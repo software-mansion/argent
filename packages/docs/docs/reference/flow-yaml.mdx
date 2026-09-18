@@ -354,7 +354,7 @@ The file name without `.yaml` names the report and the artifacts. It contains on
 
 Each step line shows the time of the step before the reason, for example `(1.2s)`. A step that did not run shows no time. The time of a `when` or `run` step does not include the steps in its block or fragment. The last line of a flow run shows the time of the run. The summary of a directory run shows the time of all flows, for example `(1m 32s)`.
 
-A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. Argent prints a summary of all flows at the end.
+A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. After the last flow, Argent prints a `Failed flows` section when one or more flows failed. Argent prints a summary of all flows at the end.
 
 A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the flows after the failure as skipped.
 
@@ -369,7 +369,34 @@ The outcome line of a flow that produced a report gives the result, the step cou
 | `did not finish (no run report)` | The tool-server answered without a run report                   |
 | `not run (batch stopped)`        | An earlier failure ended the directory run. Directory runs only |
 
-`--json` and `--json-stream` print no header, no outcome line and no summary.
+The `Failed flows` section has one entry for each flow that failed. Each entry holds these items:
+
+- The flow path.
+- The first step that failed or errored, with its number. A flow without a report gives its outcome line instead.
+- The reason of that step, or the error message of a flow without a report.
+- A `re-run:` command that runs only that flow. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that flow to the same directory as the directory run.
+
+The section does not include the flows that Argent skipped.
+
+This is the end of the output of `argent flow run ./flows --recursive --platform chromium`:
+
+```text
+Failed flows (2)
+
+  ✗ a-login.yaml › step 3 assert visible "Dashboard"
+    no element matched selector text="Dashboard"
+    re-run: argent flow run flows/a-login.yaml --platform chromium
+
+  ✗ sub/c-search.yaml › not run (invalid flow)
+    [Tool:flow-execute] Unrecognized flow entry (unrecognized step kind): {"swipe-left":{"text":"Results"}}
+    re-run: argent flow run flows/sub/c-search.yaml --platform chromium
+
+FAIL — 4 flows: 2 passed, 2 failed, 0 skipped (10.2s)
+```
+
+When a single flow run fails its steps, Argent prints the first step that failed or errored, and its reason, again above the last line.
+
+`--json` and `--json-stream` print no header, no outcome line, no `Failed flows` section and no summary.
 
 A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
 

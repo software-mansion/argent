@@ -400,6 +400,31 @@ describe("argent flow run", () => {
     expect(out).toContain("PASS (started on SIM-1) — 1 passed");
   });
 
+  it("repeats a single run's failing step above its verdict", async () => {
+    const steps: StepFixture[] = [
+      { index: 0, kind: "tap", status: "pass", target: '"Cart"' },
+      { index: 1, kind: "tap", status: "fail", target: '"Checkout"', reason: "no match" },
+      { index: 2, kind: "await", status: "skip", target: 'visible "Paid"' },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of steps) opts?.onProgress?.(step);
+        return { data: report({ steps, ok: false, passed: 1, failed: 1, skipped: 1 }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.slice(-5)).toEqual([
+      '  ·  3 await visible "Paid"',
+      "",
+      '  ✗ step 2 tap "Checkout"',
+      "    no match",
+      "\nFAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
+    ]);
+    expect(logs.join("\n")).not.toContain("re-run:");
+  });
+
   it("exits 2 without calling the tool when --device is missing its value", async () => {
     await expect(flow(["run", "checkout", "--device"], opts)).rejects.toThrow("process.exit:2");
 
@@ -1871,6 +1896,7 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain("PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped");
     // Passing steps stay silent in batch mode.
     expect(out).not.toMatch(/✓ {2}1 tap/);
+    expect(out).not.toContain("Failed flows");
     expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
   });
 
@@ -2027,7 +2053,8 @@ describe("argent flow run <dir>", () => {
     // above is not met by verdicting everything. The count discriminates only
     // because the other flow passes cleanly: renderStepLine gives a failed step
     // the same `  ✗ ` prefix, which no count tells apart from a verdict.
-    expect(lines.filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
+    const perFlow = lines.slice(0, lines.indexOf("Failed flows (1)"));
+    expect(perFlow.filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
   });
 
   // One merged ledger: both runners print the verdict under the header and the
@@ -2104,9 +2131,11 @@ describe("argent flow run <dir>", () => {
 
     const lines = logs.join("\n").split("\n");
     expect(lines).toContain(`  ✗ ${verdict}`);
-    // The batch's only ✗. It counts because the other flow passes cleanly: a
-    // failing step line carries the same prefix.
-    expect(lines.filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
+    // The batch's only ✗ above the recap. It counts because the other flow
+    // passes cleanly: a failing step line carries the same prefix.
+    const recap = lines.indexOf("Failed flows (1)");
+    expect(lines.slice(0, recap).filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
+    expect(lines).toContain(`  ✗ a-login.yaml › ${verdict}`);
   });
 
   it("gives the flow that stopped the batch its own stdout verdict", async () => {
@@ -2224,6 +2253,197 @@ describe("argent flow run <dir>", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
     expect(errs.join("\n")).toContain('"a-login.yaml" did not produce a run report');
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("ends a failed batch with the failed flows, each with a command that runs it alone", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          ok: false,
+          passed: 1,
+          failed: 1,
+          steps: [
+            { index: 0, kind: "echo", status: "pass", message: "logging in" },
+            { index: 1, kind: "tap", status: "pass" },
+            {
+              index: 2,
+              kind: "assert",
+              status: "fail",
+              target: 'visible "Home"',
+              reason: 'no element matched selector text="Home"',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./flows", "--platform", "ios"], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // The recap follows the last flow's block and precedes the batch verdict,
+    // which stays the last line, so `tail -1` still reads it.
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf("[2/2] b-checkout.yaml"))).toEqual([
+      "[2/2] b-checkout.yaml",
+      "  PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped",
+      "",
+      "Failed flows (1)",
+      "",
+      '  ✗ a-login.yaml › step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    re-run: argent flow run ${path.join("flows", "a-login.yaml")} --platform ios`,
+      "",
+      "FAIL — 2 flows: 1 passed, 1 failed, 0 skipped (0.0s)",
+    ]);
+  });
+
+  it("re-runs a flow outside the working directory by its absolute path, quoted", async () => {
+    const suiteDir = path.join(tempRoot, "night suite");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "one.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockRejectedValueOnce(new Error("tool stream ended"));
+
+    await expect(flow(["run", suiteDir, "--device", "SIM-1"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(logs.join("\n")).toContain(
+      `    re-run: argent flow run '${path.join(suiteDir, "one.yaml")}' --device SIM-1`
+    );
+  });
+
+  it("re-runs a flow whose name starts with a dash through ./, not as an option", async () => {
+    const suiteDir = path.join(tempRoot, "dash-suite");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "-nightly.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ flow: "-nightly", ok: false, steps: [] }),
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(suiteDir);
+      await expect(flow(["run", "."], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const shown = `.${path.sep}-nightly.yaml`;
+    const lines = logs.join("\n").split("\n");
+    expect(lines).toContain("  ✗ -nightly.yaml › failed with no failing step");
+    expect(lines).toContain(`    re-run: argent flow run ${shown}`);
+    expect(parseRunArgs([shown]).flowRef).toBe(shown);
+  });
+
+  it("re-runs with the batch's --update-baselines, exporting where the batch exported", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login", ok: false, steps: [] }) })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) })
+      .mockResolvedValueOnce({ data: report({ flow: "c-search", ok: false, steps: [] }) });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(["run", "./flows", "-r", "--update-baselines", "--output", "out"], opts)
+      ).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines).toContain(
+      `    re-run: argent flow run ${path.join("flows", "a-login.yaml")} --update-baselines --output out`
+    );
+    expect(lines).toContain(
+      `    re-run: argent flow run ${path.join("flows", "sub", "c-search.yaml")} --update-baselines --output ${path.join("out", "sub")}`
+    );
+  });
+
+  it("re-runs with an --output that starts with a dash through ./, not as an option", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ flow: "a-login", ok: false, steps: [] }),
+    });
+
+    await expect(flow(["run", flowsDir, "--output=-out"], opts)).rejects.toThrow("process.exit:1");
+
+    const shown = `.${path.sep}-out`;
+    expect(logs.join("\n")).toContain(
+      `    re-run: argent flow run ${path.join(flowsDir, "a-login.yaml")} --output ${shown}`
+    );
+    expect(parseRunArgs(["a-login.yaml", "--output", shown]).output).toBe(shown);
+  });
+
+  it("repeats a rejected flow's server message in the recap, as it went to stderr", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML: bad indentation (line 4)", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(errs).toContain("flow file is not valid YAML: bad indentation (line 4)");
+    const lines = logs.join("\n").split("\n");
+    const entry = lines.indexOf("  ✗ b-checkout.yaml › not run (invalid flow)");
+    expect(lines.slice(entry + 1, entry + 3)).toEqual([
+      "    flow file is not valid YAML: bad indentation (line 4)",
+      `    re-run: argent flow run ${path.join(flowsDir, "b-checkout.yaml")}`,
+    ]);
+  });
+
+  it("lists the flow that stopped the batch, but not the flows it never reached", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    toolsClientMock.callTool.mockRejectedValueOnce(new Error("tool stream ended without a result"));
+
+    await expect(flow(["run", flowsDir, "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    const recap = lines.slice(lines.indexOf("Failed flows (1)"));
+    expect(recap).toEqual([
+      "Failed flows (1)",
+      "",
+      "  ✗ a-login.yaml › did not finish (run error)",
+      "    tool stream ended without a result",
+      `    re-run: argent flow run ${path.join(flowsDir, "a-login.yaml")}`,
+      "",
+      "FAIL — 3 flows: 0 passed, 1 failed, 2 skipped (0.0s)",
+    ]);
+  });
+
+  it("lists every failed flow in run order", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ index: 0, kind: "tap", status: "fail", reason: "gone" }],
+        }),
+      })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) })
+      .mockResolvedValueOnce({ data: { flow: "c-search" } });
+
+    await expect(flow(["run", flowsDir, "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    const entries = logs
+      .join("\n")
+      .split("\n")
+      .filter((l) => l.includes(" › "));
+    expect(entries).toEqual([
+      "  ✗ a-login.yaml › step 1 tap",
+      `  ✗ ${path.join("sub", "c-search.yaml")} › did not finish (no run report)`,
+    ]);
   });
 
   it("finds nested flows with --recursive, skipping dot-directories and node_modules", async () => {
