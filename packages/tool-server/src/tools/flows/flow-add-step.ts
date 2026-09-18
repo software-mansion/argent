@@ -168,7 +168,7 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
       "No read-only tool reports the runner's projection on iOS — `native-find-views` and " +
       "`native-full-hierarchy` return the RAW view tree, keeping the hidden, transparent, " +
       "scroll-clipped and unlabelled container views the runner drops, and neither answers the " +
-      "question a selector asks: `native-find-views` matches `identifier`/`label`/`className` " +
+      "question a selector asks: `native-find-views` matches `identifier`/`label`/`className`/`nativeID` " +
       "EXACTLY and takes no substring `text` or `role`, and `native-full-hierarchy` takes no " +
       "matcher at all — it dumps the tree for you to read — " +
       retargetRemedy("an `id`", condition)

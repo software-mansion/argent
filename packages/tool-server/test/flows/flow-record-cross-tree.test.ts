@@ -740,13 +740,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // The admission no tree story rules out, appended per arm.
     expect(warning).toContain("changed between the live wait and this re-probe");
     // iOS must NOT be told a tool "reads the runner's side". The Apple-only
-    // readers match identifier/label/className exactly; `text`/`role` are substrings.
+    // readers match identifier/label/className/nativeID exactly; `text`/`role` are substrings.
     expect(warning).toContain(
       "rule that out first. No read-only tool reports the runner's projection on iOS"
     );
     // `native-full-hierarchy` takes no matcher; only `native-find-views` matches exactly.
     expect(warning).toContain(
-      "`native-find-views` matches `identifier`/`label`/`className` EXACTLY"
+      "`native-find-views` matches `identifier`/`label`/`className`/`nativeID` EXACTLY"
     );
     expect(warning).toContain("`native-full-hierarchy` takes no matcher at all");
     // The skill gates on visible text and retargets at polish, which PRODUCES this.

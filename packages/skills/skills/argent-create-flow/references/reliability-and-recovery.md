@@ -26,10 +26,10 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 Work this gate as soon as capture warns that it kept a raw point — and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
 
-1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no flow selector exists.
+1. **iOS:** query plausible ids or labels with `native-find-views` (`identifier`, `nativeID`, or `label`). If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no flow selector exists.
 2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
 3. Test each candidate in a scratch fragment with `assert: { visible: <candidate> }` on the valid screen. Inspect every failure before trying a better id, label, app, or container.
-4. If source is available, inspect its `testID`, `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
+4. If source is available, inspect its `testID`, `nativeID` (not on a physical iPhone or Android), `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
 
 An unavailable tree makes the candidate test void. It proves the tree was absent, not that the selector failed, so it never authorizes coordinates. Relevant failures include `native devtools is unavailable` or `No native-devtools-connected apps are available` on iOS, an unreachable Android helper, an unreachable Chromium CDP session, or missing Vega page source. The recorder quotes the same reason back in its `selector capture failed` warning, so read that warning before treating it as a verdict about the element. Restore the tree and repeat the test.
 

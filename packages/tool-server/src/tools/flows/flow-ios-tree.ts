@@ -52,6 +52,7 @@ interface RawRect {
 interface RawViewNode {
   className?: string;
   identifier?: string;
+  nativeID?: string;
   label?: string;
   frame?: RawRect;
   windowFrame?: RawRect;
@@ -99,6 +100,7 @@ function asViewNode(v: unknown): RawViewNode | null {
   return {
     className: nonEmptyString(r.className),
     identifier: nonEmptyString(r.identifier),
+    nativeID: nonEmptyString(r.nativeID),
     label: nonEmptyString(r.label),
     frame: asRect(r.frame),
     windowFrame: asRect(r.windowFrame),
@@ -146,6 +148,7 @@ function normalizeFrame(rect: RawRect, screenW: number, screenH: number): Descri
  * `label`, or a specific semantic role — or is the first responder, which the
  * type directive's focus wait reads — and has an on-screen frame. An identified
  * node shields its text, scoping hoisting to the nearest identified ancestor.
+ * A React Native `nativeID` also makes a view a leaf, but does not shield.
  */
 function projectIosNode(
   node: RawViewNode,
@@ -162,9 +165,11 @@ function projectIosNode(
   const win = node.windowFrame;
   const rect = win ? { x: win.x, y: win.y, w: win.width, h: win.height } : null;
 
+  // An `identifier` or a `nativeID` makes a view leaf-eligible.
+  const identified = Boolean(node.identifier || node.nativeID);
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
-  if (!skip && (node.identifier || node.label || role !== "AXGroup" || node.firstResponder)) {
+  if (!skip && (identified || node.label || role !== "AXGroup" || node.firstResponder)) {
     const leafRect = node.windowFrame ?? node.frame;
     frame = leafRect ? normalizeFrame(leafRect, screenW, screenH) : null;
     if (frame) {
@@ -174,6 +179,7 @@ function projectIosNode(
         children: [],
         label: node.label,
         identifier: node.identifier,
+        nativeID: node.nativeID,
         focused: node.firstResponder || undefined,
       };
     }
@@ -188,6 +194,8 @@ function projectIosNode(
     // leaf-eligible, so `frame` was computed for any node with text.
     ownText: frame ? (node.label ?? "") : "",
     leaf,
+    // `identifier` only: a `nativeID` never shields, so adding one never changes
+    // the text an identified ancestor reads.
     shield: Boolean(node.identifier),
     rect,
     scrolls: role === "AXScrollArea",
@@ -196,7 +204,7 @@ function projectIosNode(
 
 /**
  * Flatten a `getFullHierarchy` payload into the flat-leaves-under-one-root shape
- * the other describe adapters emit, keeping only views with an `identifier`,
+ * the other describe adapters emit, keeping only views with an `identifier`, `nativeID`,
  * `label`, or specific semantic role and an on-screen frame. Dropping the pure
  * layout containers keeps the tree comparable in size to the accessibility tree
  * while preserving children an `accessible` ancestor would have hidden.
@@ -263,6 +271,7 @@ const FLOW_TREE_MAX_DEPTH = 100;
 const FULL_HIERARCHY_FIELDS = [
   "className",
   "identifier",
+  "nativeID",
   "label",
   "frame",
   "windowFrame",

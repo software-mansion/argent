@@ -85,7 +85,12 @@ describe("flow iOS full-hierarchy source", () => {
     expect(queryViewHierarchy).toHaveBeenCalledWith(
       "com.example.app",
       "ViewHierarchy.getFullHierarchy",
-      expect.objectContaining({ maxDepth: 100 })
+      expect.objectContaining({
+        maxDepth: 100,
+        // `fields` limits the returned view fields (see FULL_HIERARCHY_FIELDS):
+        // without `nativeID` in it, a flow `id:` has no nativeID to match.
+        fields: expect.arrayContaining(["identifier", "nativeID"]),
+      })
     );
   });
 
