@@ -644,3 +644,42 @@ describe("boot-device — iOS udid on non-darwin", () => {
     ).rejects.not.toThrow(/xcode-select/);
   });
 });
+
+// `udid` selects the iOS simulator path, but the capability gate accepts a
+// Chromium/Vega/Android device id because those platforms are declared for the
+// tool's other parameters. Such an id must be refused before it reaches
+// `simctl boot`, which would report it as an invalid simulator.
+describe("boot-device — non-iOS device id passed as `udid`", () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    vi.clearAllMocks();
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      getCallback(args)(null, "", "");
+      return {} as never;
+    });
+    listIosSimulatorsMock.mockReset().mockResolvedValue([]);
+    setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it.each([
+    ["chromium-cdp-9222", /`electronAppPath`/],
+    ["amazon-4a27df03c9777152", /`vvdImage`/],
+    ["emulator-5554", /`avdName`/],
+  ])("refuses %s and names the parameter that boots it", async (udid, hint) => {
+    const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
+
+    await expect(tool.execute!({}, { udid })).rejects.toThrow(/`udid` takes an iOS simulator UDID/);
+    await expect(tool.execute!({}, { udid })).rejects.toThrow(hint);
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
