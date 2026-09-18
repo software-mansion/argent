@@ -119,7 +119,7 @@ Classify before editing:
 
 Then:
 
-1. Record the first failure or divergence index, message and `hint:`. Try the hint first.
+1. Record the first failure or divergence index and message, with the `hint:` line when the step has one. Try the hint first; many failures carry none.
 2. Capture `screenshot` and `describe`. Use native or React Native discovery when needed.
 3. Compare actual state with the preceding echo and expected destination.
 4. Classify the cause: selector, screen, missing element, readiness, stale data, optional interstitial, or product behavior.
