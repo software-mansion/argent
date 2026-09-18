@@ -27,6 +27,14 @@ export interface StepReport {
   reason?: string;
   /** Set by the tool-server on a step that PASSED in a way that weakens it as proof. */
   warning?: string;
+  hint?: string;
+  expected?: string;
+  actual?: string;
+  /**
+   * Set by the tool-server when `expected` holds a regex source rather than a
+   * value to compare literally.
+   */
+  expectedKind?: "pattern";
   tool?: string;
   flow?: string;
   message?: string;
@@ -262,6 +270,46 @@ export function renderUnderStepLine(s: StepReport, n: number, text: string): str
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
 }
 
+/**
+ * Escape only the control characters of a value printed without quotes, each in
+ * its JSON spelling (`\n`, `\t`, `\u0007`). Everything else — a backslash
+ * above all — stays as the device reported it.
+ */
+function escapeControls(v: string): string {
+  // eslint-disable-next-line no-control-regex
+  return v.replace(/[\u0000-\u001f]/g, (c) => JSON.stringify(c).slice(1, -1));
+}
+
+/**
+ * The `expected:`, `actual:` and `hint:` lines of a step that did not pass.
+ *
+ * A control character is ESCAPED, never replaced: these lines are the only
+ * place the found text is printed, and a value that differs from the expected
+ * one only by a line break or a tab has to look different here — replacing it
+ * with a space printed the two as twins. The escape keeps each value on one
+ * line and keeps a raw escape sequence out of the terminal.
+ */
+export function renderStepDetailLines(s: StepReport, n: number): string[] {
+  // A `hint:` and a snapshot value print unquoted, so their own quotes stay as
+  // they were written; a quoted value escapes its quotes with the rest.
+  const oneLine = (v: string): string => JSON.stringify(v).slice(1, -1).replace(/\\"/g, '"');
+  const value = (v: string): string => (s.kind === "snapshot" ? oneLine(v) : JSON.stringify(v));
+  // A pattern prints as its source in slash delimiters — the spelling the step
+  // line and the reason use — so it can be copied back into `matches:`. JSON
+  // quoting would double each backslash, making `\d` a literal backslash.
+  const expected = (v: string): string =>
+    s.expectedKind === "pattern" ? `/${escapeControls(v)}/` : value(v);
+  const lines: string[] = [];
+  if (typeof s.expected === "string") {
+    lines.push(renderUnderStepLine(s, n, `expected: ${expected(s.expected)}`));
+  }
+  if (typeof s.actual === "string") {
+    lines.push(renderUnderStepLine(s, n, `actual:   ${value(s.actual)}`));
+  }
+  if (typeof s.hint === "string") lines.push(renderUnderStepLine(s, n, `hint: ${oneLine(s.hint)}`));
+  return lines;
+}
+
 export function renderScriptLogLines(s: StepReport, n: number): string[] {
   const log = typeof s.scriptLog === "string" ? s.scriptLog : "";
   const lines: string[] = [];
@@ -352,6 +400,7 @@ export function renderFailedSteps(report: FlowReport): string[] {
     }
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderStepDetailLines(s, n));
     lines.push(...scriptLog);
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
@@ -767,6 +816,7 @@ export function renderReport(report: FlowReport): string {
     n++;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderStepDetailLines(s, n));
     lines.push(...renderScriptLogLines(s, n));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
@@ -1500,6 +1550,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     liveIndex++;
     console.log(renderStepLine(s, liveIndex, flowName));
     if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
+    for (const line of renderStepDetailLines(s, liveIndex)) console.log(line);
     for (const line of renderScriptLogLines(s, liveIndex)) console.log(line);
   };
 

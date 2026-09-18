@@ -1266,9 +1266,9 @@ describe("swipe: execution", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
+    expect(result.steps[0].hint).toBe("if it is off-screen, add a scroll-to step before this one");
     // The reason names the end that is actually missing, not the other one.
-    expect(result.steps[0].reason).toContain('text="Card"');
+    expect(result.steps[0].reason).toBe('no element matched selector text="Card"');
     expect(result.calls).toEqual([]);
   }, 15000);
 
@@ -1283,8 +1283,8 @@ describe("swipe: execution", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
-    expect(result.steps[0].reason).toContain('text="Archive"');
+    expect(result.steps[0].hint).toBe("if it is off-screen, add a scroll-to step before this one");
+    expect(result.steps[0].reason).toBe('no element matched selector text="Archive"');
     expect(result.calls).toEqual([]);
   }, 15000);
 
@@ -1461,9 +1461,10 @@ describe("swipe: abort", () => {
       const { result, events } = await runCancelledSwipe(step);
 
       // A skip with the uniform abort reason — NOT a fail with the misleading
-      // "no visible element matched … add a scroll-to step" hint.
+      // "no element matched …" reason and its scroll-to hint.
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
       expect(result.steps[0].reason).toBe("run aborted");
+      expect(result.steps[0].hint).toBeUndefined();
       expect(result.ok).toBe(false);
       expect(events).not.toContain("gesture-swipe");
     }

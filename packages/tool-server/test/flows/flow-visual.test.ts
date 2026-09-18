@@ -34,10 +34,7 @@ const h = vi.hoisted(() => ({
   /** Set by the differ mock: the normalizeSizes option it was passed. */
   diffNormalizeSizes: undefined as boolean | undefined,
   /** What the waitForFrame mock resolves a cropOn selector to. */
-  cropFrame: undefined as
-    | undefined
-    | "aborted"
-    | { x: number; y: number; width: number; height: number },
+  cropFrame: undefined as undefined | Awaited<ReturnType<typeof waitForFrame>>,
   /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
   cropFrameError: null as null | Error,
   dimensionMismatch: null as null | {
@@ -47,10 +44,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
-  // The real offscreenHint: cropOn failures must surface the directives'
-  // standard not-found reason, so the tests assert against the real text.
-  offscreenHint: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
-    .offscreenHint,
+  // The real selectorMiss: cropOn failures must surface the directives'
+  // standard not-found reason and hint, so the tests assert against the real text.
+  selectorMiss: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
+    .selectorMiss,
   settleTree: vi.fn(async () => ({})),
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
   waitForFrame: vi.fn(async () => {
@@ -195,7 +192,11 @@ describe("runSnapshot baselines", () => {
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain('no baseline for "home"');
-    expect(r.reason).toContain("--update-baselines");
+    expect(r.reason).toMatch(/nothing was compared$/);
+    expect(r.hint).toBe(
+      "run with updateBaselines (--update-baselines) to adopt the current screen, then review " +
+        "and commit it"
+    );
     // Nothing written: seeding on failure would make this unreviewed capture
     // the truth a re-run silently passes against.
     await expect(fs.access(baselinePath())).rejects.toThrow();
@@ -264,6 +265,8 @@ describe("runSnapshot baselines", () => {
     expect(r.reason).toContain("844x390");
     expect(r.reason).toContain("390x844");
     expect(r.reason).toContain("nothing was compared");
+    expect(r).toMatchObject({ expected: "844x390", actual: "390x844" });
+    expect(r.hint).toBeUndefined();
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
   });
@@ -278,6 +281,7 @@ describe("runSnapshot baselines", () => {
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("diff 3.10% > 0.5%");
+    expect(r).toMatchObject({ expected: "≤ 0.5%", actual: "3.10%" });
     // The key an exporter (CLI --output) names the three roles by.
     expect(r.snapshotKey).toBe("home__ios-390x844");
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
@@ -288,6 +292,43 @@ describe("runSnapshot baselines", () => {
       hostPath: h.contextDiffPath,
       filename: "home__ios-390x844-diff.png",
     });
+  });
+
+  it("prints a sub-0.005% diff at the precision it failed on, not as 0.00%", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    // 25 pixels of a 1000x1336 capture — under a zero tolerance, which two
+    // decimals would round onto: `diff 0.00% > 0%`, whose expected/actual pair
+    // says the step should have passed.
+    h.mismatchPercentage = 0.00187;
+
+    const r = await runSnapshot(env, opts({ maxMismatch: 0 }));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("diff 0.002% > 0%");
+    expect(r).toMatchObject({ expected: "≤ 0%", actual: "0.002%" });
+  });
+
+  it("prints a diff that rounds onto a non-zero tolerance at more precision", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    h.mismatchPercentage = 0.5004;
+
+    const r = await runSnapshot(env, opts({ maxMismatch: 0.5 }));
+
+    expect(r.status).toBe("fail");
+    expect(r).toMatchObject({ expected: "≤ 0.5%", actual: "0.5004%" });
+  });
+
+  it("keeps two decimals on a pass the rounding cannot contradict", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    h.mismatchPercentage = 0.4996;
+
+    const r = await runSnapshot(env, opts({ maxMismatch: 0.5 }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("diff 0.50% ≤ 0.5%");
   });
 
   it("fails without a diff artifact when the differ produced no context image", async () => {
@@ -561,14 +602,32 @@ describe("runSnapshot cropOn", () => {
   });
 
   it("fails with the standard not-found reason without capturing when cropOn never resolves", async () => {
-    h.cropFrame = undefined;
+    h.cropFrame = { unresolved: cropOn, matched: 0 };
     vi.mocked(invokeOnDevice).mockClear();
 
     const r = await runSnapshot(env, opts({ cropOn }));
 
     expect(r.status).toBe("fail");
-    expect(r.reason).toContain('no visible element matched selector text="Header"');
-    expect(r.reason).toContain("scroll-to");
+    expect(r.reason).toBe('no element matched selector text="Header"');
+    expect(r.hint).toBe("if it is off-screen, add a scroll-to step before this one");
+    expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
+  it("refuses a verdict when the cropOn read was blind, and carries the reader's repair", async () => {
+    // On Vega this is the reachable blind-read call site: the touch directives
+    // are refused before they resolve a selector, so `cropOn` is the step that
+    // would otherwise claim the screen does not hold the element.
+    const relaunch = "The toolkit attaches at app launch — relaunch the foreground app.";
+    h.cropFrame = { unresolved: cropOn, matched: 0, blind: { hint: relaunch } };
+    vi.mocked(invokeOnDevice).mockClear();
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("fail");
+    expect(r.indeterminate).toBe(true);
+    expect(r.hint).toBe(relaunch);
+    expect(r.reason).toContain("read back empty and degraded");
+    expect(r.reason).not.toContain("no element matched");
     expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
   });
 
@@ -595,7 +654,10 @@ describe("runSnapshot cropOn", () => {
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("cropOn region is 50x50");
-    expect(r.reason).toContain("crop a fixed-size container");
+    expect(r).toMatchObject({ expected: "50x60", actual: "50x50" });
+    expect(r.hint).toBe(
+      "the element's size drifted; crop a fixed-size container, or re-adopt with updateBaselines"
+    );
     // Same collision risk as the over-threshold path: both handles download.
     expect(r.artifacts?.current).toMatchObject({ filename: `${cropKey}-current.png` });
     expect(r.artifacts?.baseline).toMatchObject({ filename: `${cropKey}.png` });

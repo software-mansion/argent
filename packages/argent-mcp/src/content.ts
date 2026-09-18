@@ -196,6 +196,14 @@ export type FlowStepResult = {
    * "⚠" suffix (see StepReport.warning in the tool-server's flow-run).
    */
   warning?: string;
+  hint?: string;
+  expected?: string;
+  actual?: string;
+  /**
+   * Set by the tool-server when `expected` holds a regex source rather than a
+   * value to compare literally.
+   */
+  expectedKind?: "pattern";
   tool?: string;
   message?: string;
   result?: unknown;
@@ -265,6 +273,44 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
+/**
+ * Escape only the control characters of a value printed without quotes, each in
+ * its JSON spelling (`\n`, `\t`, `\u0007`). Everything else — a backslash
+ * above all — stays as the device reported it.
+ */
+function escapeControls(v: string): string {
+  // eslint-disable-next-line no-control-regex
+  return v.replace(/[\u0000-\u001f]/g, (c) => JSON.stringify(c).slice(1, -1));
+}
+
+/**
+ * The `expected:`, `actual:` and `hint:` lines of a step that did not pass.
+ *
+ * A control character is ESCAPED, never replaced: these lines are the only
+ * place the found text is printed, and a value that differs from the expected
+ * one only by a line break or a tab has to look different here — replacing it
+ * with a space printed the two as twins. The escape keeps each value on one
+ * line of the block.
+ */
+function stepDetailText(step: FlowStepResult): string | undefined {
+  // A `hint:` and a snapshot value print unquoted, so their own quotes stay as
+  // they were written; a quoted value escapes its quotes with the rest.
+  const oneLine = (v: string): string => JSON.stringify(v).slice(1, -1).replace(/\\"/g, '"');
+  const value = (v: string): string => (step.kind === "snapshot" ? oneLine(v) : JSON.stringify(v));
+  // A pattern prints as its source in slash delimiters — the spelling the step
+  // line and the reason use — so it can be copied back into `matches:`. JSON
+  // quoting would double each backslash, making `\d` a literal backslash.
+  const expected = (v: string): string =>
+    step.expectedKind === "pattern" ? `/${escapeControls(v)}/` : value(v);
+  const indent = `  ${stepIndent(step.depth)}`;
+  const lines: string[] = [];
+  if (typeof step.expected === "string")
+    lines.push(`${indent}expected: ${expected(step.expected)}`);
+  if (typeof step.actual === "string") lines.push(`${indent}actual:   ${value(step.actual)}`);
+  if (typeof step.hint === "string") lines.push(`${indent}hint: ${oneLine(step.hint)}`);
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
   if (step.tool) return step.tool;
@@ -311,6 +357,8 @@ export async function flowRunToMcpContent(
       type: "text",
       text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${timing}${suffix}${warning}`,
     });
+    const details = stepDetailText(step);
+    if (details !== undefined) blocks.push({ type: "text", text: details });
 
     const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
     const scriptLogTruncated = step.scriptLogTruncated === true;

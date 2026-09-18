@@ -6,6 +6,7 @@ import {
   renderSummary,
   renderArtifactLines,
   renderUnderStepLine,
+  renderStepDetailLines,
   renderFailedSteps,
   renderBatchSummary,
   type FlowReport,
@@ -244,6 +245,172 @@ describe("flow report rendering", () => {
     }
   });
 
+  it("renderStepDetailLines prints expected, actual and hint under the label, values quoted and aligned", () => {
+    const step: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      target: 'text "Total"',
+      reason: "text did not match",
+      expected: "$12.00",
+      actual: "$10.00",
+      hint: "the cart may still be loading",
+    };
+    const lines = renderStepDetailLines(step, 3);
+    expect(lines).toEqual([
+      '       expected: "$12.00"',
+      '       actual:   "$10.00"',
+      "       hint: the cart may still be loading",
+    ]);
+    expect(lines[0]!.indexOf('"')).toBe(lines[1]!.indexOf('"'));
+    expect(lines[0]!.indexOf("expected")).toBe(renderStepLine(step, 3, "f").indexOf("assert"));
+  });
+
+  it("renderStepDetailLines escapes control characters in values and the hint", () => {
+    const text: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      expected: "line one\nline two",
+      actual: "tab\there\u001b[31m",
+      hint: 'wait\r\nthen\tretry\u001b, own text "Total"',
+    };
+    const lines = renderStepDetailLines(text, 1);
+    expect(lines).toEqual([
+      '       expected: "line one\\nline two"',
+      '       actual:   "tab\\there\\u001b[31m"',
+      // The hint prints unquoted, so its own quotes are not escaped.
+      '       hint: wait\\r\\nthen\\tretry\\u001b, own text "Total"',
+    ]);
+    // Still one line each, and still no raw escape sequence in the terminal.
+    for (const line of lines) expect(line).not.toMatch(/\p{Cc}/u);
+    const snapshot: StepReport = {
+      ...text,
+      kind: "snapshot",
+      expected: "\u2264\n0.5%",
+      actual: "3\t10%",
+    };
+    expect(renderStepDetailLines(snapshot, 1).slice(0, 2)).toEqual([
+      "       expected: \u2264\\n0.5%",
+      "       actual:   3\\t10%",
+    ]);
+  });
+
+  it("renderStepDetailLines prints a pattern in slash delimiters, backslashes intact", () => {
+    // The step line one row above prints the same pattern as /^Taps: \d\d\d$/.
+    // JSON quoting doubled every backslash here, so the printed pattern matched
+    // a literal backslash followed by `d` when it was copied back into the YAML.
+    const step: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      expected: "^Taps: \\d\\d\\d$",
+      expectedKind: "pattern",
+      actual: "Taps: 0",
+    };
+    expect(renderStepDetailLines(step, 3)).toEqual([
+      "       expected: /^Taps: \\d\\d\\d$/",
+      '       actual:   "Taps: 0"',
+    ]);
+    // A literal keeps the JSON quoting the step line uses for one.
+    expect(renderStepDetailLines({ ...step, expectedKind: undefined }, 3)[0]).toBe(
+      '       expected: "^Taps: \\\\d\\\\d\\\\d$"'
+    );
+    // A control character in a pattern still cannot break the line.
+    expect(renderStepDetailLines({ ...step, expected: "^a\nb$" }, 3)[0]).toBe(
+      "       expected: /^a\\nb$/"
+    );
+  });
+
+  it("renderStepDetailLines keeps a whitespace-only difference visible", () => {
+    // The found text differs from the wanted one only by a line break. These
+    // two lines are the only place a reader of the CLI output sees it.
+    const step: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      expected: "Ship to: Jane Doe",
+      actual: "Ship to:\nJane Doe",
+    };
+    const lines = renderStepDetailLines(step, 3);
+    expect(lines).toEqual([
+      '       expected: "Ship to: Jane Doe"',
+      '       actual:   "Ship to:\\nJane Doe"',
+    ]);
+    expect(lines[0]!.replace("expected: ", "")).not.toBe(lines[1]!.replace("actual:   ", ""));
+  });
+
+  it("renderStepDetailLines prints only the fields a step carries", () => {
+    expect(
+      renderStepDetailLines({ index: 0, kind: "tap", status: "fail", reason: "no match" }, 1)
+    ).toEqual([]);
+    expect(
+      renderStepDetailLines({ index: 0, kind: "tap", status: "fail", hint: "scroll first" }, 1)
+    ).toEqual(["       hint: scroll first"]);
+    expect(
+      renderStepDetailLines({ index: 0, kind: "assert", status: "fail", actual: "Pending" }, 1)
+    ).toEqual(['       actual:   "Pending"']);
+    const hostile = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      expected: 12,
+      actual: null,
+      hint: { text: "x" },
+    } as unknown as StepReport;
+    expect(renderStepDetailLines(hostile, 1)).toEqual([]);
+  });
+
+  it("buffered report prints detail lines under the step and its warning, before its artifacts", () => {
+    const out = renderReport(
+      mkReport([
+        { index: 0, kind: "launch", status: "pass" },
+        {
+          index: 1,
+          kind: "assert",
+          status: "fail",
+          target: 'text "Total"',
+          reason: "text did not match",
+          expected: "$12.00",
+          actual: "$10.00",
+          hint: "the cart may still be loading",
+        },
+        {
+          index: 2,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5%",
+          target: '"home"',
+          warning: "baseline seeded",
+          expected: "≤ 0.5%",
+          actual: "3.10%",
+          hint: "an animation may still be running",
+          artifacts: { diff: "/tmp/d.png" },
+        },
+        { index: 3, kind: "tap", status: "skip", target: '"Pay"' },
+      ])
+    );
+    expect(out).toBe(
+      [
+        'Flow "checkout" on UDID-1',
+        "  ✓  1 launch",
+        '  ✗  2 assert text "Total" — text did not match',
+        '       expected: "$12.00"',
+        '       actual:   "$10.00"',
+        "       hint: the cart may still be loading",
+        '  ✗  3 snapshot "home" — diff 3.10% > 0.5%',
+        "       ⚠ baseline seeded",
+        "       expected: ≤ 0.5%",
+        "       actual:   3.10%",
+        "       hint: an animation may still be running",
+        "       diff: /tmp/d.png",
+        '  ·  4 tap "Pay"',
+        "",
+        "FAIL — 1 passed, 2 failed, 0 errored, 1 skipped, 1 warning",
+      ].join("\n")
+    );
+  });
+
   it("renderSummary carries the device only when asked (live tail)", () => {
     const report = mkReport(STEPS);
     expect(renderSummary(report)).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
@@ -309,6 +476,46 @@ describe("flow report rendering", () => {
       "       ⚠ the screen never held still",
     ]);
     expect(renderSummary(report)).toContain("1 warning");
+  });
+
+  it("renderFailedSteps prints detail lines under the step and its warning, before its artifacts", () => {
+    const report = mkReport([
+      { index: 0, kind: "launch", status: "pass" },
+      {
+        index: 1,
+        kind: "assert",
+        status: "fail",
+        target: 'text "Total"',
+        reason: "text did not match",
+        expected: "$12.00",
+        actual: "$10.00",
+        hint: "the cart may still be loading",
+      },
+      {
+        index: 2,
+        kind: "snapshot",
+        status: "error",
+        reason: "diff 3.10% > 0.5%",
+        target: '"home"',
+        warning: "baseline seeded",
+        expected: "≤ 0.5%",
+        actual: "3.10%",
+        hint: "an animation may still be running",
+        artifacts: { diff: "/tmp/d.png" },
+      },
+    ]);
+    expect(renderFailedSteps(report)).toEqual([
+      '  ✗  2 assert text "Total" — text did not match',
+      '       expected: "$12.00"',
+      '       actual:   "$10.00"',
+      "       hint: the cart may still be loading",
+      '  ✗  3 snapshot "home" — diff 3.10% > 0.5%',
+      "       ⚠ baseline seeded",
+      "       expected: ≤ 0.5%",
+      "       actual:   3.10%",
+      "       hint: an animation may still be running",
+      "       diff: /tmp/d.png",
+    ]);
   });
 
   it("renderStepLine puts the step time between the label and the reason", () => {

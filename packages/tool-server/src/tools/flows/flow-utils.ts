@@ -1180,7 +1180,7 @@ export function describeSelector(s: FlowSelector): string {
  * expectations use JSON quoting so embedded quotes, backslashes and control
  * characters stay unambiguous; regex patterns use slash delimiters so they
  * cannot be mistaken for literals. Failure prose asks for the infinitive verb
- * form (`wanted to contain/equal/match`), step targets for the YAML mode names
+ * form (`did not contain/equal/match`), step targets for the YAML mode names
  * (`contains/equals/matches`).
  */
 export function describeTextExpectation(

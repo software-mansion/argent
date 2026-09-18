@@ -216,8 +216,8 @@ describe("flow iOS full-hierarchy source", () => {
 
   it("hoists more text into an identified container as the cap admits more of it", async () => {
     // The cost of the raised cap, claimed by the `FLOW_TREE_MAX_DEPTH` docblock.
-    // `assertReason`'s `text` arm quotes the hoisted subtreeText verbatim into a
-    // failing reason, and nothing truncates it later.
+    // `assertReason`'s `text` arm reports the hoisted subtreeText as a failing
+    // step's `actual`, cut at 300 characters.
     const shallow = (await hoistCardUnder(40)).subtreeText ?? "";
     const deep = (await hoistCardUnder(100)).subtreeText ?? "";
 
