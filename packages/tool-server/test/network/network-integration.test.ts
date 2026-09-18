@@ -99,9 +99,9 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
     case "Runtime.evaluate": {
       const expr = params.expression as string;
 
-      // The interceptor script contains "globalThis.fetch =" (monkey-patching),
-      // while the log-read scripts never do.
-      if (expr.includes("globalThis.fetch =")) {
+      // The interceptor script sets its install guard, while the log-read
+      // scripts never mention it.
+      if (expr.includes("__argent_network_v2")) {
         // This is the network interceptor installation script
         interceptorInstalled = true;
         ws.send(
@@ -567,6 +567,81 @@ describe("NetworkInspector integration (mock server)", () => {
       expect(body.length).toBeLessThan(2000);
     } finally {
       const idx = networkLog.findIndex((e) => e.requestId === "rn-net-large");
+      if (idx >= 0) networkLog.splice(idx, 1);
+    }
+  });
+
+  it("view-network-request-details reports the full size of a body the interceptor cut", async () => {
+    const cutEntry = {
+      id: networkLog.length,
+      requestId: "rn-net-cut",
+      state: "finished" as const,
+      request: { url: "https://api.example.com/huge", method: "GET", headers: {} },
+      response: {
+        url: "https://api.example.com/huge",
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "text/plain",
+      },
+      resourceType: "XHR",
+      encodedDataLength: 1_500_000,
+      timestamp: Date.now() / 1000,
+      durationMs: 100,
+      responseBody: "x".repeat(1_048_576),
+      bodyTruncated: true,
+    };
+    networkLog.push(cutEntry);
+
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-cut",
+        includeBody: true,
+      })) as Record<string, unknown>;
+
+      const body = (result.response as Record<string, unknown>).body as string;
+      expect(body).toContain("original size: 1500000 bytes");
+    } finally {
+      const idx = networkLog.findIndex((e) => e.requestId === "rn-net-cut");
+      if (idx >= 0) networkLog.splice(idx, 1);
+    }
+  });
+
+  it("view-network-request-details says a cut body of unknown size is larger than its cap", async () => {
+    const cutEntry = {
+      id: networkLog.length,
+      requestId: "rn-net-cut-json",
+      state: "finished" as const,
+      request: { url: "https://api.example.com/huge.json", method: "GET", headers: {} },
+      response: {
+        url: "https://api.example.com/huge.json",
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "application/json",
+      },
+      resourceType: "XHR",
+      timestamp: Date.now() / 1000,
+      durationMs: 100,
+      responseBody: "x".repeat(1_048_576),
+      bodyTruncated: true,
+    };
+    networkLog.push(cutEntry);
+
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-cut-json",
+        includeBody: true,
+      })) as Record<string, unknown>;
+
+      const body = (result.response as Record<string, unknown>).body as string;
+      expect(body).toContain("original size: more than 1048576 chars");
+    } finally {
+      const idx = networkLog.findIndex((e) => e.requestId === "rn-net-cut-json");
       if (idx >= 0) networkLog.splice(idx, 1);
     }
   });

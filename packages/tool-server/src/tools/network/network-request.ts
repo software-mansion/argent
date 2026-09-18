@@ -81,6 +81,8 @@ interface RawEntry {
   errorText?: string;
   initiator?: { type: string; url?: string; lineNumber?: number };
   responseBody?: string;
+  /** The interceptor kept only the start of the body; encodedDataLength is its full size. */
+  bodyTruncated?: boolean;
 }
 
 interface NetworkRequestDetails {
@@ -231,7 +233,12 @@ Returns an error message string if the requestId is not found — use view-netwo
       if (params.includeBody && entry.responseBody != null) {
         const body = entry.responseBody;
         if (body.length > MAX_BODY_SIZE) {
-          resp.body = `[TRUNCATED — original size: ${body.length} chars, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
+          const originalSize = !entry.bodyTruncated
+            ? `${body.length} chars`
+            : entry.encodedDataLength != null
+              ? `${entry.encodedDataLength} bytes`
+              : `more than ${body.length} chars`;
+          resp.body = `[TRUNCATED — original size: ${originalSize}, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
         } else {
           resp.body = body;
         }
