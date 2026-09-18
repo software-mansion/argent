@@ -266,30 +266,52 @@ describe("flow report rendering", () => {
     expect(lines[0]!.indexOf("expected")).toBe(renderStepLine(step, 3, "f").indexOf("assert"));
   });
 
-  it("renderStepDetailLines turns control characters in values and the hint into spaces", () => {
+  it("renderStepDetailLines escapes control characters in values and the hint", () => {
     const text: StepReport = {
       index: 0,
       kind: "assert",
       status: "fail",
       expected: "line one\nline two",
-      actual: "tab\there[31m",
-      hint: "wait\r\nthen\tretry",
+      actual: "tab\there\u001b[31m",
+      hint: 'wait\r\nthen\tretry\u001b, own text "Total"',
     };
-    expect(renderStepDetailLines(text, 1)).toEqual([
-      '       expected: "line one line two"',
-      '       actual:   "tab here [31m"',
-      "       hint: wait  then retry ",
+    const lines = renderStepDetailLines(text, 1);
+    expect(lines).toEqual([
+      '       expected: "line one\\nline two"',
+      '       actual:   "tab\\there\\u001b[31m"',
+      // The hint prints unquoted, so its own quotes are not escaped.
+      '       hint: wait\\r\\nthen\\tretry\\u001b, own text "Total"',
     ]);
+    // Still one line each, and still no raw escape sequence in the terminal.
+    for (const line of lines) expect(line).not.toMatch(/\p{Cc}/u);
     const snapshot: StepReport = {
       ...text,
       kind: "snapshot",
-      expected: "≤\n0.5%",
+      expected: "\u2264\n0.5%",
       actual: "3\t10%",
     };
     expect(renderStepDetailLines(snapshot, 1).slice(0, 2)).toEqual([
-      "       expected: ≤ 0.5%",
-      "       actual:   3 10%",
+      "       expected: \u2264\\n0.5%",
+      "       actual:   3\\t10%",
     ]);
+  });
+
+  it("renderStepDetailLines keeps a whitespace-only difference visible", () => {
+    // The found text differs from the wanted one only by a line break. These
+    // two lines are the only place a reader of the CLI output sees it.
+    const step: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      expected: "Ship to: Jane Doe",
+      actual: "Ship to:\nJane Doe",
+    };
+    const lines = renderStepDetailLines(step, 3);
+    expect(lines).toEqual([
+      '       expected: "Ship to: Jane Doe"',
+      '       actual:   "Ship to:\\nJane Doe"',
+    ]);
+    expect(lines[0]!.replace("expected: ", "")).not.toBe(lines[1]!.replace("actual:   ", ""));
   });
 
   it("renderStepDetailLines prints only the fields a step carries", () => {

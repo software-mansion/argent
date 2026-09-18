@@ -633,7 +633,7 @@ describe("flowRunToMcpContent", () => {
     ]);
   });
 
-  it("turns control characters in a step's values and hint into spaces", async () => {
+  it("escapes control characters in a step's values and hint", async () => {
     const blocks = await flowRunToMcpContent({
       flow: "f",
       steps: [
@@ -642,14 +642,14 @@ describe("flowRunToMcpContent", () => {
           kind: "assert",
           status: "fail",
           expected: "line one\nline two",
-          actual: "tab\there[31m",
-          hint: "wait\r\nthen\tretry",
+          actual: "tab\there\u001b[31m",
+          hint: 'wait\r\nthen\tretry, own text "Total"',
         },
         {
           index: 1,
           kind: "snapshot",
           status: "fail",
-          expected: "≤\n0.5%",
+          expected: "\u2264\n0.5%",
           actual: "3\t10%",
         },
       ],
@@ -658,14 +658,38 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[2]).toEqual({
       type: "text",
       text: [
-        '  expected: "line one line two"',
-        '  actual:   "tab here [31m"',
-        "  hint: wait  then retry",
+        '  expected: "line one\\nline two"',
+        '  actual:   "tab\\there\\u001b[31m"',
+        // The hint prints unquoted, so its own quotes are not escaped.
+        '  hint: wait\\r\\nthen\\tretry, own text "Total"',
       ].join("\n"),
     });
     expect(blocks[4]).toEqual({
       type: "text",
-      text: "  expected: ≤ 0.5%\n  actual:   3 10%",
+      text: "  expected: \u2264\\n0.5%\n  actual:   3\\t10%",
+    });
+  });
+
+  it("keeps a whitespace-only difference between expected and actual visible", async () => {
+    // An agent reads only this block: two identical lines under a "did not
+    // equal" verdict leave it nothing to act on.
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          reason: 'element matched id="notes" but its text did not equal "Ship to: Jane Doe"',
+          expected: "Ship to: Jane Doe",
+          actual: "Ship to:\nJane Doe",
+        },
+      ],
+    });
+
+    expect(blocks[2]).toEqual({
+      type: "text",
+      text: '  expected: "Ship to: Jane Doe"\n  actual:   "Ship to:\\nJane Doe"',
     });
   });
 

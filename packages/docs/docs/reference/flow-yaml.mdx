@@ -368,6 +368,8 @@ The reason of a step that did not pass states what failed. Under that step, Arge
        actual:   "Total $41.50"
 ```
 
+Argent prints each value on one line. A control character in a value becomes an escape, for example `\n` for a line break. Thus a value that differs only by a line break or a tab looks different from the other value.
+
 A directory run prints a numbered header for each flow. Under the header Argent prints each step of that flow that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. Argent prints a summary of all flows at the end.
 
 A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the flows after the failure as skipped.

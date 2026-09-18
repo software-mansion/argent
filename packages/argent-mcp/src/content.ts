@@ -268,9 +268,20 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
+/**
+ * The `expected:`, `actual:` and `hint:` lines of a step that did not pass.
+ *
+ * A control character is ESCAPED, never replaced: these lines are the only
+ * place the found text is printed, and a value that differs from the expected
+ * one only by a line break or a tab has to look different here — replacing it
+ * with a space printed the two as twins. The escape keeps each value on one
+ * line of the block.
+ */
 function stepDetailText(step: FlowStepResult): string | undefined {
-  const oneLine = (v: string): string => v.replace(/\p{Cc}/gu, " ");
-  const value = (v: string): string => (step.kind === "snapshot" ? oneLine(v) : `"${oneLine(v)}"`);
+  // A `hint:` and a snapshot value print unquoted, so their own quotes stay as
+  // they were written; a quoted value escapes its quotes with the rest.
+  const oneLine = (v: string): string => JSON.stringify(v).slice(1, -1).replace(/\\"/g, '"');
+  const value = (v: string): string => (step.kind === "snapshot" ? oneLine(v) : JSON.stringify(v));
   const indent = `  ${stepIndent(step.depth)}`;
   const lines: string[] = [];
   if (typeof step.expected === "string") lines.push(`${indent}expected: ${value(step.expected)}`);
