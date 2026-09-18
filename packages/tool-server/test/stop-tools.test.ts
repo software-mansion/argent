@@ -1124,6 +1124,50 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     });
   });
 
+  it("scopes the app-keyed AndroidNetworkInspector URN to its device, a wireless serial included", async () => {
+    const wireless = "192.168.1.5:5555";
+    const services = new Map([
+      [
+        "AndroidNetworkInspector:emulator-5554:com.example.app",
+        { state: ServiceState.RUNNING, dependents: [] },
+      ],
+      [
+        "AndroidNetworkInspector:emulator-5556:com.example.app",
+        { state: ServiceState.RUNNING, dependents: [] },
+      ],
+      [
+        `AndroidNetworkInspector:${wireless}:com.example.app`,
+        { state: ServiceState.RUNNING, dependents: [] },
+      ],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    expect(await tool.execute!({}, { devices: ["emulator-5554", wireless] })).toEqual({
+      stopped: [
+        "AndroidNetworkInspector:emulator-5554:com.example.app",
+        `AndroidNetworkInspector:${wireless}:com.example.app`,
+      ],
+    });
+    expect(registry.disposeService).not.toHaveBeenCalledWith(
+      "AndroidNetworkInspector:emulator-5556:com.example.app"
+    );
+
+    const registry2 = createMockRegistry(
+      new Map([
+        [
+          `AndroidNetworkInspector:${wireless}:com.example.app`,
+          { state: ServiceState.RUNNING, dependents: [] },
+        ],
+      ])
+    );
+    const tool2 = createStopAllSimulatorServersTool(registry2);
+    expect(await tool2.execute!({}, { devices: ["192.168.1.5", "com.example.app"] })).toEqual({
+      stopped: [],
+      unmatched: ["192.168.1.5", "com.example.app"],
+    });
+  });
+
   it("reaps AXService on an unscoped machine-wide sweep too", async () => {
     const services = new Map([
       [`AXService:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],

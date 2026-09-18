@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { attachAndroidNetworkInspectorToLaunch } from "../../../blueprints/android-network-inspector";
 import {
   assertAmStartOk,
   normalizeActivityComponent,
@@ -41,6 +42,7 @@ export const androidImpl: PlatformImpl<
         { cause: err instanceof Error ? err : new Error(String(err)) }
       );
     }
+    await attachAndroidNetworkInspectorToLaunch(udid, bundleId);
     return { restarted: true, bundleId };
   },
 };

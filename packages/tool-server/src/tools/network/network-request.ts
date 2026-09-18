@@ -1,9 +1,15 @@
+import * as zlib from "node:zlib";
 import { z } from "zod";
-import type { ServiceRef, ToolDefinition } from "@argent/registry";
+import type { DeviceInfo, ServiceRef, ToolDefinition } from "@argent/registry";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import {
+  ANDROID_NATIVE_REQUEST_ID,
+  findAndroidNativeRecord,
+  type AndroidNetworkBody,
+} from "../../blueprints/android-network-inspector";
 import { resolveDevice } from "../../utils/device-info";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
@@ -41,6 +47,19 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
 
 /** Response body chars kept; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
+
+/**
+ * Bytes an encoded body of the Android native layer may decode to. A few
+ * hundred bytes of br can decode to gigabytes, and the decode blocks the
+ * tool-server while it runs.
+ */
+const MAX_DECODED_BODY_BYTES = 16 * 1024 * 1024;
+
+function truncateBody(body: string, mimeType: string): string {
+  return body.length > MAX_BODY_SIZE
+    ? `[TRUNCATED — original size: ${body.length} chars, MIME: ${mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`
+    : body;
+}
 
 const zodSchema = z.object({
   port: metroPortField,
@@ -106,6 +125,10 @@ interface NetworkRequestDetails {
   initiator?: { type: string; url?: string; lineNumber?: number };
 }
 
+function isAndroidNativeRequest(device: DeviceInfo, requestId: string): boolean {
+  return device.platform === "android" && ANDROID_NATIVE_REQUEST_ID.test(requestId);
+}
+
 export const networkRequestTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   NetworkRequestDetails | string
@@ -117,10 +140,11 @@ export const networkRequestTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
-  description: `Get full details of a specific network request by its requestId (from view-network-logs).
+  description: `Get full details of a specific network request by its requestId from view-network-logs or native-network-logs.
+Android native requests use android-N IDs and include the request body.
 Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
 Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
+If the requestId is not found, list requests again with the tool that supplied the ID.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {
@@ -128,12 +152,14 @@ Returns an error message string if the requestId is not found — use view-netwo
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    if (isAndroidNativeRequest(device, params.requestId)) return {};
     return {
       inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
     };
   },
   async execute(services, params) {
-    if (resolveDevice(params.device_id).platform === "chromium") {
+    const device = resolveDevice(params.device_id);
+    if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       const rec = chromium.server.network.get(params.requestId);
       if (!rec) {
@@ -172,10 +198,7 @@ Returns an error message string if the requestId is not found — use view-netwo
               const body = out.base64Encoded
                 ? Buffer.from(out.body, "base64").toString("utf8")
                 : out.body;
-              resp.body =
-                body.length > MAX_BODY_SIZE
-                  ? `[TRUNCATED — original size: ${body.length} chars, MIME: ${resp.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`
-                  : body;
+              resp.body = truncateBody(body, resp.mimeType);
             }
           } catch {
             // Body not retained: navigated away, evicted, or never had one.
@@ -184,6 +207,14 @@ Returns an error message string if the requestId is not found — use view-netwo
         details.response = resp;
       }
       return details;
+    }
+
+    if (isAndroidNativeRequest(device, params.requestId)) {
+      return androidNativeRequestDetails(
+        canonicalDeviceId(params.device_id) ?? device.id,
+        params.requestId,
+        params.includeBody
+      );
     }
 
     const api = services.inspector as NetworkInspectorApi;
@@ -229,12 +260,7 @@ Returns an error message string if the requestId is not found — use view-netwo
       };
 
       if (params.includeBody && entry.responseBody != null) {
-        const body = entry.responseBody;
-        if (body.length > MAX_BODY_SIZE) {
-          resp.body = `[TRUNCATED — original size: ${body.length} chars, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
-        } else {
-          resp.body = body;
-        }
+        resp.body = truncateBody(entry.responseBody, entry.response.mimeType);
       }
 
       details.response = resp;
@@ -243,3 +269,119 @@ Returns an error message string if the requestId is not found — use view-netwo
     return details;
   },
 };
+
+async function androidNativeRequestDetails(
+  deviceId: string,
+  requestId: string,
+  includeBody: boolean
+): Promise<NetworkRequestDetails | string> {
+  const found = findAndroidNativeRecord(deviceId, requestId);
+  if (!found) {
+    return `Request ${requestId} not found. Use native-network-logs to list the requests the Android native layer recorded.`;
+  }
+  const { inspector, record } = found;
+
+  const request: NonNullable<NetworkRequestDetails["request"]> = {
+    url: record.request.url,
+    method: record.request.method,
+    headers: redactHeaders(record.request.headers),
+  };
+  if (record.request.hasPostData) {
+    request.postData = await readAndroidBody(
+      () => inspector.requestPostData(record.id),
+      contentTypeOf(record.request.headers)
+    );
+  }
+
+  const details: NetworkRequestDetails = {
+    requestId: record.id,
+    state: record.state,
+    resourceType: record.resourceType,
+    durationMs: record.timing.durationMs,
+    encodedDataLength: record.encodedDataLength,
+    errorText: record.errorText,
+    request,
+  };
+
+  if (record.response) {
+    const resp: NetworkRequestDetails["response"] = {
+      status: record.response.status,
+      statusText: record.response.statusText,
+      headers: redactHeaders(record.response.headers),
+      mimeType: record.response.mimeType,
+    };
+    if (includeBody) {
+      resp.body = await readAndroidBody(
+        () => inspector.responseBody(record.id),
+        record.response.mimeType,
+        headerValue(record.response.headers, "content-encoding")
+      );
+    }
+    details.response = resp;
+  }
+
+  return details;
+}
+
+async function readAndroidBody(
+  read: () => Promise<AndroidNetworkBody>,
+  mimeType: string,
+  contentEncoding = ""
+): Promise<string> {
+  let body: AndroidNetworkBody;
+  try {
+    body = await read();
+  } catch (err) {
+    return `[unavailable: ${err instanceof Error ? err.message : String(err)}]`;
+  }
+  if (!body.available) return `[unavailable: ${body.reason ?? "no body"}]`;
+  if (!body.base64Encoded) return truncateBody(body.body, mimeType);
+
+  const bytes = decodeContent(Buffer.from(body.body, "base64"), contentEncoding);
+  if (!bytes) {
+    return `[unavailable: the ${contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return `[binary: ${bytes.length} bytes, MIME: ${mimeType || "unknown"}]`;
+  }
+  return truncateBody(text, mimeType);
+}
+
+/**
+ * Decodes an Android native body by the response's Content-Encoding. A body
+ * that does not decode reads as it came.
+ */
+function decodeContent(bytes: Buffer, contentEncoding: string): Buffer | null {
+  const options = { maxOutputLength: MAX_DECODED_BODY_BYTES };
+  try {
+    switch (contentEncoding.trim().toLowerCase()) {
+      case "gzip":
+        return zlib.gunzipSync(bytes, options);
+      case "br":
+        return zlib.brotliDecompressSync(bytes, options);
+      case "zstd":
+        // Node 22.15 and 23.8 added zstd; the tool-server also runs on Node 20.
+        return typeof zlib.zstdDecompressSync === "function"
+          ? zlib.zstdDecompressSync(bytes, options)
+          : bytes;
+      default:
+        return bytes;
+    }
+  } catch (err) {
+    return (err as { code?: unknown }).code === "ERR_BUFFER_TOO_LARGE" ? null : bytes;
+  }
+}
+
+function headerValue(headers: Record<string, string>, wanted: string): string {
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() === wanted) return value;
+  }
+  return "";
+}
+
+function contentTypeOf(headers: Record<string, string>): string {
+  return headerValue(headers, "content-type").split(";")[0]!.trim();
+}
