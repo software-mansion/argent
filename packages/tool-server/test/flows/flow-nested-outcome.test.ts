@@ -128,6 +128,42 @@ describe("a nested flow-execute reports its own verdict", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("carries the failed inner step's expected, actual, hint and indeterminate", async () => {
+    // A failed check keeps the found text and the advice BESIDE its reason, so
+    // a step built from the inner reason alone says "did not equal" with no
+    // found text. Nothing else in a composed run prints the inner step.
+    const { result } = await run("flow-execute", {
+      ...FAILED_SUBFLOW,
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          reason: 'element matched id="total" but its text did not equal "$42.00"',
+          expected: "$42.00",
+          actual: "Total $41.50",
+          hint: 'the element\'s own text is "Total"',
+          indeterminate: true,
+        },
+      ],
+    });
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].expected).toBe("$42.00");
+    expect(result.steps[0].actual).toBe("Total $41.50");
+    expect(result.steps[0].hint).toBe('the element\'s own text is "Total"');
+    expect(result.steps[0].indeterminate).toBe(true);
+  });
+
+  it("carries no detail fields when the failed inner step has none", async () => {
+    const { result } = await run("flow-execute", FAILED_SUBFLOW);
+
+    expect(result.steps[0].expected).toBeUndefined();
+    expect(result.steps[0].actual).toBeUndefined();
+    expect(result.steps[0].hint).toBeUndefined();
+    expect(result.steps[0].indeterminate).toBeUndefined();
+  });
+
   it("treats a cancelled nested run as a skip, not a failure", async () => {
     const { result } = await run("flow-execute", { ...FAILED_SUBFLOW, aborted: true });
 

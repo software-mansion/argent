@@ -26,27 +26,50 @@ const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 interface NestedOutcome {
   status: StepStatus;
   reason: string;
+  /**
+   * The detail fields of the inner step that failed, carried onto the outer
+   * step. A failed check keeps the text it found, and the advice about it,
+   * beside its reason rather than inside it — so an outer step built from the
+   * inner `reason` alone would say "did not equal" with no found text, or
+   * "no element matched" with no advice, and nothing else in the run prints
+   * the inner step.
+   */
+  hint?: string;
+  expected?: string;
+  actual?: string;
+  indeterminate?: true;
 }
+
+type NestedDetails = Pick<NestedOutcome, "hint" | "expected" | "actual" | "indeterminate">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function firstFailingStep(steps: unknown): string | undefined {
+/** A string field of a report that crossed the registry boundary as `unknown`. */
+function str(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function firstFailingStep(steps: unknown): ({ label: string } & NestedDetails) | undefined {
   if (!Array.isArray(steps)) return undefined;
   for (const entry of steps) {
     if (!isRecord(entry)) continue;
     if (entry.status !== "fail" && entry.status !== "error") continue;
     // Typed checks rather than coercion: this report crossed the registry
     // boundary as `unknown`, and an object here would render "[object Object]".
-    const what =
-      typeof entry.tool === "string"
-        ? entry.tool
-        : typeof entry.kind === "string"
-          ? entry.kind
-          : "step";
-    const why = typeof entry.reason === "string" ? entry.reason : "no reason given";
-    return `${what}: ${why}`;
+    const what = str(entry.tool) ?? str(entry.kind) ?? "step";
+    const why = str(entry.reason) ?? "no reason given";
+    const hint = str(entry.hint);
+    const expected = str(entry.expected);
+    const actual = str(entry.actual);
+    return {
+      label: `${what}: ${why}`,
+      ...(hint !== undefined && { hint }),
+      ...(expected !== undefined && { expected }),
+      ...(actual !== undefined && { actual }),
+      ...(entry.indeterminate === true && { indeterminate: true as const }),
+    };
   }
   return undefined;
 }
@@ -83,11 +106,13 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
 
   if (result.ok === false) {
     const detail = firstFailingStep(result.steps);
+    const { label, ...details } = detail ?? {};
     return {
       status: "fail",
       reason:
         `flow "${flow}" failed: ${count(result.passed)} passed, ${count(result.failed)} failed, ` +
-        `${count(result.errored)} errored${detail ? ` (${detail})` : ""}`,
+        `${count(result.errored)} errored${label ? ` (${label})` : ""}`,
+      ...details,
     };
   }
 

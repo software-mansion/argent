@@ -2536,6 +2536,7 @@ async function execLeafStep(
             status: nested.status,
             tool: step.name,
             reason: nested.reason,
+            ...outcomeDetails(nested),
             result,
             outputHint,
             args,
