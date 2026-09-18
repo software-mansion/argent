@@ -23,8 +23,9 @@ const { run, writeFlow } = createFlowTestHarness({
 const DETAIL_KEYS = ["hint", "expected", "actual", "indeterminate"] as const;
 
 const INDETERMINATE_HINT =
-  "argent could not read the screen, so this is not a verdict on the app; re-run, or fix the " +
-  "device and tree source, before editing the flow";
+  "check the app first — a crash, or a screen the app emptied itself, reads the same here as a " +
+  "tree source that stopped answering — then check the device and the tree source; re-run " +
+  "before you edit the flow";
 
 function disconnected(): never {
   throw new Error("native devtools disconnected");
@@ -155,6 +156,61 @@ describe("unreadable tree", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["when:error", "tap:skip"]);
     expect(result.steps[0]).toMatchObject({ indeterminate: true, hint: INDETERMINATE_HINT });
     expect(result.steps[0].reason).toMatch(/^could not evaluate when guard/);
+  });
+
+  it("names the app in the shared hint when the app is what went dark", async () => {
+    // Both triggers below are the app, not the environment: the shared hint
+    // must not send either back for a re-run as noise.
+    currentTree = () => {
+      throw new Error(
+        "com.argent.flowtest lost its devtools connection after launch (the app crashed, was " +
+          "terminated, or its socket closed)"
+      );
+    };
+    await writeFlow("crashed", {
+      executionPrerequisite: "",
+      steps: [{ kind: "await", condition: "visible", selector: { text: "Done" }, timeout: 500 }],
+    });
+
+    const [crashed] = (await run("crashed")).steps;
+
+    expect(crashed).toMatchObject({ indeterminate: true, hint: INDETERMINATE_HINT });
+    expect(crashed.reason).toContain("the app crashed, was terminated");
+    expect(crashed.hint).not.toMatch(/not a verdict on the app/);
+    expect(crashed.hint).toMatch(/^check the app first/);
+  });
+
+  it("gives a screen the app emptied after a match the same hint", async () => {
+    // The element was seen, then the tree read back empty: an error boundary
+    // that unmounted the root reads exactly like a dead tree source, so the
+    // hint has to send the reader to the app before the device.
+    let reads = 0;
+    currentTree = () =>
+      reads++ === 0 ? screen([label("Loading", { identifier: "status" })]) : screen([]);
+    await writeFlow("blanked", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "await",
+          condition: "text",
+          selector: { identifier: "status" },
+          expectedText: "Ready",
+          textMatch: "equals",
+          // Long enough for the empty reads to outlast the dark-tail
+          // tolerance, which is what makes the verdict indeterminate.
+          timeout: 2000,
+        },
+      ],
+    });
+
+    const [blanked] = (await run("blanked")).steps;
+
+    expect(blanked).toMatchObject({
+      status: "fail",
+      indeterminate: true,
+      hint: INDETERMINATE_HINT,
+    });
+    expect(blanked.reason).toMatch(/empty or degraded/);
   });
 });
 

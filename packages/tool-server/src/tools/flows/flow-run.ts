@@ -2349,9 +2349,22 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
+/**
+ * The shared hint for a step whose check never ran, used when the reader gave
+ * no hint of its own.
+ *
+ * It must not call the app innocent. An unreadable screen is exactly what an
+ * app that crashed, was terminated, or emptied its own screen after the
+ * element was seen looks like from here — `isBlindRead` cannot tell any of
+ * those from a tree source that stopped answering. A hint that promised "this
+ * is not a verdict on the app" therefore sent a real crash or a blank-screen
+ * regression back for a re-run as environment noise. Order the checks instead,
+ * and put the app first.
+ */
 const INDETERMINATE_HINT =
-  "argent could not read the screen, so this is not a verdict on the app; re-run, or fix the " +
-  "device and tree source, before editing the flow";
+  "check the app first — a crash, or a screen the app emptied itself, reads the same here as a " +
+  "tree source that stopped answering — then check the device and the tree source; re-run " +
+  "before you edit the flow";
 
 function outcomeDetails(
   r: Pick<DirectiveOutcome, "indeterminate" | "hint" | "expected" | "actual">

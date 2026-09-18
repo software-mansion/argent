@@ -251,7 +251,7 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     expect(result.steps[0].reason).toMatch(/unreadable for the final \d+ms/i);
     expect(result.steps[0].reason).toMatch(/native devtools disconnected/);
     expect(result.steps[0].reason).not.toMatch(/no element matched/);
-    expect(result.steps[0].hint).toMatch(/not a verdict on the app/);
+    expect(result.steps[0].hint).toMatch(/^check the app first/);
   });
 
   it("await exists: the same dark tail under an await window surfaces the fetch error", async () => {
