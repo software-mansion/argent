@@ -21,6 +21,25 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Which GUI app the active Xcode ships decides how boot-device shows the device.
+const DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer";
+const SIMULATOR_APP = `${DEVELOPER_DIR}/Applications/Simulator.app`;
+const DEVICE_HUB_APP = "/Applications/Xcode.app/Contents/Applications/DeviceHub.app";
+const existsSyncMock = vi.hoisted(() => vi.fn());
+
+// Only the Xcode app lookups are faked; modules that probe other paths at
+// import time still see the real filesystem.
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const isXcodePath = (path: string) => path.startsWith("/Applications/Xcode.app/");
+  return {
+    ...actual,
+    existsSync: (path: string) =>
+      isXcodePath(path) ? existsSyncMock(path) : actual.existsSync(path),
+    realpathSync: (path: string) => (isXcodePath(path) ? path : actual.realpathSync(path)),
+  };
+});
+
 // Mock the AX-bypass helpers at the module boundary so this file asserts
 // boot-device's dispatch (state probe → pre-boot if shutdown → boot →
 // ensureAutomationEnabled fallback → native-devtools → open) without pulling
@@ -60,9 +79,13 @@ describe("boot-device — iOS path", () => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
     mockExecFile.mockImplementation((...args: unknown[]) => {
-      getCallback(args)(null, "", "");
+      // A mocked execFile has no promisify.custom, so promisify resolves the
+      // second callback argument as-is: pass the { stdout } shape it reads.
+      const stdout = args[0] === "xcode-select" ? `${DEVELOPER_DIR}\n` : "";
+      getCallback(args)(null, { stdout, stderr: "" } as never);
       return {} as never;
     });
+    existsSyncMock.mockReset().mockImplementation((path: string) => path === SIMULATOR_APP);
     // Default state: 11111111 + 33333333 Shutdown (happy path), 22222222
     // Booted (kickstart-fallback path). Individual tests override.
     listIosSimulatorsMock.mockReset().mockResolvedValue([
@@ -123,7 +146,8 @@ describe("boot-device — iOS path", () => {
           "11111111-1111-1111-1111-111111111111",
         ],
       ],
-      ["open", ["-a", "Simulator.app"]],
+      ["xcode-select", ["-p"]],
+      ["open", ["-a", SIMULATOR_APP]],
     ]);
     expect(resolveService).toHaveBeenCalledWith(
       "NativeDevtools:11111111-1111-1111-1111-111111111111",
@@ -179,7 +203,7 @@ describe("boot-device — iOS path", () => {
         ],
       ],
     ]);
-    expect(calls).not.toContainEqual(["open", ["-a", "Simulator.app"]]);
+    expect(calls.map(([file]) => file)).not.toContain("open");
   });
 
   it("with ARGENT_SIMULATOR_NO_WINDOW set does NOT open Simulator.app even without headless:true", async () => {
@@ -208,7 +232,79 @@ describe("boot-device — iOS path", () => {
     }
 
     const calls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
-    expect(calls).not.toContainEqual(["open", ["-a", "Simulator.app"]]);
+    expect(calls.map(([file]) => file)).not.toContain("open");
+  });
+
+  describe("GUI window", () => {
+    const udid = "11111111-1111-1111-1111-111111111111";
+    const registry = {
+      resolveService: async () => ({ getInitFailure: () => null, reverifyEnv: async () => {} }),
+    } as unknown as Registry;
+    const openCalls = () =>
+      mockExecFile.mock.calls
+        .filter(([file]) => file === "open")
+        .map(([file, args]) => [file, args]);
+
+    it("opens the booted device in the active Xcode's Device Hub when it has no Simulator.app", async () => {
+      existsSyncMock.mockImplementation((path: string) => path === DEVICE_HUB_APP);
+
+      await createBootDeviceTool(registry).execute!({}, { udid });
+
+      expect(openCalls()).toEqual([
+        ["open", ["-a", DEVICE_HUB_APP, `devices://device/open?id=${udid}`]],
+      ]);
+    });
+
+    it("opens nothing when the active Xcode ships neither app", async () => {
+      existsSyncMock.mockReturnValue(false);
+
+      await expect(createBootDeviceTool(registry).execute!({}, { udid })).resolves.toMatchObject({
+        booted: true,
+      });
+      expect(openCalls()).toEqual([]);
+    });
+
+    it("still reports the boot when the app fails to open", async () => {
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        const stdout = args[0] === "xcode-select" ? `${DEVELOPER_DIR}\n` : "";
+        getCallback(args)(args[0] === "open" ? new Error("LaunchServices error") : null, {
+          stdout,
+          stderr: "",
+        } as never);
+        return {} as never;
+      });
+
+      await expect(createBootDeviceTool(registry).execute!({}, { udid })).resolves.toMatchObject({
+        booted: true,
+      });
+      expect(openCalls()).toEqual([["open", ["-a", SIMULATOR_APP]]]);
+    });
+
+    it("bounds the GUI lookups with a timeout", async () => {
+      await createBootDeviceTool(registry).execute!({}, { udid });
+
+      const guiCalls = mockExecFile.mock.calls.filter(
+        ([file]) => file === "xcode-select" || file === "open"
+      );
+      expect(guiCalls).toHaveLength(2);
+      for (const call of guiCalls) expect(call[2]).toMatchObject({ timeout: 5_000 });
+    });
+
+    it("still reports the boot when xcode-select fails", async () => {
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        getCallback(args)(
+          args[0] === "xcode-select" ? new Error("no developer dir") : null,
+          "",
+          ""
+        );
+        return {} as never;
+      });
+
+      await expect(createBootDeviceTool(registry).execute!({}, { udid })).resolves.toMatchObject({
+        booted: true,
+      });
+      expect(openCalls()).toEqual([]);
+    });
   });
 
   it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {

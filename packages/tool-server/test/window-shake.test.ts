@@ -225,7 +225,7 @@ describe("prepareHostWindowShake — iOS window lookup", () => {
     // The device display name is the needle: with several booted devices each
     // window is titled with its device's name, so window 1 is not safe.
     expect(scripts[0]).toContain('set needles to {"iPhone 16 Pro"}');
-    expect(scripts[0]).toContain('every process whose name is "Simulator" or name is "Device Hub"');
+    expect(scripts[0]).toContain('every process whose name is "Simulator" or name is "DeviceHub"');
     // A shake with no window to move must error out inside AppleScript rather
     // than silently "succeeding" against a stale reference.
     expect(scripts[0]).toContain("if win is missing value then error");
@@ -234,7 +234,7 @@ describe("prepareHostWindowShake — iOS window lookup", () => {
   it("falls back to window 1 of Simulator/Device Hub when the name is unknown", async () => {
     const scripts = stubOsascript();
     await shakeOnce({ kind: "ios", udid: "UDID-1234" });
-    expect(scripts[0]).toContain('{"Simulator", "Device Hub"}');
+    expect(scripts[0]).toContain('{"Simulator", "DeviceHub"}');
     expect(scripts[0]).not.toContain("set needles to");
   });
 
