@@ -41,6 +41,11 @@ on:
       - "packages/tool-server/src/tools/flows/flow-script-step.ts"
       - "packages/tool-server/src/tools/flows/flow-utils.ts"
       - "packages/tool-server/src/tools/flows/flow-add-script.ts"
+      - "packages/tool-server/src/tools/flows/script/flow-script-env.ts"
+      - "packages/tool-server/src/tools/flows/flow-run.ts"
+      - "packages/tool-server/src/utils/secrets.ts"
+      - "packages/configuration-core/src/config-schema.ts"
+      - "packages/configuration-core/src/secrets.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/utils/device-shutdown.ts"
       - "packages/tool-server/vitest.config.ts"
@@ -55,6 +60,14 @@ on:
       - "packages/tool-server/test/flows/script/flow-script-interpreter.test.ts"
       - "packages/tool-server/test/flows/script/flow-script-bash.test.ts"
       - "packages/tool-server/test/flows/script/flow-script-bash-sweep.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-env.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-environment.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-redaction.test.ts"
+      - "packages/tool-server/src/tools/flows/flow-start-recording.ts"
+      - "packages/tool-server/src/tools/flows/flow-finish-recording.ts"
+      - "packages/tool-server/src/tools/flows/flow-insert-echo.ts"
+      - "packages/tool-server/src/tools/flows/flow-add-step.ts"
+      - "packages/configuration-core/src/index.ts"
       - "packages/tool-server/test/helpers/host-bash.ts"
       - "packages/tool-server/test/helpers/flow-script-workspace.ts"
       - "packages/configuration-core/src/**"
@@ -64,6 +77,7 @@ on:
       - "packages/tool-server/src/utils/format-error.ts"
       - "packages/tool-server/src/utils/secrets.ts"
       - "packages/tool-server/src/utils/timing.ts"
+      - "packages/tool-server/test/helpers/temp-home.ts"
       - "packages/native-devtools-ios/src/index.ts"
       - "packages/native-devtools-ios/test/index.test.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
@@ -118,6 +132,9 @@ jobs:
           test/flows/script/flow-script-interpreter.test.ts
           test/flows/script/flow-script-bash.test.ts
           test/flows/script/flow-script-bash-sweep.test.ts
+          test/flows/script/flow-script-env.test.ts
+          test/flows/script/flow-script-environment.test.ts
+          test/flows/script/flow-script-redaction.test.ts
 
       - name: Resolver unit tests on Windows (native-devtools-ios)
         working-directory: packages/native-devtools-ios

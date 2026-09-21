@@ -142,6 +142,72 @@ describe("parseRunArgs", () => {
     expect(parseRunArgs(["--json-stream", "checkout.yaml"]).jsonStream).toBe(true);
   });
 
+  it("collects a repeatable --env into one map, last write winning", () => {
+    expect(
+      parseRunArgs([
+        "checkout",
+        "--env",
+        "BUILD=1421",
+        "--env",
+        "BASE_URL=https://staging.example.com",
+        "--env",
+        "BUILD=1422",
+      ]).env
+    ).toEqual({ BUILD: "1422", BASE_URL: "https://staging.example.com" });
+    expect(parseRunArgs(["checkout"]).env).toBeUndefined();
+  });
+
+  it("takes everything after the first = as the value, spaces included", () => {
+    expect(parseRunArgs(["checkout", "--env", "AUTH=Bearer abc"]).env).toEqual({
+      AUTH: "Bearer abc",
+    });
+    expect(parseRunArgs(["checkout", "--env", "Q=a=b=c"]).env).toEqual({ Q: "a=b=c" });
+    expect(parseRunArgs(["checkout", "--env", "EMPTY="]).env).toEqual({ EMPTY: "" });
+    expect(() => parseRunArgs(["checkout", "--env", "AUTH=Bearer", "abc"])).toThrow(
+      /unexpected argument "abc"/
+    );
+  });
+
+  it("refuses a malformed --env argument, quoting it", () => {
+    expect(() => parseRunArgs(["checkout", "--env", "NOEQUALS"])).toThrow(
+      /--env expects NAME=value, got "NOEQUALS" — it holds no "="/
+    );
+    expect(() => parseRunArgs(["checkout", "--env", "=value"])).toThrow(
+      /it starts with "=", so it names nothing/
+    );
+    expect(() => parseRunArgs(["checkout", "--env", "2FA=x"])).toThrow(
+      /"2FA" is not an environment variable name/
+    );
+  });
+
+  it("refuses __proto__, which every map on the way would drop", () => {
+    expect(() => parseRunArgs(["checkout", "--env", "__proto__=x"])).toThrow(
+      /--env cannot set __proto__/
+    );
+  });
+
+  it("refuses a reserved name here rather than at the server, in every spelling", () => {
+    for (const spelling of [
+      "npm_config_node-options",
+      "npm_config_node_options",
+      "NPM_CONFIG_NODE_OPTIONS",
+    ]) {
+      expect(() => parseRunArgs(["checkout", "--env", `${spelling}=--inspect`]), spelling).toThrow(
+        /--env cannot set npm_config_node-options: it steers the runner's own process/
+      );
+    }
+    expect(() => parseRunArgs(["checkout", "--env", "NODE_OPTIONS=--inspect"])).toThrow(
+      /--env cannot set NODE_OPTIONS/
+    );
+    expect(() => parseRunArgs(["checkout", "--env", "ARGENT_OUTPUT=/tmp/x"])).toThrow(
+      /names the file a `\.sh` step exchanges/
+    );
+    expect(() => parseRunArgs(["checkout", "--env", "MY-VAR=x"])).toThrow(
+      /"MY-VAR" is not an environment variable name/
+    );
+    expect(parseRunArgs(["checkout", "--env", "BUILD=1421"]).env).toEqual({ BUILD: "1421" });
+  });
+
   it("accepts -r and --recursive in any position", () => {
     expect(parseRunArgs(["flows", "-r"]).recursive).toBe(true);
     expect(parseRunArgs(["--recursive", "flows"]).recursive).toBe(true);
@@ -368,6 +434,30 @@ describe("argent flow run", () => {
       { onProgress: expect.any(Function) }
     );
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
+  });
+
+  it("forwards --env to flow-execute as the tool's env map", async () => {
+    const runRoot = await fsp.realpath(tempRoot);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(["run", "checkout.yaml", "--env", "BUILD=1421", "--env", "AUTH=Bearer abc"], opts)
+      ).rejects.toThrow("process.exit:0");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith(
+      "flow-execute",
+      {
+        flow_path: path.join(runRoot, "checkout.yaml"),
+        project_root: runRoot,
+        prerequisiteAcknowledged: true,
+        env: { BUILD: "1421", AUTH: "Bearer abc" },
+      },
+      { onProgress: expect.any(Function) }
+    );
   });
 
   it("prints a script step's log live, under the step line the event produced", async () => {
@@ -1048,6 +1138,59 @@ describe("argent flow run", () => {
     );
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("stops a directory run on a refusal about the call, not about the file", async () => {
+    const batchRoot = path.join(tempRoot, "batch-run-env");
+    const flowsDir = path.join(batchRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "a.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "b.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "c.yaml"), "steps: []\n"),
+    ]);
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError('This run\'s env value S: Unknown secret "NOPE"', {
+        errorCode: "TOOL_INPUT_INVALID",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir, "--env", "S={{secret:NOPE}}"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs.join("\n").match(/This run's env value S/g)).toHaveLength(1);
+    expect(logs.join("\n")).toContain("0 passed, 1 failed, 2 skipped");
+    expect(logs.join("\n")).toContain("not run (rejected)");
+    expect(logs.join("\n")).not.toContain("did not finish (run error)");
+  });
+
+  it("keeps a directory run going when one FILE is refused", async () => {
+    const batchRoot = path.join(tempRoot, "batch-bad-file");
+    const flowsDir = path.join(batchRoot, ".argent", "flows");
+    await fsp.mkdir(flowsDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(flowsDir, "a.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(flowsDir, "b.yaml"), "steps: []\n"),
+    ]);
+    let call = 0;
+    toolsClientMock.callTool.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        throw new ToolInvocationError("Unrecognized flow entry (script `env` holds a number)", {
+          errorCode: "FLOW_ENTRY_UNRECOGNIZED",
+          errorKind: "validation",
+        });
+      }
+      return { data: report() };
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(logs.join("\n")).toContain("1 passed, 1 failed, 0 skipped");
   });
 
   it("lists nested flows at any depth — paths `flow run` accepts", async () => {
@@ -2364,6 +2507,39 @@ describe("argent flow run <dir>", () => {
     expect(lines).toContain(
       `    re-run: argent flow run ${path.join("flows", "sub", "c-search.yaml")} --update-baselines --output ${path.join("out", "sub")}`
     );
+  });
+
+  it("re-runs with the batch's --env values, quoting the ones a shell would expand", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login", ok: false, steps: [] }) })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(
+          [
+            "run",
+            "./flows",
+            "--env",
+            "BUILD=1421",
+            "--env",
+            "LABEL=Test account",
+            "--env",
+            "API_KEY={{secret:API_KEY}}",
+          ],
+          opts
+        )
+      ).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const rerun = `argent flow run ${path.join("flows", "a-login.yaml")} --env BUILD=1421 --env 'LABEL=Test account' --env 'API_KEY={{secret:API_KEY}}'`;
+    expect(logs.join("\n").split("\n")).toContain(`    re-run: ${rerun}`);
+    expect(parseRunArgs(["flows/a-login.yaml", "--env", "LABEL=Test account"]).env).toEqual({
+      LABEL: "Test account",
+    });
   });
 
   it("re-runs with an --output that starts with a dash through ./, not as an option", async () => {

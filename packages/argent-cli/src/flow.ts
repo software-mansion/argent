@@ -4,6 +4,13 @@ import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 import {
+  PROTO_ENV_NAME,
+  SCRIPT_ENV_NAME_PATTERN,
+  reservedScriptEnvName,
+  reservedScriptEnvNamesForMessage,
+  reservedScriptEnvReason,
+} from "@argent/configuration-core";
+import {
   createToolsClient,
   getResolvedToolsUrl,
   isArtifactHandle,
@@ -129,7 +136,9 @@ alone, then a final flow summary; --recursive walks subdirectories too
 keeps the batch running, as does one the server rejects up front — an invalid
 file, or a device it cannot resolve. A transport failure, a rejection the server
 does not mark as validation, or a reply that is not a report stops the batch and
-counts the remaining flows skipped.
+counts the remaining flows skipped. So does a refusal about the CALL rather than
+the file — every flow in a batch runs with the same arguments apart from its own
+path, so a bad --env name is one fault, not one per file.
 
 Runs require the auto-started local tool server;
 ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
@@ -152,6 +161,15 @@ Options (run):
                          same filename sharing <dir> exports to <flow>-<pathhash>/
                          instead (with a warning), so no flow's evidence is
                          overwritten
+  --env <NAME=value>     Environment value every \`script\` step in the run reads
+                         from its environment (process.env in a .mjs, $NAME in
+                         a .sh), through nested flows. Repeatable. Overrides the
+                         flow file's own \`env\` defaults at any depth; a step's
+                         own \`env\` still wins. A repeated name keeps the last
+                         value. Pass a credential as
+                         --env NAME="{{secret:SECRET_NAME}}", never in the clear.
+                         A shell \`export\` does not reach a script: the tool
+                         server's environment is a snapshot from its first start
   -r, --recursive        With a directory path, also run flows in subdirectories
   --json                 Print the flow's JSON report, or a directory run's JSON
                          aggregate
@@ -166,6 +184,7 @@ Examples:
   argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
   argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
   argent flow run .argent/flows --recursive
+  argent flow run checkout --env BUILD=1421 --env BASE_URL=https://staging.example.com
 `);
 }
 
@@ -178,7 +197,46 @@ const RUN_OPTIONS = {
   "device": { kind: "value" },
   "platform": { kind: "value" },
   "output": { kind: "value" },
+  "env": { kind: "values" },
 } as const satisfies OptionSpecs;
+
+function parseEnvAssignments(raw: string[] | undefined): Record<string, string> | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  let env: Record<string, string> = {};
+  for (const assignment of raw) {
+    const eq = assignment.indexOf("=");
+    if (eq <= 0) {
+      throw new FlagParseException(
+        `--env expects NAME=value, got ${JSON.stringify(assignment)}` +
+          (eq === 0 ? ' — it starts with "=", so it names nothing' : ' — it holds no "="')
+      );
+    }
+    const name = assignment.slice(0, eq);
+    if (name === PROTO_ENV_NAME) {
+      throw new FlagParseException(
+        `--env cannot set ${PROTO_ENV_NAME}: every map on the way to the script copies it through ` +
+          `a plain object, where ${PROTO_ENV_NAME} is an accessor rather than an entry — the value ` +
+          `would be dropped and the script would run without it, silently. Use a name of your own`
+      );
+    }
+    const reserved = reservedScriptEnvName(name);
+    if (reserved) {
+      throw new FlagParseException(
+        `--env cannot set ${reserved}: it ${reservedScriptEnvReason(reserved)}, so no value ` +
+          `passed here reaches the script (reserved names: ${reservedScriptEnvNamesForMessage()})`
+      );
+    }
+    if (!SCRIPT_ENV_NAME_PATTERN.test(name)) {
+      throw new FlagParseException(
+        `--env expects NAME=value, got ${JSON.stringify(assignment)} — ${JSON.stringify(name)} ` +
+          'is not an environment variable name: a name starts with a letter or "_" and ' +
+          'continues with letters, digits or "_"'
+      );
+    }
+    env = { ...env, [name]: assignment.slice(eq + 1) };
+  }
+  return env;
+}
 
 export function parseRunArgs(argv: string[]): {
   /**
@@ -190,6 +248,7 @@ export function parseRunArgs(argv: string[]): {
   device?: string;
   platform?: string;
   output?: string;
+  env?: Record<string, string>;
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
@@ -223,6 +282,8 @@ export function parseRunArgs(argv: string[]): {
   if (options.device !== undefined) out.device = options.device as string;
   if (options.platform !== undefined) out.platform = options.platform as string;
   if (options.output !== undefined) out.output = options.output as string;
+  const env = parseEnvAssignments(options.env as string[] | undefined);
+  if (env !== undefined) out.env = env;
   if (out.json && out.jsonStream) {
     throw new FlagParseException("--json and --json-stream cannot be combined");
   }
@@ -463,9 +524,9 @@ function shellQuoteArg(arg: string): string {
 
 /**
  * The command that runs one flow of a directory run alone, from the same
- * working directory, with the same --device, --platform and --update-baselines,
- * and an --output that exports to the directory the batch exported that flow
- * to. A flow outside that directory keeps its absolute path, since `run`
+ * working directory, with the same --device, --platform, --update-baselines and
+ * --env, and an --output that exports to the directory the batch exported that
+ * flow to. A flow outside that directory keeps its absolute path, since `run`
  * refuses ".." segments, and a path with a leading "-" gets "./" so the parser
  * does not read it as an option.
  */
@@ -473,7 +534,10 @@ function rerunCommand(
   flowPath: string,
   rel: string,
   projectRoot: string,
-  args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
+  args: Pick<
+    ReturnType<typeof parseRunArgs>,
+    "device" | "platform" | "output" | "updateBaselines" | "env"
+  >
 ): string {
   const pathArg = (p: string) => shellQuoteArg(p.startsWith("-") ? `.${path.sep}${p}` : p);
   const fromCwd = path.relative(projectRoot, flowPath);
@@ -484,6 +548,9 @@ function rerunCommand(
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
   if (args.updateBaselines) parts.push("--update-baselines");
   if (args.output) parts.push("--output", pathArg(path.join(args.output, path.dirname(rel))));
+  for (const [name, value] of Object.entries(args.env ?? {})) {
+    parts.push("--env", shellQuoteArg(`${name}=${value}`));
+  }
   return parts.join(" ");
 }
 
@@ -1058,6 +1125,7 @@ function buildRunPayload(
   };
   if (args.device) payload.device = args.device;
   if (args.platform) payload.platform = args.platform;
+  if (args.env) payload.env = args.env;
   if (args.updateBaselines) payload.updateBaselines = true;
   return payload;
 }
@@ -1154,15 +1222,6 @@ interface BatchFlowResult {
   error_kind?: string;
 }
 
-/**
- * Run every discovered flow in `dir` sequentially. Prints each flow's failing
- * steps and warnings, then its outcome (no live step lines), then a flow-level
- * summary; a flow failing its steps — or one the tool-server rejects up front
- * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
- * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, or a reply that is not a report stops it and counts the
- * remaining flows skipped.
- */
 async function runFlowDirectory(
   dir: string,
   args: ReturnType<typeof parseRunArgs>,
@@ -1193,10 +1252,6 @@ async function runFlowDirectory(
   const results: BatchFlowResult[] = [];
   const failures: FailedFlow[] = [];
   const batchStartedAt = Date.now();
-  // A validation rejection is scoped to the one call, so the batch keeps
-  // going. Anything the server does not mark that way — another kind, or none
-  // at all — stops it, as does a transport throw: each remaining flow would
-  // burn a run against the same wall.
   let stopped = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
@@ -1215,10 +1270,10 @@ async function runFlowDirectory(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
-      const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
-      const verdict = rejectedThisFlowOnly
-        ? rejectionVerdict(toolErr?.errorCode)
-        : "did not finish (run error)";
+      const rejected = toolErr?.errorKind === "validation";
+      const rejectedThisFlowOnly =
+        rejected && toolErr.errorCode !== FAILURE_CODES.TOOL_INPUT_INVALID;
+      const verdict = rejected ? rejectionVerdict(toolErr.errorCode) : "did not finish (run error)";
       // A verdict on stdout for every entry, next to the `[i/n]` header stdout
       // already carries. The detail goes to stderr, so without this line a
       // redirected stdout log shows this flow's header followed by the next

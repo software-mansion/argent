@@ -32,14 +32,20 @@ args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 
 A recorded `flow-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling flow captured as `run:`.
 
+A `run:` step omits the call's `env` and inherits the recording's environment at replay. If the recorder warns about different values, put the required values in the sibling flow's top-level `env`. To keep the raw `flow-execute` call and its `env`, record with `delayMs: 0`.
+
 When the user requests a script, call `flow-add-script` where it must run. Use a local `.mjs` or `.sh` file. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
+
+`flow-add-script` saves its `env` on the step, overriding even replay's `--env`. Put defaults that must vary per run in top-level `env` after recording. See [Environment values](flow-yaml.md#environment-values).
+
+If the call reports that the flow's `env` changed, the step is already recorded. Remove that step before you record it again.
 
 Obey these lifecycle rules:
 
 1. Pass the same `name` and absolute `project_root` to every recording tool.
 2. Choose a name unique to the task. Another caller can take over the same pair without an ownership check. The pair is keyed by the file the filesystem resolves to, not the spelling you passed, so a differently-cased name or a symlinked `.argent/flows` collides too. That collision is reported: the second start says `restarted`, and the first recording's next call fails naming both spellings.
 3. Give concurrent recordings separate devices. Their files are isolated, but their live device actions are not.
-4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. `restarted` reports only a displaced live take.
+4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. Save the top-level `env` before you record again. Restore it after recording. `restarted` reports only a displaced live take.
 5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `flow-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
 7. Edit or reorder the YAML only after `flow-finish-recording`. An active remote recording can overwrite mid-recording edits.
@@ -164,7 +170,7 @@ The live tool and flow runner use [different trees](flow-yaml.md#the-runner-tree
 
 A warning does not reject the step. `flow-finish-recording` repeats each warning below its step and reports dropped warnings.
 
-Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports drops, record the waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
+Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports dropped verdicts, record the affected steps again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
 
 ### Wrong turns
 

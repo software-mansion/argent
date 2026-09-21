@@ -2,6 +2,7 @@ import {
   describeSelector,
   describeTextExpectation,
   escapeInline,
+  renderedValue,
   selectorToYaml,
   SELECTOR_RELATIONS,
   swipeByLabel,
@@ -412,7 +413,9 @@ const FLOW_STEP_DEFINITIONS: {
     // replays, the way tap's `times` does, while a report target names only
     // what the step acts on.
     summary: (step) =>
-      `${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
+      `${step.path}` +
+      `${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}` +
+      `${step.env ? ` env ${renderedValue(renderToolArgs(step.env))}` : ""}`,
     target: (step) => step.path,
   },
   "snapshot": {
