@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCRIPT_FILE_NAME_PATTERN } from "@argent/registry";
-import type { FlowStep } from "./flow-utils";
+import { hasScriptExtension, scriptInterpreter, type FlowStep } from "./flow-utils";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import {
   flowScriptExecutor,
@@ -10,15 +10,6 @@ import {
   type FlowScriptLogBudget,
   type FlowScriptResult,
 } from "./script/flow-script-executor";
-
-/**
- * One `script` step, from a path to a verdict.
- *
- * The flow runner and `flow-add-script` both come through here: a recorded step
- * that ran differently from the way it will replay would make the recording
- * prove nothing, so there is one path and each caller supplies only its own
- * anchor and its own run-scoped extras.
- */
 
 interface FlowScriptStepOutcome {
   status: "pass" | "fail" | "error";
@@ -89,12 +80,11 @@ export async function runFlowScriptStep(
 
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
+    interpreter: scriptInterpreter(hasScriptExtension(canonical) ? canonical : target),
     output: {},
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,
     flowDir,
-    // No `secrets`: nothing resolves one into a script step yet, so there is
-    // nothing for the executor to redact out of the captured log.
     ...(request.logBudget ? { logBudget: request.logBudget } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   });
@@ -118,17 +108,8 @@ export async function runFlowScriptStep(
   };
 }
 
-/**
- * How many of the script's own frames ride into the reason. A thrown message
- * alone names no file and no line, and a throw writes nothing to stderr, so
- * without these the step's whole diagnostic is one sentence and there is
- * nothing in CI to re-run against. Six is what a rethrow needs to show where it
- * came from without turning the step line into the whole stack; the executor's
- * `SCRIPT_MAX_FAILURE_STACK_CHARS` still holds what it captured.
- */
 const SCRIPT_REASON_MAX_FRAMES = 6;
 
-/** A frame in the host's own machinery, not in anything the author wrote. */
 function isHostFrame(frame: string): boolean {
   return (
     frame.includes("node:internal") ||
@@ -170,13 +151,6 @@ function readableFrame(frame: string, roots: readonly string[]): string {
   });
 }
 
-/**
- * The frames of a failed script, as a block appended to its message. Newline
- * separated on purpose: `oneLineReason` escapes them, so the block reads as
- * `\n    at …` on the step's own line and a reader can still tell one frame
- * from the next. The stack's first line is dropped — it only repeats the
- * message the reason already opens with.
- */
 function scriptFrames(stack: string | undefined, roots: readonly string[]): string {
   if (!stack) return "";
   const frames: string[] = [];
@@ -244,35 +218,6 @@ async function scriptFileProblem(canonical: string): Promise<string | null> {
   }
 }
 
-/**
- * The line between `fail` and `error` is who is at fault. A `fail` is the
- * SCRIPT's answer: it threw, it never loaded, it returned something that cannot
- * cross into flow state, or it stopped its own process. An `error` is
- * everything the runner did to it — a process it could not start, a limit it
- * hit, a signal it did not choose, a queue it never left. That split is what
- * lets CI read a red script step: a `fail` is a regression in the flow or the
- * system it talks to, an `error` is the machine it ran on.
- *
- * `cancelled` is an `error`, not a `skip`: every reader of a report takes
- * `skip` to mean the step did not run (the CLI's not-executed line,
- * `FlowRunResult.skipped`), and a script killed after reaching the system it
- * talks to left that state behind. A cancellation also lands on the near side
- * of the fork — a signal already aborted when the call arrived, or one raised
- * while the step waited for a concurrency slot — and the status does not try to
- * separate the two: `beforeFork` does, and {@link scriptRan} is what reads it.
- * What a runner marks `skip` is the step it never dispatched, at its own
- * pre-step abort gate; `flow-add-script` has no such gate and hands its
- * request's signal straight in, so an abort that arrived before the call does
- * reach here.
- *
- * Notes ride into the reason on every outcome, pass included. They are how the
- * executor says a time limit was clamped to the host's maximum, or that the
- * working directory it was given did not exist — and dropping them on a pass is
- * how a script that silently ran somewhere else stays silent.
- *
- * Exported for the test that pins the recorder's verdict and the runner's
- * against it, kind for kind.
- */
 export function scriptVerdict(
   result: FlowScriptResult
 ): Pick<FlowScriptStepOutcome, "status" | "reason"> {

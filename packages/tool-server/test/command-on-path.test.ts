@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock execFile with the repo's standard idiom: the callback receives a single
-// `{ stdout, stderr }` value (so `promisify(execFile)` resolves to that object),
-// or an Error to model a non-zero exit (command not found).
 const execFileMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -46,7 +43,6 @@ describe("commandOnPath", () => {
 
   it("uses `where` on Windows and returns the first matching line", async () => {
     setPlatform("win32");
-    // `where` prints one path per match, CRLF-terminated; the first wins.
     execFileMock.mockReturnValue({
       stdout: "C:\\Android\\platform-tools\\adb.exe\r\nC:\\other\\adb.bat\r\n",
       stderr: "",
@@ -54,6 +50,15 @@ describe("commandOnPath", () => {
     const result = await commandOnPath("adb");
     expect(result).toBe("C:\\Android\\platform-tools\\adb.exe");
     expect(execFileMock).toHaveBeenCalledWith("where", ["adb"]);
+  });
+
+  it("takes the POSIX answer away when `accept` rejects it, rather than looking again", async () => {
+    setPlatform("darwin");
+    execFileMock.mockReturnValue({ stdout: "/usr/bin/bash\n", stderr: "" });
+
+    expect(await commandOnPath("bash", (candidate) => candidate !== "/usr/bin/bash")).toBeNull();
+    expect(await commandOnPath("bash", () => true)).toBe("/usr/bin/bash");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns null when the command is not on PATH (non-zero exit)", async () => {
@@ -77,7 +82,6 @@ describe("commandOnPath", () => {
   it("skips a CWD match (`where` searches CWD before PATH) and takes the PATH one", async () => {
     setPlatform("win32");
     vi.spyOn(process, "cwd").mockReturnValue("C:\\work\\repo");
-    // `where adb` lists the planted CWD copy first, the real SDK adb second.
     execFileMock.mockReturnValue({
       stdout: "C:\\work\\repo\\adb.exe\r\nC:\\Android\\platform-tools\\adb.exe\r\n",
       stderr: "",
@@ -107,7 +111,6 @@ describe("commandOnPath", () => {
     for (const bad of ["adb; rm -rf /", "$(whoami)", "adb*", "a b", "`id`", ""]) {
       expect(await commandOnPath(bad)).toBeNull();
     }
-    // Guard short-circuits before any execFile — nothing was ever spawned.
     expect(execFileMock).not.toHaveBeenCalled();
   });
 });

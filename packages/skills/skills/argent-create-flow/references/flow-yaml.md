@@ -96,9 +96,9 @@ A container that aggregates a child's text therefore splits them: `tap` hits the
 Flow selectors support frame-based `within`, `after`, and `next` in every selector slot. Live `await-ui-element` does not support them.
 
 ```yaml
-- tap: { text: Delete, within: { id: profile-card } } # inside a container
-- assert: { visible: { role: Button, after: { text: Danger zone } } } # any follower
-- tap: { role: Switch, next: { text: Wi-Fi } } # nearest matching follower
+- tap: { text: Delete, within: { id: profile-card } }
+- assert: { visible: { role: Button, after: { text: Danger zone } } }
+- tap: { role: Switch, next: { text: Wi-Fi } }
 ```
 
 `within` means visual frame containment, not source-tree ancestry. Overflowing children and anchored popovers can fall outside it. `after` and `next` use top-to-bottom, left-to-right reading order. A target cannot satisfy its own `within`, `after`, or `next` anchor. The synthetic root never counts.
@@ -180,8 +180,8 @@ A negative condition proves only that the current tree has no visible match. It 
 Every screen change needs both checks:
 
 ```yaml
-- await: { visible: { id: profile-screen } } # identity
-- await: { idle: true } # readiness
+- await: { visible: { id: profile-screen } }
+- await: { idle: true }
 ```
 
 The identity selector must exist only on the destination. A dropped tap can leave the source screen idle. A destination element can enter the tree before its animation finishes. Therefore neither check replaces the other.
@@ -231,21 +231,28 @@ A `run:` target is a YAML path resolved against the directory of the flow file c
 
 ## Local scripts
 
-Use a local `.mjs` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
+Use a local `.mjs` or `.sh` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
+- script: { path: ../../scripts/seed-order.sh }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
+An `.mjs` file runs under Node.js. A `.sh` file runs under Bash.
+
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-- **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
+- **`path`** is relative to the flow file that contains the step. Use the lowercase extension `.mjs` or `.sh`. Match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
 If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
 
+Argent uses `project_root` as the working directory of the script.
+
 If a script fails, check its changes before you retry.
+
+For Bash scripts, a nonzero exit code fails the step. Write failure explanations to stderr.
 
 ## Snapshots and standalone runs
 

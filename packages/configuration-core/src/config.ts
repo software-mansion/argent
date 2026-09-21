@@ -4,13 +4,6 @@ import * as path from "node:path";
 import { configDir, configFilePath, type ConfigPathOptions } from "./paths.js";
 import type { FlagScope } from "./flags.js";
 
-// Shared read/write for the `.argent/config.json` documents, at both the
-// `global` (`~/.argent`) and `project` (`<project-root>/.argent`) scopes. One
-// document holds independent keys owned by different writers (telemetry
-// consent, first-run notices, Lens preferences), so every write merges and
-// publishes atomically rather than truncating keys it does not own.
-
-/** Parse a scope's config document; `{}` when missing or malformed. */
 export function readConfigObject(
   scope: FlagScope = "global",
   options: ConfigPathOptions = {}
@@ -27,8 +20,29 @@ export function readConfigObject(
   return {};
 }
 
-// Config keys are dotted paths into the nested document. The helpers below
-// refuse segments through which a crafted key could reach `Object.prototype`.
+export function configDocumentProblem(
+  scope: FlagScope = "global",
+  options: ConfigPathOptions = {}
+): string | undefined {
+  const file = configFilePath(scope, options);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    return `${file} could not be read (${err instanceof Error ? err.message : String(err)})`;
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw) as unknown;
+  } catch (err) {
+    return `${file} is not valid JSON (${err instanceof Error ? err.message : String(err)})`;
+  }
+  if (!json || typeof json !== "object" || Array.isArray(json)) {
+    return `${file} does not hold a JSON object`;
+  }
+  return undefined;
+}
 
 const FORBIDDEN_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -49,7 +63,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Read the value at a dotted key, or `undefined` when any segment is missing. */
 export function getAtPath(obj: Record<string, unknown>, dottedKey: string): unknown {
   const parts = splitKey(dottedKey);
   let cur: unknown = obj;
@@ -60,7 +73,6 @@ export function getAtPath(obj: Record<string, unknown>, dottedKey: string): unkn
   return cur;
 }
 
-/** Set the value at a dotted key, creating intermediate objects as needed. */
 export function setAtPath(obj: Record<string, unknown>, dottedKey: string, value: unknown): void {
   const parts = splitKey(dottedKey);
   let cur = obj;
@@ -75,18 +87,8 @@ export function setAtPath(obj: Record<string, unknown>, dottedKey: string, value
   cur[parts[parts.length - 1]!] = value;
 }
 
-/**
- * Delete the leaf at a dotted key. Returns true when something was removed.
- *
- * Containers this delete emptied are removed with it, so unsetting the last key
- * under a group leaves no `{ "ios": {} }` behind. The unwind stops at the first
- * ancestor that still holds something, and the root always survives (an emptied
- * config is `{}`, never a deleted file).
- */
 export function deleteAtPath(obj: Record<string, unknown>, dottedKey: string): boolean {
   const parts = splitKey(dottedKey);
-  // Every container on the way to the leaf, so emptied ones can be unwound
-  // afterwards. chain[i] holds parts[i].
   const chain: Record<string, unknown>[] = [obj];
   for (let i = 0; i < parts.length - 1; i++) {
     const next = chain[i]![parts[i]!];
@@ -108,12 +110,9 @@ export function deleteAtPath(obj: Record<string, unknown>, dottedKey: string): b
 // than this is treated as orphaned by a dead writer and stolen — a crashed
 // process can't wedge config writes forever.
 const LOCK_STALE_MS = 10_000;
-// Wait budget before giving up and proceeding unlocked: degrading to the old
-// lock-free behavior beats letting a stuck peer block the user's command.
 const LOCK_MAX_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 25;
 
-// Block the (single-threaded) script for `ms` without busy-spinning.
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -170,17 +169,6 @@ function releaseConfigLock(lock: ConfigLock): void {
   }
 }
 
-/**
- * Apply `mutate` to the current config and persist the result atomically.
- *
- * `mutate` patches the existing document in place, which is then written to a
- * temp file and renamed, so a crash mid-write leaves the previous config intact.
- *
- * The whole read → mutate → publish cycle runs under a cross-process lock:
- * without it two processes both read the old document, each patches only its
- * own key, and the last `rename` wins — silently dropping the other's change
- * (e.g. a telemetry opt-out lost behind a first-run-notice write).
- */
 export function updateConfig(
   mutate: (config: Record<string, unknown>) => void,
   scope: FlagScope = "global",
