@@ -288,6 +288,20 @@ jobs:
         env:
           DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
 
+      # For attach-release-tarball. `npm publish` packs with the same packer
+      # (libnpmpack) and packing is deterministic, so this is byte-identical to
+      # the tarball npm just received.
+      - name: Pack the published tarball
+        if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
+        run: npm pack -w @swmansion/argent --pack-destination .
+
+      - uses: actions/upload-artifact@v7
+        if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
+        with:
+          name: npm-tarball
+          path: swmansion-argent-${{ steps.mode.outputs.version }}.tgz
+          if-no-files-found: error
+
       # Serialization makes concurrent index collisions impossible, but npm's
       # read-after-write lag can still hand a back-to-back run a stale version
       # list, so retry a version-exists collision by recomputing + restamping.
@@ -329,10 +343,10 @@ jobs:
 
   # Attaches the published tarball to the GitHub release for its tag, so users
   # who don't pull from the npm registry can download it from the release page.
-  # The tarball is fetched back from npm rather than repacked, so the asset has
-  # the same bytes (and integrity) npm serves. A separate job keeps
-  # `contents: write` away from the OIDC-privileged publish job. The release
-  # itself is created by release.yml when the tag is pushed.
+  # The asset is the tarball the publish job packed, byte-identical to the one
+  # npm received. A separate job keeps `contents: write` away from the
+  # OIDC-privileged publish job. The release itself is created by release.yml
+  # when the tag is pushed.
   attach-release-tarball:
     needs: publish
     runs-on: ubuntu-latest
@@ -345,25 +359,12 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/setup-node@v6
+      # The tarball the publish job packed. Not fetched back from npm: a version
+      # published seconds ago is not yet visible there (the 0.25.2 attach failed
+      # on exactly that), and the packed file already has npm's bytes.
+      - uses: actions/download-artifact@v8
         with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Download the published tarball from npm
-        env:
-          VERSION: ${{ needs.publish.outputs.version }}
-        run: |
-          # npm's read-after-write lag can hide a version published seconds ago.
-          for attempt in 1 2 3 4 5 6; do
-            if npm pack "@swmansion/argent@${VERSION}"; then
-              exit 0
-            fi
-            echo "::warning::@swmansion/argent@${VERSION} not downloadable yet (attempt ${attempt})"
-            sleep 20
-          done
-          echo "::error::could not download @swmansion/argent@${VERSION} from npm"
-          exit 1
+          name: npm-tarball
 
       - name: Attach tarball to the GitHub release
         env:
