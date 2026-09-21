@@ -37,12 +37,33 @@ When a machine returns to your team, Argent Cloud revokes the credentials of the
 
 | Item             | Value                                                                                                 |
 | ---------------- | ----------------------------------------------------------------------------------------------------- |
-| Socket           | `$HOME/.sim-remote-daemon.sock`                                                                       |
+| Socket           | `$HOME/.sim-remote-daemon.sock`, or `$HOME/.sim-remote-daemon-<NAME>.sock` for a named session        |
 | Idle check       | Every 60 seconds                                                                                      |
 | Stop             | `sim-remote daemon stop`. This releases the machine and ends the session                              |
 | Version mismatch | After an update, the old daemon refuses the new client. Run `sim-remote daemon stop` and log in again |
 
 The daemon keeps the session token in memory. `sim-remote` writes no session token, API key or configuration file to disk. The log files below are the only files that `sim-remote` writes.
+
+## Several sessions on one computer
+
+One daemon holds one session. Set `SIM_REMOTE_SESSION` to a name to run several sessions on one computer, each with its own daemon.
+
+```bash
+export SIM_REMOTE_SESSION=agent-1
+sim-remote login
+```
+
+All `sim-remote` commands that run with the same value share one session. A different value is a different session. Commands that run without the variable use the default session.
+
+| Rule       | Value                                                                  |
+| ---------- | ---------------------------------------------------------------------- |
+| Characters | Lowercase letters, digits, `.`, `_` and `-`. No leading `.`            |
+| Length     | 1 to 32 characters                                                     |
+| Socket     | `$HOME/.sim-remote-daemon-<NAME>.sock`                                 |
+| Log file   | `sim-remote-daemon-<NAME>`                                             |
+| Scope      | `daemon stop` and `logout` act only on the daemon of the named session |
+
+Every process reads the variable from its own environment. Set it in the shell or agent that runs the commands, so the shims and every tool that they start use the same session.
 
 ## Log files
 
@@ -53,4 +74,4 @@ The daemon keeps the session token in memory. `sim-remote` writes no session tok
 | macOS    | `~/Library/Logs/radon/`                                      |
 | Linux    | `$XDG_STATE_HOME/radon/logs`, or `~/.local/state/radon/logs` |
 
-`sim-remote` rotates the log file daily and keeps 7 days. Set `RUST_LOG` to change the filter.
+`sim-remote` rotates the log file daily and keeps 7 days. Set `RUST_LOG` to change the filter. The daemon of a named session writes to `sim-remote-daemon-<NAME>`.

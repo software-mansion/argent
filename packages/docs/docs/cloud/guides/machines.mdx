@@ -22,6 +22,8 @@ You can also log in without a machine and reserve one later with `sim-remote acq
 
 One user can hold several machines at the same time. `sim-remote list-machines` shows the machines that you hold and marks the current one. `sim-remote attach` points your session at another machine that you hold. A session started in a different client, for example the Argent agent, can share a machine in this way.
 
+To use several machines at the same time from one computer, run one session per machine. Set `SIM_REMOTE_SESSION` to a different name in each shell or agent before you run `sim-remote login`. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer).
+
 ## Keep a machine during a long run
 
 The daemon releases the machine after 15 minutes without a `sim-remote` command. During a long test run that does not go through `sim-remote`, run `sim-remote keepalive 30m` to keep the machine for 30 minutes. A session holds a machine for at most 24 hours.

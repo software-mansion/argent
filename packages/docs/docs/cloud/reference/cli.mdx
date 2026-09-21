@@ -12,9 +12,10 @@ sim-remote [OPTIONS] <COMMAND>
 
 ## Global options
 
-| Option           | Environment variable | Description                                                                                                          |
-| ---------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `--server <URL>` | `SIM_ROUTER_URL`     | The URL of the Argent Cloud server. The release binary contains the default. Pass it only if we give you another URL |
+| Option           | Environment variable | Description                                                                                                                                                                                    |
+| ---------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--server <URL>` | `SIM_ROUTER_URL`     | The URL of the Argent Cloud server. The release binary contains the default. Pass it only if we give you another URL                                                                           |
+| -                | `SIM_REMOTE_SESSION` | The name of the session. Each name has its own daemon, so several sessions can run on one computer. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer) |
 
 ## Session commands
 
