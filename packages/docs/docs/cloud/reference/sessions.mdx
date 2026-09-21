@@ -63,7 +63,7 @@ All `sim-remote` commands that run with the same value share one session. A diff
 | Log file   | `sim-remote-daemon-<NAME>`                                             |
 | Scope      | `daemon stop` and `logout` act only on the daemon of the named session |
 
-Every process reads the variable from its own environment. Set it in the shell or agent that runs the commands, so the shims and every tool that they start use the same session.
+Every process reads the variable from its own environment. Set `SIM_REMOTE_SESSION` in the shell or agent that runs the commands. Every shim and tool that it starts inherits the same value.
 
 ## Log files
 
