@@ -919,8 +919,10 @@ function isLoaderFailure(err) {
 
 /**
  * Validation cannot happen in the parent: the IPC channel serializes as JSON,
- * so a function or `undefined` vanishes silently, `NaN` and `Infinity` arrive
- * as `null`, and a BigInt or cycle throws inside `send`.
+ * so a function vanishes silently, `NaN` and `Infinity` arrive as `null`, and a
+ * BigInt or cycle throws inside `send`. An `undefined` member vanishes there
+ * too, but that one loss `walk` adopts on purpose rather than refuses, so the
+ * parent would reach the same document either way.
  *
  * What is encoded is the copy the walk built, never a second read of the live
  * object: a getter, a Proxy trap or a `toJSON` may answer differently the
@@ -954,67 +956,154 @@ function validate(root) {
   if (root === null || typeof root !== "object" || Array.isArray(root) || !isPlainObject(root)) {
     return { problem: `output is ${describeValue(root)}; output must be a plain object` };
   }
-  return walk(root, "output", new Set());
+  return walk(root, "output");
 }
 
-function walk(value, path, ancestors) {
-  if (value === null) return { value: null };
-  const type = typeof value;
-  if (type === "string" || type === "boolean") return { value };
-  if (type === "number") {
-    return Number.isFinite(value)
-      ? { value }
-      : { problem: `${path} is ${describeValue(value)}; output numbers must be finite` };
-  }
-  if (type !== "object") {
-    return { problem: `${path} is ${describeValue(value)}; output must be JSON-compatible data` };
-  }
-  if (ancestors.has(value)) {
-    return { problem: `${path} is a cyclic reference; output must be a tree` };
-  }
+/**
+ * The deepest document the parent accepts (`MAX_OUTPUT_DEPTH` in
+ * `flow-script-executor.ts`, with the same message), held here as well because
+ * the walk below has no stack to run out of: output that grows as it is read —
+ * a getter or a `toJSON` that makes a fresh object each time — would otherwise
+ * fill the heap before the parent could refuse it.
+ */
+const MAX_OUTPUT_DEPTH = 4096;
 
-  if (Array.isArray(value)) {
-    ancestors.add(value);
-    const copy = [];
-    for (let i = 0; i < value.length; i++) {
-      const walked = walk(i in value ? value[i] : null, `${path}[${i}]`, ancestors);
-      if (walked.problem) return walked;
-      copy.push(walked.value);
+const MAX_PROBLEM_PATH_CHARS = 80;
+
+/**
+ * Validates and copies the document with an explicit stack. Every script is
+ * handed the run's whole document, so a `.mjs` step receives whatever depth an
+ * earlier `.sh` step wrote — up to the parent's 4096 — and a recursive walk
+ * overflowed at ~3450-3925 levels, failing a script that touched nothing.
+ *
+ * Depth-first and in key order, so the first problem is the one a recursive
+ * walk would report. Each value is read once and the copy is built from those
+ * reads, never from a second look at the live object.
+ */
+function walk(root, rootPath) {
+  const ancestors = new Set();
+  const frames = [];
+  let result;
+
+  const release = (held) => {
+    for (const value of held) ancestors.delete(value);
+  };
+
+  // A container is assigned its empty copy at once and filled by its frame. It
+  // stays in `ancestors` until that frame is done, and so does every object
+  // whose `toJSON` produced it: that is how a cycle through `toJSON` is seen.
+  const open = (source, copy, path, assign, held) => {
+    // `frames` holds exactly the containers above this one, so this is its depth.
+    if (frames.length + 1 > MAX_OUTPUT_DEPTH) {
+      const shown =
+        path.length <= MAX_PROBLEM_PATH_CHARS ? path : `${path.slice(0, MAX_PROBLEM_PATH_CHARS)}…`;
+      return (
+        `${shown} nests deeper than ${MAX_OUTPUT_DEPTH} levels; output must be a document a ` +
+        "later step can read back."
+      );
     }
-    ancestors.delete(value);
-    return { value: copy };
-  }
-  if (value instanceof Date) {
-    return {
-      problem: `${path} is a Date; output must be JSON-compatible data (use an ISO string)`,
-    };
-  }
-  if (typeof value.toJSON === "function") {
-    ancestors.add(value);
-    const walked = walk(value.toJSON(), path, ancestors);
-    ancestors.delete(value);
-    return walked;
-  }
-  if (!isPlainObject(value)) {
-    return { problem: `${path} is ${describeValue(value)}; output must be JSON-compatible data` };
-  }
-  ancestors.add(value);
-  const copy = {};
-  for (const key of Object.keys(value)) {
-    if (key === "__proto__") {
-      // `JSON.parse` creates this as an own key, so a parsed body would carry
-      // it into flow state, where a later `Object.assign` writes a prototype
-      // rather than a property.
-      return {
-        problem: `${path} has an own "__proto__" key; output must be JSON-compatible data`,
-      };
+    ancestors.add(source);
+    held.push(source);
+    assign(copy);
+    frames.push({
+      source,
+      copy,
+      path,
+      held,
+      next: 0,
+      keys: Array.isArray(source) ? undefined : Object.keys(source),
+    });
+    return undefined;
+  };
+
+  const enter = (start, path, assign) => {
+    let value = start;
+    const held = [];
+    for (;;) {
+      if (value === null || typeof value === "string" || typeof value === "boolean") {
+        assign(value);
+        release(held);
+        return undefined;
+      }
+      const type = typeof value;
+      if (type === "number") {
+        if (!Number.isFinite(value)) {
+          return `${path} is ${describeValue(value)}; output numbers must be finite`;
+        }
+        assign(value);
+        release(held);
+        return undefined;
+      }
+      if (type !== "object") {
+        return `${path} is ${describeValue(value)}; output must be JSON-compatible data`;
+      }
+      if (ancestors.has(value)) return `${path} is a cyclic reference; output must be a tree`;
+      if (Array.isArray(value)) return open(value, [], path, assign, held);
+      if (value instanceof Date) {
+        return `${path} is a Date; output must be JSON-compatible data (use an ISO string)`;
+      }
+      if (typeof value.toJSON === "function") {
+        ancestors.add(value);
+        held.push(value);
+        value = value.toJSON();
+        continue;
+      }
+      if (!isPlainObject(value)) {
+        return `${path} is ${describeValue(value)}; output must be JSON-compatible data`;
+      }
+      return open(value, {}, path, assign, held);
     }
-    const walked = walk(value[key], `${path}${memberPath(key)}`, ancestors);
-    if (walked.problem) return walked;
-    copy[key] = walked.value;
+  };
+
+  const first = enter(root, rootPath, (copy) => {
+    result = copy;
+  });
+  if (first !== undefined) return { problem: first };
+
+  while (frames.length > 0) {
+    const frame = frames[frames.length - 1];
+    let problem;
+    if (frame.keys === undefined) {
+      if (frame.next >= frame.source.length) {
+        release(frames.pop().held);
+        continue;
+      }
+      const i = frame.next++;
+      // An element cannot be dropped the way a member is: every element after
+      // it would move down an index. `null` holds the position instead, which
+      // is what `JSON.stringify` writes for `undefined` and an empty slot alike.
+      const element = i in frame.source ? frame.source[i] : null;
+      problem = enter(element === undefined ? null : element, `${frame.path}[${i}]`, (copy) => {
+        frame.copy.push(copy);
+      });
+    } else {
+      if (frame.next >= frame.keys.length) {
+        release(frames.pop().held);
+        continue;
+      }
+      const key = frame.keys[frame.next++];
+      if (key === "__proto__") {
+        // `JSON.parse` creates this as an own key, so a parsed body would carry
+        // it into flow state, where a later `Object.assign` writes a prototype
+        // rather than a property.
+        return {
+          problem: `${frame.path} has an own "__proto__" key; output must be JSON-compatible data`,
+        };
+      }
+      const member = frame.source[key];
+      // Dropped rather than refused, as `JSON.stringify` drops it. A script that
+      // writes `output.promo = user.promo?.code` is saying "there is no promo",
+      // and failing the step on it would stop the flow before a later step's
+      // `??` fallback got the chance to supply one. Only a plain `undefined`
+      // earns this: a function or a symbol is still a mistake worth naming.
+      if (member === undefined) continue;
+      problem = enter(member, `${frame.path}${memberPath(key)}`, (copy) => {
+        frame.copy[key] = copy;
+      });
+    }
+    if (problem !== undefined) return { problem };
   }
-  ancestors.delete(value);
-  return { value: copy };
+  return { value: result };
 }
 
 function isPlainObject(value) {

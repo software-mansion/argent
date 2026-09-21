@@ -13,7 +13,11 @@ import {
 import {
   requireRecordingSession,
   appendStepToFlow,
+  assertStepOutputReferences,
+  blockSteps,
   holdsOutputReference,
+  refusesOutputReferences,
+  resolveStepReferences,
   appIdForPlatform,
   authoringPlatform,
   parseFlow,
@@ -1128,7 +1132,8 @@ async function captureRunTarget(
       };
     }
 
-    const fragmentEnv = parseFlow(await fs.readFile(fragPath, "utf8")).env;
+    const fragment = parseFlow(await fs.readFile(fragPath, "utf8"));
+    const fragmentEnv = fragment.env;
     // The sibling validated above is the file the runner will replay — but the
     // live sub-invoke that just ran resolved `name` through getFlowPath, the
     // as-written flows dir under the caller's project_root. When the recording
@@ -1183,6 +1188,16 @@ async function captureRunTarget(
               `call with a delayMs does that)`,
           ]
         : []),
+      // The live call was a run of its own, with a document of its own; the
+      // recorded `run:` shares the flow's. Nothing here can make the two match.
+      ...(usesOutput(fragment.steps)
+        ? [
+            `the live flow-execute ran ${name}.yaml as a run of its own, which started with an ` +
+              `empty output document, and argent kept none of the output its scripts wrote; ` +
+              `at replay the run: step shares this flow's output document, so its scripts and ` +
+              `references can see different values than they did now`,
+          ]
+        : []),
     ];
     return {
       flow: `${name}.yaml`,
@@ -1193,6 +1208,13 @@ async function captureRunTarget(
       warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
     };
   }
+}
+
+function usesOutput(steps: readonly FlowStep[]): boolean {
+  return steps.some(
+    (step) =>
+      step.kind === "script" || holdsOutputReference(step) || usesOutput(blockSteps(step) ?? [])
+  );
 }
 
 function runEnvWarning(
@@ -1281,6 +1303,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         throw err;
       }
 
+      // Checked before the tool runs, so a reference that cannot be used stops
+      // the call while the device is still untouched.
+      assertStepOutputReferences(
+        { kind: "tool", name: params.command, args },
+        `The \`${params.command}\` call was not made and nothing was recorded`
+      );
+
       // Snapshot before the rewrite below mutates `args` in place, so a schema
       // miss can be re-rendered against the keys the author wrote. Shallow is
       // enough: `rewriteSiblingFlowPath` only deletes and adds top-level keys.
@@ -1289,6 +1318,27 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A nested flow-execute must never carry a raw flow_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
       if (params.command === RUN_TARGET_COMMAND) await rewriteSiblingFlowPath(session, args);
+
+      // Resolved against the recording's document before the tool runs. The
+      // tool receives `liveArgs`; the recorded step keeps `args`, references and
+      // all, and resolves them against the run's document at replay.
+      const revision = session.outputRevision;
+      const resolution = resolveStepReferences(
+        { kind: "tool" as const, name: params.command, args },
+        session.output
+      );
+      if (!resolution.ok) {
+        throw new FailureError(
+          `The \`${params.command}\` call was not made and nothing was recorded: ${resolution.reason}`,
+          {
+            error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+            failure_stage: "flow_add_step_output_reference",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          }
+        );
+      }
+      const liveArgs = resolution.step.args;
 
       // Selector capture must read the tree BEFORE the tap runs: a navigating
       // tap (e.g. a list row that opens a detail screen) replaces the screen, so
@@ -1302,7 +1352,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, session, args.udid as string, {
+        captured = await captureTapSelector(registry, session, liveArgs.udid as string, {
           x: args.x as number,
           y: args.y as number,
         });
@@ -1310,7 +1360,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let toolResult: unknown;
       try {
-        toolResult = await invokeSubTool(registry, ctx, params.command, args);
+        toolResult = await invokeSubTool(registry, ctx, params.command, liveArgs);
       } catch (err) {
         const hint = isToolNotFound(err, params.command)
           ? directiveCommandHint(params.command)
@@ -1321,7 +1371,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           registry,
           err,
           params.command,
-          args,
+          liveArgs,
           authoredArgs
         );
         if (reframed === undefined) throw err;
@@ -1367,7 +1417,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
             kind: "wait",
           };
         } else {
-          const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
+          const probed = (await probeAgainstRunnerTree(registry, ctx, liveArgs)).warning;
           if (probed) waitWarning = { warning: probed, kind: "conversion" };
         }
       }
@@ -1386,9 +1436,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // Android `activity`) keep the raw tool step. `launch-app` is NOT
       // rewritten — it foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
+      // A `launch` is read as written, so a bundle id that came from output keeps
+      // the raw tool step, which resolves it again at replay.
       const isLaunch =
         params.command === "restart-app" &&
         params.delayMs === undefined &&
+        resolution.references.length === 0 &&
         typeof strippedArgs.bundleId === "string" &&
         Object.keys(strippedArgs).length === 1;
 
@@ -1431,8 +1484,11 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let savedTo: FlowSavedTo;
       let stepCount: number;
+      const drift = { output: false };
       try {
-        ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+        ({ savedTo, stepCount } = await appendStepToFlow(session, step, () => {
+          drift.output = holdsOutputReference(step) && session.outputRevision !== revision;
+        }));
       } catch (err) {
         const stage = getFailureSignal(err)?.failure_stage;
         const fromTheFile = stage === "flow_file_parse" || stage === "flow_file_parse_step";
@@ -1446,7 +1502,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
             failure_area: "tool_server",
             error_kind: "validation",
           },
-          !fromTheFile && holdsOutputReference(step)
+          !fromTheFile && refusesOutputReferences(step)
             ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
                 `recorded. Check the call's changes before you retry. ${refused}`
             : `The \`${params.command}\` call ran, but something already in the flow file failed ` +
@@ -1469,8 +1525,19 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         });
       }
 
+      const notes = [
+        ...(warning ? [warning] : []),
+        ...(drift.output
+          ? [
+              "another call merged a script's output into this recording while this call was " +
+                "running, so its references resolved against an older output document than the " +
+                "one the step reads at replay. The step IS in the file — calling this again " +
+                "would append a second one",
+            ]
+          : []),
+      ];
       return {
-        message: `Step added to "${params.name}" flow${warning ? ` — ${warning}` : ""}`,
+        message: `Step added to "${params.name}" flow${notes.length > 0 ? ` — ${notes.join("; ")}` : ""}`,
         toolResult,
         stepCount,
         recorded: summarizeStep(step, stepCount),

@@ -135,6 +135,8 @@ Each step contains one directive. A failed directive stops the flow.
 
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
 
+A step can read an earlier script's output with `{{output:…}}`. See [Script output](#script-output).
+
 A gesture that resolves no selector passes with a warning when the runner cannot read the UI tree. This covers a coordinate `tap`, a `swipe` with no selector at either end, and a `pinch` or `rotate` without `on`. The warning says that Argent sent the gesture, not that the gesture reached the element.
 
 ### Launch map
@@ -280,6 +282,8 @@ Use a `script` step for setup or cleanup that device steps cannot do. The script
 
 An `.mjs` file runs under Node.js. A `.sh` file runs under Bash. See [Bash scripts](#bash-scripts).
 
+A script can return data for later steps. See [Script output](#script-output).
+
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
 The value is always a map. Parsing rejects a bare path, such as `script: scripts/seed-order.sh`.
@@ -400,7 +404,11 @@ Override defaults with `argent flow run <name> --env NAME=value` or `flow-execut
 
 A `run:` inherits values; its defaults apply only inside that flow. A raw `tool: flow-execute` starts a separate run: pass values in `args.env`.
 
-Use string values; quote numbers and booleans. Names must match `[A-Za-z_][A-Za-z0-9_]*`; on Windows, avoid names that differ only in case. Reserved names and script output references are rejected.
+Use string values; quote numbers and booleans. Names must match `[A-Za-z_][A-Za-z0-9_]*`; on Windows, avoid names that differ only in case. Argent rejects a reserved name.
+
+[Output references](#output-references) work in `script.env`. They do not work in top-level `env`, `--env`, or the `flow-execute` parameter `env`.
+
+A `tool: flow-execute` step can pass output values through `args.env`. The parent flow resolves these references before the child flow starts.
 
 Add top-level `env` after recording. Save it before re-recording: `flow-start-recording` clears the whole file.
 
@@ -413,6 +421,100 @@ Argent redacts resolved secrets in script failures and logs, but not every encod
 ### Inheriting host variables
 
 [`scripts.env.allow`](/docs/reference/configuration#available-keys) adds names inherited from the tool-server. A later shell `export` does not update it. For a missing value or command, pass the value or `PATH` through `env`, or restart the tool-server with the required environment.
+
+## Script output
+
+A script can save data for later steps in an output document. Use `{{output:path}}` to read a value:
+
+```yaml
+steps:
+  - script:
+      path: ../../scripts/create-user.mjs
+  - type:
+      into: { id: user-name }
+      text: "{{output:user.displayName}}"
+  - echo: "Created user {{output:user.id}}"
+```
+
+### Output document
+
+The output document is a JSON object. Each run starts with an empty document. Nested `run:` flows and `when` blocks share that document. A `tool: flow-execute` step starts a separate run with its own empty document.
+
+In an `.mjs` script, read or change the `output` global:
+
+```js
+output.user = { id: "42", displayName: "Test user" };
+```
+
+You can also assign an object with `output = { user, orderId };`.
+
+In a `.sh` script, `$ARGENT_OUTPUT` is the path to a file with the current document. Write a JSON object to that file:
+
+```bash
+printf '%s\n' '{"user":{"id":"42","displayName":"Test user"}}' > "$ARGENT_OUTPUT"
+```
+
+If a command reads `$ARGENT_OUTPUT`, write its result to a second file. Then move that file to `$ARGENT_OUTPUT`. Direct redirection empties the source file before the command reads it.
+
+After a successful script step, Argent updates the output document:
+
+- Each returned top-level key replaces its previous value, including nested values.
+- Other top-level keys keep their values. To clear a key, set it to `null`.
+- Argent ignores output from failed scripts.
+
+Use JSON objects, arrays, strings, finite numbers, booleans and `null` as values. Keep each returned document and the combined document at or below 1 MiB. Use strings for identifiers, prices and codes to preserve their exact values.
+
+Output values can appear in logs and failure reports. Use [secrets](#secrets-in-an-env-value) for credentials.
+
+### Output references
+
+A reference starts with `{{output:` and ends with `}}`. Put quotation marks around YAML values that contain references.
+
+| Reference                              | Reads                                                |
+| -------------------------------------- | ---------------------------------------------------- |
+| `{{output:user.displayName}}`          | An object property                                   |
+| `{{output:codes[0]}}`                  | The first array element                              |
+| `{{output:order['order-id']}}`         | A property with a hyphen in its name                 |
+| `{{output:user.promo.code ?? 'NONE'}}` | The code, or `NONE` if the path is missing or `null` |
+
+Use `??` to supply a fallback path or a literal value. A literal can be a quoted string, number, boolean or `null`. Argent tries the alternatives from left to right:
+
+```yaml
+- echo: "Region {{output:user.region ?? defaults.region ?? 'unknown'}}"
+```
+
+If no alternative supplies a value, the step stops the run with an error. This also applies to `when` conditions. References support only paths and `??` fallbacks. Calculate other values in the script.
+
+### Reference fields
+
+References work in these fields:
+
+| Field                                             | Supported values                                             |
+| ------------------------------------------------- | ------------------------------------------------------------ |
+| `echo`                                            | Message text                                                 |
+| Selectors, including scopes and `when` conditions | `text`, `id` and `role`                                      |
+| `type`                                            | `text`                                                       |
+| Text checks, including `when` conditions          | `contains` and `equals`                                      |
+| `script.env`                                      | Environment values                                           |
+| `tool.args`                                       | String values, including values in nested objects and arrays |
+
+Keep paths, `launch` values, snapshot names, `executionPrerequisite`, tool names and `matches` patterns literal. For `tool: flow-execute`, this also applies to `flow_path`, `project_root`, `name` and `flow_file`. Tool names inside `tool: run-sequence` must also stay literal.
+
+### Value types
+
+In `tool.args`, a field that contains only one reference keeps the referenced value's JSON type. The value must match the tool parameter's type. For example, `keyboard` requires a string in `text`. A `type` step converts a referenced number to text.
+
+Other fields convert strings, numbers and booleans to text. An `args` value with text around a reference also uses this conversion. Only `echo` accepts objects, arrays and `null` as text; it prints them as JSON.
+
+Selectors, text checks and `type` need nonempty values. Do not use `?? ''` as their complete value. A selector's `text` must contain a visible character.
+
+Write secret placeholders directly in the flow file. Do not build them from output values.
+
+### Record script output
+
+Recorded scripts share an output document. Record each script with `flow-add-script`. Use references in its `env` or in the `args` of a later `flow-add-step` call.
+
+Argent resolves these references before the call and saves them for replay. If a reference has no value, the call does not run or record a step. `flow-add-echo` can record an unresolved reference, but its result includes a warning.
 
 ## The `argent flow` command
 
@@ -469,7 +571,7 @@ The outcome line of a flow that produced a report gives the result, the step cou
 The `Failed flows` section has one entry for each flow that failed. Each entry holds these items:
 
 - The flow path.
-- The first step that failed or errored, with its number. A flow without a report gives its outcome line instead.
+- The first step that failed or errored, with its number. An `echo` step has no number, so Argent gives its message instead. A flow without a report gives its outcome line instead.
 - The reason of that step, or the error message of a flow without a report.
 - A `re-run:` command that runs only that flow. The command uses the same `--device`, `--platform`, `--update-baselines` and `--env` options as the directory run. The command shows each `--env` value as you wrote it. If the directory run has `--output`, the command writes the images of that flow to the same directory as the directory run.
 
@@ -507,4 +609,4 @@ The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow
 
 ## YAML safety
 
-Quote a string that contains `#`, `:` or quotes. Quote a number, `true` or `false` in a text slot. Use single quotes for a regex with backslashes. Parsing rejects an unknown directive, an invalid selector, an invalid regex, `else`, an unsupported option, and an end-to-end flow that declares `executionPrerequisite`.
+Quote a string that contains `#`, `:` or quotes. Quote a value that holds an `{{output:…}}` reference. Quote a number, `true` or `false` in a text slot. Use single quotes for a regex with backslashes. Parsing rejects an unknown directive, an invalid selector, an invalid regex, `else`, an unsupported option, and an end-to-end flow that declares `executionPrerequisite`.

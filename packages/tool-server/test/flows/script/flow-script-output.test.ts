@@ -42,6 +42,56 @@ describe("flow script executor — output validation", () => {
     });
   });
 
+  // Every script is handed the run's document, and a `.sh` step may return one
+  // as deep as the parent accepts (4096 levels, root included). A recursive
+  // validation walk in the runner overflowed at ~3450-3925 levels, failing the
+  // next `.mjs` step even when it touched nothing.
+  it("hands a .mjs a document as deep as the parent accepts, and takes it back", async () => {
+    const ws = workspace();
+    const script = ws.write("noop.mjs", `output.touched = true;`);
+    const nested = 4095;
+    const deep: unknown = JSON.parse('{"a":'.repeat(nested) + "1" + "}".repeat(nested));
+    const result = await new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      output: { deep },
+    });
+    expect(result.failure).toBeUndefined();
+    expect(result.ok).toBe(true);
+    expect(result.output?.touched).toBe(true);
+    // Counted without recursion: a recursive helper would overflow here first.
+    let levels = 0;
+    let node: unknown = result.output?.deep;
+    while (node !== null && typeof node === "object") {
+      levels++;
+      node = (node as { a?: unknown }).a;
+    }
+    expect(levels).toBe(nested);
+    expect(node).toBe(1);
+  });
+
+  it("refuses output deeper than the parent accepts with the parent's own message", async () => {
+    const result = await run(
+      `let node = 1; for (let i = 0; i < 4097; i++) node = { a: node }; output.deep = node;`
+    );
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toMatch(
+      /^output\.deep(\.a)+\.?… nests deeper than 4096 levels; output must be a document a later step can read back\.$/
+    );
+  });
+
+  // With no stack to overflow, output that grows as it is read would fill the
+  // heap before anything refused it; the depth cap stops it first.
+  it("refuses output that grows as it is read, at the depth cap rather than the heap limit", async () => {
+    const result = await run(
+      `class Endless { toJSON() { return { child: new Endless() }; } }\noutput.tree = new Endless();`
+    );
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("nests deeper than 4096 levels");
+  });
+
   it("takes a replaced binding, not only a mutated one", async () => {
     const result = await run(`output.seeded = 1; output = { replaced: true };`);
     expect(result.output).toEqual({ replaced: true });
@@ -58,11 +108,6 @@ describe("flow script executor — output validation", () => {
       "a function",
       `output.items = [1, 2, { handler: () => {} }];`,
       "output.items[2].handler is a function; output must be JSON-compatible data",
-    ],
-    [
-      "undefined",
-      `output.missing = undefined;`,
-      "output.missing is undefined; output must be JSON-compatible data",
     ],
     ["a BigInt", `output.big = 1n;`, "output.big is a BigInt; output must be JSON-compatible data"],
     [
@@ -95,6 +140,31 @@ describe("flow script executor — output validation", () => {
     expect(result.ok).toBe(false);
     expect(result.failure?.kind).toBe("output");
     expect(result.failure?.message).toBe(expected);
+  });
+
+  it("drops a member set to undefined the way JSON.stringify does", async () => {
+    const result = await run(`output.promo = undefined; output.ok = true;`);
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ ok: true });
+    expect(Object.hasOwn(result.output!, "promo")).toBe(false);
+  });
+
+  it("drops a nested member set to undefined", async () => {
+    const result = await run(`output.user = { id: "u_1", promo: undefined };`);
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ user: { id: "u_1" } });
+  });
+
+  it("encodes an undefined array element as null the way JSON.stringify does", async () => {
+    const result = await run(`output.codes = ["a", undefined, "c"];`);
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ codes: ["a", null, "c"] });
+  });
+
+  it("accepts an optional chain that found nothing, so a later ?? fallback sees no key", async () => {
+    const result = await run(`const user = {}; output.promo = user.promo?.code; output.ok = true;`);
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ ok: true });
   });
 
   it("rejects a cycle rather than crashing on it", async () => {

@@ -345,7 +345,7 @@ describe("recording a script step", () => {
       "scripts/seed.mjs",
       `import * as fs from "node:fs";
        fs.writeFileSync(${JSON.stringify(flowPath("handedited"))},
-         'steps:\\n  - echo: "created {{output:user.id}}"\\n');
+         'steps:\\n  - echo: "created {{output:user.id ||}}"\\n');
        output.ok = true;`
     );
 
@@ -358,7 +358,7 @@ describe("recording a script step", () => {
     expect(err.message).toContain("Fix what is named below");
     expect(err.message).toContain("not in this script");
     expect(err.message).toContain(flowPath("handedited"));
-    expect(err.message).toContain("Step 1 (`echo`)");
+    expect(err.message).toContain("Step 1 (`echo`): `echo` holds a malformed output reference");
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
   });
 
@@ -388,10 +388,39 @@ describe("recording a script step", () => {
     await expect(fs.access(marker)).rejects.toThrow();
   });
 
-  it("is never itself the step an output-reference refusal names", async () => {
-    expect(
-      holdsOutputReference({ kind: "script", path: "../../scripts/{{output:user.id}}.mjs" })
-    ).toBe(false);
+  it("refuses an output reference in its path before it runs anything", async () => {
+    const marker = path.join(root, "ran.txt");
+    const scriptPath = "../../scripts/{{output:dir}}/seed.mjs";
+    // A script where the literal path lands, so a refusal that came after the
+    // run would leave the marker behind. Windows file names cannot hold `:`.
+    if (process.platform !== "win32") {
+      await write(
+        "scripts/{{output:dir}}/seed.mjs",
+        `import { writeFileSync } from "node:fs";
+         writeFileSync(${JSON.stringify(marker)}, "ran");
+         output.ok = true;`
+      );
+    }
+    await start("static-path");
+    const before = await fs.readFile(flowPath("static-path"), "utf8");
+
+    const err = (await addScript("static-path", scriptPath).catch((e: unknown) => e)) as Error;
+
+    expect(holdsOutputReference({ kind: "script", path: scriptPath })).toBe(true);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(
+      /^This call's `script` step: `script\.path` cannot hold an output reference: Argent reads this field as written/
+    );
+    expect(err.message).toContain(JSON.stringify(scriptPath));
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+      failure_stage: "flow_add_script_path",
+    });
+    await expect(fs.access(marker)).rejects.toThrow();
+    expect(await fs.readFile(flowPath("static-path"), "utf8")).toBe(before);
+    const session = await getRecordingSession(root, "static-path");
+    expect(session?.output).toEqual({});
+    expect(session?.outputRevision).toBe(0);
   });
 
   it("leaves a document inside the limit whole and unflagged", async () => {

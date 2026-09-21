@@ -1126,17 +1126,41 @@ function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output
 }
 
 /**
+ * The rules {@link commitOutput} holds one script's document to, asked of the
+ * document a run holds after a step merged into it. The size is the rule that
+ * matters: each script's document fits the limit on its own, and only this
+ * side ever sees the total. The merge is shallow, so it cannot deepen the
+ * document, but the check is the same one rather than a second copy of it.
+ */
+export function mergedOutputProblem(document: Record<string, unknown>): string | undefined {
+  let encoded: string;
+  try {
+    encoded = JSON.stringify(document);
+  } catch (err) {
+    return `The flow output could not be encoded after this step: ${errorMessage(err)}`;
+  }
+  const bytes = Buffer.byteLength(encoded, "utf8");
+  if (bytes > SCRIPT_MAX_OUTPUT_BYTES) {
+    return (
+      `After this step the flow output is ${describeBytes(bytes)} encoded; the limit is ` +
+      `${describeBytes(SCRIPT_MAX_OUTPUT_BYTES)}. A script cannot remove a key, so set one ` +
+      "the flow no longer reads to null."
+    );
+  }
+  return documentProblem(document);
+}
+
+/**
  * How deep a document may nest. The size cap does not bound this: nested arrays
  * cost two bytes a level, so a document inside the 1 MiB ceiling reaches half a
  * million of them.
  *
- * The value sits in the gap between two stack-derived ceilings, measured on
- * Node 20, 22, 24 and 26 (`{"a":` repeated, binary search):
+ * The value sits under a stack-derived ceiling, measured on Node 20, 22, 24
+ * and 26 (`{"a":` repeated, binary search). The runner's `walk` is iterative
+ * and must stay so: every script is handed the run's document, so a `.mjs`
+ * step receives any depth this constant admits, and a recursive walk
+ * overflowed at ~3450-3925.
  *
- * - the runner's own `walk` is recursive, so a `.mjs` document deeper than
- *   ~3450-3925 never reaches this file at all — `encodeOutput`'s try/catch
- *   reports it. Above that ceiling, so a `.mjs` step is refused nothing it
- *   used to return.
  * - `JSON.stringify` is recursive in V8 up to Node 24 and throws `RangeError`
  *   at ~6100. Below that ceiling, because `renderOutput` in
  *   `flow-add-script.ts` is a bare `JSON.stringify` reached AFTER the step has

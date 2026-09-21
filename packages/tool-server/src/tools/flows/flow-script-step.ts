@@ -6,6 +6,7 @@ import { hasScriptExtension, scriptInterpreter, type FlowStep, type ScriptEnv } 
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import {
   flowScriptExecutor,
+  mergedOutputProblem,
   scrubScriptText,
   type FlowScriptFailureKind,
   type FlowScriptLogBudget,
@@ -14,12 +15,38 @@ import {
   type FlowScriptSecret,
 } from "./script/flow-script-executor";
 import { resolveScriptEnvSecrets } from "./script/flow-script-env";
+import { describeUnsafeIntegers, type OutputDocument } from "./flow-output";
 
 interface FlowScriptStepOutcome {
   status: "pass" | "fail" | "error";
   reason?: string;
+  warning?: string;
   scriptLog?: string;
   scriptLogTruncated?: true;
+}
+
+/**
+ * The document a run or a recording holds after a script step passed:
+ *
+ * ```text
+ * new output = { ...current output, ...returned document }
+ * ```
+ *
+ * A top-level key the script wrote replaces that key's whole value, and a key
+ * it did not write keeps its value. Never a replace: with one, a step 2 that
+ * writes `output = { orderId: 42 }` would take away step 1's `output.user`, and
+ * the `{{output:user.id}}` that then stops names a key the author can see being
+ * written. A `.sh` always writes a whole file, so this is also what lets it
+ * follow a `.mjs` without erasing what the `.mjs` set. A script clears a value
+ * by setting it to `null`; it cannot remove a key.
+ */
+export function mergeScriptOutput(
+  current: OutputDocument,
+  returned: OutputDocument
+): { output: Record<string, unknown> } | { problem: string } {
+  const output = { ...current, ...returned };
+  const problem = mergedOutputProblem(output);
+  return problem === undefined ? { output } : { problem };
 }
 
 interface FlowScriptStepRun {
@@ -38,6 +65,12 @@ interface FlowScriptStepRequest {
   projectRoot: string;
   logBudget?: FlowScriptLogBudget;
   env?: ScriptEnv;
+  /**
+   * The document the script is handed: the run's, or the recording's. One value
+   * for both languages — the runner sets a `.mjs`'s `output` global from it, and
+   * the executor writes the same text into a `.sh`'s `$ARGENT_OUTPUT`.
+   */
+  output?: OutputDocument;
   runNotes?: FlowScriptRunNotes;
   signal?: AbortSignal;
 }
@@ -95,7 +128,7 @@ export async function runFlowScriptStep(
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
     interpreter: scriptInterpreter(hasScriptExtension(canonical) ? canonical : target),
-    output: {},
+    output: request.output ?? {},
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,
     flowDir,
@@ -117,10 +150,17 @@ export async function runFlowScriptStep(
         [request.projectRoot, await canonicalFlowPath(request.projectRoot)],
         secrets
       );
+  // Here, in the parent, for both languages: `JSON.parse` in the executor is
+  // where a large integer is rounded, and it keeps no source text to compare.
+  const warning =
+    result.ok && result.output
+      ? describeUnsafeIntegers(request.output ?? {}, result.output)
+      : undefined;
   return {
     outcome: {
       ...verdict,
       ...(frames && verdict.reason !== undefined ? { reason: verdict.reason + frames } : {}),
+      ...(warning !== undefined ? { warning } : {}),
       ...(result.log ? { scriptLog: result.log } : {}),
       ...(result.logTruncated ? { scriptLogTruncated: true } : {}),
     },

@@ -461,22 +461,54 @@ describe("environment shape rules", () => {
     await expect(runFlow("stillmalformed")).rejects.toThrow(/not an environment variable name/);
   });
 
-  it("refuses a {{output:...}} reference in every env channel", async () => {
-    await write("scripts/probe.mjs", "");
+  it("refuses a {{output:...}} reference in the env maps resolved before any script runs", async () => {
     await flow("out-file", 'env: { X: "{{output:user.id}}" }\nsteps:\n  - echo: hi\n');
-    await expect(runFlow("out-file")).rejects.toThrow(/env.X` uses unsupported template syntax/);
-
-    await flow(
-      "out-step",
-      'steps:\n  - script: { path: ../../scripts/probe.mjs, env: { X: "{{output:user.id}}" } }\n'
+    await expect(runFlow("out-file")).rejects.toThrow(
+      "The flow's `env.X` uses unsupported template syntax: this map holds defaults for every " +
+        "script in the run, and Argent resolves it before the first script has written any " +
+        "output. A `script` step's own `env` can read output."
     );
-    await expect(runFlow("out-step")).rejects.toThrow(/env.X` uses unsupported template syntax/);
 
     await flow("out-ok", "steps:\n  - echo: hi\n");
     await expect(runFlow("out-ok", { env: { X: "{{output:user.id}}" } })).rejects.toThrow(
       /This run's `env.X` uses unsupported template syntax/
     );
+  });
 
+  it("resolves a {{output:...}} reference in a script step's own env, at replay and while recording", async () => {
+    await write("scripts/seed.mjs", `output.user = { id: "u_42" };`);
+    await write("scripts/probe.mjs", reporter("probe", ["X"]));
+    const probeStep = { kind: "script", path: "../../scripts/probe.mjs" };
+
+    // Accepted at parse, and resolved directly before the step: with nothing
+    // written yet, the step errors and names the field and the missing path.
+    await flow(
+      "out-step-missing",
+      'steps:\n  - script: { path: ../../scripts/probe.mjs, env: { X: "{{output:user.id}}" } }\n'
+    );
+    const missing = (await runFlow("out-step-missing")).result;
+    expect(missing.ok).toBe(false);
+    expect(missing.steps[0]).toMatchObject({
+      kind: "script",
+      status: "error",
+      reason:
+        "`script.env.X`: {{output:user.id}} did not resolve: `output` has no `user` (it has no keys)",
+    });
+    expect(readMark("probe")).toBeUndefined();
+
+    await flow(
+      "out-step",
+      "steps:\n" +
+        "  - script: { path: ../../scripts/seed.mjs }\n" +
+        '  - script: { path: ../../scripts/probe.mjs, env: { X: "{{output:user.id}}" } }\n'
+    );
+    const resolved = (await runFlow("out-step")).result;
+    expect(resolved.ok).toBe(true);
+    expect(seen("probe")).toEqual({ X: "u_42" });
+    await fs.rm(markPath("probe"));
+
+    // flow-add-script resolves against the recording's own document, which
+    // starts empty — so the same reference is refused before the script runs…
     await flowStartRecordingTool.execute({}, { name: "out-rec", project_root: root });
     await expect(
       flowAddScriptTool.execute(
@@ -488,7 +520,34 @@ describe("environment shape rules", () => {
           env: { X: "{{output:user.id}}" },
         }
       )
-    ).rejects.toThrow(/This call's `env.X` uses unsupported template syntax/);
+    ).rejects.toThrow(
+      "This call's `env` cannot be used, so the script did not run and nothing was recorded: " +
+        "`script.env.X`: {{output:user.id}} did not resolve: `output` has no `user` (it has no keys)"
+    );
+    expect(readMark("probe")).toBeUndefined();
+
+    // …and reaches the script once a recorded script has written the path,
+    // while the file keeps the reference.
+    await flowAddScriptTool.execute(
+      {},
+      { name: "out-rec", project_root: root, path: "../../scripts/seed.mjs" }
+    );
+    const added = await flowAddScriptTool.execute(
+      {},
+      {
+        name: "out-rec",
+        project_root: root,
+        path: "../../scripts/probe.mjs",
+        env: { X: "{{output:user.id}}" },
+      }
+    );
+    expect(added.status).toBe("pass");
+    expect(seen("probe")).toEqual({ X: "u_42" });
+    const recorded = await fs.readFile(path.join(root, ".argent/flows/out-rec.yaml"), "utf8");
+    expect(parseFlow(recorded).steps).toEqual([
+      { kind: "script", path: "../../scripts/seed.mjs" },
+      { ...probeStep, env: { X: "{{output:user.id}}" } },
+    ]);
   });
 
   it("refuses __proto__, which a merge would drop rather than carry", async () => {
