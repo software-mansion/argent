@@ -82,14 +82,18 @@ async function runGated(
 }
 
 describe("a flow step whose native-devtools precheck blocked", () => {
-  // All four, not just the pre-existing `restart_required`: `service_stale` and
-  // `connect_pending` were added by the state derivation, so a flow written
-  // against the older behaviour green-passes two more ways than before.
+  // Every member of NativeDevtoolsPrecheckBlock, not just `restart_required`:
+  // each further status the precheck learned to return is another way a flow
+  // written against the older behaviour green-passes a read that never ran.
   it.each([
     ["restart_required", "com.example.app has no running process on this simulator."],
     ["service_stale", "Restarting the app cannot change that — restart the tool-server."],
     ["connect_pending", "It launched moments ago and is still connecting."],
     ["init_failed", "Native devtools failed to initialize for this udid after 3 attempts."],
+    [
+      "injection_failed",
+      "com.example.app was told to relaunch, and the process now running is a different one, so the relaunch happened — and it still never connected.",
+    ],
   ])("fails the step and stops the run on %s", async (status, message) => {
     const { run, registry } = await runGated(status, "native-full-hierarchy", NATIVE_ARGS, {
       status,
@@ -102,8 +106,9 @@ describe("a flow step whose native-devtools precheck blocked", () => {
     expect(gate.tool).toBe("native-full-hierarchy");
     expect(gate.status).toBe("fail");
     expect(gate.reason).toContain(status);
-    // The message is the only field carrying the remedy — and for the two new
-    // statuses, the only thing saying NOT to restart the app.
+    // The message is the only field carrying the remedy — and for every status
+    // whose remedy is not a relaunch, the only thing saying NOT to restart the
+    // app.
     expect(gate.reason).toContain(message);
     expect(gate.result).toEqual({ status, message });
     expect(run.steps[1].status).toBe("skip");
@@ -140,7 +145,38 @@ describe("a flow step whose native-devtools precheck blocked", () => {
     expect(run.ok).toBe(true);
   });
 
-  // The tool id is load-bearing: the four status strings are ordinary words, so
+  // `injection_failed` off native-devtools-status is the tool's own measured
+  // answer, produced after its 2-arg precheck returned null — reporting the
+  // state IS its work, so failing the step would report "did not run" about a
+  // call that ran, and would flip a recorded status-probe step from pass to
+  // fail the day the app it probes breaks.
+  it("passes a native-devtools-status step that measured the terminal state", async () => {
+    const { run, registry } = await runGated("measured", "native-devtools-status", NATIVE_ARGS, {
+      status: "injection_failed",
+      message:
+        "com.example.app was told to relaunch, and the process now running is a different one.",
+    });
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    expect(run.steps.map((s) => s.status)).toEqual(["pass", "pass"]);
+    expect(run.ok).toBe(true);
+  });
+
+  // The same tool's `init_failed` DID come from the precheck, so it still blocks.
+  it("fails a native-devtools-status step its precheck blocked", async () => {
+    const { run } = await runGated("blocked", "native-devtools-status", NATIVE_ARGS, {
+      status: "init_failed",
+      message: "Native devtools failed to initialize.",
+      attempts: 3,
+    });
+
+    expect(run.steps[0].status).toBe("fail");
+    expect(run.steps[0].reason).toContain("init_failed");
+    expect(run.steps[1].status).toBe("skip");
+    expect(run.ok).toBe(false);
+  });
+
+  // The tool id is load-bearing: the five status strings are ordinary words, so
   // matching them on any result would fail a step for a tool that never runs
   // this precheck and happens to answer with one.
   it("leaves a tool outside the precheck set alone", async () => {
