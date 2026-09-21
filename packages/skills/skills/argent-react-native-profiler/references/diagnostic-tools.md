@@ -8,7 +8,7 @@ These tools can be called independently without starting a profiling session.
 { "port": 8081, "device_id": "<UDID>", "top_n": 20 }
 ```
 
-Call `react-profiler-renders`. Returns render counts and durations per component — useful for spotting hot components before a full profile.
+Call `react-profiler-renders`. Returns mounted instance counts and render durations per component (the count is instances on screen, not re-renders) — useful for spotting hot components before a full profile.
 
 ## Component hierarchy
 
