@@ -185,6 +185,26 @@ describe("flow-add-step tap selector capture", () => {
     ]);
   });
 
+  it("captures a nativeID as an id selector for a view with no testID", async () => {
+    // A text-less, label-less view whose only handle is its React Native
+    // `nativeID`: without it capture would keep the raw point.
+    setTree([
+      n({
+        role: "AXGroup",
+        nativeID: "promo-banner",
+        frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 },
+      }),
+    ]);
+
+    const result = await recordTap({ x: 0.5, y: 0.45 });
+
+    expect(result.message).not.toContain("—");
+    expect(result.recorded).toBe('1. tap: {"id":"promo-banner"}');
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", selector: { identifier: "promo-banner" } },
+    ]);
+  });
+
   it("reports the captured selector in the `recorded` line, in the file's spelling", async () => {
     // The coordinates the caller passed are NOT what gets stored, and the
     // recorder no longer returns the YAML per step — so `recorded` is the only

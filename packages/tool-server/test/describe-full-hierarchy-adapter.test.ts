@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { DescribeNode } from "../src/tools/describe/contract";
 import { adaptFullHierarchyToDescribeResult } from "../src/tools/flows/flow-ios-tree";
 import {
   assertText,
@@ -577,5 +578,126 @@ describe("describe full-hierarchy adapter", () => {
 
     expect(findAll(tree, { identifier: "inner" })[0]!.subtreeText).toBe("42");
     expect(findAll(tree, { identifier: "outer" })[0]!.subtreeText).toBeUndefined();
+  });
+
+  // ── React Native nativeID ─────────────────────────────────────────────────
+  // `nativeID` is an author-set id just like `testID` (`identifier`): the flow
+  // tree must keep, scope and match it the same way.
+  const inWindow = (...views: Record<string, unknown>[]) => ({
+    windows: [{ className: "UIWindow", frame: SCREEN, windowFrame: SCREEN, children: views }],
+  });
+  // Located by field, not by selector, so these adapter cases do not lean on
+  // the matcher's nativeID support.
+  const withNativeID = (tree: DescribeNode, id: string): DescribeNode[] =>
+    tree.children.filter((n) => n.nativeID === id);
+
+  it("keeps a view whose only id is a nativeID as a leaf carrying it", () => {
+    // No testID, no label, a generic Fabric class: without its nativeID this is
+    // exactly the pure layout view the prune drops.
+    const footer = (extra: Record<string, unknown>) => ({
+      className: "RCTViewComponentView",
+      windowFrame: { x: 20, y: 700, width: 360, height: 80 },
+      children: [],
+      ...extra,
+    });
+    const tree = adaptFullHierarchyToDescribeResult(
+      inWindow(footer({ nativeID: "checkout-footer" }))
+    );
+
+    expect(tree.children).toEqual([
+      {
+        role: "AXGroup",
+        // 20/400, 700/800, 360/400, 80/800
+        frame: { x: 0.05, y: 0.875, width: 0.9, height: 0.1 },
+        children: [],
+        nativeID: "checkout-footer",
+      },
+    ]);
+    expect(tree.children[0]!.identifier).toBeUndefined();
+    // Flow YAML's `id:` resolves it end to end.
+    expect(selectorToFrame(tree, { identifier: "checkout-footer" })).toEqual(
+      tree.children[0]!.frame
+    );
+
+    // Controls: the same view with no nativeID, or an empty one, is pruned.
+    expect(adaptFullHierarchyToDescribeResult(inWindow(footer({}))).children).toHaveLength(0);
+    expect(
+      adaptFullHierarchyToDescribeResult(inWindow(footer({ nativeID: "" }))).children
+    ).toHaveLength(0);
+  });
+
+  it("keeps both ids on a view that carries a testID and a nativeID", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      inWindow({
+        className: "RCTViewComponentView",
+        identifier: "tid-both",
+        nativeID: "nid-both",
+        windowFrame: { x: 24, y: 304, width: 200, height: 48 },
+        children: [],
+      })
+    );
+
+    expect(tree.children).toHaveLength(1);
+    expect(tree.children[0]).toMatchObject({ identifier: "tid-both", nativeID: "nid-both" });
+    expect(findAll(tree, { identifier: "tid-both" })).toEqual(tree.children);
+    expect(findAll(tree, { identifier: "nid-both" })).toEqual(tree.children);
+  });
+
+  // Mirrors "hoists a testID container's child text into subtreeText".
+  it("hoists a nativeID container's child text into subtreeText", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      inWindow({
+        className: "RCTViewComponentView",
+        nativeID: "square-#d97973",
+        windowFrame: { x: 24, y: 304, width: 100, height: 100 },
+        children: [
+          {
+            className: "RCTTextView",
+            label: "1",
+            windowFrame: { x: 60, y: 340, width: 20, height: 24 },
+            children: [],
+          },
+        ],
+      })
+    );
+    const square = withNativeID(tree, "square-#d97973");
+
+    expect(square).toHaveLength(1);
+    expect(square[0]!.label).toBeUndefined(); // its own text is still empty
+    expect(square[0]!.subtreeText).toBe("1"); // ...but the child's text is hoisted
+    expect(evaluateCondition("text", "1", square, "equals")).toBe(true);
+    expect(evaluateCondition("text", "Taps: 1", square, "equals")).toBe(false);
+  });
+
+  // Counterpart of "does not let an outer container swallow a self-identified
+  // descendant's text", where the inner id is a testID. Only a testID shields:
+  // a nativeID descendant still hands its text up, so a text check on the
+  // outer testID container reads the same text with or without nativeIDs.
+  it("an outer testID container still hoists a nativeID descendant's text", () => {
+    const tree = adaptFullHierarchyToDescribeResult(
+      inWindow({
+        className: "RCTView",
+        identifier: "outer",
+        windowFrame: { x: 0, y: 0, width: 200, height: 200 },
+        children: [
+          {
+            className: "RCTView",
+            nativeID: "inner",
+            windowFrame: { x: 0, y: 0, width: 100, height: 100 },
+            children: [
+              {
+                className: "RCTTextView",
+                label: "42",
+                windowFrame: { x: 10, y: 10, width: 20, height: 24 },
+                children: [],
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    expect(withNativeID(tree, "inner")[0]!.subtreeText).toBe("42");
+    expect(tree.children.find((n) => n.identifier === "outer")!.subtreeText).toBe("42");
   });
 });

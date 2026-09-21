@@ -53,7 +53,7 @@ Use values that meet the [stable-selector definition](../SKILL.md#stable-selecto
 { id: settings-row, text: Notifications }
 ```
 
-All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
+All provided fields must match. `id` is exact and case-insensitive. On an iOS simulator, `id` also matches a React Native `nativeID`. The physical iPhone and Android runners do not read `nativeID`. On iOS and Android, `describe` and `await-ui-element` do not read it either. Use a `testID` when the flow must run on another platform or when a live `await-ui-element` must find the element. `text` and `role` are case-insensitive substrings. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
 
 Use single quotes for anchored, case-sensitive regexes:
 

@@ -15,6 +15,9 @@ export interface DescribeNode {
   children: DescribeNode[];
   label?: string;
   identifier?: string;
+  // React Native `nativeID`, where the tree source exposes it (the iOS
+  // simulator flow tree). A flow `id` selector matches it like `identifier`.
+  nativeID?: string;
   value?: string;
   // Descendant text hoisted onto container leaves by the flow adapters'
   // flatten (`flow-tree-flatten`): the flat shape drops the child that renders
@@ -44,6 +47,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       children: z.array(describeNodeSchema),
       label: z.string().optional(),
       identifier: z.string().optional(),
+      nativeID: z.string().optional(),
       value: z.string().optional(),
       subtreeText: z.string().optional(),
       clickable: z.boolean().optional(),
