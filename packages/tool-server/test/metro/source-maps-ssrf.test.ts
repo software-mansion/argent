@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  drainCappedBody,
   isAllowedSourceMapURL,
+  readCappedJson,
   SourceMapsRegistry,
 } from "../../src/utils/debugger/source-maps";
 
@@ -63,18 +63,18 @@ describe("isAllowedSourceMapURL", () => {
 });
 
 // PR #194 follow-up F: source-map bodies are read under a cap.
-describe("drainCappedBody (body cap)", () => {
+describe("readCappedJson (body cap)", () => {
   it("rejects when content-length exceeds the cap", async () => {
     const res = {
       headers: { get: (n: string) => (n === "content-length" ? "999999999" : null) },
       body: null,
     };
-    await expect(drainCappedBody(res, 1024)).rejects.toThrow(/too large/);
+    await expect(readCappedJson(res as any, 1024)).rejects.toThrow(/too large/);
   });
 
-  it("returns without reading when no stream body is available", async () => {
-    const res = { headers: { get: () => null }, body: null };
-    await expect(drainCappedBody(res, 1024)).resolves.toBeUndefined();
+  it("falls back to res.json() when no stream body is available", async () => {
+    const res = { headers: { get: () => null }, body: null, json: async () => ({ ok: 1 }) };
+    await expect(readCappedJson(res, 1024)).resolves.toEqual({ ok: 1 });
   });
 
   it("aborts a streamed body that exceeds the cap", async () => {
@@ -91,18 +91,19 @@ describe("drainCappedBody (body cap)", () => {
         }),
       },
     };
-    await expect(drainCappedBody(res, 1024)).rejects.toThrow(/exceeded/);
+    await expect(readCappedJson(res as any, 1024)).rejects.toThrow(/exceeded/);
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  // The whole point of the rewrite: the bytes are counted, never accumulated
-  // and never parsed. A body that is not JSON at all must still drain clean,
-  // which is what tells a reader the parse is gone rather than just moved.
-  it("drains a body that is not JSON, under the cap", async () => {
-    const chunks = [new Uint8Array(400), new Uint8Array(400)];
+  it("parses a chunked body under the cap", async () => {
+    const enc = new TextEncoder();
+    const chunks = [enc.encode('{"version":3,'), enc.encode('"sources":[]}')];
     let i = 0;
     const res = {
       headers: { get: () => null },
+      json: async () => {
+        throw new Error("stream path must not fall back to json()");
+      },
       body: {
         getReader: () => ({
           read: async () =>
@@ -113,8 +114,7 @@ describe("drainCappedBody (body cap)", () => {
         }),
       },
     };
-    await expect(drainCappedBody(res, 1024)).resolves.toBeUndefined();
-    expect(i).toBe(chunks.length);
+    await expect(readCappedJson(res, 1024)).resolves.toEqual({ version: 3, sources: [] });
   });
 });
 
