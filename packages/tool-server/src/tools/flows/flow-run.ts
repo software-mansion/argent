@@ -63,6 +63,7 @@ import {
   probeWhenCondition,
   type ActionEnv,
   type DirectiveOutcome,
+  type StepDetails,
 } from "./flow-actions";
 import {
   buildAppStateMessage,
@@ -179,7 +180,7 @@ const fileInputs: FileInputSpec[] = [
 
 export type StepStatus = "pass" | "fail" | "skip" | "error";
 
-export interface StepReport {
+export interface StepReport extends StepDetails {
   index: number;
   kind: FlowStep["kind"];
   status: StepStatus;
@@ -202,6 +203,7 @@ export interface StepReport {
    * from one that waited.
    */
   warning?: string;
+  indeterminate?: true;
   /** Underlying tool id for `tool` steps. */
   tool?: string;
   /** Tool result for `tool` steps. */
@@ -2113,6 +2115,7 @@ async function execWhenStep(
         ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+        ...outcomeDetails(probe),
         durationMs: Date.now() - guardStartedAt,
       });
       state.stopped = true;
@@ -2343,6 +2346,39 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
+/**
+ * The shared hint for a step whose check never ran, used when the reader gave
+ * no hint of its own.
+ *
+ * It must not call the app innocent. An unreadable screen is exactly what an
+ * app that crashed, was terminated, or emptied its own screen after the
+ * element was seen looks like from here — `isBlindRead` cannot tell any of
+ * those from a tree source that stopped answering. A hint that promised "this
+ * is not a verdict on the app" therefore sent a real crash or a blank-screen
+ * regression back for a re-run as environment noise. Order the checks instead,
+ * and put the app first.
+ */
+const INDETERMINATE_HINT =
+  "check the app first — a crash, or a screen the app emptied itself, reads the same here as a " +
+  "tree source that stopped answering — then check the device and the tree source; re-run " +
+  "before you edit the flow";
+
+function outcomeDetails(
+  r: StepDetails & Pick<DirectiveOutcome, "indeterminate" | "refused">
+): StepDetails & Pick<StepReport, "indeterminate"> {
+  // A refused read gets neither the flag nor the re-run hint: a re-run gets the
+  // same refusal, and its reason already says what to change.
+  const indeterminate = r.indeterminate === true && r.refused !== true;
+  const hint = r.hint ?? (indeterminate ? INDETERMINATE_HINT : undefined);
+  return {
+    ...(hint !== undefined && { hint }),
+    ...(r.expected !== undefined && { expected: r.expected }),
+    ...(r.expectedKind !== undefined && { expectedKind: r.expectedKind }),
+    ...(r.actual !== undefined && { actual: r.actual }),
+    ...(indeterminate && { indeterminate: true as const }),
+  };
+}
+
 async function execLeafStep(
   state: ExecState,
   step: LeafStep,
@@ -2396,14 +2432,17 @@ async function execLeafStep(
         // as a regression. `error` keeps the run non-ok while saying plainly
         // that the app was never judged. Scoped to `idle`, whose whole verdict
         // rests on being able to observe the screen.
+        const details = outcomeDetails(r);
         if (!r.ok && r.indeterminate && step.kind === "idle") {
-          return { ...base, status: "error", reason: r.reason };
+          return { ...base, status: "error", reason: r.reason, ...details };
         }
         return {
           ...base,
           status: r.ok ? "pass" : "fail",
-          reason: r.reason,
+          // The note qualifies the verdict, so it closes the reason.
+          reason: r.note === undefined ? r.reason : `${r.reason} (${r.note})`,
           ...(r.warning !== undefined ? { warning: r.warning } : {}),
+          ...details,
         };
       } catch (err) {
         return { ...base, status: "error", reason: errMsg(err) };
@@ -2433,6 +2472,7 @@ async function execLeafStep(
           ...base,
           status: r.status,
           reason: r.reason,
+          ...outcomeDetails(r),
           snapshotKey: r.snapshotKey,
           ...(r.snapshotKey !== undefined && state.device?.platform === "ios-remote"
             ? { snapshotRemote: true as const }
@@ -2511,6 +2551,7 @@ async function execLeafStep(
             status: nested.status,
             tool: step.name,
             reason: nested.reason,
+            ...outcomeDetails(nested),
             result,
             outputHint,
             args,

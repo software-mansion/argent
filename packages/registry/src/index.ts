@@ -43,6 +43,7 @@ export type {
   ResolvedFileInput,
   ClientFileDirective,
 } from "./file-inputs";
+export { printCapped } from "./flow-report";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

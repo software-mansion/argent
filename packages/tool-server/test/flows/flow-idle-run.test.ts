@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry, ToolContext } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type Registry, type ToolContext } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 
@@ -503,7 +503,9 @@ steps:
     expect(elapsed).toBeLessThan(3_000);
     const step = r.steps.at(-1)!;
     expect(step.status).toBe("error");
-    expect(step.reason).toContain("never answered within the step's 800ms");
+    expect(step.reason).toBe("the tree source never answered within the step's 800ms");
+    expect(step.indeterminate).toBe(true);
+    expect(step.hint).toContain("raise this step's `timeout:`");
   });
 
   // The sibling of the case above, and the one that used to slip through: a
@@ -532,8 +534,12 @@ steps:
     expect(r.ok).toBe(false);
     const step = r.steps.find((s) => s.kind === "idle")!;
     expect(step.status).toBe("error");
+    expect(step.indeterminate).toBe(true);
     expect(step.reason).toContain("answered and then stopped");
-    expect(step.reason).toContain("foreground");
+    expect(step.hint).toBe(
+      "check the app is still in the foreground and responding (a wedged app reads the same " +
+        "as a backgrounded one)"
+    );
     // And it must not be dressed up as a verdict about what was on screen.
     expect(step.reason).not.toContain("never held still");
   });
@@ -871,12 +877,41 @@ steps:
     expect(r.ok).toBe(false);
     const step = r.steps.find((s) => s.kind === "idle")!;
     expect(step.status).toBe("error");
-    expect(step.reason).toContain("could not read the UI tree");
-    expect(step.reason).toContain("foreground");
-    expect(step.reason).toContain("native-devtools is not connected");
+    expect(step.indeterminate).toBe(true);
+    expect(step.reason).toBe(
+      "could not read the UI tree while waiting for the screen to settle: " +
+        "native-devtools is not connected"
+    );
+    expect(step.hint).toContain("check the app is still in the foreground");
     // An indeterminate readiness check stops the run rather than recording a
     // regression the app never had.
     expect(r.steps.at(-1)!.status).toBe("skip");
+  });
+
+  // A read refused with a `validation` failure is refused again on every re-run
+  // (here: the flow reads an Apple system app). The check did not run, so the
+  // step still errors, but it is not flagged as one to run again — the rule an
+  // `assert` on the same read follows.
+  it("does not flag a refused read for a re-run", async () => {
+    currentTree = () => {
+      throw new FailureError("com.apple.Preferences is an Apple system app", {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+        failure_stage: "flow_tree_pinned_target",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+    };
+    await writeFlow(
+      "refused",
+      `executionPrerequisite: ""
+steps:
+  - await: { idle: true, timeout: 900, stableFor: 0 }
+`
+    );
+    const [step] = (await run("refused")).steps;
+    expect(step!.status).toBe("error");
+    expect(step!.reason).toContain("is an Apple system app");
+    expect(step).not.toHaveProperty("indeterminate");
   });
 
   // A blip mid-settle is expected — the hold restarts from the next good read
@@ -1140,10 +1175,13 @@ steps:
     expect(r.ok).toBe(false);
     const step = r.steps.find((s) => s.kind === "idle")!;
     expect(step.status).toBe("error");
-    // The window, named as the window — and the reader's own repair with it.
+    // The window, named as the window — and the reader's own repair as the hint.
+    expect(step.indeterminate).toBe(true);
     expect(step.reason).toContain("empty and degraded");
-    expect(step.reason).toContain("automation toolkit is not attached");
     expect(step.reason).not.toContain("never rendered content");
+    expect(step.hint).toBe(
+      "the automation toolkit is not attached — relaunch the app so it can attach"
+    );
     expect(r.steps.at(-1)!.status).toBe("skip");
   });
 
@@ -1263,8 +1301,12 @@ steps:
     // `indeterminate` is scored `error`, which is what stops a QA run rather
     // than recording a regression the app never had.
     expect(step.status).toBe("error");
-    expect(step.reason).toContain("could not read the UI tree");
-    expect(step.reason).toContain("foreground");
+    expect(step.indeterminate).toBe(true);
+    expect(step.reason).toBe(
+      "could not read the UI tree while waiting for the screen to settle: " +
+        "native-devtools is not connected"
+    );
+    expect(step.hint).toContain("check the app is still in the foreground");
   });
 
   // H1: a screen that settles and then moves again has NOT settled. The

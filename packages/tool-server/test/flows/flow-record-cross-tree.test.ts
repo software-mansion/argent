@@ -235,6 +235,9 @@ async function recordedSteps(name: string) {
 }
 
 /** The probe's reason, quoted back. It is the only part the cap governs. */
+/** `MAX_PROBE_REASON_CHARS` in flow-add-step.ts. */
+const MAX_ECHOED_VERDICT = 270;
+
 function echoedReasonOf(warning: string): string {
   const open = "directives against (";
   const close = "). As the raw";
@@ -686,7 +689,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       expectedText: "$5.00",
       textMatch: "equals",
     });
-    expect(warningOf(exact, "textequals")).toContain('its text was "Total: $5.00"');
+    expect(warningOf(exact, "textequals")).toContain('actual: "Total: $5.00"');
   });
 
   // ── Per-platform divergences, each produced by that platform's adapter ────
@@ -1414,7 +1417,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("could not be re-verified");
   }, 20_000);
 
-  // A `text` reason quotes the matched element's content, and on the flow tree
+  // A `text` verdict quotes the matched element's content, and on the flow tree
   // that content is HOISTED. Unbounded, one check pastes a whole log pane.
   it("caps the screen text it echoes back", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60); // ~1600 chars
@@ -1433,7 +1436,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("Lorem ipsum");
     // Bound the ECHOED REASON: the fixed prose around it is longer than this fixture.
     const echoed = echoedReasonOf(warning);
-    expect(echoed.length).toBeLessThanOrEqual(200);
+    expect(echoed.length).toBeLessThanOrEqual(MAX_ECHOED_VERDICT);
     const [, tail] = echoed.split(/… \(\d+ more chars\) …/);
     expect(tail).toHaveLength(60);
   });
@@ -1441,9 +1444,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // The cap bounds what is EMITTED, not what is kept. Budgeting the kept content
   // let a 201-character reason come out at 218, announcing "(1 more chars)".
   it("never emits a reason over the cap, or longer than the reason itself", async () => {
-    // The fixed prose around the label is 76 characters.
-    const FIXED = 76;
-    for (const reasonLength of [199, 200, 201, 205, 220, 260]) {
+    // The fixed prose around the label is 77 characters.
+    const FIXED = 77;
+    for (const reasonLength of [269, 270, 271, 275, 290, 330]) {
       const label = `Total ${"z".repeat(reasonLength - FIXED - "Total ".length)}`;
       serveTree(iosRunnerTree([iosLabel(label)]));
       const name = `cap${reasonLength}`;
@@ -1456,12 +1459,42 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       });
       const echoed = echoedReasonOf(warningOf(result, name) ?? "");
 
-      expect(echoed.length).toBeLessThanOrEqual(200);
+      expect(echoed.length).toBeLessThanOrEqual(MAX_ECHOED_VERDICT);
       expect(echoed.length).toBeLessThanOrEqual(reasonLength);
-      if (reasonLength <= 200) expect(echoed).not.toContain("more chars)");
+      if (reasonLength <= MAX_ECHOED_VERDICT) expect(echoed).not.toContain("more chars)");
       else expect(echoed).toContain("more chars)");
     }
   }, 30_000);
+
+  // The own-text hint adds fixed wording to the verdict. A found text that fit
+  // the old one-sentence verdict must still be quoted whole.
+  it("quotes a short found text whole beside the own-text hint", async () => {
+    const found = `$41.50 ${"incl. tax and shipping ".repeat(4)}`.trim(); // 100 chars
+    serveTree(
+      iosRunnerTree([
+        {
+          className: "UIView",
+          identifier: "total",
+          label: "Total",
+          frame: IOS_ROW,
+          windowFrame: IOS_ROW,
+          children: [iosLabel(found)],
+        },
+      ])
+    );
+    await startRecording("owntext");
+
+    const result = await recordWait("owntext", {
+      condition: "text",
+      selector: { identifier: "total" },
+      expectedText: "$5.00",
+    });
+    const echoed = echoedReasonOf(warningOf(result, "owntext") ?? "");
+
+    expect(echoed).not.toContain("more chars)");
+    expect(echoed).toContain(`actual: "Total ${found}"`);
+    expect(echoed).toContain(`the element's own text is "Total"`);
+  });
 
   // The cap ELIDES THE MIDDLE: the note about a dark final poll lives at the END.
   it("keeps the tail of an over-long reason, where the final-poll note lives", async () => {

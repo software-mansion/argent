@@ -8,7 +8,9 @@ import {
   getResolvedToolsUrl,
   isArtifactHandle,
   materializeArtifacts,
+  renderFlowStepDetails,
   ToolInvocationError,
+  type FlowStepDetails,
   type MaterializeContext,
   type ToolsClient,
   type ToolsServerPaths,
@@ -20,7 +22,7 @@ export interface FlowCommandOptions {
   paths: ToolsServerPaths;
 }
 
-export interface StepReport {
+export interface StepReport extends FlowStepDetails {
   index: number;
   kind: string;
   status: "pass" | "fail" | "skip" | "error";
@@ -123,8 +125,8 @@ a running instance.
 
 A directory run prints only the steps that need attention (each failure, each
 warning, and each script step's output), then its outcome. After the last flow
-it lists every failed flow with its reason and a command that re-runs that flow
-alone, then a final flow summary; --recursive walks subdirectories too
+it lists every failed flow with its reason, its expected/actual/indeterminate/hint
+lines, and a command that re-runs that flow alone, then a final flow summary; --recursive walks subdirectories too
 (dot-directories and node_modules are skipped). A flow that fails its steps
 keeps the batch running, as does one the server rejects up front — an invalid
 file, or a device it cannot resolve. A transport failure, a rejection the server
@@ -258,12 +260,38 @@ export function renderStepLine(s: StepReport, n: number, topFlow: string): strin
 }
 
 /**
- * A line printed under a step (warning, artifact path), padded to the width of
- * renderStepLine's `  ✓ NN ` prefix — which grows past step 99 — plus the
- * step's depth indent. Shared by the buffered and live renderers.
+ * A line printed under a step (warning, detail line, artifact path), padded to
+ * the width of renderStepLine's `  ✓ NN ` prefix — which grows past step 99 —
+ * plus the step's depth indent. Shared by the buffered and live renderers.
  */
 export function renderUnderStepLine(s: StepReport, n: number, text: string): string {
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
+}
+
+/**
+ * A step's line and the lines under it: its warning, its detail lines and its
+ * script output. Every renderer prints a step through this, so a line added
+ * under a step reaches the buffered report, a batch's failed steps and the
+ * live output alike. The buffered renderers follow it with the step's artifact
+ * paths (renderStepArtifactLines); the live one prints each step before any
+ * path exists, and lists them at the end instead (renderArtifactLines).
+ */
+export function renderStepLines(s: StepReport, n: number, topFlow: string): string[] {
+  const lines = [renderStepLine(s, n, topFlow)];
+  if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+  for (const text of renderFlowStepDetails(s)) lines.push(renderUnderStepLine(s, n, text));
+  lines.push(...renderScriptLogLines(s, n));
+  return lines;
+}
+
+function renderStepArtifactLines(s: StepReport, n: number): string[] {
+  const lines: string[] = [];
+  if (s.artifacts && typeof s.artifacts === "object") {
+    for (const [k, v] of Object.entries(s.artifacts)) {
+      if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
+    }
+  }
+  return lines;
 }
 
 export function renderScriptLogLines(s: StepReport, n: number): string[] {
@@ -343,25 +371,17 @@ export function renderFailedSteps(report: FlowReport): string[] {
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
-    const scriptLog = renderScriptLogLines(s, n);
     const scriptNote = s.kind === "script" && Boolean(s.reason);
     if (
       s.status !== "fail" &&
       s.status !== "error" &&
       !s.warning &&
       !scriptNote &&
-      scriptLog.length === 0
+      renderScriptLogLines(s, n).length === 0
     ) {
       continue;
     }
-    lines.push(renderStepLine(s, n, report.flow));
-    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
-    lines.push(...scriptLog);
-    if (s.artifacts && typeof s.artifacts === "object") {
-      for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
-      }
-    }
+    lines.push(...renderStepLines(s, n, report.flow), ...renderStepArtifactLines(s, n));
   }
   return lines;
 }
@@ -391,6 +411,9 @@ interface FailedFlow {
  * numbers it so the recap, the per-flow block, and a single rerun agree. The
  * reason is wire data, so it is stringified the way renderStepLine's template
  * does rather than trusted to be a string.
+ *
+ * The reason says only what failed: the text the step found and the advice
+ * are in its expected, actual and hint lines, so the recap carries those too.
  */
 export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
   let n = 0;
@@ -398,7 +421,8 @@ export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline
     if (s.kind === "echo") continue;
     n++;
     if (s.status === "fail" || s.status === "error") {
-      const detail = s.reason ? String(s.reason) : undefined;
+      const lines = [...(s.reason ? [String(s.reason)] : []), ...renderFlowStepDetails(s)];
+      const detail = lines.length > 0 ? lines.join("\n") : undefined;
       return { headline: `step ${n} ${stepLabel(s, report.flow)}`, detail };
     }
   }
@@ -842,14 +866,7 @@ export function renderReport(report: FlowReport): string {
       continue;
     }
     n++;
-    lines.push(renderStepLine(s, n, report.flow));
-    if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
-    lines.push(...renderScriptLogLines(s, n));
-    if (s.artifacts && typeof s.artifacts === "object") {
-      for (const [k, v] of Object.entries(s.artifacts)) {
-        if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
-      }
-    }
+    lines.push(...renderStepLines(s, n, report.flow), ...renderStepArtifactLines(s, n));
   }
   lines.push(...renderSingleFailure(report));
   lines.push(`\n${renderSummary(report)}`);
@@ -1577,9 +1594,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       return;
     }
     liveIndex++;
-    console.log(renderStepLine(s, liveIndex, flowName));
-    if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
-    for (const line of renderScriptLogLines(s, liveIndex)) console.log(line);
+    for (const line of renderStepLines(s, liveIndex, flowName)) console.log(line);
   };
 
   let report: FlowReport;

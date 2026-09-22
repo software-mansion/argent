@@ -1266,9 +1266,9 @@ describe("swipe: execution", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
+    expect(result.steps[0].hint).toBe("if it is off-screen, add a scroll-to step before this one");
     // The reason names the end that is actually missing, not the other one.
-    expect(result.steps[0].reason).toContain('text="Card"');
+    expect(result.steps[0].reason).toBe('no element matched selector text="Card"');
     expect(result.calls).toEqual([]);
   }, 15000);
 
@@ -1283,8 +1283,8 @@ describe("swipe: execution", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
-    expect(result.steps[0].reason).toContain('text="Archive"');
+    expect(result.steps[0].hint).toBe("if it is off-screen, add a scroll-to step before this one");
+    expect(result.steps[0].reason).toBe('no element matched selector text="Archive"');
     expect(result.calls).toEqual([]);
   }, 15000);
 
@@ -1308,10 +1308,50 @@ describe("swipe: execution", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
-    expect(result.steps[0].reason).toContain('text="Drop"');
-    expect(result.steps[0].reason).not.toContain('text="Anchor"');
+    // Exact, so a count taken on the anchor (one visible match) would read
+    // "1 element matched" here instead of "no element matched".
+    expect(result.steps[0].reason).toBe('no element matched selector text="Drop"');
+    expect(result.steps[0].hint).toBe("if it is off-screen, add a scroll-to step before this one");
     expect(result.calls).toEqual([]);
   }, 15000);
+
+  it.each(["from", "to"] as const)(
+    "counts the zero-area matches of the %s end that missed, not of the end that resolved",
+    async (missingEnd) => {
+      // The resolved end has one visible match and the missing end two
+      // zero-area ones, so a count taken on the wrong end reads "1 element".
+      currentTree = () =>
+        screen([
+          n({ label: "Shown", frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 } }),
+          n({ label: "Hidden", frame: { x: 0.6, y: 0.5, width: 0, height: 0.1 } }),
+          n({ label: "Hidden", frame: { x: 0.6, y: 0.7, width: 0.2, height: 0 } }),
+        ]);
+      const shown = { selector: { text: "Shown", loose: true } };
+      const hidden = { selector: { text: "Hidden", loose: true } };
+      await writeFlow(`zero-area-${missingEnd}`, {
+        executionPrerequisite: "",
+        steps: [
+          missingEnd === "to"
+            ? { kind: "swipe", from: shown, to: hidden }
+            : { kind: "swipe", from: hidden, to: shown },
+        ],
+      });
+
+      const result = await run(`zero-area-${missingEnd}`);
+
+      expect(result.ok).toBe(false);
+      expect(result.steps[0]).toMatchObject({ kind: "swipe", status: "fail" });
+      expect(result.steps[0].reason).toBe(
+        '2 elements matched text="Hidden" but none was visible (zero-area frame)'
+      );
+      expect(result.steps[0].hint).toBe(
+        "the element is in the tree but has no on-screen area; it may be off-screen " +
+          "(add a scroll-to step before this one), collapsed, or not laid out yet"
+      );
+      expect(result.calls).toEqual([]);
+    },
+    15000
+  );
 
   it("blames the anchor when NEITHER end ever appears", async () => {
     // Deliberate tie-break, pinned so it can't drift: with both ends missing the
@@ -1461,9 +1501,10 @@ describe("swipe: abort", () => {
       const { result, events } = await runCancelledSwipe(step);
 
       // A skip with the uniform abort reason — NOT a fail with the misleading
-      // "no visible element matched … add a scroll-to step" hint.
+      // "no element matched …" reason and its scroll-to hint.
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["swipe:skip"]);
       expect(result.steps[0].reason).toBe("run aborted");
+      expect(result.steps[0].hint).toBeUndefined();
       expect(result.ok).toBe(false);
       expect(events).not.toContain("gesture-swipe");
     }

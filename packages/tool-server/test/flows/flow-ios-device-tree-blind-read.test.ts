@@ -11,9 +11,9 @@ import { queryIosDeviceFlowTree } from "../../src/tools/flows/flow-ios-tree";
 // runner snapshot (zero nodes, or still root-only after the settle-and-retry)
 // describeIosDevice returns a childless Application root plus a hint: the
 // right shape for describe/await, which surface the hint. The flow tree
-// source must THROW on that shape instead: settleTree reads only `.tree`, so
-// two blind reads fingerprint identical and "settle", and the step then fails
-// with a misleading offscreen hint while the runner's own hint is dropped.
+// source must THROW on that shape instead: an empty tree must not settle a
+// step's wait or satisfy `hidden`, and the thrown reason keeps the runner's
+// own hint.
 
 const DEVICE_UDID = "00008110-000978540290401E";
 const APP = "com.example.app";

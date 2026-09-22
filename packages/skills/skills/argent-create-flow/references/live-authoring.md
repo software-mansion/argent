@@ -268,7 +268,20 @@ Run `flow-execute` on the complete YAML with the absolute project root. For a fr
 
 `flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`. `run:` targets and baselines resolve on the tool server's filesystem, beside the YAML it actually reads. `flow_path` therefore requires the agent and the tool server to share a filesystem and is refused when they do not. `name` still runs remotely, but the server receives only that one YAML in a fresh temp directory. It checks the whole flow first and refuses a `run:`, `script:`, or `snapshot:` step at any depth, naming the missing co-location rather than a missing fragment, script, or baseline. Replay self-contained flows remotely; a composing, scripting, or snapshotting flow needs one shared filesystem.
 
-Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason — most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
+A failed step can show these lines under its reason:
+
+- `expected:` and `actual:` show the values that a text check or a snapshot compared.
+- `indeterminate:` shows that the step did not do its check, because Argent could not read the UI tree.
+- `hint:` shows a thing to try first, or a fact that helps you find the cause.
+
+Many failed steps have no `hint:` line. An `assert` or `await` with `exists`, `visible` or `hidden` that read the screen has none. `launch:`, `script:`, `run:` and most `tool:` steps have none. A `tool: flow-execute` step shows the lines of the step that failed in the composed flow. Before you use a hint, look at the screen. A hint is only one possible cause.
+
+Manual rescue invalidates the pass. These steps did not do their check:
+
+- An `errored` step: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app.
+- A failed step with the `indeterminate:` line.
+
+The environment is not the only possible cause of such a step. An app crash gives the same result as a tree source that stopped. A screen that the app made empty gives the same result too. Look at the app first. Then look at the device and the tree source. A failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
 
 **A passing step that carries a `warning` is a finding, not noise.** `await: { idle: true }` raises [six different warnings](flow-yaml.md#idle-readiness) and they do not share one meaning. Two say the screen was moving; one says the wait ran out mid-hold and is repaired by raising the step's `timeout:`; one says the tree stayed empty; one says the tree did hold still and only the screenshot pairs were missing, so the capture path is what to check; one says the step ended with no evidence either way. No report separates intended motion from a load that never finished. Read which one it is, look at that screen, disclose what you found, and confirm the following step targets a stable element rather than stillness.
 
