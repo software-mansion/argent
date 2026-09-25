@@ -28,6 +28,29 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
+// The global install's OWN on-disk location beats npm_config_user_agent for a
+// global-mode command: user_agent reflects whoever LAUNCHED `argent` (bare
+// `argent update` has none at all, and npx/pnpm dlx/etc. carry the RUNNER's
+// agent, not the target install's), while a pnpm-owned path is unambiguous —
+// npm and yarn never write into pnpm's store or its global dir (#1207). Kept
+// narrow on purpose: no attempt to spot npm/yarn/bun from a path, since
+// nothing about their global layouts is as distinctive as pnpm's.
+export function detectGlobalPackageManager(
+  packageRoot: string | null,
+  env: NodeJS.ProcessEnv = process.env
+): PackageManager {
+  if (packageRoot !== null) {
+    const normalized = packageRoot.split("\\").join("/");
+    const pnpmHome = env.PNPM_HOME?.split("\\").join("/").replace(/\/$/, "");
+    const insidePnpmHome =
+      Boolean(pnpmHome) && (normalized === pnpmHome || normalized.startsWith(`${pnpmHome}/`));
+    if (normalized.includes("/.pnpm/") || normalized.includes("/pnpm/global/") || insidePnpmHome) {
+      return "pnpm";
+    }
+  }
+  return detectPackageManager();
+}
+
 function asKnownPm(name: unknown): PackageManager | null {
   return name === "npm" || name === "yarn" || name === "pnpm" || name === "bun" ? name : null;
 }
