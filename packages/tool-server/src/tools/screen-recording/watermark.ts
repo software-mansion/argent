@@ -33,7 +33,7 @@ const DARK_LOGO_LEVEL = 0.08;
 const MASK_DARK_MAX_LUMA = 90;
 const MASK_LIGHT_MIN_LUMA = 165;
 
-interface Dimensions {
+export interface Dimensions {
   width: number;
   height: number;
 }
@@ -77,6 +77,34 @@ const even = (n: number) => 2 * Math.round(n / 2);
 // box one pixel past the frame edge.
 const evenFloor = (n: number) => 2 * Math.floor(n / 2);
 
+/**
+ * The filter chain that fits every frame into the recording's canvas: the
+ * first frame's size, evened. The video keeps that one size for its whole
+ * length, and a frame of another size (a foldable's other panel, a rotated
+ * screen) is scaled to fit inside it with its aspect ratio kept, and centred
+ * on black bars, rather than stretched to fill it.
+ *
+ * The even-crop comes first so that a frame of the canvas's own size is never
+ * resampled: it only loses the odd edge pixel (1179x2556 -> 1178x2556), and
+ * then fits the canvas exactly, which the scale and the pad pass through
+ * unchanged. Scaled the other way round, every frame of an odd-sized device
+ * would be resampled into a canvas one pixel narrower. The second even-crop
+ * trims a fitted size that came out odd by its edge row or column, so the
+ * content ends on yuv420p's 2x2 chroma grid. The scale's `force_divisible_by`
+ * would do that too, but only ffmpeg 4.3 and later have it, and on an older
+ * ffmpeg the unknown option fails every recording.
+ */
+export function letterboxFilter(canvas: Dimensions): string {
+  const w = evenFloor(canvas.width);
+  const h = evenFloor(canvas.height);
+  return (
+    `crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,` +
+    `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+    `crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,` +
+    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`
+  );
+}
+
 /** The bottom-left watermark rectangle in pixels (all even) for a frame size. */
 export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox {
   // Cap the box to the frame: a frame far wider than tall keeps the logo aspect
@@ -102,30 +130,23 @@ export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox
  * overlay is what ends the graph when the frame pipe closes. Every input runs
  * at OUTPUT_FPS so maskedmerge's per-frame streams stay in lockstep.
  *
- * `pinSize` is for a capture whose frames can change size mid-stream — a
- * foldable's recording, which moves to the other panel's stream on a fold. A
- * frame of another size would leave the box's crop and overlay outside it and
- * end the encode, so the base is then fitted to the first frame's size. Every
- * other capture keeps the plain graph: the pin costs a format conversion
- * ahead of the split that no same-size frame needs.
+ * `dims` is the first frame's size. The base is letterboxed into it (see
+ * {@link letterboxFilter}) ahead of the split, so a frame of another size
+ * mid-stream still meets a box and an overlay that lie inside it.
  */
-export function buildWatermarkGraph(dims: Dimensions, opts: { pinSize?: boolean } = {}): string {
+export function buildWatermarkGraph(dims: Dimensions): string {
   // libx264 with yuv420p fails on an odd frame size, and some devices stream
-  // one (1179x2556). Even the base up front and derive the box from the same
-  // evened size so the mask crop stays inside it; an even frame is unchanged.
-  const evenW = evenFloor(dims.width);
-  const evenH = evenFloor(dims.height);
-  const { w, h, x, y } = computeWatermarkBox({ width: evenW, height: evenH });
-  // Pinned: the crop evens whatever size arrives without resampling it (a
-  // same-size frame then passes through the scale untouched, and only a frame
-  // of another size is fitted). The explicit format is what keeps the scale
-  // honest: left to negotiate, it would answer the mask branch's `gray` and
-  // the whole recording would lose its colour.
-  const base = opts.pinSize
-    ? `,crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,scale=${evenW}:${evenH},format=yuv420p`
-    : evenW !== dims.width || evenH !== dims.height
-      ? `,crop=${evenW}:${evenH}:0:0`
-      : "";
+  // one (1179x2556). The letterbox evens the base, and the box is derived
+  // from the same evened size so the mask crop stays inside it.
+  const { w, h, x, y } = computeWatermarkBox({
+    width: evenFloor(dims.width),
+    height: evenFloor(dims.height),
+  });
+  // The explicit format keeps the letterbox's scale honest: left to
+  // negotiate, it would answer the mask branch's `gray`, and the whole
+  // recording would lose its colour. yuv420p is the format the encoder takes
+  // anyway, so the pin adds no conversion of its own.
+  const base = `,${letterboxFilter(dims)},format=yuv420p`;
   const span = MASK_LIGHT_MIN_LUMA - MASK_DARK_MAX_LUMA;
   // High where the background is dark (-> keep the white logo), low where light.
   const maskRamp = `lut=y='clip((${MASK_LIGHT_MIN_LUMA}-val)/${span}*255,0,255)'`;

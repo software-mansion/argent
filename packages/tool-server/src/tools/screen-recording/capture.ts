@@ -22,7 +22,13 @@ import {
   type StartRecordingResult,
   type StopRecordingFile,
 } from "./session-guards";
-import { buildWatermarkGraph, resolveFfmpeg, writeLogoTemp } from "./watermark";
+import {
+  buildWatermarkGraph,
+  letterboxFilter,
+  resolveFfmpeg,
+  writeLogoTemp,
+  type Dimensions,
+} from "./watermark";
 
 /**
  * Screen capture off simulator-server's MJPEG stream, paced onto a fixed 30fps
@@ -79,7 +85,7 @@ const PANEL_FIRST_FRAME_TIMEOUT_MS = 5_000;
  * How a recording of a foldable follows the panel the device renders to. The
  * MJPEG stream is per panel and keeps one size for its lifetime, so following
  * a fold means closing one stream and opening another; the frames keep going
- * into the same ffmpeg, which keeps the size of the first frame it saw.
+ * into the same ffmpeg, which letterboxes them into the first frame's size.
  */
 export interface PanelFollow {
   /**
@@ -108,6 +114,11 @@ export function ffmpegArgs(opts: {
   outputFile: string;
   logoFile: string | null;
   graph: string | null;
+  /**
+   * The first frame's size, which the whole video keeps; null when its JPEG
+   * header could not be read.
+   */
+  canvas: Dimensions | null;
 }): string[] {
   const args = [
     "-hide_banner",
@@ -126,9 +137,8 @@ export function ffmpegArgs(opts: {
   if (opts.logoFile && opts.graph) {
     // The still logo is looped so the graph has a logo frame for every video
     // frame; `shortest=1` in the graph ends the output with the capture.
-    // `buildWatermarkGraph` evens the base (and, for a capture that follows a
-    // foldable's panel, pins it to the first frame's size), so the yuv420p
-    // encoder below always gets a valid size.
+    // `buildWatermarkGraph` letterboxes the base into the first frame's
+    // evened size, so the yuv420p encoder below always gets a valid size.
     args.push(
       "-framerate",
       String(OUTPUT_FPS),
@@ -147,10 +157,13 @@ export function ffmpegArgs(opts: {
     // native resolution is odd on either axis (iPhone 16 / 15 Pro / 15 / 14 Pro
     // stream at 1179x2556) would fail the encode after the readiness grace and
     // leave a 0-byte file. Dropping the odd edge pixel leaves even frames
-    // unchanged. A frame of another size mid-stream (a foldable's other panel)
-    // needs no pin here: with nothing in the graph sized to the first frame,
-    // ffmpeg fits it to the encoder's size itself.
-    args.push("-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+    // unchanged. The letterbox fits a frame of another size mid-stream (a
+    // foldable's other panel) into the first frame's; ffmpeg left to itself
+    // would stretch it to the encoder's size.
+    args.push(
+      "-vf",
+      opts.canvas ? letterboxFilter(opts.canvas) : "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0"
+    );
   }
   args.push(
     "-c:v",
@@ -409,16 +422,14 @@ async function startCaptureLocked(
   let child: ReturnType<typeof spawn>;
   try {
     // The first frame proves the device is drawing, and its JPEG header carries
-    // the frame size the watermark geometry needs — no ffprobe pass over a file
-    // that does not exist yet.
+    // the size the whole video keeps (the letterbox canvas) and the watermark
+    // geometry — no ffprobe pass over a file that does not exist yet.
     const firstFrame = await stream.waitForFirstFrame(FIRST_FRAME_TIMEOUT_MS);
-    const dims = params.watermark ? readJpegDimensions(firstFrame) : null;
+    const canvas = readJpegDimensions(firstFrame);
     let graph: string | null = null;
-    if (dims) {
+    if (params.watermark && canvas) {
       logoFile = await writeLogoTemp();
-      // A capture that follows the panel of a foldable sees frames of the
-      // other panel's size after a fold; only that capture pins the base.
-      graph = buildWatermarkGraph(dims, { pinSize: params.followPanel !== undefined });
+      graph = buildWatermarkGraph(canvas);
     } else if (params.watermark) {
       // Only an unreadable JPEG header gets here. Record anyway, but say so
       // rather than handing back a silently unwatermarked file.
@@ -429,7 +440,7 @@ async function startCaptureLocked(
     // while this start was suspended above, abort rather than spawn an encoder
     // the teardown can no longer reap.
     assertNotDisposed(api, "screen_recording_start");
-    child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph }), {
+    child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph, canvas }), {
       stdio: ["pipe", "ignore", "pipe"],
     });
     // Visible to dispose() while the fail-fast grace is pending (captureProcess
