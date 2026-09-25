@@ -329,8 +329,8 @@ run_phase() {
   fi
 
   # A fold made outside argent leaves the hinge where the server did not put
-  # it. The next fold must still end on the right panel, with no `from`, and the
-  # tap after it must land. The helper moves the hinge the way Device Hub does.
+  # it. The next fold must still end on the right panel, with nothing passed
+  # to say where the hinge was, and the tap after it must land. The helper moves the hinge the way Device Hub does.
   local HINGE="${E2E_DUO_HINGE:-}"
   if [ -n "$HINGE" ] && [ -x "$HINGE" ]; then
     "$HINGE" "$DEV" hinge 0 180 >/dev/null 2>&1; sleep 2   # closed, behind argent's back

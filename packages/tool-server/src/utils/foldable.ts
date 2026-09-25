@@ -130,9 +130,11 @@ const READ_GRACE_MS = 500;
  * is not predicted: from closed, 76-80° switches to the inner panel for about
  * a second and then returns to the cover, and 85° switches for good.
  *
- * A sweep that starts anywhere else follows no such model: measured 75° → 90°,
- * 90° → 75°, 100° → 75° and 120° → 75° all leave the panel where it was. The
- * fold tool predicts nothing for those and reports what it reads.
+ * A sweep between two angles short of the stops follows no such model:
+ * measured 75° → 90°, 90° → 75°, 100° → 75° and 120° → 75° all leave the panel
+ * where it was. The fold tool predicts nothing for those and reports what it
+ * reads. A sweep that ends at a stop lands on that stop's panel whatever its
+ * start, so the map holds for it too.
  */
 const COVER_MAX_ANGLE = 75;
 const INNER_MIN_ANGLE = 90;
@@ -269,9 +271,7 @@ function firstLine(err: unknown): string {
  * binary, a timeout, a device CoreDevice does not know, or a payload with no
  * lit integrated panel.
  */
-export async function readCoreDeviceDisplays(
-  udid: string
-): Promise<{
+export async function readCoreDeviceDisplays(udid: string): Promise<{
   displays: { activeScreen: number; panels: FoldablePanel[] } | null;
   reason?: string;
 }> {
@@ -409,8 +409,10 @@ function innerScreenId(panels: readonly FoldablePanel[]): number | undefined {
  * The panel a foldable renders to after a sweep from a stop (closed or open)
  * to `angle`: the main screen up to {@link COVER_MAX_ANGLE}, the inner panel
  * from {@link INNER_MIN_ANGLE}, and undefined in between (or when the panel
- * list names no inner panel). Says nothing about a sweep that starts anywhere
- * else; see the constants.
+ * list names no inner panel). A sweep that ends at a stop lands on that
+ * stop's panel whatever its start, so the map holds for those too. Says
+ * nothing about a sweep between two angles short of the stops; see the
+ * constants.
  */
 export function panelForHingeAngle(
   angle: number,

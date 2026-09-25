@@ -142,10 +142,6 @@ describe("fold tool — input", () => {
       false
     );
     expect(foldTool.zodSchema!.safeParse({ udid: DUO, angle: 181 }).success).toBe(false);
-    expect(
-      foldTool.zodSchema!.safeParse({ udid: DUO, posture: "open", from: "closed" }).success
-    ).toBe(true);
-    expect(foldTool.zodSchema!.safeParse({ udid: DUO, angle: 60, from: 0 }).success).toBe(true);
   });
 
   it("is a local-simulator tool only", () => {
@@ -211,17 +207,6 @@ describe("fold tool — execute", () => {
     expect(result.activeScreen).toBe(1);
   });
 
-  it("keeps the start the caller named", async () => {
-    answerDisplay(null);
-    resolveLivePanelMock.mockResolvedValue(live(3));
-    answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
-    await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "closed", from: "half-open" }
-    );
-    expect(hingeBody()).toEqual({ posture: "closed", from: "half-open" });
-  });
-
   it("names the preset an angle sits at and waits for the panel the angle implies", async () => {
     answerDisplay(0);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
@@ -267,7 +252,7 @@ describe("fold tool — execute", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  it("predicts nothing for a sweep that starts between the stops, and reports where the device stayed", async () => {
+  it("predicts nothing for a sweep between two angles short of the stops, and reports where the device stayed", async () => {
     // The server holds the hinge at 75°, on the cover panel. 75° -> 90° is a
     // short sweep the guest does not hand over on: the tool waits for any
     // change, sees none, and answers the panel the device kept — no failure,
@@ -298,19 +283,38 @@ describe("fold tool — execute", () => {
     expect(back.warning).toBeUndefined();
   });
 
-  it("predicts the panel from a caller-named start at a stop, and not from one between", async () => {
-    answerDisplay(null);
-    resolveLivePanelMock.mockResolvedValue(live(1));
-    answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
-    await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 120, from: 0 });
+  it("predicts the panel for a sweep that ends at a stop, whatever it starts from", async () => {
+    // The server holds the hinge at 120°, on the inner panel. Open ends on the
+    // inner panel and closed on the cover whatever the path, so both are waited
+    // for with the hand-over budget — not for "any change" with the settle one,
+    // which a sweep that keeps its panel would only run out.
+    answerDisplay(120);
+    resolveLivePanelMock.mockResolvedValue(live(3));
+    answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
+    const opened = await foldTool.execute!(
+      { simulatorServer: api() },
+      { udid: DUO, posture: "open" }
+    );
+    // 120° and the inner panel agree, so the sweep starts where the server has the hinge.
+    expect(hingeBody()).toEqual({ posture: "open" });
     expect(awaitedPanel()).toBe(3);
     expect(awaited().timeoutMs).toBe(HAND_OVER_TIMEOUT_MS);
+    expect(opened.activeScreen).toBe(3);
+    expect(opened.warning).toBeUndefined();
+    expect(heldMs()).toBe(INPUT_READY_HOLD_MS);
 
     awaitLivePanelMock.mockClear();
-    answerDisplay(null);
-    answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
-    await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 120, from: 100 });
-    expect(awaited().timeoutMs).toBe(SETTLE_TIMEOUT_MS);
+    holdLivePanelMock.mockClear();
+    answerDisplay(120);
+    answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
+    const closed = await foldTool.execute!(
+      { simulatorServer: api() },
+      { udid: DUO, posture: "closed" }
+    );
+    expect(awaitedPanel()).toBe(1);
+    expect(awaited().timeoutMs).toBe(HAND_OVER_TIMEOUT_MS);
+    expect(closed.activeScreen).toBe(1);
+    expect(closed.warning).toBeUndefined();
   });
 
   it("warns, rather than fails, when the device kept a panel other than the one the sweep implied", async () => {
@@ -325,7 +329,8 @@ describe("fold tool — execute", () => {
     expect(result.screen).toEqual({ id: 1, panel: "cover panel", width: 1398, height: 2034 });
     expect(result.warning).toContain("kept rendering to screen 1 (cover panel, 1398x2034)");
     expect(result.warning).toContain("switching to screen 3 (inner panel, 2007x2853)");
-    expect(result.warning).toContain("fold to closed or open first");
+    // A stop is the target that switches panels by itself: no "fold to a stop first" advice.
+    expect(result.warning).toContain("Fold again if the device did not switch");
     // The guest still moved its hinge, so it still gets the hold.
     expect(holdLivePanelMock).toHaveBeenCalledTimes(1);
   });

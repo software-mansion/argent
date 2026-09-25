@@ -63,12 +63,6 @@ const zodSchema = z
       .describe(
         "The hinge angle in degrees, 0 (closed) to 180 (open). Exactly one of `posture` and `angle`."
       ),
-    from: z
-      .union([z.number().min(0).max(180), z.enum(POSTURES)])
-      .optional()
-      .describe(
-        "Where the hinge is now, as an angle or a posture. Normally left out: argent starts the sweep on the panel the device renders to. Pass it to name the exact angle something other than argent (Device Hub) left the hinge at."
-      ),
   })
   .refine((p) => (p.posture === undefined) !== (p.angle === undefined), {
     message: "Pass exactly one of `posture` and `angle`.",
@@ -136,7 +130,6 @@ function hingeRequest(params: Params): HingeRequest {
   const request: HingeRequest = {};
   if (params.posture !== undefined) request.posture = params.posture;
   if (params.angle !== undefined) request.angle = params.angle;
-  if (params.from !== undefined) request.from = params.from;
   return request;
 }
 
@@ -148,13 +141,16 @@ function targetAngle(params: Params): number {
   return params.angle ?? POSTURE_ANGLE[params.posture ?? "closed"];
 }
 
+/** The stop a sweep is started from when the tool names one (see `sweepStartFor`). */
+type SweepStart = "closed" | "open";
+
 /** A stop of the hinge: closed or open, where the guest settles fastest and hands over predictably. */
 function atStop(angle: number): boolean {
   return angle <= POSTURE_ANGLE.closed || angle >= POSTURE_ANGLE.open;
 }
 
 /**
- * Where to tell the server the hinge is, when the caller did not say.
+ * Where to tell the server the hinge is.
  *
  * The server sweeps from the angle it last set, or from closed when it never
  * did, and it cannot read the hinge back. When that start lies on the other
@@ -171,21 +167,20 @@ function sweepStartFor(
   serverAngle: number | null,
   liveScreen: number,
   panels: readonly FoldablePanel[]
-): HingeRequest["from"] | undefined {
+): SweepStart | undefined {
   const start = serverAngle ?? POSTURE_ANGLE.closed;
   if (panelForHingeAngle(start, panels) === liveScreen) return undefined;
   return liveScreen === MAIN_SCREEN_ID ? "closed" : "open";
 }
 
 /**
- * The angle the sweep starts at: the caller's `from`, else the angle the
- * server last set, else closed, where a server that never moved the hinge
- * starts. Decides whether the outcome is predicted at all (see
- * `panelForHingeAngle`).
+ * The angle the sweep starts at: the start the tool named (see
+ * `sweepStartFor`), else the angle the server last set, else closed, where a
+ * server that never moved the hinge starts. With the target, decides whether
+ * the outcome is predicted (see `panelForHingeAngle`).
  */
-function sweepStartAngle(from: HingeRequest["from"], serverAngle: number | null): number {
-  if (typeof from === "number") return from;
-  if (from !== undefined) return POSTURE_ANGLE[from];
+function sweepStartAngle(start: SweepStart | undefined, serverAngle: number | null): number {
+  if (start !== undefined) return POSTURE_ANGLE[start];
   return serverAngle ?? POSTURE_ANGLE.closed;
 }
 
@@ -210,11 +205,11 @@ export const foldTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to fold device to ${targetLabel(params)}: ${failureSignal.error_code}`,
   },
-  description: `Move the hinge of a foldable iOS simulator (the iPhone Duo) to a \`posture\` (closed, half-open, open) or an \`angle\` (0-180°), folding or unfolding it, then wait until the device has settled on the panel it renders to and takes input again, so the next tap lands (about 0.5 s after the sweep for closed and open, about 1.5 s for any other angle, half-open included).
+  description: `Move the hinge of a foldable iOS simulator (the iPhone Duo) to a \`posture\` (closed, half-open, open) or an \`angle\` (0-180°), folding or unfolding it, then wait until the device has settled on the panel it renders to and takes input again, so the next tap lands (about 0.7 s after the sweep for closed and open, about 1.7 s for any other angle, half-open included).
 Use when an app has to be seen or driven in another posture: on the cover panel (closed), on the inner panel (open), or half-open. \`list-devices\` marks the foldable simulators with \`foldable: true\`; \`rotate\` turns a device without folding it.
 Closed, the device renders to the cover panel (screen 1, 1398x2034 px on the Duo); half-open and open, to the inner panel (screen 3, 2007x2853 px). The other panel is black. Argent resolves the live panel for every screenshot, describe, touch and stream at the moment it runs, so the tools follow the fold, whoever moved the hinge — but their coordinate space changes with it: re-run \`describe\` (or read the element tree appended to this result) before tapping, and expect \`screenshot\` to change size. Unfolded, the UI runs landscape on the inner panel's portrait-native framebuffer; frames and touch coordinates stay in that native space, like landscape on any iPhone.
-The device switches panels on a sweep from closed or open past its own threshold (about 75-90°); a sweep between two angles short of those stops leaves it on the panel it had. The result reports the panel the device renders to either way, with a \`warning\` when that is not the panel the sweep implied — fold to closed or open first to switch panels.
-The sweep starts on the panel the device renders to, resolved at that moment, so a fold made outside argent (Device Hub) needs no \`from\`; pass \`from\` only to name the exact angle the hinge was left at. A fold during a gesture is not supported: the gesture completes on the screen it started on.
+The device switches panels on a sweep from or to closed or open, past its own threshold (about 75-90°); a sweep between two angles short of those stops leaves it on the panel it had. The result reports the panel the device renders to either way, with a \`warning\` when that is not the panel the sweep implied — to switch panels, fold to closed or open.
+The sweep starts on the panel the device renders to, resolved at that moment, so a fold made outside argent (Device Hub) needs nothing extra. A fold during a gesture is not supported: the gesture completes on the screen it started on.
 Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }; posture is set only when the hinge sits at a preset (0°, 120°, 180°). Fails on a device that is not foldable (the server's own message), on a remote simulator, and on a simulator-server build that predates foldables.`,
   searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
   zodSchema,
@@ -241,8 +236,9 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAng
     const beforeScreen = before && before.source !== "unknown" ? before.screen : undefined;
 
     const request = hingeRequest(params);
-    if (request.from === undefined && known && beforeScreen !== undefined) {
-      const start = sweepStartFor(known.hingeAngle, beforeScreen, known.panels);
+    let start: SweepStart | undefined;
+    if (known && beforeScreen !== undefined) {
+      start = sweepStartFor(known.hingeAngle, beforeScreen, known.panels);
       if (start !== undefined) request.from = start;
     }
     let display: SimulatorDisplayState;
@@ -264,12 +260,15 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAng
     // The guest hands over to the other panel 1.5-2 s after the sweep, longer
     // when busy; the server does not wait for it, so the client does, by
     // resolving the live panel until it changes. Which panel to wait for is
-    // only predicted for a sweep from a stop (closed or open): one that
-    // starts mid-way may leave the panel where it was, and there — as at an
-    // angle near the hand-over — any change from where the device was is the
-    // answer, and so is none.
-    const startAngle = sweepStartAngle(request.from, known?.hingeAngle ?? null);
-    const expected = atStop(startAngle) ? panelForHingeAngle(angle, panels) : undefined;
+    // predicted when either end of the sweep is a stop (closed or open): a
+    // sweep that ends at a stop lands on that stop's panel whatever its start,
+    // and one from a stop is predicted by where it ends. Only a sweep between
+    // two angles short of the stops may leave the panel where it was, and
+    // there — as at an angle near the hand-over — any change from where the
+    // device was is the answer, and so is none.
+    const startAngle = sweepStartAngle(start, known?.hingeAngle ?? null);
+    const expected =
+      atStop(angle) || atStop(startAngle) ? panelForHingeAngle(angle, panels) : undefined;
     let settled: LivePanel | null =
       expected !== undefined
         ? await awaitLivePanel(udid, (screen) => screen === expected, {
@@ -309,12 +308,15 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAng
         `${unresolvedPanelNote(udid, reason, "commands target", panels)} ` +
         "Take a screenshot to see the screen.";
     } else if (expected !== undefined && settled.screen !== expected) {
+      // A stop is the target that switches panels by itself; a mid angle is
+      // reached through one.
+      const advice = atStop(angle)
+        ? "Fold again if the device did not switch; a screenshot shows what it renders."
+        : "To switch panels, fold to closed or open first, then to the angle wanted.";
       warning =
         `The hinge was swept to ${targetLabel(params)}, but the device kept rendering to ` +
         `${screenLabel(activeScreen, panels)} rather than switching to ${screenLabel(expected, panels)}. ` +
-        `Commands target the panel the device renders to. To switch panels, fold to closed or open ` +
-        `first, then to the angle wanted; if something other than argent moved the hinge, pass ` +
-        "`from` with the angle it was really at.";
+        `Commands target the panel the device renders to. ${advice}`;
     }
 
     return {

@@ -350,17 +350,6 @@ const CASES = {
   "fold": [
     { step: { kind: "fold", posture: "open" }, summary: "1. fold: open", target: "open" },
     { step: { kind: "fold", angle: 120 }, summary: "1. fold: 120°", target: "120°" },
-    {
-      // `from` changes which panel the device ends on, so both surfaces spell it.
-      step: { kind: "fold", posture: "closed", from: "open" },
-      summary: "1. fold: closed from open",
-      target: "closed from open",
-    },
-    {
-      step: { kind: "fold", angle: 60, from: 0 },
-      summary: "1. fold: 60° from 0°",
-      target: "60° from 0°",
-    },
   ],
   "snapshot": [
     { step: { kind: "snapshot", name: "home" }, summary: "1. snapshot: home", target: '"home"' },

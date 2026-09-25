@@ -87,29 +87,25 @@ afterEach(async () => {
 });
 
 describe("fold: parse/serialize", () => {
-  it("round-trips the bare posture, bare angle and options-map spellings", () => {
+  it("round-trips the bare posture and bare angle spellings", () => {
     const steps: FlowStep[] = [
       { kind: "fold", posture: "open" },
       { kind: "fold", angle: 120 },
-      { kind: "fold", posture: "closed", from: "open" },
-      { kind: "fold", angle: 60, from: 0 },
     ];
     const reparsed = parseFlow(serializeFlow({ executionPrerequisite: "", steps })).steps;
     expect(reparsed).toEqual(steps);
   });
 
-  it("sugars a posture or an angle with no `from` to the bare form", () => {
+  it("sugars a posture or an angle to the bare form", () => {
     const yaml = serializeFlow({
       executionPrerequisite: "",
       steps: [
         { kind: "fold", posture: "open" },
         { kind: "fold", angle: 120 },
-        { kind: "fold", angle: 60, from: 0 },
       ],
     });
     expect(yaml).toMatch(/- fold: open\n/);
     expect(yaml).toMatch(/- fold: 120\n/);
-    expect(yaml).toMatch(/fold:\n\s+angle: 60\n\s+from: 0\n/);
   });
 
   it("parses every spelling", () => {
@@ -117,14 +113,14 @@ describe("fold: parse/serialize", () => {
       "steps:\n" +
         "  - fold: open\n" +
         "  - fold: 120\n" +
-        "  - fold: { posture: closed, from: open }\n" +
-        "  - fold: { angle: 60, from: 0 }\n"
+        "  - fold: { posture: closed }\n" +
+        "  - fold: { angle: 60 }\n"
     ).steps;
     expect(steps).toEqual([
       { kind: "fold", posture: "open" },
       { kind: "fold", angle: 120 },
-      { kind: "fold", posture: "closed", from: "open" },
-      { kind: "fold", angle: 60, from: 0 },
+      { kind: "fold", posture: "closed" },
+      { kind: "fold", angle: 60 },
     ]);
   });
 
@@ -138,8 +134,10 @@ describe("fold: parse/serialize", () => {
     expect(() => parseFlow("steps:\n  - fold: {}\n")).toThrow(/exactly one of posture and angle/);
     expect(() => parseFlow("steps:\n  - fold: { posture: open, to: closed }\n")).toThrow(/to/);
     expect(() => parseFlow("steps:\n  - fold: null\n")).toThrow(/fold takes a posture/);
-    expect(() => parseFlow("steps:\n  - fold: { angle: 60, from: 200 }\n")).toThrow(
-      /fold.from must be/
+    // `from` is not a key the directive takes: the sweep starts on the panel
+    // the device renders to, which the tool resolves itself.
+    expect(() => parseFlow("steps:\n  - fold: { angle: 60, from: 0 }\n")).toThrow(
+      /unknown key `from`/
     );
   });
 });
@@ -148,16 +146,14 @@ describe("fold: run", () => {
   it("dispatches to the fold tool on the run device and reports the panel", async () => {
     await writeFlow("open", {
       executionPrerequisite: "",
-      steps: [{ kind: "fold", posture: "open", from: "closed" }],
+      steps: [{ kind: "fold", posture: "open" }],
     });
     const result = await run("open");
-    expect(result.calls).toEqual([
-      { tool: "fold", args: { udid: DEVICE, posture: "open", from: "closed" } },
-    ]);
+    expect(result.calls).toEqual([{ tool: "fold", args: { udid: DEVICE, posture: "open" } }]);
     expect(result.steps[0]).toMatchObject({
       kind: "fold",
       status: "pass",
-      target: "open from closed",
+      target: "open",
       reason: "open: screen 3 (inner panel 2007x2853)",
     });
     expect(result.ok).toBe(true);
@@ -235,11 +231,8 @@ describe("fold: recorder", () => {
 
   it("keeps a raw tool step for args the directive does not take", () => {
     expect(foldStepFromArgs({ posture: "open" })).toEqual({ kind: "fold", posture: "open" });
-    expect(foldStepFromArgs({ angle: 60, from: "closed" })).toEqual({
-      kind: "fold",
-      angle: 60,
-      from: "closed",
-    });
+    expect(foldStepFromArgs({ angle: 60 })).toEqual({ kind: "fold", angle: 60 });
+    expect(foldStepFromArgs({ angle: 60, from: "closed" })).toBeUndefined();
     expect(foldStepFromArgs({ posture: "open", extra: 1 })).toBeUndefined();
     expect(foldStepFromArgs({})).toBeUndefined();
   });

@@ -715,11 +715,10 @@ export type FlowStep =
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
   /**
-   * Fold or unfold a foldable simulator: exactly one of `posture` and `angle`,
-   * plus where the hinge is now when something other than the flow moved it.
+   * Fold or unfold a foldable simulator: exactly one of `posture` and `angle`.
    * The `fold` tool's own contract; the runner dispatches it to that tool.
    */
-  | { kind: "fold"; posture?: FoldPosture; angle?: number; from?: number | FoldPosture }
+  | { kind: "fold"; posture?: FoldPosture; angle?: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
   | { kind: "script"; path: string; timeout?: number };
 
@@ -990,10 +989,7 @@ type YamlStep =
   | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
   | { script: { path: string; timeout?: number } };
 
-type YamlFoldBody =
-  | FoldPosture
-  | number
-  | { posture?: FoldPosture; angle?: number; from?: number | FoldPosture };
+type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
@@ -1593,16 +1589,14 @@ function toYamlStep(step: FlowStep): YamlStep {
           : { by: step.by },
       };
     case "fold": {
-      // Sugar the common case back to the bare form: a posture or an angle with
-      // no `from`. parseFold is the exact inverse.
-      if (step.from === undefined) {
-        if (step.posture !== undefined && step.angle === undefined) return { fold: step.posture };
-        if (step.angle !== undefined && step.posture === undefined) return { fold: step.angle };
-      }
+      // The bare form: parseFold takes exactly one of posture and angle (and
+      // accepts the map spelling), so every parsed step comes back bare; the
+      // map is only for a step that breaks that invariant.
+      if (step.posture !== undefined && step.angle === undefined) return { fold: step.posture };
+      if (step.angle !== undefined && step.posture === undefined) return { fold: step.angle };
       const body: Exclude<YamlFoldBody, FoldPosture | number> = {};
       if (step.posture !== undefined) body.posture = step.posture;
       if (step.angle !== undefined) body.angle = step.angle;
-      if (step.from !== undefined) body.from = step.from;
       return { fold: body };
     }
     case "snapshot": {
@@ -2635,7 +2629,7 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
 
 const FOLD_SHAPE_HINT =
   `fold takes a posture (${FOLD_POSTURES.join(", ")}), an angle in degrees (0-180), or an ` +
-  `options map — e.g. fold: open, fold: 120, fold: { posture: open, from: closed }`;
+  `options map — e.g. fold: open, fold: 120, fold: { angle: 120 }`;
 
 function parseFoldAngle(value: unknown, entry: unknown, what: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 180) {
@@ -2646,9 +2640,8 @@ function parseFoldAngle(value: unknown, entry: unknown, what: string): number {
 
 /**
  * Parse a `fold` body: a bare posture (`fold: open`), a bare angle
- * (`fold: 120`), or an options map with exactly one of `posture` and `angle`
- * plus an optional `from` — where the hinge is now, when something other than
- * the flow moved it. The same contract as the `fold` tool the step dispatches to.
+ * (`fold: 120`), or an options map with exactly one of `posture` and `angle`.
+ * The same contract as the `fold` tool the step dispatches to.
  */
 function parseFold(body: unknown, entry: unknown): FlowStep {
   if (typeof body === "string") {
@@ -2662,7 +2655,7 @@ function parseFold(body: unknown, entry: unknown): FlowStep {
     badEntry(entry, FOLD_SHAPE_HINT);
   }
   const obj = body as Record<string, unknown>;
-  rejectUnknownKeys(entry, obj, ["posture", "angle", "from"], "fold");
+  rejectUnknownKeys(entry, obj, ["posture", "angle"], "fold");
   const hasPosture = obj.posture !== undefined;
   const hasAngle = obj.angle !== undefined;
   if (hasPosture === hasAngle) {
@@ -2676,9 +2669,6 @@ function parseFold(body: unknown, entry: unknown): FlowStep {
     step.posture = obj.posture;
   }
   if (hasAngle) step.angle = parseFoldAngle(obj.angle, entry, "fold.angle");
-  if (obj.from !== undefined) {
-    step.from = isFoldPosture(obj.from) ? obj.from : parseFoldAngle(obj.from, entry, "fold.from");
-  }
   return step;
 }
 

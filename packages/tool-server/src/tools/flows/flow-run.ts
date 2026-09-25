@@ -2371,7 +2371,6 @@ async function runFold(
   const args = bindDeviceArgs(registry, "fold", device.id, {
     ...(step.posture !== undefined ? { posture: step.posture } : {}),
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
-    ...(step.from !== undefined ? { from: step.from } : {}),
   });
   try {
     const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
