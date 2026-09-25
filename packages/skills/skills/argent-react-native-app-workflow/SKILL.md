@@ -3,7 +3,8 @@ name: argent-react-native-app-workflow
 description: Step-by-step workflows for developing or debugging React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
-Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject it. Use a simulator.
+- Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject it. Use a simulator.
+- Do not try to use the DevMenu in React Native apps by default. Use the argent tools instead.
 
 ## 1. Starting the React Native App
 
@@ -17,13 +18,10 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
 **If the project structure is convoluted, ask the user before proceeding.**
 
-**Remember the workflow:** Once you discover the project's build/run workflow, save it to project memory so you don't need to re-discover it each time.
-
 **Checklist before start:**
 
 - [ ] `node_modules` present (if not: `npm install` or `yarn`)
 - [ ] For iOS: `ios/Podfile` exists; if `ios/Pods` missing or stale, run `cd ios && pod install && cd ..`
-- [ ] No conflicting Metro on default port (see 1.2)
 
 ### 1.2 Start Metro
 
@@ -45,7 +43,7 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
 In a **separate** terminal (Metro keeps running in the first):
 
-**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `npm run android`, `yarn ios:debug`). Only fall back to the defaults below if no custom scripts are defined.
+**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `npm run android`, `yarn ios:debug`).
 
 **Pass the target device explicitly** — derive it from `list-devices` (see `<device_selection_rule>`):
 
@@ -69,40 +67,34 @@ npx react-native run-android --deviceId=<adb-serial> # Android
 
 ### 2.1 Check for Existing Metro
 
-Before starting Metro, avoid "port already in use" errors. Default port to check is :8081, infer the port from documentation:
+Before starting Metro, avoid "port already in use" errors. Infer the port from the project documentation or use the default port :8081.
 
 ```bash
 lsof -i :PORT
 ```
 
-- **No output** → Port free; safe to start Metro.
-- **Output with PID** → Another process is using the port.
-
-Use the `debugger-status` tool to check whether the process on that port is actually a Metro server — it returns a structured result, not an error. `status: "connected"` or `reason: "no_app_connected"` → the process is Metro. `reason: "metro_not_running"` while `lsof` shows a listener → the port is occupied by something that is **not** Metro; the result's `detail` field shows what the process answered (`Metro at port ... is not running (got: ...)`). In that case ask the user whether you may kill the process.
-
-To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
+- **No output** → safe to start Metro.
+- **Output with PID** → check if the process is a Metro server with `debugger-status` tool.
+  - `status: "connected"` or `reason: "no_app_connected"` → the process is Metro.
+  - `reason: "metro_not_running"` while `lsof` shows a listener → the port is occupied by something that is **not** Metro; the result's `detail` field shows what the process answered (`Metro at port ... is not running (got: ...)`). In that case ask the user whether you may kill the process. To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
 
 ### 2.2 Confirm Correct Server Connection
 
 - **App must point at the same host/port as the running Metro.** Default: same machine, port 8081.
 - **iOS Simulator:** By default uses localhost; no extra config needed for same-machine Metro.
 
-**Verify Metro is reachable:** use the `debugger-status` tool. `reason: "metro_not_running"` means Metro did not answer on that port — start it (§2.1); `"no_app_connected"` means Metro answered but the app has not attached (§2.3). Any other reason: follow the result's `guidance` (it does not by itself prove Metro is up).
+**Verify Metro is reachable:** use the `debugger-status` tool.
+
+- `reason: "metro_not_running"` — start the Metro (§2.1)
+- `"no_app_connected"` — reload the RN App (§2.3).
+- Any other reason: follow the result's `guidance`.
 
 ### 2.3 Reload the App (Ensure New Bundle)
 
 After code or config changes, the app must load the new bundle:
 
-| Method      | How                                                                                               |
-| ----------- | ------------------------------------------------------------------------------------------------- |
-| Reload tool | Use the `debugger-reload-metro` tool                                                              |
-| Restart app | Use the `restart-app` tool, or kill the app in simulator and run `npx react-native run-ios` again |
-
-**Agent checklist:**
-
-- [ ] Only one Metro process (no duplicate on port)
-- [ ] App was started after Metro was ready
-- [ ] When needing to reload: refer to 2.3
+- use `debugger-reload-metro` tool when JS layer of the RN App was modified
+- use `restart-app` tool, or kill the app in simulator and run e.g. `npx react-native run-ios` again, on config or native layer changes
 
 ---
 
@@ -121,8 +113,6 @@ After code or config changes, the app must load the new bundle:
 
 **After 2-3 failed build or run attempts, STOP and ask the user for guidance.** The user may know about required env vars, Xcode version requirements, custom build configurations, monorepo-specific setup, or required external services.
 
-If the project structure is convoluted and the correct build approach is not obvious, **ask the user early** rather than guessing.
-
 ### 3.3 Saving Build Workflow for Later
 
 Once you discover the correct build/run workflow for a project, **save it to project memory**. Capture: commands to start Metro, commands to build/run the app, and any required environment setup.
@@ -136,22 +126,6 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install`. Then rebuild. |
 | App needs reinstalling from .app path                 | Use `reinstall-app` tool with UDID, bundle ID, and .app path.                         |
 | Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                |
-
-### 3.5 Device Control
-
-| Action                     | Tool / Command                                                                                                                                                                                             |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| List devices               | `list-devices` tool (iOS + Android)                                                                                                                                                                        |
-| Boot an iOS simulator      | `boot-device` tool with `udid`                                                                                                                                                                             |
-| Boot an Android emulator   | `boot-device` tool with `avdName`                                                                                                                                                                          |
-| Launch an app              | `launch-app` tool (pass device id + bundle id / package name)                                                                                                                                              |
-| Restart an app             | `restart-app` tool (pass device id + bundle id / package name)                                                                                                                                             |
-| Open a URL / deep link     | `open-url` tool (pass device id + URL)                                                                                                                                                                     |
-| Rotate device              | `rotate` tool                                                                                                                                                                                              |
-| Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device)                                                                                                                                     |
-| Stop all simulator servers | `stop-all-simulator-servers` tool — pass `devices: [...]` to scope the teardown to this session's devices (an unscoped call also tears down other agents' devices; use it only for a machine-wide cleanup) |
-
-For full simulator setup workflow, refer to the `argent-ios-simulator-setup` skill.
 
 ---
 
@@ -168,23 +142,17 @@ For full simulator setup workflow, refer to the `argent-ios-simulator-setup` ski
 | **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                                                                                                                                                                             |
 | **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                                                                                                                                                                      |
 
-For comprehensive Metro debugging workflows (component inspection, console logs, JS evaluation), refer to the `argent-metro-debugger` skill.
-
 ### 4.2 JS Console Logs (Log Registry)
 
 Logs are written to a flat log file on disk under `~/.argent/tmp/`. Use the **log-registry → grep** pattern instead of reading logs inline.
 
 For the full workflow, flat entry format, and grep examples, see `argent-metro-debugger` skill §5.
 
-### 4.3 Do not try to use the DevMenu in React Native apps by default.
-
-Use the argent tools instead.
-
 ---
 
 ## 5. Testing the App
 
-Check the `argent-environment-inspector` result for test commands. For interactive UI testing with automatic screenshot verification, use the `argent-test-ui-flow` skill.
+Check the `argent-environment-inspector` result for test commands.
 
 - **Unit tests**: Look for Jest in `package.json` (`"test": "jest"`, `jest` config). Run: `npm test` or `yarn test`.
 - **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`, and for iOS often `applesimutils`.
@@ -195,7 +163,7 @@ Check the `argent-environment-inspector` result for test commands. For interacti
 
 If the user's intent is ambiguous (run existing tests, write new tests, or find missing coverage), clarify before proceeding.
 
-- **Jest**: `npm test` or `npx jest`.
+- **Jest**: typically `npm test` or `npx jest`.
 - **Detox (example)**:
   - Build: `detox build --configuration ios.sim.release` (or debug).
   - Run: `detox test --configuration ios.sim.release`.
