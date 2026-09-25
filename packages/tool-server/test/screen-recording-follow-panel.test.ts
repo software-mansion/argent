@@ -45,7 +45,7 @@ import {
 import { startCapture, stopCapture, type PanelFollow } from "../src/tools/screen-recording/capture";
 import type { LivePanel } from "../src/utils/foldable";
 import { openMjpegStream } from "../src/tools/screen-recording/mjpeg-stream";
-import { buildWatermarkGraph } from "../src/tools/screen-recording/watermark";
+import { buildWatermarkGraph, letterboxFilter } from "../src/tools/screen-recording/watermark";
 import { __resetActiveScreenRecordingsForTesting } from "../src/utils/screen-recording-reminder";
 import { __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
@@ -380,7 +380,10 @@ describe("a recording of a foldable follows the live panel", () => {
     await stop(api);
   });
 
-  it("pins the watermark base only when following a panel", async () => {
+  it("letterboxes into the first panel's size, following a panel or not", async () => {
+    // The capture keeps the size of the panel it started on; the other
+    // panel's frames are fitted into it after a fold. A capture of a device
+    // with one panel gets the same graph, which leaves its frames unchanged.
     const graph = vi.mocked(buildWatermarkGraph);
     graph.mockClear();
     serveStreams(() => INNER);
@@ -401,22 +404,28 @@ describe("a recording of a foldable follows the live panel", () => {
     start.catch(() => {});
     await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
     await start;
-    expect(graph).toHaveBeenCalledWith({ width: 2007, height: 2853 }, { pinSize: true });
+    expect(graph).toHaveBeenCalledWith({ width: 2007, height: 2853 });
+    const followingArgs = mockSpawn.mock.calls.at(-1)![1] as string[];
+    expect(followingArgs[followingArgs.indexOf("-filter_complex") + 1]).toContain(
+      letterboxFilter({ width: 2007, height: 2853 })
+    );
     await stop(following);
 
-    graph.mockClear();
     fakeChild();
     const plain = await makeSession();
     const plainStart = startCapture(plain, {
       streamUrl: BASE_URL,
       timeLimitSeconds: 60,
-      watermark: true,
+      watermark: false,
       trimStatic: false,
     });
     plainStart.catch(() => {});
     await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
     await plainStart;
-    expect(graph).toHaveBeenCalledWith({ width: 2007, height: 2853 }, { pinSize: false });
+    const plainArgs = mockSpawn.mock.calls.at(-1)![1] as string[];
+    expect(plainArgs[plainArgs.indexOf("-vf") + 1]).toBe(
+      letterboxFilter({ width: 2007, height: 2853 })
+    );
     await stop(plain);
   });
 });

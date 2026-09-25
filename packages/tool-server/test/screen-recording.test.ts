@@ -41,7 +41,11 @@ import { setPointerTrail, setPointerVisible } from "../src/utils/simulator-clien
 import { makePointerControl } from "../src/tools/screen-recording/screen-recording-start";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
-import { resolveFfmpeg, writeLogoTemp } from "../src/tools/screen-recording/watermark";
+import {
+  letterboxFilter,
+  resolveFfmpeg,
+  writeLogoTemp,
+} from "../src/tools/screen-recording/watermark";
 import {
   __resetActiveScreenRecordingsForTesting,
   getActiveScreenRecordings,
@@ -480,6 +484,8 @@ describe("screen recording capture", () => {
     await startAndSettle(api, { watermark: true });
     const args = mockSpawn.mock.calls[0]![1] as string[];
     expect(args).not.toContain("-filter_complex");
+    // No canvas to letterbox into either: the frames are only evened.
+    expect(args[args.indexOf("-vf") + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
 
     await fs.writeFile(api.outputFile!, Buffer.alloc(32, 1));
     const outputFile = api.outputFile!;
@@ -500,27 +506,67 @@ describe("screen recording capture", () => {
     expect(args).not.toContain("-filter_complex");
   });
 
+  it("letterboxes into the first frame's size with the watermark on and off", async () => {
+    // The first frame (1320x2868) is the canvas the whole video keeps, so a
+    // frame of another size later on is fitted into it instead of stretched.
+    for (const watermark of [false, true]) {
+      mockSpawn.mockClear();
+      const api = await makeSession(iosDevice);
+      fakeStream();
+      fakeChild();
+
+      await startAndSettle(api, { watermark });
+
+      const args = mockSpawn.mock.calls[0]![1] as string[];
+      const filter = watermark
+        ? args[args.indexOf("-filter_complex") + 1]
+        : args[args.indexOf("-vf") + 1];
+      expect(filter).toContain(letterboxFilter({ width: 1320, height: 2868 }));
+    }
+  });
+
   it("evens the raw base so an odd device resolution still encodes (no watermark)", () => {
     // The watermark-off path has no filter graph to normalize the base, so the
     // frame reaches libx264 directly. yuv420p rejects an odd width/height and
     // leaves a 0-byte file (iPhone 16 / 15 Pro / 15 / 14 Pro stream at
-    // 1179x2556); the crop drops the odd edge pixel so any resolution records.
-    const args = ffmpegArgs({ outputFile: "/tmp/out.mp4", logoFile: null, graph: null });
+    // 1179x2556); the crop drops the odd edge pixel so any resolution records,
+    // and it comes ahead of the letterbox, so those frames are not resampled.
+    const args = ffmpegArgs({
+      outputFile: "/tmp/out.mp4",
+      logoFile: null,
+      graph: null,
+      canvas: { width: 1179, height: 2556 },
+    });
     const vf = args.indexOf("-vf");
     expect(vf).toBeGreaterThan(-1);
-    expect(args[vf + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+    expect(args[vf + 1]).toBe(
+      "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
+        "scale=1178:2556:force_original_aspect_ratio=decrease:force_divisible_by=2," +
+        "pad=1178:2556:(ow-iw)/2:(oh-ih)/2"
+    );
     expect(args).not.toContain("-filter_complex");
     // the crop must precede the output file, not trail it
     expect(vf).toBeLessThan(args.length - 1);
   });
 
+  it("only evens the base when the first frame's size is unknown (no watermark)", () => {
+    const args = ffmpegArgs({
+      outputFile: "/tmp/out.mp4",
+      logoFile: null,
+      graph: null,
+      canvas: null,
+    });
+    expect(args[args.indexOf("-vf") + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+  });
+
   it("does not add a second base filter when a watermark graph already evens it", () => {
-    // buildWatermarkGraph handles the even-base crop itself, so the args must not
+    // buildWatermarkGraph letterboxes the base itself, so the args must not
     // also carry a -vf (ffmpeg rejects -vf alongside -filter_complex on one map).
     const args = ffmpegArgs({
       outputFile: "/tmp/out.mp4",
       logoFile: "/tmp/logo.png",
       graph: "[0:v]fps=30,split=2[base][under];[base][x]overlay[out]",
+      canvas: { width: 1320, height: 2868 },
     });
     expect(args).not.toContain("-vf");
     expect(args).toContain("-filter_complex");
