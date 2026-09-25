@@ -165,6 +165,19 @@ describe("refreshArgentSkills", () => {
     expect(args.indexOf("--force")).toBeLessThan(args.indexOf("skills"));
   });
 
+  it("launches nothing and reports a sync error when no runner is on PATH", () => {
+    resolveSkillsRunnerMock.mockReturnValue(null);
+    listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
+    writeLock(path.join(tmpDir, "skills-lock.json"), {
+      "argent-create-flow": {},
+    });
+
+    const results = refreshArgentSkills(tmpDir);
+
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(results[0]!.syncError).toBe("neither npx nor pnpm is on PATH");
+  });
+
   it("runs the skills CLI through `pnpm dlx` when the resolver picks pnpm (#1206)", () => {
     resolveSkillsRunnerMock.mockReturnValue(pnpmDlxRunner);
     listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);

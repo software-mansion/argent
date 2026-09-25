@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { withNpmForce } from "./utils.js";
@@ -53,20 +54,24 @@ function findOnPath(bin: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platfo
 // PATH, so nothing changes for npm users. When Node is pnpm-managed and npm
 // (so npx) was never installed, `argent init`/`update` used to fail the
 // skills step with `spawn npx ENOENT` (#1206) — `pnpm dlx` runs the same
-// `skills` CLI without needing npm. With neither present, keep today's npx
-// failure mode; it's the clearest signal something's missing.
+// `skills` CLI without needing npm. With neither on PATH there is nothing
+// trusted to launch, so this returns null: a bare `npx` would let cmd.exe
+// pick up an `npx.cmd` from the working directory.
 export function resolveSkillsRunner(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform
-): SkillsRunner {
+): SkillsRunner | null {
   const npx = findOnPath("npx", env, platform);
   if (npx) return { kind: "npx", bin: npx, buildArgs: withNpmForce, label: "npx" };
   const pnpm = findOnPath("pnpm", env, platform);
   if (pnpm) {
     return { kind: "pnpm", bin: pnpm, buildArgs: (args) => ["dlx", ...args], label: "pnpm dlx" };
   }
-  return { kind: "npx", bin: "npx", buildArgs: withNpmForce, label: "npx" };
+  return null;
 }
+
+// The error both callers report when resolveSkillsRunner found nothing.
+export const NO_SKILLS_RUNNER_MESSAGE = "neither npx nor pnpm is on PATH";
 
 export interface SkillsCommand {
   file: string;
@@ -93,4 +98,26 @@ export function skillsCommand(
   const args = runner.buildArgs(skillsArgs);
   if (platform !== "win32") return { file: runner.bin, args, shell: false };
   return { file: [runner.bin, ...args].map(quoteForCmd).join(" "), args: [], shell: true };
+}
+
+const OFFLINE_PROBE_TIMEOUT_MS = 3_000;
+
+// Whether the skills CLI can run offline from the npx cache. Only npx has an
+// offline mode (`--no-install`); pnpm dlx has none.
+export function isSkillsCliCached(
+  runner: SkillsRunner,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  if (runner.kind !== "npx") return false;
+  const command = skillsCommand(runner, ["--no-install", "skills", "--version"], platform);
+  try {
+    execFileSync(command.file, command.args, {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: OFFLINE_PROBE_TIMEOUT_MS,
+      shell: command.shell,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }

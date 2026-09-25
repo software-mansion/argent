@@ -12,7 +12,7 @@ import {
   listBundledSkills,
   SKILLS_DIR,
 } from "./utils.js";
-import { resolveSkillsRunner, skillsCommand } from "./skills-runner.js";
+import { NO_SKILLS_RUNNER_MESSAGE, resolveSkillsRunner, skillsCommand } from "./skills-runner.js";
 
 type SkillScope = "project" | "global";
 
@@ -84,6 +84,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     cwd: string;
   };
   const runSkills = (skillsArgs: string[]): void => {
+    if (!runner) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
     const command = skillsCommand(runner, skillsArgs);
     execFileSync(command.file, command.args, { ...execOpts, shell: command.shell });
   };

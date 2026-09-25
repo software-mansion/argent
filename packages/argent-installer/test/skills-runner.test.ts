@@ -1,8 +1,21 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveSkillsRunner, skillsCommand } from "../src/skills-runner.js";
+// The resolver scans the real filesystem; only the offline probe spawns a
+// process, so child_process is mocked for isSkillsCliCached.
+const { execFileSyncMock } = vi.hoisted(() => ({ execFileSyncMock: vi.fn() }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    default: { ...actual, execFileSync: execFileSyncMock },
+    execFileSync: execFileSyncMock,
+  };
+});
+
+import { isSkillsCliCached, resolveSkillsRunner, skillsCommand } from "../src/skills-runner.js";
 import { withNpmForce } from "../src/utils.js";
 
 // Fake-executable fixtures live under per-test temp dirs on an injected PATH,
@@ -35,7 +48,7 @@ describe("resolveSkillsRunner", () => {
     writePosixExecutable(path.join(bin, "npx"));
     writePosixExecutable(path.join(bin, "pnpm"));
 
-    const runner = resolveSkillsRunner({ PATH: bin }, "linux");
+    const runner = resolveSkillsRunner({ PATH: bin }, "linux")!;
 
     expect(runner.kind).toBe("npx");
     expect(runner.bin).toBe(path.join(bin, "npx"));
@@ -47,7 +60,7 @@ describe("resolveSkillsRunner", () => {
     const bin = makeTmpDir();
     writePosixExecutable(path.join(bin, "pnpm"));
 
-    const runner = resolveSkillsRunner({ PATH: bin }, "linux");
+    const runner = resolveSkillsRunner({ PATH: bin }, "linux")!;
 
     expect(runner.kind).toBe("pnpm");
     expect(runner.bin).toBe(path.join(bin, "pnpm"));
@@ -55,13 +68,12 @@ describe("resolveSkillsRunner", () => {
     expect(runner.buildArgs(["skills", "add", "x"])).toEqual(["dlx", "skills", "add", "x"]);
   });
 
-  it("falls back to npx's unchanged failure mode when neither npx nor pnpm is on PATH", () => {
+  it("returns null when neither npx nor pnpm is on PATH", () => {
+    // A bare `npx` would let cmd.exe pick up an npx.cmd from the working
+    // directory, so there is no fallback runner.
     const bin = makeTmpDir();
 
-    const runner = resolveSkillsRunner({ PATH: bin }, "linux");
-
-    expect(runner.bin).toBe("npx");
-    expect(runner.label).toBe("npx");
+    expect(resolveSkillsRunner({ PATH: bin }, "linux")).toBeNull();
   });
 
   // NTFS doesn't gate execution on the POSIX mode bits this test flips, so it
@@ -75,7 +87,7 @@ describe("resolveSkillsRunner", () => {
       fs.chmodSync(path.join(bin, "npx"), 0o644);
       writePosixExecutable(path.join(bin, "pnpm"));
 
-      const runner = resolveSkillsRunner({ PATH: bin }, "linux");
+      const runner = resolveSkillsRunner({ PATH: bin }, "linux")!;
 
       expect(runner.bin).toBe(path.join(bin, "pnpm"));
     }
@@ -85,7 +97,7 @@ describe("resolveSkillsRunner", () => {
     const bin = makeTmpDir();
     fs.writeFileSync(path.join(bin, "pnpm.CMD"), "@echo off\n");
 
-    const runner = resolveSkillsRunner({ PATH: bin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }, "win32");
+    const runner = resolveSkillsRunner({ PATH: bin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }, "win32")!;
 
     // The full path, extension included: cmd.exe then never searches the
     // working directory for a same-named shim.
@@ -97,7 +109,7 @@ describe("resolveSkillsRunner", () => {
     const bin = makeTmpDir();
     fs.writeFileSync(path.join(bin, "pnpm.CMD"), "@echo off\n");
 
-    const runner = resolveSkillsRunner({ PATH: bin }, "win32");
+    const runner = resolveSkillsRunner({ PATH: bin }, "win32")!;
 
     expect(runner.bin).toBe(path.join(bin, "pnpm.CMD"));
   });
@@ -109,10 +121,7 @@ describe("resolveSkillsRunner", () => {
     const originalCwd = process.cwd();
     process.chdir(cwd);
     try {
-      const runner = resolveSkillsRunner({ PATH: "rel" }, "linux");
-
-      expect(runner.kind).toBe("npx");
-      expect(runner.bin).toBe("npx");
+      expect(resolveSkillsRunner({ PATH: "rel" }, "linux")).toBeNull();
     } finally {
       process.chdir(originalCwd);
     }
@@ -165,5 +174,56 @@ describe("skillsCommand", () => {
   it("quotes cmd.exe metacharacters and doubles embedded quotes on win32", () => {
     const { file } = skillsCommand(pnpmDlx, ["a&b", 'say "hi"'], "win32");
     expect(file).toBe('pnpm dlx "a&b" "say ""hi"""');
+  });
+});
+
+describe("isSkillsCliCached", () => {
+  const npx = {
+    kind: "npx" as const,
+    bin: "/usr/local/bin/npx",
+    buildArgs: (args: string[]) => ["--force", ...args],
+    label: "npx",
+  };
+
+  beforeEach(() => {
+    execFileSyncMock.mockReset();
+  });
+
+  it("probes the resolved npx with --force --no-install and returns true on success", () => {
+    execFileSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
+
+    expect(isSkillsCliCached(npx, "linux")).toBe(true);
+    const [file, args, opts] = execFileSyncMock.mock.calls[0]! as [
+      string,
+      string[],
+      { stdio?: unknown; timeout?: number; shell?: boolean },
+    ];
+    expect(file).toBe("/usr/local/bin/npx");
+    // `--force` softens the host project's npm engine gate (#298).
+    expect(args).toEqual(["--force", "--no-install", "skills", "--version"]);
+    // Silent, and bounded so a wedged npx cannot hang init.
+    expect(opts.stdio).toEqual(["ignore", "ignore", "ignore"]);
+    expect(opts.timeout).toBeGreaterThan(0);
+    expect(opts.shell).toBe(false);
+  });
+
+  it("returns false when the probe fails (skills CLI not in the npx cache)", () => {
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("command failed");
+    });
+
+    expect(isSkillsCliCached(npx, "linux")).toBe(false);
+  });
+
+  it("returns false for pnpm dlx without spawning anything, as it has no offline mode", () => {
+    const pnpmDlx = {
+      kind: "pnpm" as const,
+      bin: "/usr/local/bin/pnpm",
+      buildArgs: (a: string[]) => ["dlx", ...a],
+      label: "pnpm dlx",
+    };
+
+    expect(isSkillsCliCached(pnpmDlx, "linux")).toBe(false);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 });

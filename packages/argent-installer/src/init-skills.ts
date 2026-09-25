@@ -2,8 +2,14 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { spawn } from "node:child_process";
 import { track } from "@argent/telemetry";
-import { SKILLS_DIR, buildArgentSkillsSource, isOnline, isSkillsCliAvailable } from "./utils.js";
-import { resolveSkillsRunner, skillsCommand, type SkillsCommand } from "./skills-runner.js";
+import { SKILLS_DIR, buildArgentSkillsSource, isOnline } from "./utils.js";
+import {
+  NO_SKILLS_RUNNER_MESSAGE,
+  isSkillsCliCached,
+  resolveSkillsRunner,
+  skillsCommand,
+  type SkillsCommand,
+} from "./skills-runner.js";
 import { InitCancelled } from "./init-args.js";
 import type { Scope } from "./init-scope.js";
 
@@ -25,10 +31,13 @@ export async function runSkillsStep(args: {
 
   let skillsMethod: SkillsMethod;
 
-  const online = await isOnline();
-  const offlineWithCache = !online && isSkillsCliAvailable();
-  const skillsCliReady = online || offlineWithCache;
   const runner = resolveSkillsRunner();
+  // Labels the displayed and manual-fallback commands even when no runner
+  // was found.
+  const label = runner?.label ?? "npx";
+  const online = await isOnline();
+  const offlineWithCache = !online && runner !== null && isSkillsCliCached(runner);
+  const skillsCliReady = online || offlineWithCache;
 
   if (!skillsCliReady) {
     p.log.warn(
@@ -50,12 +59,12 @@ export async function runSkillsStep(args: {
         {
           value: "default" as const,
           label: "Automatic",
-          hint: `Installs all skills automatically with ${runner.label} skills`,
+          hint: `Installs all skills automatically with ${label} skills`,
         },
         {
           value: "interactive" as const,
           label: "Interactive",
-          hint: `Full ${runner.label} skills TUI - choose skills, agents, and method`,
+          hint: `Full ${label} skills TUI - choose skills, agents, and method`,
         },
         {
           value: "manual" as const,
@@ -88,8 +97,8 @@ export async function runSkillsStep(args: {
         `  ${pc.dim("# Cursor")}`,
         `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
         ``,
-        `  ${pc.dim(`# Or use ${runner.label} skills directly:`)}`,
-        `  ${runner.label} skills add ${skillsSource}`,
+        `  ${pc.dim(`# Or use ${label} skills directly:`)}`,
+        `  ${label} skills add ${skillsSource}`,
       ].join("\n"),
       "Manual Skills Installation"
     );
@@ -105,15 +114,13 @@ export async function runSkillsStep(args: {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    // `--no-install` is npx-only. isSkillsCliAvailable() probes npx, so
-    // offlineWithCache already implies it; the check keeps that explicit.
-    const baseArgs =
-      offlineWithCache && runner.kind === "npx" ? ["--no-install", ...skillsArgs] : skillsArgs;
+    // `--no-install` is npx-only; isSkillsCliCached() is true only for npx.
+    const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
     // skillsCommand adds whatever the runner needs (npx: --force; pnpm: dlx);
     // baseArgs stays clean for the displayed and manual-fallback commands.
-    const command = skillsCommand(runner, baseArgs);
+    const command = runner ? skillsCommand(runner, baseArgs) : null;
 
-    p.log.info(`Running: ${pc.dim(runner.label)} ${pc.cyan(baseArgs.join(" "))}`);
+    if (command) p.log.info(`Running: ${pc.dim(label)} ${pc.cyan(baseArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -121,8 +128,9 @@ export async function runSkillsStep(args: {
     }
 
     try {
+      if (!command) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
       const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runSkillsCli(command, runner.label, skillsMethod === "interactive", skillsCwd);
+      await runSkillsCli(command, label, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
@@ -131,8 +139,8 @@ export async function runSkillsStep(args: {
       if (skillsMethod === "default") {
         spinner.stop(pc.red("Skills installation failed."));
       }
-      p.log.error(`Failed to run ${runner.label} skills: ${err}`);
-      p.log.info(`You can install skills manually:\n  ${runner.label} ${skillsArgs.join(" ")}`);
+      p.log.error(`Failed to run ${label} skills: ${err}`);
+      p.log.info(`You can install skills manually:\n  ${label} ${skillsArgs.join(" ")}`);
       skillOutcome = "failure";
     }
   }
