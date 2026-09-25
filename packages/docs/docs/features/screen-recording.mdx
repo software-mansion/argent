@@ -26,7 +26,7 @@ Argent draws each interaction of the agent into the video. A pulse marks each ta
 
 Argent removes the still parts of the recording. When the screen does not change, Argent keeps the first second and removes the rest. Thus a long session with a short activity gives a short video without dead air. The agent can also keep the full real-time recording, for example to measure how long an operation takes on the screen.
 
-The video has one size: the size of the screen at the start of the recording. When the screen changes size during the recording, Argent fits the new screen into the video and adds black bars. Argent does not stretch the screen. For example, the screen changes size when a foldable simulator changes panels.
+The video keeps the size of the screen at the start of the recording. If the screen changes size, Argent keeps the proportions of the new screen and adds black bars. On a foldable simulator, the screen changes size when the other panel shows the UI. To get a panel at full size, tell the agent to start the recording on that panel.
 
 Argent stamps a small Argent watermark into the corner of the video. You can turn the watermark off.
 
