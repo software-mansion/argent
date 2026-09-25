@@ -32,14 +32,17 @@ export async function runSkillsStep(args: {
   let skillsMethod: SkillsMethod;
 
   const runner = resolveSkillsRunner();
-  // Labels the displayed and manual-fallback commands even when no runner
-  // was found.
   const label = runner?.label ?? "npx";
   const online = await isOnline();
   const offlineWithCache = !online && runner !== null && isSkillsCliCached(runner);
-  const skillsCliReady = online || offlineWithCache;
+  const skillsCliReady = runner !== null && (online || offlineWithCache);
 
-  if (!skillsCliReady) {
+  if (runner === null) {
+    p.log.warn(
+      pc.yellow("Neither npx nor pnpm is on PATH. ") +
+        "Automatic skills installation requires one of them."
+    );
+  } else if (!skillsCliReady) {
     p.log.warn(
       pc.yellow("You appear to be offline. ") +
         "Automatic skills installation requires a network connection."
@@ -96,9 +99,14 @@ export async function runSkillsStep(args: {
         ``,
         `  ${pc.dim("# Cursor")}`,
         `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
-        ``,
-        `  ${pc.dim(`# Or use ${label} skills directly:`)}`,
-        `  ${label} skills add ${skillsSource}`,
+        // Without a runner the skills CLI is not an option, so do not offer it.
+        ...(runner
+          ? [
+              ``,
+              `  ${pc.dim(`# Or use ${label} skills directly:`)}`,
+              `  ${label} skills add ${skillsSource}`,
+            ]
+          : []),
       ].join("\n"),
       "Manual Skills Installation"
     );
