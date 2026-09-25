@@ -533,6 +533,49 @@ describe("formatDescribeTree", () => {
     expect(elementLines(out)).toHaveLength(0);
   });
 
+  // The Chromium walker sets `checked` alone, so a ticked box has to render
+  // differently from an unticked one without any `checkable` companion.
+  it("renders checked on a node that carries no checkable", () => {
+    const box = (checked: boolean): DescribeNode => ({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "input",
+          label: "Accept terms",
+          identifier: "terms",
+          frame: { x: 0, y: 0.1, width: 0.04, height: 0.04 },
+          clickable: true,
+          checked,
+        }),
+      ],
+    });
+    const ticked = elementLines(formatDescribeTree(box(true), { source: "cdp-dom" }));
+    const unticked = elementLines(formatDescribeTree(box(false), { source: "cdp-dom" }));
+    expect(ticked[0]).toContain("[clickable,checked]");
+    expect(unticked[0]).toContain("[clickable]");
+    expect(ticked[0]).not.toEqual(unticked[0]);
+  });
+
+  // A `<div role="checkbox" aria-checked="true">` carries no other content
+  // signal, so hasContent() has to count `checked` or the node is dropped.
+  it("keeps an unlabeled node whose only content signal is checked", () => {
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "div",
+          frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+          checked: true,
+        }),
+      ],
+    };
+    const lines = elementLines(formatDescribeTree(root, { source: "cdp-dom" }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("[checked]");
+  });
+
   // Regression: nested mode previously keyed on "uiautomator" only, so
   // "android-devtools" responses rendered flat and lost all descendants.
   it("renders android-devtools source in nested mode", () => {
