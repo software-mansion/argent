@@ -103,19 +103,20 @@ export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox
  * at OUTPUT_FPS so maskedmerge's per-frame streams stay in lockstep.
  */
 export function buildWatermarkGraph(dims: Dimensions): string {
-  // libx264 with yuv420p fails on an odd frame size, and some devices stream
-  // one (1179x2556). Even the base up front and derive the box from the same
-  // evened size so the mask crop stays inside it; an even frame is unchanged.
+  // The base is pinned to the first frame's size, evened: libx264 with yuv420p
+  // fails on an odd frame size, and some devices stream one (1179x2556), and a
+  // frame of another size — a foldable's other panel, after a fold mid-capture
+  // — would otherwise leave the box's crop and overlay outside it and end the
+  // encode. The box is derived from that same size so it stays inside. A frame
+  // already that size passes through the scale untouched.
   const evenW = evenFloor(dims.width);
   const evenH = evenFloor(dims.height);
   const { w, h, x, y } = computeWatermarkBox({ width: evenW, height: evenH });
-  const evenCrop =
-    evenW !== dims.width || evenH !== dims.height ? `,crop=${evenW}:${evenH}:0:0` : "";
   const span = MASK_LIGHT_MIN_LUMA - MASK_DARK_MAX_LUMA;
   // High where the background is dark (-> keep the white logo), low where light.
   const maskRamp = `lut=y='clip((${MASK_LIGHT_MIN_LUMA}-val)/${span}*255,0,255)'`;
   return [
-    `[0:v]fps=${OUTPUT_FPS}${evenCrop},split=2[base][under]`,
+    `[0:v]fps=${OUTPUT_FPS},scale=${evenW}:${evenH},split=2[base][under]`,
     `[under]crop=${w}:${h}:${x}:${y},format=gray,${maskRamp},format=gbrap[mask]`,
     `[1:v]fps=${OUTPUT_FPS},format=rgba,scale=${w}:${h},split=2[white][darksrc]`,
     `[darksrc]colorchannelmixer=rr=${DARK_LOGO_LEVEL}:gg=${DARK_LOGO_LEVEL}:bb=${DARK_LOGO_LEVEL}[dark]`,

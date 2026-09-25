@@ -117,8 +117,8 @@ export function ffmpegArgs(opts: {
   if (opts.logoFile && opts.graph) {
     // The still logo is looped so the graph has a logo frame for every video
     // frame; `shortest=1` in the graph ends the output with the capture.
-    // `buildWatermarkGraph` crops the base to even dimensions, so the yuv420p
-    // encoder below always gets a valid size.
+    // `buildWatermarkGraph` pins the base to the first frame's evened size, so
+    // the yuv420p encoder below always gets a valid, constant size.
     args.push(
       "-framerate",
       String(OUTPUT_FPS),

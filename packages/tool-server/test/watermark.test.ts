@@ -94,10 +94,10 @@ describe("buildWatermarkGraph", () => {
   it("evens an odd-resolution base before splitting so yuv420p can encode it", () => {
     // iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556 (odd width). Without
     // an even base the overlayed output stays 1179 wide and libx264 rejects it
-    // ("width not divisible by 2"), killing the whole recording. Crop the base
+    // ("width not divisible by 2"), killing the whole recording. Pin the base
     // to 1178 up front, and derive the box from that so the mask stays inside.
     const odd = buildWatermarkGraph({ width: 1179, height: 2556 });
-    expect(odd.startsWith("[0:v]fps=30,crop=1178:2556:0:0,split=2[base][under]")).toBe(true);
+    expect(odd.startsWith("[0:v]fps=30,scale=1178:2556,split=2[base][under]")).toBe(true);
     const box = computeWatermarkBox({ width: 1178, height: 2556 });
     expect(box.x + box.w).toBeLessThanOrEqual(1178);
     // the mask crop reads from within the evened base
@@ -107,8 +107,9 @@ describe("buildWatermarkGraph", () => {
 
   it("leaves an already-even frame's graph unchanged (no redundant base crop)", () => {
     const even = buildWatermarkGraph({ width: 1320, height: 2868 });
-    expect(even.startsWith("[0:v]fps=30,split=2[base][under]")).toBe(true);
-    // the only crop is the mask crop; there is no base even-crop of the frame
-    expect(even).not.toMatch(/crop=1320:2868/);
+    // An even frame is pinned to its own size, which the scale passes through;
+    // a frame of another size mid-capture (a foldable's other panel) is fitted
+    // to it, so the box stays inside the encoded frame.
+    expect(even.startsWith("[0:v]fps=30,scale=1320:2868,split=2[base][under]")).toBe(true);
   });
 });
