@@ -1583,6 +1583,9 @@ describe("swipe: pre-dispatch settle", () => {
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass", "swipe:pass"]);
     expect(result.steps[1].warning).toContain("dispatched without settling the screen first");
-    expect(result.steps[1].warning).toBe(result.steps[0].warning);
+    // The tap's warning word for word, and a direction swipe adds that no read
+    // said how the UI lies, so the direction may not be the UI's.
+    expect(result.steps[1].warning!.startsWith(result.steps[0].warning!)).toBe(true);
+    expect(result.steps[1].warning).toContain("No read reported the UI's orientation");
   }, 15000);
 });

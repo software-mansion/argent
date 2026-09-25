@@ -27,6 +27,8 @@ export interface JsonSchema {
   enum?: unknown[];
   description?: string;
   not?: JsonSchema;
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
 }
 
 interface FlagParseResult {
@@ -138,6 +140,27 @@ function coerceScalar(raw: string, type: string | undefined, field: string): unk
   }
   // string or unknown: pass through
   return raw;
+}
+
+/**
+ * Coerce a plain flag's value by the field's schema. A field with no single
+ * `type` whose alternatives are a number and a set of words — `fold`'s `from`,
+ * an angle or a posture — takes the value as a number when it reads as one and
+ * is none of the words, so `--from 90` sends 90, not "90", which the number
+ * alternative would reject. Any other shape passes the value through as a
+ * string, as before, for the server to judge.
+ */
+function coerceFieldValue(raw: string, prop: JsonSchema | undefined, field: string): unknown {
+  const alternatives = prop && prop.type === undefined ? (prop.anyOf ?? prop.oneOf) : undefined;
+  if (!alternatives) return coerceScalar(raw, prop?.type, field);
+  const numeric = alternatives.find((a) => a.type === "number" || a.type === "integer");
+  const restAreWords = alternatives.every(
+    (a) => a === numeric || (a.type === "string" && Array.isArray(a.enum))
+  );
+  if (!numeric || !restAreWords) return raw;
+  if (alternatives.some((a) => a.enum?.includes(raw))) return raw;
+  if (raw.trim() === "" || Number.isNaN(Number(raw))) return raw;
+  return coerceScalar(raw, numeric.type, field);
 }
 
 function parseJsonOrThrow(raw: string, label: string): unknown {
@@ -323,7 +346,7 @@ export function parseFlags(argv: string[], schema: JsonSchema | undefined): Flag
     // breaking the CLI; tool-server answers 400 if the payload is invalid.
     const { value, nextIndex } =
       inlineValue !== undefined ? { value: inlineValue, nextIndex: i } : takeNext(i, flag);
-    args[flag] = coerceScalar(value, propSchema?.type, flag);
+    args[flag] = coerceFieldValue(value, propSchema, flag);
     if (inlineValue === undefined) i = nextIndex;
   }
 

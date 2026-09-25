@@ -15,15 +15,18 @@ import type {
 // with that report and watch what the gestures dispatch.
 let currentTree: () => DescribeNode;
 let currentOrientation: UiOrientation | undefined;
+/** The tree source stops answering: every read throws. */
+let treeDown = false;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
+    if (treeDown) throw new Error("tree source down");
+    return {
       tree: currentTree(),
       source: "native-devtools",
       ...(currentOrientation ? { uiOrientation: currentOrientation } : {}),
-    })
-  ),
+    };
+  }),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -78,12 +81,17 @@ interface ToolCall {
   args: Record<string, unknown>;
 }
 
-function mockRegistry(calls: ToolCall[], onSwipe?: () => void): Registry {
+function mockRegistry(
+  calls: ToolCall[],
+  onSwipe?: () => void,
+  onTool?: (id: string) => void
+): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
       calls.push({ tool: id, args });
       if (id === "gesture-swipe") onSwipe?.();
+      onTool?.(id);
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
@@ -94,7 +102,8 @@ let tmpDir: string;
 
 async function runFlow(
   steps: Parameters<typeof serializeFlow>[0]["steps"],
-  onSwipe?: () => void
+  onSwipe?: () => void,
+  onTool?: (id: string) => void
 ): Promise<{ result: FlowRunResult; calls: ToolCall[] }> {
   const dir = path.join(tmpDir, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
@@ -104,7 +113,7 @@ async function runFlow(
     "utf8"
   );
   const calls: ToolCall[] = [];
-  const tool = createRunFlowTool(mockRegistry(calls, onSwipe));
+  const tool = createRunFlowTool(mockRegistry(calls, onSwipe, onTool));
   const result = await tool.execute({}, { name: "turned", project_root: tmpDir, device: DEVICE });
   if (!("steps" in result)) throw new Error(`expected a run result, got notice: ${result.notice}`);
   return { result, calls };
@@ -114,6 +123,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-orientation-"));
   currentTree = () => screen([]);
   currentOrientation = undefined;
+  treeDown = false;
 });
 
 describe("swipe on a landscape UI", () => {
@@ -166,6 +176,70 @@ describe("swipe on a landscape UI", () => {
     const { calls } = await runFlow([{ kind: "swipe", direction: "down" }]);
     expect(calls[0]!.args).toEqual({ udid: DEVICE, fromX: 0.5, fromY: 0.2, toX: 0.5, toY: 0.9 });
   });
+});
+
+describe("a direction after the UI may have turned", () => {
+  // Unfolded (landscape), then folded closed (portrait), and the tree source
+  // goes down with the fold: no read says how the UI lies now.
+  it("is not turned by the orientation read before a fold", async () => {
+    currentOrientation = "landscapeLeft";
+    const { result, calls } = await runFlow(
+      [
+        { kind: "swipe", direction: "down" },
+        { kind: "fold", posture: "closed" },
+        { kind: "swipe", direction: "down" },
+      ],
+      undefined,
+      (id) => {
+        if (id === "fold") treeDown = true;
+      }
+    );
+    const swipes = calls.filter((c) => c.tool === "gesture-swipe").map((c) => c.args);
+    // Landscape before the fold: UI `down` is the panel's +x.
+    expect(swipes[0]).toMatchObject({ fromX: 0.2, fromY: 0.5, toX: 0.9, toY: 0.5 });
+    // After it, the direction is not turned by the stale landscape.
+    expect(swipes[1]).toMatchObject({ fromX: 0.5, fromY: 0.2, toX: 0.5, toY: 0.9 });
+    const after = result.steps[2]!;
+    expect(after.status).toBe("pass");
+    expect(after.warning).toContain("No read reported the UI's orientation");
+  }, 30_000);
+
+  it("is not turned by the orientation read before a raw rotate step either", async () => {
+    currentOrientation = "landscapeRight";
+    const { calls } = await runFlow(
+      [
+        { kind: "swipe", direction: "down" },
+        { kind: "tool", name: "rotate", args: { orientation: "Portrait" } },
+        { kind: "swipe", direction: "down" },
+      ],
+      undefined,
+      (id) => {
+        if (id === "rotate") treeDown = true;
+      }
+    );
+    const swipes = calls.filter((c) => c.tool === "gesture-swipe").map((c) => c.args);
+    expect(swipes[1]).toMatchObject({ fromX: 0.5, fromY: 0.2, toX: 0.5, toY: 0.9 });
+  }, 30_000);
+
+  it("names the older orientation it turned by when the tree cannot be read", async () => {
+    currentOrientation = "landscapeLeft";
+    let swiped = 0;
+    const { result, calls } = await runFlow(
+      [
+        { kind: "swipe", direction: "down" },
+        { kind: "swipe", direction: "down" },
+      ],
+      () => {
+        swiped += 1;
+        if (swiped === 1) treeDown = true;
+      }
+    );
+    const swipes = calls.filter((c) => c.tool === "gesture-swipe").map((c) => c.args);
+    // Nothing turned the UI in between, so the earlier read still stands...
+    expect(swipes[1]).toMatchObject({ fromX: 0.2, toX: 0.9 });
+    // ...and the step says it had nothing newer.
+    expect(result.steps[1]!.warning).toContain("an earlier read reported (landscapeLeft)");
+  }, 30_000);
 });
 
 describe("scroll-to on a landscape UI", () => {

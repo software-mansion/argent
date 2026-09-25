@@ -219,7 +219,7 @@ describe("fold tool — execute", () => {
     expect(hingeBody()).toEqual({ posture: "closed", from: "half-open" });
   });
 
-  it("classifies an angle into a posture and waits for the panel the angle implies", async () => {
+  it("names the preset an angle sits at and waits for the panel the angle implies", async () => {
     answerDisplay(0);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
     const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 120 });
@@ -241,8 +241,13 @@ describe("fold tool — execute", () => {
     answerDisplay(0);
     refreshActiveScreenMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 30 });
-    await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 30 });
+    const thirty = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 30 });
     expect(heldMs()).toBe(INPUT_READY_HOLD_MID_ANGLE_MS);
+    // 30° is no preset: it is not "half-open" (the docs' inner panel) while
+    // the cover panel is live; the angle and the panel say where it is.
+    expect(thirty).not.toHaveProperty("posture");
+    expect(thirty.hingeAngle).toBe(30);
+    expect(thirty.activeScreen).toBe(1);
   });
 
   it("waits for any change, with the shorter budget, at an angle near the hand-over", async () => {
@@ -275,7 +280,7 @@ describe("fold tool — execute", () => {
     expect(done(live(3))).toBe(true);
     expect(timeoutMs).toBe(SETTLE_TIMEOUT_MS);
     expect(result.activeScreen).toBe(1);
-    expect(result.posture).toBe("half-open");
+    expect(result).not.toHaveProperty("posture");
     expect(result.warning).toBeUndefined();
 
     // The same the other way: 120° -> 75° from the inner panel stays inner.
@@ -337,7 +342,7 @@ describe("fold tool — execute", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  it("surfaces the server's own reason on a device that is not foldable", async () => {
+  it("surfaces the server's own reason on a device that is not foldable, as unsupported", async () => {
     answers.push({
       path: "/api/display",
       body: {
@@ -354,13 +359,34 @@ describe("fold tool — execute", () => {
         { simulatorServer: flat },
         { udid: "AAAAAAAA-0000-0000-0000-000000000000", posture: "open" }
       )
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("the hinge can only be moved on a foldable iOS simulator"),
+    ).rejects.toSatisfy((err: unknown) => {
+      expect((err as Error).message).toContain(
+        "the hinge can only be moved on a foldable iOS simulator"
+      );
+      // The caller's mistake, not a server failure.
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.IOS_FOLD_UNSUPPORTED,
+        error_kind: "unsupported",
+      });
+      return true;
     });
     // Nothing to read or settle against on a device with one panel.
     expect(refreshActiveScreenMock).not.toHaveBeenCalled();
     expect(awaitActiveScreenMock).not.toHaveBeenCalled();
     expect(flat.display).toBeUndefined();
+  });
+
+  it("keeps a refusal on a foldable a fold failure", async () => {
+    answerDisplay(0);
+    answerHinge({ error: "the hinge did not move" });
+    let caught: unknown;
+    try {
+      await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, posture: "open" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(getFailureSignal(caught)?.error_code).toBe(FAILURE_CODES.IOS_FOLD_FAILED);
+    expect((caught as Error).message).toContain("the hinge did not move");
   });
 
   it("names the missing route on a simulator-server build that predates the hinge", async () => {

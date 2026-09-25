@@ -46,20 +46,42 @@ _probe_taps() { # udid
   printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'taps=[0-9]*' | head -1 | cut -d= -f2
 }
 
-# The centre of `probe.pad` as `describe` frames it, as "<x> <y>"; empty when absent.
-_pad_centre() { # udid
+# A point of `probe.pad` as `describe` frames it, at fractions of its frame,
+# as "<x> <y>"; empty when absent.
+_pad_point() { # udid fx fy
   run_tool describe "{\"udid\":\"$1\"}" || return 1
-  printf '%s' "$RT_JSON" | jq -r '.description' | grep 'probe.pad' | head -1 | python3 -c 'import re,sys; m=re.search(r"\(([0-9.]+), ?([0-9.]+), ?([0-9.]+), ?([0-9.]+)\)", sys.stdin.read()); print(round(float(m.group(1))+float(m.group(3))/2, 3), round(float(m.group(2))+float(m.group(4))/2, 3)) if m else print("")'
+  printf '%s' "$RT_JSON" | jq -r '.description' | grep 'probe.pad' | head -1 | python3 -c 'import re,sys; fx,fy=float(sys.argv[1]),float(sys.argv[2]); m=re.search(r"\(([0-9.]+), ?([0-9.]+), ?([0-9.]+), ?([0-9.]+)\)", sys.stdin.read()); print(round(float(m.group(1))+float(m.group(3))*fx, 3), round(float(m.group(2))+float(m.group(4))*fy, 3)) if m else print("")' "$2" "$3"
+}
+
+# The centre of `probe.pad`, as "<x> <y>"; empty when absent.
+_pad_centre() { # udid
+  _pad_point "$1" 0.5 0.5
+}
+
+# The window-space start of the last touch on the pad (`began=(... n=<x>,<y>)`).
+_probe_began() { # udid
+  run_tool describe "{\"udid\":\"$1\"}" || return 1
+  printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'began=([^)]*n=[0-9.]*,[0-9.]*' | grep -o 'n=[0-9.]*,[0-9.]*' | head -1
 }
 
 # The probe's `probe.touch` label carries the window-space start and end of
 # the last touch on the pad (`began=(... n=<x>,<y>)`, `ended=(... n=<x>,<y>)`).
 # Run a one-step flow `swipe: { from: { id: probe.pad }, direction: down }` and
-# check the finger travelled down the UI: window-space y grew, x held.
+# check the finger travelled down the UI: window-space y grew, x held. The
+# probe counts no swipes, so a tap off the pad's centre stamps the label first:
+# a swipe that never reaches the app leaves the stamp, where the previous
+# swipe's own start would pass for a new one.
 _flow_swipe_case() { # udid project-root flow-name case
-  local udid="$1" root="$2" flow="$3" case="$4"
+  local udid="$1" root="$2" flow="$3" case="$4" stamp mark
   mkdir -p "$root/.argent/flows"
   printf 'steps:\n  - swipe: { from: { id: probe.pad }, direction: down }\n' > "$root/.argent/flows/$flow.yaml"
+  stamp="$(_pad_point "$udid" 0.3 0.3)"
+  run_tool gesture-tap "{\"udid\":\"$udid\",\"x\":${stamp%% *},\"y\":${stamp##* }}"
+  sleep 1
+  mark="$(_probe_began "$udid")"
+  if [ -z "$stamp" ] || [ -z "$mark" ]; then
+    fail "$P" flow-execute "swipe-down-$case" "the stamp tap at ($stamp) did not reach the probe"; return 1
+  fi
   run_tool flow-execute "{\"name\":\"$flow\",\"project_root\":\"$root\",\"device\":\"$udid\"}"
   if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.ok==true' >/dev/null 2>&1; then
     fail "$P" flow-execute "swipe-down-$case" "$(rt_detail 200)"; return 1
@@ -71,6 +93,9 @@ _flow_swipe_case() { # udid project-root flow-name case
   ended="$(printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'ended=([^)]*n=[0-9.]*,[0-9.]*' | grep -o 'n=[0-9.]*,[0-9.]*' | head -1)"
   if [ -z "$began" ] || [ -z "$ended" ]; then
     fail "$P" flow-execute "swipe-down-$case" "probe reported no swipe: $(rt_detail 120)"; return 1
+  fi
+  if [ "$began" = "$mark" ]; then
+    fail "$P" flow-execute "swipe-down-$case" "the swipe never reached the app: the probe still shows the stamp tap ($mark)"; return 1
   fi
   if python3 - "$began" "$ended" <<'PY'
 import sys
@@ -110,19 +135,25 @@ _flow_tap_after_external_fold() { # udid hinge-helper project-root to-angle from
 }
 
 # Tap the centre of `probe.pad` as `describe` frames it, then check the probe
-# received that point. One case per posture.
+# counted the tap and received that point. One case per posture. The count is
+# what catches a dropped tap: two cases in a row on the same panel tap the same
+# point, and a dropped one would leave the previous case's point in the label.
 _tap_pad_case() { # udid case
-  local udid="$1" case="$2" centre cx cy
+  local udid="$1" case="$2" centre cx cy before after
   centre="$(_pad_centre "$udid")"
   cx="${centre%% *}"; cy="${centre##* }"
   if [ -z "$cx" ] || [ -z "$cy" ]; then
     fail "$P" describe "$case-pad-frame" "probe.pad not in describe: $(rt_detail 120)"; return 1
   fi
+  before="$(_probe_taps "$udid")"
   run_tool gesture-tap "{\"udid\":\"$udid\",\"x\":$cx,\"y\":$cy}"
   if [ "$RT_RC" -ne 0 ]; then fail "$P" gesture-tap "$case" "$(rt_detail 160)"; return 1; fi
   sleep 1
-  if _probe_touch_close_to "$udid" "$cx" "$cy"; then
-    pass "$P" gesture-tap "$case" "probe received ($cx,$cy)"
+  after="$(_probe_taps "$udid")"
+  if ! [ "$after" -gt "$before" ] 2>/dev/null; then
+    fail "$P" gesture-tap "$case" "the tap was dropped (taps $before -> $after) — it went to the dark panel, or before the device took input?"
+  elif _probe_touch_close_to "$udid" "$cx" "$cy"; then
+    pass "$P" gesture-tap "$case" "probe received ($cx,$cy), taps $before -> $after"
   else
     fail "$P" gesture-tap "$case" "probe did not receive ($cx,$cy) — tap went to the wrong panel?"
   fi
@@ -200,7 +231,9 @@ run_phase() {
 
   # Flow directions are the UI's. Unfolded, the UI is landscape on the
   # portrait-native inner panel, so a `swipe: down` anchored on the pad must
-  # travel down the UI (window-space +y), not along the panel's own y.
+  # travel down the UI (window-space +y), not along the panel's own y. The
+  # transient case above left the device on the cover panel: open it first.
+  assert_field "$P" fold open-for-flow "{\"udid\":\"$DEV\",\"posture\":\"open\"}" '.activeScreen' '3'
   _flow_swipe_case "$DEV" "$E2E_WORK/duo-flows" pad-down open
   assert_field "$P" fold closed-for-flow "{\"udid\":\"$DEV\",\"posture\":\"closed\"}" '.activeScreen' '1'
   _flow_swipe_case "$DEV" "$E2E_WORK/duo-flows" pad-down closed
@@ -282,10 +315,12 @@ run_phase() {
   assert_field "$P" fold closed-again "{\"udid\":\"$DEV\",\"posture\":\"closed\"}" '.activeScreen' '1'
   assert_ok "$P" await-ui-element pad-still-there "{\"udid\":\"$DEV\",\"condition\":\"visible\",\"selector\":{\"identifier\":\"probe.pad\"},\"timeoutMs\":8000}"
 
-  # A fold is refused on a device that is not foldable, with the server's reason.
+  # A fold is refused on a device that is not foldable, with the server's
+  # reason, not with the "no hinge endpoint" of a server build that predates
+  # foldables (whose fix also names foldable support).
   if [ -n "${E2E_IOS_FLAT_UDID:-}" ]; then
     run_tool fold "{\"udid\":\"$E2E_IOS_FLAT_UDID\",\"posture\":\"open\"}"
-    if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "foldable"; then
+    if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "foldable" && ! printf '%s' "$RT_OUT" | grep -qi "no hinge endpoint"; then
       pass "$P" fold rejected-on-flat
     else
       fail "$P" fold rejected-on-flat "$(rt_detail 160)"

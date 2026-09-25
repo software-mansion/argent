@@ -2346,13 +2346,18 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
+/** Raw tool steps that can change how the UI lies on the screen. */
+const UI_TURNING_TOOLS = new Set(["rotate", "fold"]);
+
 /**
  * A `fold:` step runs the `fold` tool on the run device. The app survives a
  * fold, so the pinned tree target stays; what changes is the panel and its
  * coordinate space, and the runner caches no screen geometry — every gesture
  * that needs the screen aspect reads it afresh (`fetchScreenAspect`). A proven
  * tree outage is retired the way a relaunch retires it: the screen the verdict
- * was proven on is gone.
+ * was proven on is gone. So is the UI orientation the last read reported: a
+ * fold can turn the UI, and until a read reports the new one, a direction must
+ * not be turned by the old one.
  */
 async function runFold(
   state: ExecState,
@@ -2362,6 +2367,7 @@ async function runFold(
   const device = deviceEnv(state).device;
   if (signal?.aborted) return ABORTED_OUTCOME;
   if (state.treeOutage) state.treeOutage.proven = undefined;
+  if (state.lastRead) state.lastRead.uiOrientation = undefined;
   const args = bindDeviceArgs(registry, "fold", device.id, {
     ...(step.posture !== undefined ? { posture: step.posture } : {}),
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
@@ -2371,16 +2377,18 @@ async function runFold(
     const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
       activeScreen?: number;
       screen?: { panel?: string; width?: number; height?: number };
-      posture?: string;
       warning?: string;
     };
     const size =
       result.screen?.width !== undefined && result.screen?.height !== undefined
         ? ` ${result.screen.width}x${result.screen.height}`
         : "";
+    // The step's own target, not the result's posture: that is set only at a
+    // preset angle, and a mid angle can leave either panel live.
+    const target = step.posture ?? `${step.angle}°`;
     return {
       ok: true,
-      reason: `${result.posture ?? "folded"}: screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`,
+      reason: `${target}: screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`,
       ...(result.warning !== undefined ? { warning: result.warning } : {}),
     };
   } catch (err) {
@@ -2548,6 +2556,11 @@ async function execLeafStep(
       // later gesture a window it would have skipped.
       if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
         state.treeOutage.proven = undefined;
+      }
+      // A raw `rotate` or `fold` can turn the UI, like the `fold:` directive
+      // (see runFold): the orientation the last read reported no longer holds.
+      if (UI_TURNING_TOOLS.has(step.name) && state.lastRead) {
+        state.lastRead.uiOrientation = undefined;
       }
       try {
         const result = await invokeSubTool(registry, ctx, step.name, args);

@@ -163,6 +163,19 @@ describe("fold: run", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("names the angle it was given for a fold to no preset, whichever panel that leaves live", async () => {
+    await writeFlow("thirty", { executionPrerequisite: "", steps: [{ kind: "fold", angle: 30 }] });
+    const result = await run("thirty", () => ({
+      activeScreen: 1,
+      screen: { id: 1, panel: "cover panel", width: 1398, height: 2034 },
+      hingeAngle: 30,
+    }));
+    expect(result.steps[0]).toMatchObject({
+      status: "pass",
+      reason: "30°: screen 1 (cover panel 1398x2034)",
+    });
+  });
+
   it("fails the step with the tool's reason on a device that is not foldable", async () => {
     await writeFlow("flat", { executionPrerequisite: "", steps: [{ kind: "fold", angle: 120 }] });
     const result = await run("flat", () => {

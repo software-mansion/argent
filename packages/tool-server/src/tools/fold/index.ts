@@ -1,8 +1,19 @@
 import { z } from "zod";
-import { type ToolCapability, type ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  type ToolCapability,
+  type ToolDefinition,
+} from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { fetchDisplayState, postHinge, type HingeRequest } from "../../utils/simulator-client";
+import {
+  fetchDisplayState,
+  postHinge,
+  type HingeRequest,
+  type SimulatorDisplayState,
+} from "../../utils/simulator-client";
 import {
   activeScreenOrMain,
   awaitActiveScreen,
@@ -70,8 +81,12 @@ interface Result {
   activeScreen: number;
   /** That panel, with its native pixel size: the size a `screenshot` at scale 1 has. */
   screen: { id: number; panel: string; width?: number; height?: number };
-  /** `closed`, `half-open` or `open`, from the angle the hinge was moved to. */
-  posture: Posture;
+  /**
+   * The posture preset the hinge sits at: `closed` (0°), `half-open` (120°) or
+   * `open` (180°). Absent at any other angle, where `hingeAngle` says where
+   * the hinge is and `activeScreen` which panel that left live.
+   */
+  posture?: Posture;
   /** The angle the hinge was swept to. */
   hingeAngle: number;
   /**
@@ -88,11 +103,32 @@ const capability: ToolCapability = {
   apple: { simulator: true },
 };
 
-/** A posture for the reported angle, matching the presets at their exact values. */
-function postureForAngle(angle: number): Posture {
-  if (angle <= 0) return "closed";
-  if (angle >= 180) return "open";
-  return "half-open";
+/** The posture preset at exactly `angle`, if one sits there. */
+function presetAtAngle(angle: number): Posture | undefined {
+  return POSTURES.find((p) => POSTURE_ANGLE[p] === angle);
+}
+
+/**
+ * A refusal from a server that reported the device as not foldable answers a
+ * request the device cannot serve: the caller's mistake, not a server failure.
+ * The message stays the server's own reason; only the classification changes.
+ */
+function classifyHingeRefusal(
+  err: unknown,
+  known: SimulatorDisplayState | null | undefined
+): unknown {
+  if (known?.foldable !== false) return err;
+  if (getFailureSignal(err)?.error_code !== FAILURE_CODES.IOS_FOLD_FAILED) return err;
+  return new FailureError(
+    err instanceof Error ? err.message : String(err),
+    {
+      error_code: FAILURE_CODES.IOS_FOLD_UNSUPPORTED,
+      failure_stage: "simulator_hinge_not_foldable",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    },
+    err instanceof Error ? { cause: err } : undefined
+  );
 }
 
 function hingeRequest(params: Params): HingeRequest {
@@ -177,7 +213,7 @@ Use when an app has to be seen or driven in another posture: on the cover panel 
 Closed, the device renders to the cover panel (screen 1, 1398x2034 px on the Duo); half-open and open, to the inner panel (screen 3, 2007x2853 px). The other panel is black. Argent names the live panel on every screenshot, describe, touch and stream, so the tools follow the fold — but their coordinate space changes with it: re-run \`describe\` (or read the element tree appended to this result) before tapping, and expect \`screenshot\` to change size. Unfolded, the UI runs landscape on the inner panel's portrait-native framebuffer; frames and touch coordinates stay in that native space, like landscape on any iPhone.
 The device switches panels on a sweep from closed or open past its own threshold (about 75-90°); a sweep between two angles short of those stops leaves it on the panel it had. The result reports the panel the device renders to either way, with a \`warning\` when that is not the panel the sweep implied — fold to closed or open first to switch panels.
 The sweep starts on the panel the device renders to, read fresh, so a fold made outside argent (Device Hub) needs no \`from\`; pass \`from\` only to name the exact angle the hinge was left at. A fold during a gesture is not supported: the gesture completes on the screen it started on.
-Returns { activeScreen, screen: { id, panel, width, height }, posture, hingeAngle, warning? }. Fails on a device that is not foldable (the server's own message), on a remote simulator, and on a simulator-server build that predates foldables.`,
+Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }; posture is set only when the hinge sits at a preset (0°, 120°, 180°). Fails on a device that is not foldable (the server's own message), on a remote simulator, and on a simulator-server build that predates foldables.`,
   searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
   zodSchema,
   capability,
@@ -205,7 +241,12 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture, hingeAngl
       const start = sweepStartFor(known.hingeAngle, before);
       if (start !== undefined) request.from = start;
     }
-    const display = await postHinge(api, request, signal);
+    let display: SimulatorDisplayState;
+    try {
+      display = await postHinge(api, request, signal);
+    } catch (err) {
+      throw classifyHingeRefusal(err, known);
+    }
     // A server that answered the hinge is a server with panels: a fold tool
     // resolved before the factory's probe ran would otherwise keep naming no
     // screen. The angle it now holds is the one the next fold starts from.
@@ -213,7 +254,7 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture, hingeAngl
 
     const angle = targetAngle(params);
     const hingeAngle = display.hingeAngle ?? angle;
-    const posture = params.posture ?? postureForAngle(hingeAngle);
+    const posture = params.posture ?? presetAtAngle(hingeAngle);
     const panels = display.panels.length > 0 ? display.panels : (before?.panels ?? []);
 
     // The guest hands over to the other panel 0.5-1.5 s after the sweep, longer
@@ -271,7 +312,7 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture, hingeAngl
     return {
       activeScreen,
       screen: screenResult(activeScreen, panels),
-      posture,
+      ...(posture ? { posture } : {}),
       hingeAngle,
       ...(warning ? { warning } : {}),
     };

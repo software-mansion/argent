@@ -962,6 +962,18 @@ function warned(settle: { warning?: string }): { warning?: string } {
   return settle.warning !== undefined ? { warning: settle.warning } : {};
 }
 
+/**
+ * What a direction swipe adds to that warning: without a tree read, nothing
+ * said how the UI lies on the screen now.
+ */
+function unreadOrientationNote(orientation: UiOrientation | undefined): string {
+  return orientation
+    ? `The direction was turned for the UI orientation an earlier read reported ` +
+        `(${orientation}); if the UI has turned since, the finger went another way.`
+    : `No read reported the UI's orientation, so the direction was sent in the screen's ` +
+        `portrait space; on a landscape UI the finger went sideways.`;
+}
+
 /** What a gesture reports when an outage left it unsettled, in the source's own words. */
 function unsettledGestureWarning(err: unknown): string {
   const reason = err instanceof Error ? err.message : String(err);
@@ -1344,6 +1356,10 @@ async function runSwipe(
   // on a landscape UI the two differ by a rotation (flow-orientation.ts). The
   // settle above is the read that said which.
   const orientation = env.lastRead?.uiOrientation;
+  if (settle.warning !== undefined && step.direction) {
+    // No tree this time: the turn comes from an older read, or from none.
+    settle = { ...settle, warning: `${settle.warning} ${unreadOrientationNote(orientation)}` };
+  }
 
   let start: { x: number; y: number };
   if (step.from) {

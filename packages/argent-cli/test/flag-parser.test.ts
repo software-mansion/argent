@@ -64,6 +64,49 @@ describe("flag-parser number coercion rejects empty/whitespace", () => {
   });
 });
 
+describe("a number-or-words field (fold's `from`)", () => {
+  // The shape zod serializes `z.union([z.number(), z.enum([...])])` to.
+  const foldSchema: JsonSchema = {
+    type: "object",
+    properties: {
+      from: {
+        anyOf: [{ type: "number" }, { type: "string", enum: ["closed", "half-open", "open"] }],
+      },
+      mixed: { anyOf: [{ type: "number" }, { type: "string" }] },
+    },
+  };
+
+  it("sends a numeric value as a number", () => {
+    expect(parseFlags(["--from", "90"], foldSchema).args.from).toBe(90);
+    expect(parseFlags(["--from=0"], foldSchema).args.from).toBe(0);
+    expect(parseFlags(["--from", "120.5"], foldSchema).args.from).toBe(120.5);
+  });
+
+  it("keeps a word as the word", () => {
+    expect(parseFlags(["--from", "open"], foldSchema).args.from).toBe("open");
+    expect(parseFlags(["--from", "half-open"], foldSchema).args.from).toBe("half-open");
+  });
+
+  it("passes anything else through for the server to judge", () => {
+    expect(parseFlags(["--from", "9x"], foldSchema).args.from).toBe("9x");
+    expect(parseFlags(["--from="], foldSchema).args.from).toBe("");
+  });
+
+  it('leaves a number-or-any-string field alone, where 90 and "90" can differ', () => {
+    expect(parseFlags(["--mixed", "90"], foldSchema).args.mixed).toBe("90");
+  });
+
+  it("matches what zod serializes for the fold tool's `from`", () => {
+    const schema = zodObjectToJsonSchema(
+      z.object({
+        from: z.union([z.number().min(0).max(180), z.enum(["closed", "half-open", "open"])]),
+      })
+    ) as JsonSchema;
+    expect(parseFlags(["--from", "90"], schema).args.from).toBe(90);
+    expect(parseFlags(["--from", "closed"], schema).args.from).toBe("closed");
+  });
+});
+
 describe("flag-parser array + -json interleave never throws a raw error", () => {
   it("throws FlagParseException (not TypeError) on interleave", () => {
     let err: unknown;
