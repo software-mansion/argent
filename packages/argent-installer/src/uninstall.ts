@@ -13,7 +13,7 @@ import {
 } from "./mcp-configs.js";
 import {
   AGENTS_DIR,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   formatShellCommand,
   getGloballyInstalledPackageRoot,
@@ -646,7 +646,11 @@ export async function uninstall(args: string[]): Promise<void> {
       if (!globalPresent) return null;
       return {
         kind: "global",
-        cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
+        // Remove with the package manager that owns the global install (#1207).
+        cmd: globalUninstallCommand(
+          detectGlobalPackageManager(getGloballyInstalledPackageRoot()),
+          PACKAGE_NAME
+        ),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),

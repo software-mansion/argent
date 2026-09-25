@@ -54,6 +54,91 @@ export function isGloballyInstalled(): boolean {
   return getGlobalBinaryPath() !== null;
 }
 
+// Shared by both resolution paths below: walk up from `dir` to the nearest
+// package.json and accept the root only when it is actually argent's.
+// resolvePackageRoot walks up to the FIRST package.json, which can be an
+// unrelated manifest (e.g. a stray `~/package.json`) when the bin isn't a
+// symlink straight into the package (a cmd-shim, or a Windows `argent.cmd`).
+// An over-broad root would make killToolServerForInstallDir kill unrelated
+// installs' tool-servers.
+function packageRootIfNamed(dir: string): string | null {
+  try {
+    const root = resolvePackageRoot(dir);
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
+      name?: string;
+    };
+    return pkg.name === PACKAGE_NAME ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+// npm's global bin is a symlink straight into the package, so realpath +
+// walk-up crosses into it directly.
+function packageRootFromRealpath(binaryPath: string): string | null {
+  try {
+    const realPath = fs.realpathSync(binaryPath);
+    return packageRootIfNamed(path.dirname(realPath));
+  } catch {
+    return null;
+  }
+}
+
+// 64 KiB is generous for a shim (real ones are a few dozen lines); a file
+// past that size — or one holding a NUL byte — isn't a text shim, so treat it
+// as unreadable rather than risk parsing something else as one.
+const MAX_SHIM_FILE_SIZE = 64 * 1024;
+
+// pnpm's cmd-shim (both the POSIX `sh` shim it writes and the Windows `.cmd`
+// it writes alongside it — untested here, but read the same way) appends the
+// resolved absolute target as a trailing comment. Trust it over parsing the
+// shim body.
+const SHIM_TRAILER_PATTERN = /^# cmd-shim-target=(.+)$/m;
+
+// Otherwise the shim body execs a quoted path relative to its own directory:
+// `"$basedir/../..."` (POSIX sh) or `"%~dp0\...\"` / `"%dp0%\...\"` (Windows
+// .cmd; `%~dp0/` is accepted too).
+const SHIM_BODY_TARGET_PATTERN = /["']((?:\$basedir|%~dp0|%dp0%)[\\/][^"']*)["']/g;
+
+function findShimTarget(contents: string, shimDir: string): string | null {
+  const trailerTarget = SHIM_TRAILER_PATTERN.exec(contents)?.[1]?.trim();
+  if (trailerTarget) return trailerTarget;
+
+  // Several quoted candidates can appear (one per node-binary fallback branch
+  // in pnpm's POSIX shim) — they all point at the same target, so the first
+  // one that actually lands inside argent's package wins.
+  const marker = `node_modules/${PACKAGE_NAME}/`;
+  const pattern = new RegExp(SHIM_BODY_TARGET_PATTERN);
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(contents)) !== null) {
+    // Normalize to `/` first (Windows fixtures are exercised on Linux too),
+    // then strip whichever prefix matched.
+    const normalized = match[1]!.split("\\").join("/");
+    const rel = normalized.replace(/^(?:\$basedir|%~dp0|%dp0%)\//, "");
+    const resolved = path.resolve(shimDir, rel);
+    if (resolved.split(path.sep).join("/").includes(marker)) return resolved;
+  }
+  return null;
+}
+
+// A bin-dir shim (pnpm's cmd-shim, or an npm/pnpm Windows .cmd) is a REGULAR
+// file, not a symlink into the package, so realpath + walk-up never reaches
+// argent's package.json. Read the shim's own text for the path it execs
+// instead.
+function packageRootFromShim(binaryPath: string): string | null {
+  let contents: string;
+  try {
+    if (fs.statSync(binaryPath).size > MAX_SHIM_FILE_SIZE) return null;
+    contents = fs.readFileSync(binaryPath, "utf8");
+    if (contents.includes("\0")) return null;
+  } catch {
+    return null;
+  }
+
+  const target = findShimTarget(contents, path.dirname(binaryPath));
+  return target ? packageRootIfNamed(path.dirname(target)) : null;
+}
+
 /**
  * Root directory of the globally-installed argent package, or null when argent
  * is not on PATH or the layout can't be resolved. Used to read the installed
@@ -62,20 +147,7 @@ export function isGloballyInstalled(): boolean {
 export function getGloballyInstalledPackageRoot(): string | null {
   const binaryPath = getGlobalBinaryPath();
   if (!binaryPath) return null;
-  try {
-    const realPath = fs.realpathSync(binaryPath);
-    const root = resolvePackageRoot(path.dirname(realPath));
-    // resolvePackageRoot walks up to the FIRST package.json, which can be an
-    // unrelated manifest (e.g. a stray `~/package.json`) when the bin is a
-    // non-symlink wrapper like a Windows `argent.cmd`. An over-broad root would
-    // make killToolServerForInstallDir kill unrelated installs' tool-servers.
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
-      name?: string;
-    };
-    return pkg.name === PACKAGE_NAME ? root : null;
-  } catch {
-    return null;
-  }
+  return packageRootFromRealpath(binaryPath) ?? packageRootFromShim(binaryPath);
 }
 
 /**
