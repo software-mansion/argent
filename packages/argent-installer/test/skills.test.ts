@@ -39,15 +39,24 @@ vi.mock("../src/utils.js", async (importOriginal) => {
 
 // `resolveSkillsRunner` scans the real PATH, which may lack npx (#1206). Mock
 // it so these tests see a fixed npx runner, and switch to pnpm dlx on demand.
+// `skillsCommand` is pinned to the POSIX shape so the assertions below hold
+// when the suite runs on Windows; skills-runner.test.ts covers the win32 one.
 const { resolveSkillsRunnerMock } = vi.hoisted(() => ({
   resolveSkillsRunnerMock: vi.fn(),
 }));
 
-vi.mock("../src/skills-runner.js", () => ({
-  resolveSkillsRunner: resolveSkillsRunnerMock,
-}));
+vi.mock("../src/skills-runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/skills-runner.js")>();
+  return {
+    ...actual,
+    resolveSkillsRunner: resolveSkillsRunnerMock,
+    skillsCommand: (runner: SkillsRunner, args: string[]) =>
+      actual.skillsCommand(runner, args, "linux"),
+  };
+});
 
 import { refreshArgentSkills, formatSkillRefreshSummary } from "../src/skills.js";
+import type { SkillsRunner } from "../src/skills-runner.js";
 
 const npxRunner = {
   bin: "npx",

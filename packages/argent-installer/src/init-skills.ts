@@ -3,7 +3,7 @@ import pc from "picocolors";
 import { spawn } from "node:child_process";
 import { track } from "@argent/telemetry";
 import { SKILLS_DIR, buildArgentSkillsSource, isOnline, isSkillsCliAvailable } from "./utils.js";
-import { resolveSkillsRunner, type SkillsRunner } from "./skills-runner.js";
+import { resolveSkillsRunner, skillsCommand, type SkillsCommand } from "./skills-runner.js";
 import { InitCancelled } from "./init-args.js";
 import type { Scope } from "./init-scope.js";
 
@@ -109,9 +109,9 @@ export async function runSkillsStep(args: {
     // offlineWithCache already implies it; the check keeps that explicit.
     const baseArgs =
       offlineWithCache && runner.bin === "npx" ? ["--no-install", ...skillsArgs] : skillsArgs;
-    // buildArgs adds whatever the runner needs (npx: --force; pnpm: dlx);
+    // skillsCommand adds whatever the runner needs (npx: --force; pnpm: dlx);
     // baseArgs stays clean for the displayed and manual-fallback commands.
-    const runnerArgs = runner.buildArgs(baseArgs);
+    const command = skillsCommand(runner, baseArgs);
 
     p.log.info(`Running: ${pc.dim(runner.label)} ${pc.cyan(baseArgs.join(" "))}`);
 
@@ -122,7 +122,7 @@ export async function runSkillsStep(args: {
 
     try {
       const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runSkillsCli(runner, runnerArgs, skillsMethod === "interactive", skillsCwd);
+      await runSkillsCli(command, runner.label, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
@@ -148,16 +148,15 @@ export async function runSkillsStep(args: {
 }
 
 function runSkillsCli(
-  runner: SkillsRunner,
-  args: string[],
+  command: SkillsCommand,
+  label: string,
   interactive: boolean,
   cwd?: string
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const cmd = process.platform === "win32" ? `${runner.bin}.cmd` : runner.bin;
-    const child = spawn(cmd, args, {
+    const child = spawn(command.file, command.args, {
       stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
+      shell: command.shell,
       ...(cwd ? { cwd } : {}),
     });
 
@@ -178,7 +177,7 @@ function runSkillsCli(
         resolve();
       } else {
         const output = [stderr, stdout].filter(Boolean).join("\n").trim();
-        reject(new Error(output || `${runner.label} skills exited with code ${code}`));
+        reject(new Error(output || `${label} skills exited with code ${code}`));
       }
     });
 

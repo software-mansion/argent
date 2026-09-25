@@ -12,7 +12,7 @@ import {
   listBundledSkills,
   SKILLS_DIR,
 } from "./utils.js";
-import { resolveSkillsRunner } from "./skills-runner.js";
+import { resolveSkillsRunner, skillsCommand } from "./skills-runner.js";
 
 type SkillScope = "project" | "global";
 
@@ -83,6 +83,10 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     stdio: ["ignore", "pipe", "pipe"];
     cwd: string;
   };
+  const runSkills = (skillsArgs: string[]): void => {
+    const command = skillsCommand(runner, skillsArgs);
+    execFileSync(command.file, command.args, { ...execOpts, shell: command.shell });
+  };
 
   for (const spec of getScopeSpecs(projectRoot)) {
     const tracked = listArgentSkillsInLock(spec.lockPath);
@@ -98,7 +102,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     };
 
     try {
-      execFileSync(runner.bin, runner.buildArgs(spec.buildAddArgs(primarySource)), execOpts);
+      runSkills(spec.buildAddArgs(primarySource));
       result.synced = bundled.size;
     } catch (primaryErr) {
       if (primarySource === SKILLS_DIR) {
@@ -106,7 +110,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
           primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
       } else {
         try {
-          execFileSync(runner.bin, runner.buildArgs(spec.buildAddArgs(SKILLS_DIR)), execOpts);
+          runSkills(spec.buildAddArgs(SKILLS_DIR));
           result.synced = bundled.size;
         } catch (fallbackErr) {
           result.syncError =
@@ -117,7 +121,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (orphaned.length > 0) {
       try {
-        execFileSync(runner.bin, runner.buildArgs([...spec.removeArgs, ...orphaned]), execOpts);
+        runSkills([...spec.removeArgs, ...orphaned]);
         result.pruned = orphaned;
       } catch (err) {
         result.pruneError = err instanceof Error ? err.message.split("\n")[0] : String(err);

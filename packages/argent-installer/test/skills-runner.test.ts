@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolveSkillsRunner } from "../src/skills-runner.js";
+import { resolveSkillsRunner, skillsCommand } from "../src/skills-runner.js";
 import { withNpmForce } from "../src/utils.js";
 
 // Fake-executable fixtures live under per-test temp dirs on an injected PATH,
@@ -96,5 +96,41 @@ describe("resolveSkillsRunner", () => {
     const runner = resolveSkillsRunner({ PATH: bin }, "win32");
 
     expect(runner.bin).toBe("pnpm");
+  });
+});
+
+describe("skillsCommand", () => {
+  const pnpmDlx = {
+    bin: "pnpm",
+    buildArgs: (args: string[]) => ["dlx", ...args],
+    label: "pnpm dlx",
+  };
+
+  it("passes argv straight through on POSIX", () => {
+    expect(skillsCommand(pnpmDlx, ["skills", "add", "/a b", "--skill", "*"], "linux")).toEqual({
+      file: "pnpm",
+      args: ["dlx", "skills", "add", "/a b", "--skill", "*"],
+      shell: false,
+    });
+  });
+
+  it("builds one quoted command line for cmd.exe on win32", () => {
+    // .cmd shims only start through a shell, which joins argv unescaped.
+    expect(
+      skillsCommand(
+        pnpmDlx,
+        ["skills", "add", "C:\\Users\\Jane Doe\\argent\\skills", "--skill", "*", "-y"],
+        "win32"
+      )
+    ).toEqual({
+      file: 'pnpm dlx skills add "C:\\Users\\Jane Doe\\argent\\skills" --skill * -y',
+      args: [],
+      shell: true,
+    });
+  });
+
+  it("quotes cmd.exe metacharacters and doubles embedded quotes on win32", () => {
+    const { file } = skillsCommand(pnpmDlx, ["a&b", 'say "hi"'], "win32");
+    expect(file).toBe('pnpm dlx "a&b" "say ""hi"""');
   });
 });

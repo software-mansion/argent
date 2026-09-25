@@ -55,3 +55,30 @@ export function resolveSkillsRunner(
   }
   return { bin: "npx", buildArgs: withNpmForce, label: "npx" };
 }
+
+export interface SkillsCommand {
+  file: string;
+  args: string[];
+  shell: boolean;
+}
+
+// Whitespace and cmd.exe metacharacters: an argument holding any is quoted.
+const CMD_SPECIAL = /[\s"&|<>^()%!,;=]/;
+
+function quoteForCmd(arg: string): string {
+  return CMD_SPECIAL.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+}
+
+// The process to start for a `skills` command. On Windows npx and pnpm are
+// .cmd shims, which Node only starts through a shell (ENOENT or EINVAL
+// otherwise), and a shell joins argv unescaped - so a path with a space would
+// split. Build the quoted command line here and hand it over as one string.
+export function skillsCommand(
+  runner: SkillsRunner,
+  skillsArgs: string[],
+  platform: NodeJS.Platform = process.platform
+): SkillsCommand {
+  const args = runner.buildArgs(skillsArgs);
+  if (platform !== "win32") return { file: runner.bin, args, shell: false };
+  return { file: [runner.bin, ...args].map(quoteForCmd).join(" "), args: [], shell: true };
+}
