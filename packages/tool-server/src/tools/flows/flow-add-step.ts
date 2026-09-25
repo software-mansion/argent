@@ -654,7 +654,7 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(
+    const { tree, source, uiOrientation } = await fetchFlowTree(
       registry,
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
@@ -668,8 +668,9 @@ async function captureTapSelector(
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer.
-    const resolved = selectorToFrame(tree, selector);
+    // silently retarget and coordinates are safer. Ranked in the reading order
+    // replay will rank in: the UI's, on a landscape UI.
+    const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (!resolved) {
       // Defensive: a selector derived from a visible node matches that node
       // under matchNode's semantics, so this should be unreachable. Kept in

@@ -1,15 +1,19 @@
-import type { UiOrientation } from "../describe/contract";
+import type { DescribeFrame, UiOrientation } from "../describe/contract";
 
 /**
  * A flow's directions are the UI's: `swipe: down` moves the finger towards
  * the bottom of what the user sees, `scroll-to` `direction: down` reveals
- * what is below it. The frames a flow acts on, and the touches it sends, are
- * in the screen's fixed (portrait-native) space on an iOS simulator — the
- * space the simulator takes touches in, whatever the interface orientation.
- * With a portrait UI the two coincide. With a landscape UI (a rotated iPhone,
- * or a foldable unfolded, whose inner panel is portrait-native under a
- * landscape UI) the UI's vertical axis lies along the frame space's
- * horizontal one, and a direction has to be turned before it is dispatched.
+ * what is below it. So is its reading order: the element `after` or `next`
+ * to another follows it as the user reads, and a `text` condition reads the
+ * match the user sees first. The frames a flow acts on, and the touches it
+ * sends, are in the screen's fixed (portrait-native) space on an iOS
+ * simulator — the space the simulator takes touches in, whatever the
+ * interface orientation. With a portrait UI the two coincide. With a landscape
+ * UI (a rotated iPhone, or a foldable unfolded, whose inner panel is
+ * portrait-native under a landscape UI) the UI's vertical axis lies along the
+ * frame space's horizontal one: a direction has to be turned before it is
+ * dispatched, and a frame has to be turned back before it is compared with
+ * another in reading order.
  *
  * The orientation is UIKit's name for the interface's (as the injected
  * framework reports it; see `flow-ios-tree.ts`). The maps below were checked on
@@ -37,6 +41,33 @@ export function uiPointToNative(p: Vec, orientation: UiOrientation | undefined):
       return { x: 1 - p.x, y: 1 - p.y };
     default:
       return { x: p.x, y: p.y };
+  }
+}
+
+/**
+ * A native-space frame in the UI's own space: {@link uiPointToNative} run
+ * backwards over a rectangle, so a rectangle comes out (the maps are quarter
+ * turns and a half turn). The selector relations and picks that go by reading
+ * order (`ui-tree-match.ts`) compare frames through this, so that "below" and
+ * "to the right" are the user's on a landscape UI, while the frame itself
+ * stays in the space touches are sent in. The frame unchanged for a portrait
+ * UI, and when no orientation was reported.
+ */
+export function nativeFrameToUi(
+  f: DescribeFrame,
+  orientation: UiOrientation | undefined
+): DescribeFrame {
+  switch (orientation) {
+    case "landscapeRight":
+      // native (x, y) = (1 - v, u), so u = y and v = 1 - x.
+      return { x: f.y, y: 1 - f.x - f.width, width: f.height, height: f.width };
+    case "landscapeLeft":
+      // native (x, y) = (v, 1 - u), so u = 1 - y and v = x.
+      return { x: 1 - f.y - f.height, y: f.x, width: f.height, height: f.width };
+    case "portraitUpsideDown":
+      return { x: 1 - f.x - f.width, y: 1 - f.y - f.height, width: f.width, height: f.height };
+    default:
+      return f;
   }
 }
 

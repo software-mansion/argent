@@ -146,12 +146,16 @@ export interface ActionEnv {
   /**
    * What the run's most recent tree read said about how the UI lies on the
    * frame space, for the directives that turn a UI-space direction into it
-   * (`swipe: down`, `scroll-to`; see `flow-orientation.ts`). Written by every
+   * (`swipe: down`, `scroll-to`; see `flow-orientation.ts`) and for the
+   * selector relations and picks that go by reading order (`after`, `next`,
+   * `any: true`, a `text` condition; see `ui-tree-match.ts`). Written by every
    * read that goes through {@link readFlowTree} — the settle a swipe or a
-   * scroll round makes before it dispatches is the read that fills it — and
-   * one holder per run, shared with nested `run:` flows like
+   * scroll round makes before it dispatches is the read that fills it, and
+   * every selector resolves against the tree of the read that just filled it
+   * — and one holder per run, shared with nested `run:` flows like
    * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
-   * `ActionEnv` by hand, which leaves every direction in the frame space.
+   * `ActionEnv` by hand, which leaves every direction, and reading order, in
+   * the frame space.
    */
   lastRead?: { uiOrientation?: UiOrientation };
 }
@@ -409,10 +413,14 @@ function selectorAlternatives(sel: FlowSelector): Selector[] {
  * is kept only as a last resort, so `exists` still sees those nodes without
  * blocking the text pass from finding the visible element.
  */
-function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
+function flowFindAll(
+  tree: DescribeNode,
+  sel: FlowSelector,
+  orientation: UiOrientation | undefined
+): DescribeNode[] {
   let fallback: DescribeNode[] = [];
   for (const s of selectorAlternatives(sel)) {
-    const matches = findAll(tree, s);
+    const matches = findAll(tree, s, orientation);
     if (matches.some(isVisible)) return matches;
     if (fallback.length === 0) fallback = matches;
   }
@@ -420,12 +428,27 @@ function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
 }
 
 /** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
-function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFrame | undefined {
+function flowSelectorToFrame(
+  tree: DescribeNode,
+  sel: FlowSelector,
+  orientation: UiOrientation | undefined
+): DescribeFrame | undefined {
   for (const s of selectorAlternatives(sel)) {
-    const frame = selectorToFrame(tree, s);
+    const frame = selectorToFrame(tree, s, orientation);
     if (frame) return frame;
   }
   return undefined;
+}
+
+/**
+ * How the UI lies on the frame space of the tree a selector is about to
+ * resolve against, for the relations and picks that go by reading order: the
+ * orientation the run's last read reported ({@link ActionEnv.lastRead}). Every
+ * selector resolves against the tree of the read that just filled it — the
+ * settle, the poll, the focus wait — so the last read's answer is that tree's.
+ */
+function readingOrientation(env: ActionEnv): UiOrientation | undefined {
+  return env.lastRead?.uiOrientation;
 }
 
 /**
@@ -561,7 +584,10 @@ async function waitForFrames(
     if (env.signal?.aborted) return "aborted";
     const tree = await settleTree(env);
     if (tree) {
-      const frames = selectors.map((s) => (s ? flowSelectorToFrame(tree, s) : undefined));
+      const orientation = readingOrientation(env);
+      const frames = selectors.map((s) =>
+        s ? flowSelectorToFrame(tree, s, orientation) : undefined
+      );
       const missing = pending.find(({ i }) => frames[i] === undefined);
       if (!missing) return frames;
       unresolved = missing.selector;
@@ -662,9 +688,9 @@ async function waitForFocus(
   for (;;) {
     if (env.signal?.aborted) return;
     try {
-      const { tree, source } = await readFlowTree(env);
+      const { tree, source, uiOrientation } = await readFlowTree(env);
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
-      const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
+      const target = flowSelectorToFrame(tree, into, uiOrientation) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
     } catch {
       // transient describe failure — retry until the deadline
@@ -780,21 +806,23 @@ async function scrollToVisible(
     const tree = await settleTree(env);
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
-    // The direction is the UI's; the frames, the clip and the gesture are in
-    // the frame space, so the direction is turned into it (flow-orientation.ts)
-    // as the settle above read it. Re-read every round: a fold or a rotation
-    // mid-scroll is a settle away.
-    const axisDirection = nativeDirection(direction, env.lastRead?.uiOrientation);
+    // The direction is the UI's, and so is the reading order the selectors go
+    // by; the frames, the clip and the gesture are in the frame space, so the
+    // direction is turned into it (flow-orientation.ts) as the settle above
+    // read it. Re-read every round: a fold or a rotation mid-scroll is a settle
+    // away.
+    const orientation = readingOrientation(env);
+    const axisDirection = nativeDirection(direction, orientation);
 
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named. Its frame is also the
     // clip window the axis check measures the target against.
-    const region = within ? flowSelectorToFrame(tree, within) : FULL_SCREEN;
+    const region = within ? flowSelectorToFrame(tree, within, orientation) : FULL_SCREEN;
     if (!region) {
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
-    const frame = flowSelectorToFrame(tree, target);
+    const frame = flowSelectorToFrame(tree, target, orientation);
     if (frame && axisFullyInside(frame, axisDirection, region)) return { frame };
 
     // Fingerprint only the scrolled content: a continuously-animating node
@@ -1626,7 +1654,7 @@ async function waitForCondition(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
       const data = await readFlowTree(env);
-      lastMatches = flowFindAll(data.tree, step.selector);
+      lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
       const blind = isBlindRead(data, everMatched);
@@ -1634,7 +1662,13 @@ async function waitForCondition(
       lastReadTrusted = !blind;
       if (
         !blind &&
-        evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
+        evaluateCondition(
+          step.condition,
+          step.expectedText,
+          lastMatches,
+          step.textMatch,
+          data.uiOrientation
+        )
       ) {
         return { ok: true };
       }
@@ -1719,8 +1753,16 @@ async function waitForCondition(
   return {
     ok: false,
     reason:
-      assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
-      blipNote,
+      assertReason(
+        step.condition,
+        step.selector,
+        step.expectedText,
+        step.textMatch,
+        lastMatches,
+        // The read `lastMatches` came from is the last one that answered, and
+        // only a read that answers writes the orientation.
+        readingOrientation(env)
+      ) + blipNote,
   };
 }
 
@@ -2292,7 +2334,8 @@ function assertReason(
   selector: FlowSelector,
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
-  matches: ReturnType<typeof findAll>
+  matches: ReturnType<typeof findAll>,
+  orientation: UiOrientation | undefined
 ): string {
   const sel = describeSelector(selector);
   switch (condition) {
@@ -2309,7 +2352,11 @@ function assertReason(
       // holds what that read saw: the element, still on screen.
       return `an element matching ${sel} was still visible`;
     case "text": {
-      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      // The same pick evaluateCondition made, so the reason quotes the element
+      // the check read.
+      const first =
+        firstInReadingOrder(matches.filter(isVisible), orientation) ??
+        firstInReadingOrder(matches, orientation);
       if (!first) return `no element matched selector ${sel}`;
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted

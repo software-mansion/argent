@@ -32,6 +32,7 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import {
   nativeDirection,
+  nativeFrameToUi,
   uiPointToNative,
   uiVectorToNative,
 } from "../../src/tools/flows/flow-orientation";
@@ -62,6 +63,39 @@ describe("flow-orientation geometry", () => {
     expect(uiVectorToNative({ x: 0.7, y: 0 }, "landscapeLeft")).toEqual({ x: 0, y: -0.7 });
     expect(uiVectorToNative({ x: 0, y: 0.7 }, "landscapeRight")).toEqual({ x: -0.7, y: 0 });
     expect(uiVectorToNative({ x: 0.7, y: 0 }, "portraitUpsideDown")).toEqual({ x: -0.7, y: -0 });
+  });
+
+  it("turns a native-space frame back into the UI's space, corner for corner", () => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+    const corners = (f: typeof frame) => [
+      { x: f.x, y: f.y },
+      { x: f.x + f.width, y: f.y },
+      { x: f.x, y: f.y + f.height },
+      { x: f.x + f.width, y: f.y + f.height },
+    ];
+    const key = (p: { x: number; y: number }) => `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
+    for (const orientation of [
+      "landscapeLeft",
+      "landscapeRight",
+      "portraitUpsideDown",
+      "portrait",
+      undefined,
+    ] as const) {
+      const ui = nativeFrameToUi(frame, orientation);
+      expect(ui.width).toBeGreaterThan(0);
+      expect(ui.height).toBeGreaterThan(0);
+      // The UI frame's corners, sent where touches go, are the native frame's.
+      const back = corners(ui).map((c) => key(uiPointToNative(c, orientation)));
+      expect(back.sort()).toEqual(corners(frame).map(key).sort());
+    }
+    // Unfolded Duo: a strip down the panel's left edge is the top row of the UI.
+    expect(nativeFrameToUi({ x: 0, y: 0.1, width: 0.05, height: 0.8 }, "landscapeLeft")).toEqual({
+      x: expect.closeTo(0.1, 10),
+      y: 0,
+      width: 0.8,
+      height: 0.05,
+    });
+    expect(nativeFrameToUi(frame, undefined)).toBe(frame);
   });
 
   it("names the native direction a UI direction becomes", () => {
@@ -240,6 +274,80 @@ describe("a direction after the UI may have turned", () => {
     // ...and the step says it had nothing newer.
     expect(result.steps[1]!.warning).toContain("an earlier read reported (landscapeLeft)");
   }, 30_000);
+});
+
+describe("relational selectors on a landscape UI", () => {
+  // Two rows of two buttons, as the user sees them: Ask and Fetch on the
+  // first row, Echo and Reset on the second. `next: { id: ask }` is Fetch —
+  // the same row, to the right — whichever way the UI lies on the panel.
+  const uiButtons = {
+    ask: { x: 0.05, y: 0.2, width: 0.4, height: 0.05 },
+    fetch: { x: 0.55, y: 0.2, width: 0.4, height: 0.05 },
+    echo: { x: 0.05, y: 0.3, width: 0.4, height: 0.05 },
+    reset: { x: 0.55, y: 0.3, width: 0.4, height: 0.05 },
+  };
+  /** Where the frame space has a UI-space frame: the inverse of `nativeFrameToUi`. */
+  const toNative = (
+    f: { x: number; y: number; width: number; height: number },
+    o: "landscapeLeft" | "landscapeRight"
+  ) =>
+    o === "landscapeRight"
+      ? { x: 1 - f.y - f.height, y: f.x, width: f.height, height: f.width }
+      : { x: f.y, y: 1 - f.x - f.width, width: f.height, height: f.width };
+  const turned = (o: "landscapeLeft" | "landscapeRight") =>
+    screen(
+      Object.entries(uiButtons).map(([id, f]) =>
+        n({ role: "AXButton", identifier: `probe.${id}`, frame: toNative(f, o) })
+      )
+    );
+
+  it.each(["landscapeLeft", "landscapeRight"] as const)(
+    "resolve in the user's reading order in %s, and tap where the panel has the element",
+    async (o) => {
+      currentOrientation = o;
+      currentTree = () => turned(o);
+      const { result, calls } = await runFlow([
+        {
+          kind: "assert",
+          condition: "visible",
+          selector: { identifier: "probe.fetch", next: { identifier: "probe.ask" } },
+        },
+        {
+          kind: "assert",
+          condition: "visible",
+          selector: { identifier: "probe.reset", after: { identifier: "probe.ask" } },
+        },
+        { kind: "tap", selector: { any: true, next: { identifier: "probe.ask" } } },
+      ]);
+      expect(result.steps.map((s) => s.status)).toEqual(["pass", "pass", "pass"]);
+      const fetch = toNative(uiButtons.fetch, o);
+      expect(calls.at(-1)).toEqual({
+        tool: "gesture-tap",
+        args: {
+          udid: DEVICE,
+          x: expect.closeTo(fetch.x + fetch.width / 2, 10),
+          y: expect.closeTo(fetch.y + fetch.height / 2, 10),
+        },
+      });
+    }
+  );
+
+  it("would follow the panel's order — another row — without the reported orientation", async () => {
+    // The tree of an unfolded Duo served by a framework that reports no
+    // orientation: what the fix is for. Echo, not Fetch, follows Ask on the
+    // panel, and the assert says so.
+    currentOrientation = undefined;
+    currentTree = () => turned("landscapeLeft");
+    const { result } = await runFlow([
+      {
+        kind: "assert",
+        condition: "visible",
+        selector: { identifier: "probe.fetch", next: { identifier: "probe.ask" } },
+      },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]!.reason).toContain("no element matched");
+  });
 });
 
 describe("scroll-to on a landscape UI", () => {
