@@ -88,6 +88,11 @@ interface Result {
    * side effect. Set only when true.
    */
   reactivated?: true;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the swipe went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
 }
 
 // Touch platforms only: on a desktop renderer a mouse drag selects text instead
@@ -167,6 +172,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
     // here. Flooring the count would only turn durationMs into a lie.
     const steps = Math.max(1, Math.round(duration / 16));
     // Last dispatched sample, so an abort can lift from where the finger is.
+    let warning: string | undefined;
     let lastX = 0;
     let lastY = 0;
     // Neither touch backend delivers the Up's coordinates: on both, the finger
@@ -225,7 +231,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
           second_y: null,
         });
       }
-      await sendCommand(api, {
+      const sent = await sendCommand(api, {
         cmd: "touch",
         type,
         x,
@@ -233,11 +239,13 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
         second_x: null,
         second_y: null,
       });
+      // Only the Down resolves the panel; the rest of the sequence keeps it.
+      if (type === "Down") warning = sent.warning;
       lastX = x;
       lastY = y;
       if (i < steps) await sleep(16);
     }
 
-    return { swiped: true, timestampMs };
+    return { swiped: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
   },
 };

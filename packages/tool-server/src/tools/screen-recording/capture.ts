@@ -2,6 +2,7 @@ import * as os from "os";
 import * as path from "path";
 import { promises as fs } from "fs";
 import { spawn } from "child_process";
+import type { LivePanel } from "../../utils/foldable";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
 import { waitForChildExit } from "../../utils/profiler-shared/lifecycle";
@@ -61,9 +62,10 @@ const STATIC_GRACE_MS = 1_000;
 const STREAM_CONNECT_TIMEOUT_MS = 10_000;
 const FIRST_FRAME_TIMEOUT_MS = 10_000;
 /**
- * How often a recording of a foldable asks CoreDevice which panel is live —
- * the only place argent polls it. A fold made outside argent is then in the
- * video within about a second of the hand-over.
+ * How often a recording of a foldable resolves which panel is live, while it
+ * runs (the preview page polls its own route on a similar cadence; nothing
+ * else in argent polls). A fold made outside argent is then in the video
+ * within about a second of the hand-over.
  */
 const PANEL_POLL_MS = 1_000;
 /**
@@ -85,10 +87,10 @@ export interface PanelFollow {
   /** The MJPEG stream of a panel. */
   streamUrlForScreen(screen: number): string;
   /**
-   * Which panel to record now: the one CoreDevice reports (`fresh`), else the
-   * one argent's commands target; null when neither is known.
+   * Which panel the device renders to now, as every touch and capture
+   * resolves it; `source: "unknown"` when nothing could say.
    */
-  readActiveScreen(): Promise<{ screen: number; fresh: boolean } | null>;
+  resolveLivePanel(): Promise<LivePanel>;
   /** Poll cadence; the default is {@link PANEL_POLL_MS}. */
   pollMs?: number;
 }
@@ -252,13 +254,13 @@ async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
 }
 
 /**
- * Follow the panel a foldable renders to: poll CoreDevice (or, while it does
- * not answer, the panel argent's commands target, counted for stop's warning),
- * and when the answer changes, move the capture onto that panel's stream. The
- * old stream is closed only once the new one has delivered a frame, so a
- * stream that fails to open (or a panel that has not drawn yet) costs nothing
- * but a retry on the next tick; the recording never goes dark on argent's
- * account.
+ * Follow the panel a foldable renders to: resolve it on each tick, and when
+ * the answer changes, move the capture onto that panel's stream. A tick that
+ * resolves nothing leaves the capture where it is and is counted for stop's
+ * warning. The old stream is closed only once the new one has delivered a
+ * frame, so a stream that fails to open (or a panel that has not drawn yet)
+ * costs nothing but a retry on the next tick; the recording never goes dark
+ * on argent's account.
  */
 function startPanelFollow(
   api: ScreenRecordingSessionApi,
@@ -271,11 +273,14 @@ function startPanelFollow(
     inFlight = true;
     void (async () => {
       try {
-        const read = await follow.readActiveScreen();
+        const live = await follow.resolveLivePanel();
         if (api.captureProcess !== child) return;
-        if (!read?.fresh) api.panelReadFailures++;
-        const screen = read?.screen ?? null;
-        if (screen === null || screen === api.activeScreen) return;
+        if (live.source === "unknown") {
+          api.panelReadFailures++;
+          return;
+        }
+        const screen = live.screen;
+        if (screen === api.activeScreen) return;
         const next = await openMjpegStream(
           follow.streamUrlForScreen(screen),
           STREAM_CONNECT_TIMEOUT_MS
@@ -691,10 +696,10 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     if (panelReadFailures > 0) {
       warning = [
         warning,
-        `CoreDevice did not report which panel the device renders to on ${panelReadFailures} of ` +
-          `the recording's panel checks; for those the recording stayed on the panel argent's ` +
-          `commands target. After a fold made outside argent that panel is the dark one until a ` +
-          `\`describe\` corrects it, so parts of the video may be black.`,
+        `The panel the device renders to could not be resolved on ${panelReadFailures} of the ` +
+          `recording's panel checks (neither the accessibility service nor CoreDevice answered); ` +
+          `the recording stayed on its panel for those, so a fold made during them is in the ` +
+          `video only from the next check that answered, and parts of it may be black.`,
       ]
         .filter(Boolean)
         .join(" ");

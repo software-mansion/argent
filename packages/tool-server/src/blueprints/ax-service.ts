@@ -61,13 +61,6 @@ export interface AXDescribeResponse {
   alertVisible: boolean;
   screenFrame?: { width: number; height: number };
   elements: AXDescribeElement[];
-  /**
-   * On a foldable only: the CoreSimulator screen id of the panel the daemon
-   * read the tree on and normalized the frames to (1 cover, 3 inner on the
-   * iPhone Duo). The client cross-checks it against the panel it captures and
-   * touches; absent on every other device.
-   */
-  displayId?: number;
 }
 
 export interface AXServiceApi {
@@ -76,7 +69,22 @@ export interface AXServiceApi {
   describe(): Promise<AXDescribeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
+  /**
+   * The display id of the panel the guest renders to (1 the cover panel, 3
+   * the inner one on the iPhone Duo): the display the front app's window is
+   * on, which is the panel `describe` reads its tree on. Null when the daemon
+   * names none — a device with one panel, or a window on no known display.
+   * Answered in a few milliseconds without walking the tree; every touch of a
+   * foldable asks it (`utils/foldable.ts`), so its budget is short.
+   */
+  livePanel(): Promise<number | null>;
 }
+
+/**
+ * How long `live_panel` gets: a healthy daemon answers in a few milliseconds,
+ * and a caller that asks before every touch must not wait on one that hangs.
+ */
+const LIVE_PANEL_TIMEOUT_MS = 2_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -444,8 +452,25 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
-          ...(typeof result.displayId === "number" ? { displayId: result.displayId } : {}),
         };
+      },
+
+      async livePanel(): Promise<number | null> {
+        const result = (await query("live_panel", LIVE_PANEL_TIMEOUT_MS)) as {
+          displayId?: number | null;
+          error?: string;
+        };
+        if (result.error) {
+          throw new FailureError(`ax-service live_panel error: ${result.error}`, {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_live_panel",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return typeof result.displayId === "number" && result.displayId > 0
+          ? result.displayId
+          : null;
       },
 
       async alertCheck(): Promise<boolean> {

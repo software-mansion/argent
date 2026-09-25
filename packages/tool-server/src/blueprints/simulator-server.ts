@@ -26,12 +26,6 @@ import {
   type SimulatorDisplayState,
 } from "../utils/simulator-client";
 import {
-  forgetActiveScreen,
-  refreshActiveScreen,
-  rememberServerPanels,
-  screenLabel,
-} from "../utils/foldable";
-import {
   assertExternalCapability,
   externalClaimForAnyId,
   type ExternalDevice,
@@ -103,9 +97,10 @@ export interface SimulatorServerApi {
   /**
    * Set for a foldable simulator whose server reported its panels: the server
    * captures every panel and follows none, so every touch, wheel, screenshot
-   * and stream then names the panel the guest renders to (`utils/foldable.ts`).
-   * Undefined for every other device, and for a foldable driven by a server
-   * build that predates panels, which stays on screen 1 as before.
+   * and stream then names the panel the guest renders to, resolved at that
+   * moment (`utils/foldable.ts`). Undefined for every other device, and for a
+   * foldable driven by a server build that predates panels, which stays on
+   * screen 1 as before.
    */
   display?: SimulatorDisplayState;
 }
@@ -114,8 +109,9 @@ export interface SimulatorServerApi {
 const DISPLAY_PROBE_TIMEOUT_MS = 3_000;
 
 /**
- * Give a foldable simulator's server its panel list, and read which panel is
- * live before the first command targets one.
+ * Give a foldable simulator's server its panel list, so the commands that
+ * follow name a panel. Which panel is live is not read here: every command
+ * resolves it when it runs.
  *
  * Only a device whose profile is foldable is probed at all, so the common case
  * pays nothing. A foldable whose server answers with no panels — a build that
@@ -135,13 +131,9 @@ async function attachFoldableDisplay(api: SimulatorServerApi, device: DeviceInfo
     return;
   }
   api.display = display;
-  rememberServerPanels(device.id, display.panels);
-  const state = await refreshActiveScreen(device.id);
+  const panels = display.panels.map((p) => `${p.screenId} (${p.width}x${p.height})`).join(", ");
   process.stderr.write(
-    state
-      ? `${tag} foldable simulator; the device renders to ${screenLabel(state.activeScreen, state.panels)}\n`
-      : `${tag} foldable simulator, but CoreDevice did not report its active panel; ` +
-          `screen 1 (the cover panel) is used until a later read succeeds\n`
+    `${tag} foldable simulator with screens ${panels}; every command names the live panel\n`
   );
 }
 
@@ -182,7 +174,9 @@ async function buildRemoteInstance(
     // Through `sendCommand`, as the attached instance below does, so a key the
     // session refuses reports the same failure as a refused touch instead of a
     // bare SDK error the caller cannot classify.
-    pressKey: (direction, keyCode) => sendCommand(api, { cmd: "key", code: keyCode, direction }),
+    pressKey: async (direction, keyCode) => {
+      await sendCommand(api, { cmd: "key", code: keyCode, direction });
+    },
     transport,
   };
 
@@ -233,7 +227,9 @@ async function buildAttachedInstance(
     apiUrl: externalDevice.simulatorServer.apiUrl,
     deviceId: device.id,
     external: true,
-    pressKey: (direction, code) => sendCommand(api, { cmd: "key", code, direction }),
+    pressKey: async (direction, code) => {
+      await sendCommand(api, { cmd: "key", code, direction });
+    },
     streamUrl: externalDevice.simulatorServer.streamUrl,
     /** `transport: undefined`, so the WS + HTTP path is reused unchanged. */
   };
@@ -244,9 +240,7 @@ async function buildAttachedInstance(
 
   return {
     api,
-    dispose: async () => {
-      forgetActiveScreen(device.id);
-    },
+    dispose: async () => {},
     events: new TypedEventEmitter<ServiceEvents>(),
   };
 }
@@ -551,7 +545,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
         },
       },
       dispose: async () => {
-        forgetActiveScreen(device.id);
         proc.kill();
       },
       events,

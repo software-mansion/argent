@@ -60,15 +60,31 @@ export function nativeFrameToUi(
   switch (orientation) {
     case "landscapeRight":
       // native (x, y) = (1 - v, u), so u = y and v = 1 - x.
-      return { x: f.y, y: 1 - f.x - f.width, width: f.height, height: f.width };
+      return { x: f.y, y: snap(1 - f.x - f.width), width: f.height, height: f.width };
     case "landscapeLeft":
       // native (x, y) = (v, 1 - u), so u = 1 - y and v = x.
-      return { x: 1 - f.y - f.height, y: f.x, width: f.height, height: f.width };
+      return { x: snap(1 - f.y - f.height), y: f.x, width: f.height, height: f.width };
     case "portraitUpsideDown":
-      return { x: 1 - f.x - f.width, y: 1 - f.y - f.height, width: f.width, height: f.height };
+      return {
+        x: snap(1 - f.x - f.width),
+        y: snap(1 - f.y - f.height),
+        width: f.width,
+        height: f.height,
+      };
     default:
       return f;
   }
+}
+
+/**
+ * A turned edge, free of float noise: `1 - y - height` for two frames that
+ * share an edge in the native space can differ by one unit in the last place,
+ * and the reading-order comparisons in `ui-tree-match.ts` are exact, so that
+ * noise would decide a tie instead of the frame's area. Frames are normalized
+ * to at most 12 decimals; a billionth is well below any real difference.
+ */
+function snap(v: number): number {
+  return Math.round(v * 1e9) / 1e9;
 }
 
 /** A UI-space displacement in the native space: the point map without its offsets. */

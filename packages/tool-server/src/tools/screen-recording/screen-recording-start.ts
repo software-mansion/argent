@@ -10,11 +10,7 @@ import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
-import {
-  readActiveScreenOrMain,
-  readActiveScreenOrMemo,
-  streamUrlForScreen,
-} from "../../utils/foldable";
+import { resolveLivePanel, streamUrlForScreen } from "../../utils/foldable";
 import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import type { StartRecordingResult } from "./session-guards";
 
@@ -133,19 +129,19 @@ Fails if a recording is already running on the device, the device is not booted,
       }
 
       // A foldable's stream is per panel. The recording starts on the panel the
-      // device renders to now — read fresh, since nothing before this call has
-      // described the screen — and follows it across folds (capture.ts). While
-      // CoreDevice does not answer, both use the panel the touches target, so
-      // the video stays on the panel a `describe` moves argent to.
+      // device renders to now, and follows it across folds (capture.ts) with
+      // the same resolution every touch and screenshot makes. A start that
+      // resolves nothing records the main screen, as every command then
+      // targets it; the poll moves the capture as soon as a source answers.
       let followPanel: PanelFollow | undefined;
       if (simulator.display?.foldable) {
         const base = streamUrl;
-        const initialScreen = await readActiveScreenOrMain(device.id);
+        const initialScreen = (await resolveLivePanel(device.id)).screen;
         streamUrl = streamUrlForScreen(base, initialScreen);
         followPanel = {
           initialScreen,
           streamUrlForScreen: (screen) => streamUrlForScreen(base, screen),
-          readActiveScreen: () => readActiveScreenOrMemo(device.id),
+          resolveLivePanel: () => resolveLivePanel(device.id),
         };
       }
 

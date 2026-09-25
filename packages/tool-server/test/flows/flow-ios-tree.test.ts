@@ -15,7 +15,6 @@ import {
 } from "../../src/tools/flows/flow-ios-tree";
 import { evaluateCondition, selectorToFrame } from "../../src/utils/ui-tree-match";
 import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
-import { crossCheckTreeScreen } from "../../src/utils/foldable";
 import {
   __resetDeviceSetCacheForTesting,
   rememberDeviceSet,
@@ -31,11 +30,6 @@ vi.mock("../../src/utils/ios-device-sets", async (importOriginal) => {
 
 // A pass-through spy: a tree read hands the screen it was read on to the
 // foldable panel memo's cross-check.
-vi.mock("../../src/utils/foldable", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/utils/foldable")>();
-  return { ...actual, crossCheckTreeScreen: vi.fn(actual.crossCheckTreeScreen) };
-});
-
 const DEVICE = {
   id: "00000000-0000-0000-0000-0000000000ab",
   platform: "ios",
@@ -205,25 +199,6 @@ describe("flow iOS full-hierarchy source", () => {
       );
       expect(uiOrientation).toBe(orientation);
     }
-  });
-
-  // A foldable folded behind argent's back: the app's screen has the other
-  // panel's shape, and the memo every touch reads must hear of it.
-  it("hands the screen the tree was read on to the foldable panel memo", async () => {
-    const raw = {
-      screen: { width: 669, height: 951, interfaceOrientation: "landscapeLeft" },
-      windows: [
-        {
-          className: "UIWindow",
-          windowFrame: { x: 0, y: 0, width: 951, height: 669 },
-          screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-          children: [],
-        },
-      ],
-    };
-    vi.mocked(crossCheckTreeScreen).mockClear();
-    await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
-    expect(crossCheckTreeScreen).toHaveBeenCalledWith(DEVICE.id, { width: 669, height: 951 });
   });
 
   it("reports no orientation when the framework names none it knows", async () => {

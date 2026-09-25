@@ -13,7 +13,11 @@ import {
   chromiumDropNote,
   unsupportedDropNote,
 } from "./dropped-geometry";
-import { getScreenshotScale, refreshActiveScreenForCapture } from "../../utils/simulator-client";
+import {
+  getScreenshotScale,
+  httpScreenshot,
+  resolveCapturePanel,
+} from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
@@ -288,18 +292,17 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
 
       const ref = simulatorServerRef(device);
       const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
-      // A bare screenshot is preceded by no describe, so on a foldable it reads
-      // the live panel fresh instead of trusting the memo (a fold made outside
-      // argent would otherwise capture the panel that went dark). The server
-      // cannot say which panel a frame is from, so the result names it.
-      const panelNote = await refreshActiveScreenForCapture(api);
+      // On a foldable the panel is resolved now, whoever moved the hinge, and
+      // handed to the capture. The server cannot say which panel a frame is
+      // from, so the result names it.
+      const panel = await resolveCapturePanel(api);
       const { path: capturedPath } = await captureScreenshotUpright(
         api,
         device,
         params.rotation,
         signal,
         params.scale,
-        undefined,
+        panel ? (a, r, s, sc) => httpScreenshot(a, r, s, sc, panel.screen) : undefined,
         androidDevtoolsRotationPeek(registry, device)
       );
       const image = await requireArtifacts(ctx).register({
@@ -307,7 +310,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         kind: "screenshot",
         mimeType: "image/png",
       });
-      return { image, ...(panelNote ? { [RESULT_NOTE_KEY]: panelNote } : {}) };
+      return { image, ...(panel ? { [RESULT_NOTE_KEY]: panel.note } : {}) };
     },
   };
 }

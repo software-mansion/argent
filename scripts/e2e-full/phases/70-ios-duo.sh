@@ -134,6 +134,47 @@ _flow_tap_after_external_fold() { # udid hinge-helper project-root to-angle from
   fi
 }
 
+# The pixel size of a PNG file, as "<w>x<h>", from its IHDR chunk.
+_png_size() { # file
+  python3 -c 'import struct,sys; b=open(sys.argv[1],"rb").read(24); print("%dx%d" % struct.unpack(">II", b[16:24]))' "$1" 2>/dev/null
+}
+
+# Whether a capture is of the panel of size "<w>x<h>": the same aspect within
+# half a percent, at whatever scale the server captured it (the Duo's panels
+# differ in aspect by 1.6 %).
+_same_panel_aspect() { # got expected
+  python3 -c 'import sys; gw, gh = map(int, sys.argv[1].split("x")); ew, eh = map(int, sys.argv[2].split("x")); sys.exit(0 if abs(gw / gh - ew / eh) < 0.005 else 1)' "$1" "$2"
+}
+
+# Fold the hinge behind argent's back, then, with NO describe in between, send
+# a bare tap at a point of the pad known from before the fold and take a
+# screenshot: both must target the panel the device now renders to. The tap
+# count is read before the fold; `describe` runs only after the tap.
+_bare_after_external_fold() { # udid hinge-helper to-angle from-angle tap-x tap-y expected-size case
+  local udid="$1" hinge="$2" to="$3" from="$4" tx="$5" ty="$6" size="$7" case="$8" before after got
+  before="$(_probe_taps "$udid")"
+  "$hinge" "$udid" hinge "$to" "$from" >/dev/null 2>&1; sleep 2.5
+  run_tool gesture-tap "{\"udid\":\"$udid\",\"x\":$tx,\"y\":$ty}"
+  if [ "$RT_RC" -ne 0 ]; then fail "$P" gesture-tap "bare-tap-$case" "$(rt_detail 160)"; return 1; fi
+  if capture_screenshot "$udid" "$E2E_WORK/duo-$case.png"; then
+    got="$(_png_size "$E2E_WORK/duo-$case.png")"
+    if _same_panel_aspect "$got" "$size"; then
+      pass "$P" screenshot "after-external-fold-$case" "$got, the shape of the $size panel"
+    else
+      fail "$P" screenshot "after-external-fold-$case" "captured $got, the panel the device renders to is $size"
+    fi
+  else
+    fail "$P" screenshot "after-external-fold-$case" "size=${SHOT_SIZE:-0} rc=${SHOT_RC:-?}"
+  fi
+  sleep 1
+  after="$(_probe_taps "$udid")"
+  if [ "$after" -gt "$before" ] 2>/dev/null; then
+    pass "$P" gesture-tap "bare-tap-$case" "taps $before -> $after with no describe in between"
+  else
+    fail "$P" gesture-tap "bare-tap-$case" "the bare tap went to the dark panel (taps $before -> $after)"
+  fi
+}
+
 # Tap the centre of `probe.pad` as `describe` frames it, then check the probe
 # counted the tap and received that point. One case per posture. The count is
 # what catches a dropped tap: two cases in a row on the same panel tap the same
@@ -191,8 +232,6 @@ run_phase() {
 
   # Open: the inner panel, larger capture, taps still land.
   assert_field "$P" fold open "{\"udid\":\"$DEV\",\"posture\":\"open\"}" '.activeScreen' '3'
-  assert_field "$P" list-devices active-screen '{}' \
-    "first(.devices[]? | select(.udid==\"$DEV\")) | .activeScreen" '3'
   if capture_screenshot "$DEV" "$E2E_WORK/duo-open.png"; then
     pass "$P" screenshot open "${SHOT_SIZE}B"
   else
@@ -307,6 +346,11 @@ run_phase() {
     # A flow run after an outside fold, in both directions: the first tap lands.
     _flow_tap_after_external_fold "$DEV" "$HINGE" "$E2E_WORK/duo-flows" 180 0 tap-after-external-unfold
     _flow_tap_after_external_fold "$DEV" "$HINGE" "$E2E_WORK/duo-flows" 0 180 tap-after-external-close
+    # A bare tap and a screenshot right after an outside fold, with no describe
+    # in between, in both directions. The inner panel's pad point was read
+    # while the device was open (half-open above); the cover panel's is fixed.
+    _bare_after_external_fold "$DEV" "$HINGE" 180 0 "${centre%% *}" "${centre##* }" 2007x2853 unfolded
+    _bare_after_external_fold "$DEV" "$HINGE" 0 180 0.41 0.53 1398x2034 closed
   else
     skip "$P" fold after-external-fold "set E2E_DUO_HINGE to a hinge helper (duo-hinge) to fold behind argent's back"
   fi

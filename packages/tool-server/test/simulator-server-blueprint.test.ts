@@ -53,20 +53,6 @@ vi.mock("../src/utils/ios-devices", () => ({
   isFoldableSimulator: (udid: string) => isFoldableSimulatorMock(udid),
 }));
 
-// The foldable probe reads CoreDevice after it finds panels; keep that off the
-// real `devicectl` and observable.
-const refreshActiveScreenMock = vi.fn(async (_udid: string) => null as unknown);
-const rememberServerPanelsMock = vi.fn();
-vi.mock("../src/utils/foldable", async () => {
-  const actual =
-    await vi.importActual<typeof import("../src/utils/foldable")>("../src/utils/foldable");
-  return {
-    ...actual,
-    refreshActiveScreen: (udid: string) => refreshActiveScreenMock(udid),
-    rememberServerPanels: (...args: unknown[]) => rememberServerPanelsMock(...args),
-  };
-});
-
 // Device-set resolution reads the user's config + probes simctl — mock it to
 // the default set (null) so spawns stay hermetic; the additional-set spawn
 // test flips it per-case.
@@ -123,8 +109,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     androidSdkRootMock.mockReturnValue(null);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(false);
-    refreshActiveScreenMock.mockReset().mockResolvedValue(null);
-    rememberServerPanelsMock.mockReset();
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
     // and the real probe would surface as a DependencyMissingError unrelated
@@ -391,9 +375,6 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
     spawnMock.mockReset();
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(true);
-    refreshActiveScreenMock
-      .mockReset()
-      .mockResolvedValue({ activeScreen: 3, panels: PANELS, readAt: 0 });
     fetchMock.mockReset();
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const { __resetDepCacheForTests, __primeDepCacheForTests } =
@@ -407,7 +388,7 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
     vi.clearAllMocks();
   });
 
-  it("probes /api/display, keeps the panels and reads the live panel before handing out the api", async () => {
+  it("probes /api/display and keeps the panels, without reading which panel is live", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ foldable: true, panels: PANELS, hingeAngle: null }), {
         status: 200,
@@ -427,10 +408,9 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
     expect(fetchMock.mock.calls[0]![0]).toBe("http://127.0.0.1:61830/api/display");
     expect(instance.api.deviceId).toBe(udid);
     expect(instance.api.display).toEqual({ foldable: true, panels: PANELS, hingeAngle: null });
-    // Kept for a flow's tree read to seed the memo from, should CoreDevice
-    // never answer.
-    expect(rememberServerPanelsMock).toHaveBeenCalledWith(udid, PANELS);
-    expect(refreshActiveScreenMock).toHaveBeenCalledWith(udid);
+    // Which panel is live is every command's to resolve when it runs: the
+    // probe is the one request the attach makes.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     await instance.dispose();
   });
 
@@ -446,8 +426,6 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
     const instance = await factoryPromise;
 
     expect(instance.api.display).toBeUndefined();
-    expect(rememberServerPanelsMock).not.toHaveBeenCalled();
-    expect(refreshActiveScreenMock).not.toHaveBeenCalled();
     await instance.dispose();
   });
 

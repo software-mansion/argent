@@ -31,6 +31,7 @@ import {
   type ScreenRecordingSessionApi,
 } from "../src/blueprints/screen-recording-session";
 import { startCapture, stopCapture, type PanelFollow } from "../src/tools/screen-recording/capture";
+import type { LivePanel } from "../src/utils/foldable";
 import { openMjpegStream } from "../src/tools/screen-recording/mjpeg-stream";
 import { buildWatermarkGraph } from "../src/tools/screen-recording/watermark";
 import { __resetActiveScreenRecordingsForTesting } from "../src/utils/screen-recording-reminder";
@@ -164,15 +165,18 @@ afterEach(async () => {
   await fs.rm(scratch, { recursive: true, force: true });
 });
 
+const live = (screen: number): LivePanel => ({ screen, source: "ax-service" });
+const UNKNOWN: LivePanel = { screen: 1, source: "unknown", reason: "nothing answered" };
+
 async function startFollowing(
   api: ScreenRecordingSessionApi,
-  readActiveScreen: PanelFollow["readActiveScreen"],
+  resolveLivePanel: PanelFollow["resolveLivePanel"],
   initialScreen = 1
 ) {
   const follow: PanelFollow = {
     initialScreen,
     streamUrlForScreen: (screen) => (screen === 1 ? BASE_URL : `${BASE_URL}?screen=${screen}`),
-    readActiveScreen,
+    resolveLivePanel,
   };
   const promise = startCapture(api, {
     streamUrl: follow.streamUrlForScreen(initialScreen),
@@ -191,15 +195,15 @@ describe("a recording of a foldable follows the live panel", () => {
     serveStreams((url) => (url.includes("screen=3") ? INNER : COVER));
     const child = fakeChild();
     const api = await makeSession();
-    let live = 1;
-    const read = vi.fn(async () => ({ screen: live, fresh: true }));
-    await startFollowing(api, read);
+    let screen = 1;
+    const resolve = vi.fn(async () => live(screen));
+    await startFollowing(api, resolve);
 
     expect(opened.map((s) => s.url)).toEqual([BASE_URL]);
     expect(api.activeScreen).toBe(1);
 
     // The device unfolds; the next poll sees it.
-    live = 3;
+    screen = 3;
     await vi.advanceTimersByTimeAsync(PANEL_POLL_MS);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -221,7 +225,7 @@ describe("a recording of a foldable follows the live panel", () => {
     expect(after.every((f) => f.equals(INNER))).toBe(true);
 
     // Folding back counts a second switch, onto a fresh cover stream.
-    live = 1;
+    screen = 1;
     await vi.advanceTimersByTimeAsync(PANEL_POLL_MS);
     await vi.advanceTimersByTimeAsync(0);
     expect(api.panelSwitches).toBe(2);
@@ -239,7 +243,7 @@ describe("a recording of a foldable follows the live panel", () => {
     );
     fakeChild();
     const api = await makeSession();
-    await startFollowing(api, async () => ({ screen: 3, fresh: true }));
+    await startFollowing(api, async () => live(3));
 
     await vi.advanceTimersByTimeAsync(PANEL_POLL_MS);
     await vi.advanceTimersByTimeAsync(0);
@@ -255,48 +259,33 @@ describe("a recording of a foldable follows the live panel", () => {
     await stop(api);
   });
 
-  it("stays put when no panel is known, and says at stop that CoreDevice did not answer", async () => {
-    serveStreams(() => COVER);
-    fakeChild();
-    const api = await makeSession();
-    await startFollowing(api, async () => null);
-    await vi.advanceTimersByTimeAsync(PANEL_POLL_MS * 3);
-    expect(opened).toHaveLength(1);
-    expect(api.panelSwitches).toBe(0);
-    const stopped = await stop(api);
-    expect(stopped).not.toHaveProperty("panelSwitches");
-    expect(stopped.warning).toContain("CoreDevice did not report which panel");
-    expect(stopped.warning).toContain("on 3 of the recording's panel checks");
-  });
-
-  // CoreDevice stops answering, the device is unfolded, and a describe moves
-  // argent's commands to the inner panel: the recording follows them there
-  // rather than staying on the panel that went dark, and says why at stop.
-  it("follows the panel argent's commands target while CoreDevice does not answer", async () => {
+  it("stays put when nothing resolves the panel, and says so at stop", async () => {
     serveStreams((url) => (url.includes("screen=3") ? INNER : COVER));
     fakeChild();
     const api = await makeSession();
-    let memo = 1;
-    await startFollowing(api, async () => ({ screen: memo, fresh: false }));
-    await vi.advanceTimersByTimeAsync(PANEL_POLL_MS);
-    expect(api.activeScreen).toBe(1);
-
-    memo = 3;
+    let answer: LivePanel = UNKNOWN;
+    await startFollowing(api, async () => answer, 3);
+    await vi.advanceTimersByTimeAsync(PANEL_POLL_MS * 3);
+    // An unresolved panel is not the main screen: the capture stays where it is.
+    expect(opened).toHaveLength(1);
+    expect(api.activeScreen).toBe(3);
+    expect(api.panelSwitches).toBe(0);
+    // A source answering again moves it, as any change does.
+    answer = live(1);
     await vi.advanceTimersByTimeAsync(PANEL_POLL_MS);
     await vi.advanceTimersByTimeAsync(0);
-    expect(api.activeScreen).toBe(3);
-    expect(api.frameStream).toBe(opened[1]);
-
+    expect(api.activeScreen).toBe(1);
     const stopped = await stop(api);
     expect(stopped.panelSwitches).toBe(1);
-    expect(stopped.warning).toContain("on 2 of the recording's panel checks");
+    expect(stopped.warning).toContain("could not be resolved on 3 of the recording's panel checks");
+    expect(stopped.warning).toContain("neither the accessibility service nor CoreDevice answered");
   });
 
   it("warns about nothing while every panel check is answered", async () => {
     serveStreams(() => COVER);
     fakeChild();
     const api = await makeSession();
-    await startFollowing(api, async () => ({ screen: 1, fresh: true }));
+    await startFollowing(api, async () => live(1));
     await vi.advanceTimersByTimeAsync(PANEL_POLL_MS * 3);
     const stopped = await stop(api);
     expect(stopped).not.toHaveProperty("warning");
@@ -329,7 +318,7 @@ describe("a recording of a foldable follows the live panel", () => {
     const follow: PanelFollow = {
       initialScreen: 3,
       streamUrlForScreen: (screen) => `${BASE_URL}?screen=${screen}`,
-      readActiveScreen: async () => ({ screen: 3, fresh: true }),
+      resolveLivePanel: async () => live(3),
     };
     const start = startCapture(following, {
       streamUrl: follow.streamUrlForScreen(3),

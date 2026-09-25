@@ -85,17 +85,8 @@ Decision order:
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc. Not on a physical iPhone.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
+- A foldable iOS simulator (`foldable: true` in `list-devices`, e.g. the iPhone Duo) is folded with the `fold` tool; every screenshot, describe and touch follows the panel it renders to. See the `fold` section of the `argent-device-interact` skill.
   </general_rules>
-
-<foldable_rules>
-A foldable iOS simulator (the iPhone Duo) is listed by `list-devices` with `foldable: true`. Argent, not the simulator, chooses the panel: every screenshot, describe, touch, stream and recording names the panel the device renders to (the cover panel closed, the inner panel half-open and open), read from CoreDevice.
-
-- Fold with the `fold` tool (`posture`: closed / half-open / open, or `angle` 0–180). It waits for the device to settle on its panel and accept input there, and returns the panel and its size. The device switches panels on a sweep from closed or open; a sweep between two mid angles can leave it where it was, which the result reports with a `warning`.
-- A fold changes the coordinate space: **re-describe after every fold** before tapping (the tree appended to the fold result is already on the new panel). `screenshot` size follows the panel: 1398×2034 closed, 2007×2853 open on the Duo.
-- Unfolded, the UI is landscape on the inner panel's portrait-native framebuffer. Frames and touch coordinates stay in that native space, like landscape on any iPhone. `rotate` sets the device's orientation, so `Portrait` is a landscape UI there.
-- A gesture completes on the panel it started on, also when the device is folded during it. Fold between actions.
-- If a `describe` says its tree and argent's panel disagree, call `await-screen-idle` and describe again.
-  </foldable_rules>
 
 <react_native_detection>
 Project type is determined by the `argent-environment-inspector` subagent (see `subagents` section).

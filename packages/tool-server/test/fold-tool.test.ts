@@ -1,30 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
-import type { ActiveScreenState } from "../src/utils/foldable";
+import type { LivePanel } from "../src/utils/foldable";
 
-const refreshActiveScreenMock = vi.fn();
-const awaitActiveScreenMock = vi.fn();
-const holdActiveScreenMock = vi.fn();
-const activeScreenOrMainMock = vi.fn((_udid: string) => 1);
+const resolveLivePanelMock = vi.fn();
+const awaitLivePanelMock = vi.fn();
+const holdLivePanelMock = vi.fn();
 vi.mock("../src/utils/foldable", async () => {
   const actual =
     await vi.importActual<typeof import("../src/utils/foldable")>("../src/utils/foldable");
   return {
     ...actual,
-    refreshActiveScreenUnlessFailing: (udid: string) => refreshActiveScreenMock(udid),
-    activeScreenOrMain: (udid: string) => activeScreenOrMainMock(udid),
-    awaitActiveScreen: (
+    resolveLivePanel: (udid: string) => resolveLivePanelMock(udid),
+    awaitLivePanel: (
       udid: string,
-      done: (state: ActiveScreenState) => boolean,
+      done: (screen: number) => boolean,
       opts?: { timeoutMs?: number }
-    ) => awaitActiveScreenMock(udid, done, opts),
-    holdActiveScreen: (
+    ) => awaitLivePanelMock(udid, done, opts),
+    holdLivePanel: (
       udid: string,
-      initial: ActiveScreenState | null,
+      initial: LivePanel | null,
       holdMs: number,
       opts?: { signal?: AbortSignal }
-    ) => holdActiveScreenMock(udid, initial, holdMs, opts),
+    ) => holdLivePanelMock(udid, initial, holdMs, opts),
   };
 });
 
@@ -53,9 +51,15 @@ function api(overrides: Partial<SimulatorServerApi> = {}): SimulatorServerApi {
   };
 }
 
-function live(activeScreen: number): ActiveScreenState {
-  return { activeScreen, panels: PANELS, readAt: 0 };
+function live(screen: number): LivePanel {
+  return { screen, source: "ax-service" };
 }
+
+const UNKNOWN: LivePanel = {
+  screen: 1,
+  source: "unknown",
+  reason: "the accessibility service failed (not connected); CoreDevice failed (no)",
+};
 
 /** The server's answers, in the order the tool asks: `GET /api/display`, then `POST /api/hinge`. */
 const answers: Array<{ path: string; body: unknown; status: number }> = [];
@@ -88,10 +92,10 @@ function hingeBody(): unknown {
 }
 
 /** The predicate the tool waited on, and the budget it gave it. */
-function awaited(): { done: (s: ActiveScreenState) => boolean; timeoutMs?: number } {
-  const [, done, opts] = awaitActiveScreenMock.mock.calls[0]! as [
+function awaited(): { done: (screen: number) => boolean; timeoutMs?: number } {
+  const [, done, opts] = awaitLivePanelMock.mock.calls[0]! as [
     string,
-    (s: ActiveScreenState) => boolean,
+    (screen: number) => boolean,
     { timeoutMs?: number } | undefined,
   ];
   return { done, timeoutMs: opts?.timeoutMs };
@@ -99,31 +103,30 @@ function awaited(): { done: (s: ActiveScreenState) => boolean; timeoutMs?: numbe
 
 /** The panel the tool waited for: the first screen id its predicate accepts. */
 function awaitedPanel(): number | undefined {
-  return [1, 3].find((id) => awaited().done(live(id)));
+  return [1, 3].find((id) => awaited().done(id));
 }
 
 /** How long the tool held for input after the settle. */
 function heldMs(): number {
-  return holdActiveScreenMock.mock.calls[0]![2] as number;
+  return holdLivePanelMock.mock.calls[0]![2] as number;
 }
 
 beforeEach(() => {
   answers.length = 0;
   fetchMock.mockClear();
   globalThis.fetch = fetchMock as unknown as typeof fetch;
-  refreshActiveScreenMock.mockReset().mockResolvedValue(live(1));
-  activeScreenOrMainMock.mockReset().mockReturnValue(1);
-  // Answers with the first state the predicate accepts, like a hand-over that landed.
-  awaitActiveScreenMock
+  resolveLivePanelMock.mockReset().mockResolvedValue(live(1));
+  // Answers with the first panel the predicate accepts, like a hand-over that landed.
+  awaitLivePanelMock
     .mockReset()
     .mockImplementation(
-      async (_udid: string, done: (s: ActiveScreenState) => boolean) =>
-        [live(1), live(3)].find(done) ?? live(1)
+      async (_udid: string, done: (screen: number) => boolean) =>
+        [live(1), live(3)].find((p) => done(p.screen)) ?? live(1)
     );
   // A hold during which the panel stayed put answers what it was given.
-  holdActiveScreenMock
+  holdLivePanelMock
     .mockReset()
-    .mockImplementation(async (_udid: string, initial: ActiveScreenState | null) => initial);
+    .mockImplementation(async (_udid: string, initial: LivePanel | null) => initial);
 });
 
 afterEach(() => {
@@ -151,7 +154,7 @@ describe("fold tool — input", () => {
 });
 
 describe("fold tool — execute", () => {
-  it("reads both ends fresh, posts the hinge, waits for the implied panel and holds for input", async () => {
+  it("resolves both ends now, posts the hinge, waits for the implied panel and holds for input", async () => {
     answerDisplay(0);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
     const result = await foldTool.execute!(
@@ -159,8 +162,8 @@ describe("fold tool — execute", () => {
       { udid: DUO, posture: "open" }
     );
 
-    // The live panel is read, never taken from the memo.
-    expect(refreshActiveScreenMock).toHaveBeenCalledWith(DUO);
+    // The live panel is resolved for this fold.
+    expect(resolveLivePanelMock).toHaveBeenCalledWith(DUO);
     // The server's start (closed) is on the panel the device renders to, so it is kept.
     expect(hingeBody()).toEqual({ posture: "open" });
     // Open implies the inner panel; the wait is for that panel, with the hand-over budget.
@@ -169,7 +172,7 @@ describe("fold tool — execute", () => {
     // The sweep ends at a stop (open), so the shorter input-ready hold precedes
     // the answer, from the state the wait settled on.
     expect(heldMs()).toBe(INPUT_READY_HOLD_MS);
-    expect(holdActiveScreenMock.mock.calls[0]![1]).toEqual(live(3));
+    expect(holdLivePanelMock.mock.calls[0]![1]).toEqual(live(3));
     expect(result).toEqual({
       activeScreen: 3,
       screen: { id: 3, panel: "inner panel", width: 2007, height: 2853 },
@@ -182,7 +185,7 @@ describe("fold tool — execute", () => {
     // A fresh server assumes closed; the device is open. Sweeping 0 -> 180
     // would cross the hand-over and flip the panel twice.
     answerDisplay(null);
-    refreshActiveScreenMock.mockResolvedValue(live(3));
+    resolveLivePanelMock.mockResolvedValue(live(3));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
     const result = await foldTool.execute!(
       { simulatorServer: api() },
@@ -197,7 +200,7 @@ describe("fold tool — execute", () => {
   it("starts the sweep on the device's panel after a fold made outside argent", async () => {
     // argent last opened the device (server at 180); Device Hub closed it since.
     answerDisplay(180);
-    refreshActiveScreenMock.mockResolvedValue(live(1));
+    resolveLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
     const result = await foldTool.execute!(
       { simulatorServer: api() },
@@ -210,7 +213,7 @@ describe("fold tool — execute", () => {
 
   it("keeps the start the caller named", async () => {
     answerDisplay(null);
-    refreshActiveScreenMock.mockResolvedValue(live(3));
+    resolveLivePanelMock.mockResolvedValue(live(3));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
     await foldTool.execute!(
       { simulatorServer: api() },
@@ -237,9 +240,9 @@ describe("fold tool — execute", () => {
     await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, posture: "half-open" });
     expect(heldMs()).toBe(INPUT_READY_HOLD_MID_ANGLE_MS);
 
-    holdActiveScreenMock.mockClear();
+    holdLivePanelMock.mockClear();
     answerDisplay(0);
-    refreshActiveScreenMock.mockResolvedValue(live(1));
+    resolveLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 30 });
     const thirty = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 30 });
     expect(heldMs()).toBe(INPUT_READY_HOLD_MID_ANGLE_MS);
@@ -252,12 +255,12 @@ describe("fold tool — execute", () => {
 
   it("waits for any change, with the shorter budget, at an angle near the hand-over", async () => {
     answerDisplay(0);
-    awaitActiveScreenMock.mockResolvedValue(live(1));
+    awaitLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 80 });
     const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 80 });
     const { done, timeoutMs } = awaited();
-    expect(done(live(1))).toBe(false);
-    expect(done(live(3))).toBe(true);
+    expect(done(1)).toBe(false);
+    expect(done(3)).toBe(true);
     expect(timeoutMs).toBe(SETTLE_TIMEOUT_MS);
     // Staying put is an answer there, not a failure.
     expect(result.activeScreen).toBe(1);
@@ -270,24 +273,24 @@ describe("fold tool — execute", () => {
     // change, sees none, and answers the panel the device kept — no failure,
     // no warning, since nothing was predicted.
     answerDisplay(75);
-    refreshActiveScreenMock.mockResolvedValue(live(1));
-    awaitActiveScreenMock.mockResolvedValue(live(1));
+    resolveLivePanelMock.mockResolvedValue(live(1));
+    awaitLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 90 });
     const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 90 });
     expect(hingeBody()).toEqual({ angle: 90 });
     const { done, timeoutMs } = awaited();
-    expect(done(live(1))).toBe(false);
-    expect(done(live(3))).toBe(true);
+    expect(done(1)).toBe(false);
+    expect(done(3)).toBe(true);
     expect(timeoutMs).toBe(SETTLE_TIMEOUT_MS);
     expect(result.activeScreen).toBe(1);
     expect(result).not.toHaveProperty("posture");
     expect(result.warning).toBeUndefined();
 
     // The same the other way: 120° -> 75° from the inner panel stays inner.
-    awaitActiveScreenMock.mockClear();
+    awaitLivePanelMock.mockClear();
     answerDisplay(120);
-    refreshActiveScreenMock.mockResolvedValue(live(3));
-    awaitActiveScreenMock.mockResolvedValue(live(3));
+    resolveLivePanelMock.mockResolvedValue(live(3));
+    awaitLivePanelMock.mockResolvedValue(live(3));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 75 });
     const back = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 75 });
     expect(awaited().timeoutMs).toBe(SETTLE_TIMEOUT_MS);
@@ -297,13 +300,13 @@ describe("fold tool — execute", () => {
 
   it("predicts the panel from a caller-named start at a stop, and not from one between", async () => {
     answerDisplay(null);
-    refreshActiveScreenMock.mockResolvedValue(live(1));
+    resolveLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
     await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 120, from: 0 });
     expect(awaitedPanel()).toBe(3);
     expect(awaited().timeoutMs).toBe(HAND_OVER_TIMEOUT_MS);
 
-    awaitActiveScreenMock.mockClear();
+    awaitLivePanelMock.mockClear();
     answerDisplay(null);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
     await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 120, from: 100 });
@@ -312,7 +315,7 @@ describe("fold tool — execute", () => {
 
   it("warns, rather than fails, when the device kept a panel other than the one the sweep implied", async () => {
     answerDisplay(0);
-    awaitActiveScreenMock.mockResolvedValue(live(1));
+    awaitLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
     const result = await foldTool.execute!(
       { simulatorServer: api() },
@@ -324,20 +327,19 @@ describe("fold tool — execute", () => {
     expect(result.warning).toContain("switching to screen 3 (inner panel, 2007x2853)");
     expect(result.warning).toContain("fold to closed or open first");
     // The guest still moved its hinge, so it still gets the hold.
-    expect(holdActiveScreenMock).toHaveBeenCalledTimes(1);
+    expect(holdLivePanelMock).toHaveBeenCalledTimes(1);
   });
 
   it("answers the panel the hold ended on, not the one the wait first saw", async () => {
-    // From closed to 78°: CoreDevice reports the inner panel for about a
-    // second, then the cover again. The wait latches the first change; the
-    // hold, still watching, ends on the cover — and that is what is answered
-    // and what the memo holds.
+    // From closed to 78°: the device shows the inner panel for about a
+    // second, then the cover again. The wait takes the first change; the
+    // hold, still watching, ends on the cover — and that is what is answered.
     answerDisplay(0);
-    awaitActiveScreenMock.mockResolvedValue(live(3));
-    holdActiveScreenMock.mockResolvedValue(live(1));
+    awaitLivePanelMock.mockResolvedValue(live(3));
+    holdLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 78 });
     const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 78 });
-    expect(holdActiveScreenMock.mock.calls[0]![1]).toEqual(live(3));
+    expect(holdLivePanelMock.mock.calls[0]![1]).toEqual(live(3));
     expect(result.activeScreen).toBe(1);
     expect(result.warning).toBeUndefined();
   });
@@ -370,9 +372,9 @@ describe("fold tool — execute", () => {
       });
       return true;
     });
-    // Nothing to read or settle against on a device with one panel.
-    expect(refreshActiveScreenMock).not.toHaveBeenCalled();
-    expect(awaitActiveScreenMock).not.toHaveBeenCalled();
+    // Nothing to resolve or settle against on a device with one panel.
+    expect(resolveLivePanelMock).not.toHaveBeenCalled();
+    expect(awaitLivePanelMock).not.toHaveBeenCalled();
     expect(flat.display).toBeUndefined();
   });
 
@@ -405,15 +407,13 @@ describe("fold tool — execute", () => {
     expect((caught as Error).message).toContain("no hinge endpoint");
   });
 
-  it("warns, and keeps the panel the tools target, when CoreDevice never answers", async () => {
-    // Every read fails, before and after the sweep; the memo still holds the
-    // inner panel from an earlier read, and that is what every touch and
-    // screenshot targets — so that is what the fold reports too.
+  it("warns, and names the main screen, when nothing resolves the panel", async () => {
+    // Neither source answers, before or after the sweep: the commands fall
+    // back to the main screen, and the fold says so and why.
     answerDisplay(180);
-    refreshActiveScreenMock.mockResolvedValue(null);
-    awaitActiveScreenMock.mockResolvedValue(null);
-    holdActiveScreenMock.mockResolvedValue(null);
-    activeScreenOrMainMock.mockReturnValue(3);
+    resolveLivePanelMock.mockResolvedValue(UNKNOWN);
+    awaitLivePanelMock.mockResolvedValue(null);
+    holdLivePanelMock.mockResolvedValue(null);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
     const result = await foldTool.execute!(
       { simulatorServer: api() },
@@ -421,11 +421,12 @@ describe("fold tool — execute", () => {
     );
     // With no live panel there is nothing to start the sweep from but the server's angle.
     expect(hingeBody()).toEqual({ posture: "closed" });
-    expect(result.activeScreen).toBe(3);
-    expect(result.screen).toEqual({ id: 3, panel: "inner panel", width: 2007, height: 2853 });
+    expect(result.activeScreen).toBe(1);
+    expect(result.screen).toEqual({ id: 1, panel: "cover panel", width: 1398, height: 2034 });
     expect(result.posture).toBe("closed");
-    expect(result.warning).toContain("did not report which panel");
-    expect(result.warning).toContain("commands target screen 3 (inner panel, 2007x2853)");
+    expect(result.warning).toContain("could not be resolved (the accessibility service failed");
+    expect(result.warning).toContain("commands target screen 1 (cover panel, 1398x2034)");
+    expect(result.warning).toContain("Take a screenshot to see the screen.");
   });
 
   it("gives a server that answered the hinge its panels and the angle it now holds", async () => {

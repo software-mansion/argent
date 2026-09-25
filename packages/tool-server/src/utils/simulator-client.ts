@@ -15,13 +15,7 @@ import {
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
-import {
-  activeScreenForCommand,
-  activeScreenOrMain,
-  refreshActiveScreenUnlessFailing,
-  screenLabel,
-  type FoldablePanel,
-} from "./foldable";
+import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel } from "./foldable";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -250,16 +244,19 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
 export async function sendCommand(
   api: SimulatorServerApi,
   cmd: Record<string, unknown>
-): Promise<void> {
+): Promise<SendCommandOutcome> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
   // MoQ carries no screen: a remote simulator is driven on its main screen.
-  if (api.transport) return sendViaTransport(api.transport, cmd, cmdName);
+  if (api.transport) {
+    await sendViaTransport(api.transport, cmd, cmdName);
+    return {};
+  }
   const conn = getOrCreateConnection(api);
-  const targeted = await withActiveScreen(api, cmd);
+  const { cmd: targeted, warning } = await withActiveScreen(api, cmd);
   const id = String(++cmdId);
   const payload = JSON.stringify({ id, ...targeted });
 
-  return new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     let done = false;
     const settle = (err?: FailureError) => {
       if (done) return;
@@ -313,6 +310,16 @@ export async function sendCommand(
     if (conn.ws.readyState === WebSocket.OPEN) write();
     else conn.ws.once("open", write);
   });
+  return warning !== undefined ? { warning } : {};
+}
+
+/**
+ * What `sendCommand` reports back besides delivery: on a foldable, a warning
+ * when the panel the command should name could not be resolved and it went
+ * to the main screen. Empty for every other device and command.
+ */
+export interface SendCommandOutcome {
+  warning?: string;
 }
 
 /**
@@ -325,16 +332,15 @@ const gestureScreens = new WeakMap<SimulatorServerApi, number>();
  * The screen a touch or wheel is for, on a foldable. The simulator-server
  * captures every panel and follows none: a command that names no screen goes
  * to screen 1, the cover panel, which is black once the device is open. So on
- * a foldable every touch and wheel names the panel the guest renders to, read
- * from the active-screen memo (`utils/foldable.ts`) — or, while that memo is
- * empty, from CoreDevice itself.
+ * a foldable every touch and wheel names the panel the guest renders to,
+ * resolved at that moment (`utils/foldable.ts`): the ax-service's answer,
+ * else CoreDevice's, else the main screen with a warning the tool carries.
  *
- * A gesture completes on the panel it started on: the memo can be refreshed
- * under a gesture (a recording polls it, the preview re-asks it), and a fold
- * made outside argent in the middle of a swipe would otherwise send the
- * swipe's tail to the other panel, leaving a finger down on the first and
- * the next tap on the second consumed by its lift. So the screen a `Down`
- * resolved is kept for every `Move` and the `Up` of that touch sequence.
+ * A gesture completes on the panel it started on: a fold made outside argent
+ * in the middle of a swipe would otherwise send the swipe's tail to the other
+ * panel, leaving a finger down on the first and the next tap on the second
+ * consumed by its lift. So the screen a `Down` resolved is kept for every
+ * `Move` and the `Up` of that touch sequence, and only the `Down` resolves.
  *
  * `api.display` is set only when the device profile is foldable AND the server
  * reported its panels, so the payload of every other device is byte-identical
@@ -343,16 +349,31 @@ const gestureScreens = new WeakMap<SimulatorServerApi, number>();
 async function withActiveScreen(
   api: SimulatorServerApi,
   cmd: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-  if (!api.display?.foldable || cmd.screen !== undefined) return cmd;
-  if (cmd.cmd !== "touch" && cmd.cmd !== "wheel") return cmd;
+): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
+  if (!api.display?.foldable || cmd.screen !== undefined) return { cmd };
+  if (cmd.cmd !== "touch" && cmd.cmd !== "wheel") return { cmd };
   const udid = api.deviceId ?? "";
-  if (cmd.cmd === "wheel") return { ...cmd, screen: await activeScreenForCommand(udid) };
-  const latched = cmd.type === "Down" ? undefined : gestureScreens.get(api);
-  const screen = latched ?? (await activeScreenForCommand(udid));
-  if (cmd.type === "Up") gestureScreens.delete(api);
-  else gestureScreens.set(api, screen);
-  return { ...cmd, screen };
+  const latched = cmd.cmd === "touch" && cmd.type !== "Down" ? gestureScreens.get(api) : undefined;
+  let screen = latched;
+  let warning: string | undefined;
+  if (screen === undefined) {
+    const panel = await resolveLivePanel(udid);
+    screen = panel.screen;
+    if (panel.source === "unknown") {
+      warning = unresolvedPanelNote(
+        udid,
+        panel.reason,
+        `this ${cmd.cmd === "wheel" ? "wheel" : "touch"} went to`,
+        api.display.panels
+      );
+      process.stderr.write(`[sim ${udid.slice(0, 8)}] ${warning}\n`);
+    }
+  }
+  if (cmd.cmd === "touch") {
+    if (cmd.type === "Up") gestureScreens.delete(api);
+    else gestureScreens.set(api, screen);
+  }
+  return { cmd: { ...cmd, screen }, ...(warning !== undefined ? { warning } : {}) };
 }
 
 /**
@@ -418,9 +439,10 @@ export interface HingeRequest {
 /**
  * Move the hinge of a foldable (`POST /api/hinge`). Resolves with the display
  * state once the sweep has been sent; the guest hands over to the other panel
- * some time after that, which the caller waits out with the active-screen
- * memo. Rejects with the server's own reason on a device that is not foldable,
- * and names the missing route on a build that predates the hinge.
+ * some time after that, which the caller waits out by resolving the live
+ * panel until it changes. Rejects with the server's own reason on a device
+ * that is not foldable, and names the missing route on a build that predates
+ * the hinge.
  */
 export async function postHinge(
   api: SimulatorServerApi,
@@ -491,29 +513,34 @@ export async function postHinge(
 }
 
 /**
- * Re-read which panel a foldable renders to, for a capture that follows no
- * `describe` (the `screenshot` tool, a live `screenshot-diff` input, a
- * recording start): the memo those paths would otherwise read may date from
- * before a fold made outside argent. Resolves with the note the capture should
- * carry — which panel it is — and undefined for any device that is not
- * foldable, so their results are unchanged. A CoreDevice that is not answering
- * is not waited for: the capture is of the memo's panel, and the note says so.
+ * The panel a capture of a foldable is of, resolved now, and the note the
+ * result carries about it — which panel it is, or why it is the main screen.
+ * Undefined for any device that is not foldable, so their results are
+ * unchanged. The caller hands `screen` to {@link httpScreenshot}, so the
+ * capture asks nothing again.
  */
-export async function refreshActiveScreenForCapture(
+export async function resolveCapturePanel(
   api: SimulatorServerApi
-): Promise<string | undefined> {
+): Promise<{ screen: number; note: string } | undefined> {
   if (!api.display?.foldable || !api.deviceId) return undefined;
-  const state = await refreshActiveScreenUnlessFailing(api.deviceId);
-  if (!state) {
-    return (
-      "The panel this foldable simulator renders to could not be read (CoreDevice is not " +
-      `answering), so this capture is ${screenLabel(activeScreenOrMain(api.deviceId), api.display.panels)}.`
-    );
+  const panel = await resolveLivePanel(api.deviceId);
+  if (panel.source === "unknown") {
+    return {
+      screen: panel.screen,
+      note: unresolvedPanelNote(
+        api.deviceId,
+        panel.reason,
+        "this capture is of",
+        api.display.panels
+      ),
+    };
   }
-  return (
-    `This foldable simulator renders to ${screenLabel(state.activeScreen, state.panels)}, which ` +
-    "this capture shows; describe frames and touch coordinates are in the same space."
-  );
+  return {
+    screen: panel.screen,
+    note:
+      `This foldable simulator renders to ${screenLabel(panel.screen, api.display.panels)}, which ` +
+      "this capture shows; describe frames and touch coordinates are in the same space.",
+  };
 }
 
 /**
@@ -712,10 +739,9 @@ export async function httpScreenshot(
   signal?: AbortSignal,
   scale?: number,
   /**
-   * The panel to capture on a foldable. Defaults to the active-screen memo;
-   * a caller that captures without a preceding `describe` refreshes that memo
-   * first (see `utils/foldable.ts`). Never sent for a device that is not
-   * foldable, so its request body is unchanged.
+   * The panel to capture on a foldable, from {@link resolveCapturePanel};
+   * resolved here when the caller did not. Never sent for a device that is
+   * not foldable, so its request body is unchanged.
    */
   screen?: number
 ): Promise<{ url: string; path: string }> {
@@ -731,7 +757,8 @@ export async function httpScreenshot(
   if (rotation) body.rotation = rotation;
   if (resolvedScale !== 1.0) body.scale = resolvedScale;
   const resolvedScreen =
-    screen ?? (api.display?.foldable ? activeScreenOrMain(api.deviceId ?? "") : undefined);
+    screen ??
+    (api.display?.foldable ? (await resolveLivePanel(api.deviceId ?? "")).screen : undefined);
   if (resolvedScreen !== undefined) body.screen = resolvedScreen;
 
   const deadline = Date.now() + FIRST_FRAME_WAIT_MS;

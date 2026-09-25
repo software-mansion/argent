@@ -15,20 +15,20 @@ import {
   type SimulatorDisplayState,
 } from "../../utils/simulator-client";
 import {
-  activeScreenOrMain,
-  awaitActiveScreen,
+  awaitLivePanel,
   HAND_OVER_TIMEOUT_MS,
-  holdActiveScreen,
+  holdLivePanel,
   INPUT_READY_HOLD_MID_ANGLE_MS,
   INPUT_READY_HOLD_MS,
   MAIN_SCREEN_ID,
   panelForHingeAngle,
   panelName,
-  refreshActiveScreenUnlessFailing,
+  resolveLivePanel,
   screenLabel,
   SETTLE_TIMEOUT_MS,
-  type ActiveScreenState,
+  unresolvedPanelNote,
   type FoldablePanel,
+  type LivePanel,
 } from "../../utils/foldable";
 
 const POSTURES = ["closed", "half-open", "open"] as const;
@@ -90,8 +90,9 @@ interface Result {
   /** The angle the hinge was swept to. */
   hingeAngle: number;
   /**
-   * Set when the active panel could not be confirmed after the sweep, or when
-   * the device kept rendering to a panel other than the one the sweep implied.
+   * Set when the panel the device renders to could not be resolved after the
+   * sweep, or when the device kept rendering to a panel other than the one
+   * the sweep implied.
    */
   warning?: string;
 }
@@ -168,11 +169,12 @@ function atStop(angle: number): boolean {
  */
 function sweepStartFor(
   serverAngle: number | null,
-  live: ActiveScreenState
+  liveScreen: number,
+  panels: readonly FoldablePanel[]
 ): HingeRequest["from"] | undefined {
   const start = serverAngle ?? POSTURE_ANGLE.closed;
-  if (panelForHingeAngle(start, live.panels) === live.activeScreen) return undefined;
-  return live.activeScreen === MAIN_SCREEN_ID ? "closed" : "open";
+  if (panelForHingeAngle(start, panels) === liveScreen) return undefined;
+  return liveScreen === MAIN_SCREEN_ID ? "closed" : "open";
 }
 
 /**
@@ -210,9 +212,9 @@ export const foldTool: ToolDefinition<Params, Result> = {
   },
   description: `Move the hinge of a foldable iOS simulator (the iPhone Duo) to a \`posture\` (closed, half-open, open) or an \`angle\` (0-180°), folding or unfolding it, then wait until the device has settled on the panel it renders to and takes input again, so the next tap lands (about 0.5 s after the sweep for closed and open, about 1.5 s for any other angle, half-open included).
 Use when an app has to be seen or driven in another posture: on the cover panel (closed), on the inner panel (open), or half-open. \`list-devices\` marks the foldable simulators with \`foldable: true\`; \`rotate\` turns a device without folding it.
-Closed, the device renders to the cover panel (screen 1, 1398x2034 px on the Duo); half-open and open, to the inner panel (screen 3, 2007x2853 px). The other panel is black. Argent names the live panel on every screenshot, describe, touch and stream, so the tools follow the fold — but their coordinate space changes with it: re-run \`describe\` (or read the element tree appended to this result) before tapping, and expect \`screenshot\` to change size. Unfolded, the UI runs landscape on the inner panel's portrait-native framebuffer; frames and touch coordinates stay in that native space, like landscape on any iPhone.
+Closed, the device renders to the cover panel (screen 1, 1398x2034 px on the Duo); half-open and open, to the inner panel (screen 3, 2007x2853 px). The other panel is black. Argent resolves the live panel for every screenshot, describe, touch and stream at the moment it runs, so the tools follow the fold, whoever moved the hinge — but their coordinate space changes with it: re-run \`describe\` (or read the element tree appended to this result) before tapping, and expect \`screenshot\` to change size. Unfolded, the UI runs landscape on the inner panel's portrait-native framebuffer; frames and touch coordinates stay in that native space, like landscape on any iPhone.
 The device switches panels on a sweep from closed or open past its own threshold (about 75-90°); a sweep between two angles short of those stops leaves it on the panel it had. The result reports the panel the device renders to either way, with a \`warning\` when that is not the panel the sweep implied — fold to closed or open first to switch panels.
-The sweep starts on the panel the device renders to, read fresh, so a fold made outside argent (Device Hub) needs no \`from\`; pass \`from\` only to name the exact angle the hinge was left at. A fold during a gesture is not supported: the gesture completes on the screen it started on.
+The sweep starts on the panel the device renders to, resolved at that moment, so a fold made outside argent (Device Hub) needs no \`from\`; pass \`from\` only to name the exact angle the hinge was left at. A fold during a gesture is not supported: the gesture completes on the screen it started on.
 Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }; posture is set only when the hinge sits at a preset (0°, 120°, 180°). Fails on a device that is not foldable (the server's own message), on a remote simulator, and on a simulator-server build that predates foldables.`,
   searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
   zodSchema,
@@ -227,21 +229,20 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAng
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(HINGE_REQUEST_TIMEOUT_MS)])
       : AbortSignal.timeout(HINGE_REQUEST_TIMEOUT_MS);
 
-    // Both ends of the sweep are read fresh. The server's state says where it
+    // Both ends of the sweep are read now. The server's state says where it
     // will start (the angle it last set; null when it never did or when
-    // another client moved the hinge since), and CoreDevice says which panel
-    // the device renders to now — the memo may date from before a fold made
-    // outside argent. A CoreDevice that is not answering is not waited for
-    // here (the waits below keep asking, within their budgets): `before` is
-    // then null, and the sweep starts where the server has the hinge. A server
+    // another client moved the hinge since), and the live panel says which
+    // panel the device renders to, whoever moved the hinge last. A server
     // without the display route answers null and is left to reject the hinge
-    // itself.
+    // itself; a device whose panel nothing can name starts the sweep where
+    // the server has the hinge.
     const known = (await fetchDisplayState(api, signal)) ?? api.display;
-    const before = known?.foldable ? await refreshActiveScreenUnlessFailing(udid) : null;
+    const before = known?.foldable ? await resolveLivePanel(udid) : null;
+    const beforeScreen = before && before.source !== "unknown" ? before.screen : undefined;
 
     const request = hingeRequest(params);
-    if (request.from === undefined && known && before) {
-      const start = sweepStartFor(known.hingeAngle, before);
+    if (request.from === undefined && known && beforeScreen !== undefined) {
+      const start = sweepStartFor(known.hingeAngle, beforeScreen, known.panels);
       if (start !== undefined) request.from = start;
     }
     let display: SimulatorDisplayState;
@@ -258,52 +259,56 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAng
     const angle = targetAngle(params);
     const hingeAngle = display.hingeAngle ?? angle;
     const posture = params.posture ?? presetAtAngle(hingeAngle);
-    const panels = display.panels.length > 0 ? display.panels : (before?.panels ?? []);
+    const panels = display.panels.length > 0 ? display.panels : (known?.panels ?? []);
 
-    // The guest hands over to the other panel 0.5-1.5 s after the sweep, longer
+    // The guest hands over to the other panel 1.5-2 s after the sweep, longer
     // when busy; the server does not wait for it, so the client does, by
-    // re-reading CoreDevice. Which panel to wait for is only predicted for a
-    // sweep from a stop (closed or open): one that starts mid-way may leave
-    // the panel where it was, and there — as at an angle near the hand-over —
-    // any change from where the device was is the answer, and so is none.
+    // resolving the live panel until it changes. Which panel to wait for is
+    // only predicted for a sweep from a stop (closed or open): one that
+    // starts mid-way may leave the panel where it was, and there — as at an
+    // angle near the hand-over — any change from where the device was is the
+    // answer, and so is none.
     const startAngle = sweepStartAngle(request.from, known?.hingeAngle ?? null);
     const expected = atStop(startAngle) ? panelForHingeAngle(angle, panels) : undefined;
-    let settled =
+    let settled: LivePanel | null =
       expected !== undefined
-        ? await awaitActiveScreen(udid, (s) => s.activeScreen === expected, {
+        ? await awaitLivePanel(udid, (screen) => screen === expected, {
             timeoutMs: HAND_OVER_TIMEOUT_MS,
             signal: ctx?.signal,
           })
-        : await awaitActiveScreen(
+        : await awaitLivePanel(
             udid,
-            (s) => before !== null && s.activeScreen !== before.activeScreen,
+            (screen) => beforeScreen !== undefined && screen !== beforeScreen,
             { timeoutMs: SETTLE_TIMEOUT_MS, signal: ctx?.signal }
           );
 
     // The guest takes no input for a while after the hinge moves, hand-over or
     // not, and for longer when the hinge stops anywhere but closed or open
-    // (see the constants). CoreDevice does not report that, so the tool holds
-    // the measured time before it answers — still watching the panel, since a
+    // (see the constants). No source reports that, so the tool holds the
+    // measured time before it answers — still watching the panel, since a
     // hand-over near the threshold can be transient and would otherwise be
-    // latched by the wait above.
-    settled = await holdActiveScreen(
+    // taken by the wait above.
+    settled = await holdLivePanel(
       udid,
       settled,
       atStop(angle) ? INPUT_READY_HOLD_MS : INPUT_READY_HOLD_MID_ANGLE_MS,
       { signal: ctx?.signal }
     );
 
-    // What the tools target: the last read, or the memo a failed read left in
-    // place — never the main screen while the memo says otherwise.
-    const activeScreen = settled?.activeScreen ?? activeScreenOrMain(udid);
+    // What the tools target: the last panel resolved, else the main screen,
+    // which is what every command falls back to while nothing answers.
+    const activeScreen = settled?.screen ?? MAIN_SCREEN_ID;
 
     let warning: string | undefined;
     if (!settled) {
+      const reason =
+        before?.source === "unknown"
+          ? before.reason
+          : "neither the accessibility service nor CoreDevice answered after the sweep";
       warning =
-        "CoreDevice did not report which panel the device renders to after the fold; " +
-        `commands target ${screenLabel(activeScreen, panels)} until a later read succeeds. ` +
+        `${unresolvedPanelNote(udid, reason, "commands target", panels)} ` +
         "Take a screenshot to see the screen.";
-    } else if (expected !== undefined && settled.activeScreen !== expected) {
+    } else if (expected !== undefined && settled.screen !== expected) {
       warning =
         `The hinge was swept to ${targetLabel(params)}, but the device kept rendering to ` +
         `${screenLabel(activeScreen, panels)} rather than switching to ${screenLabel(expected, panels)}. ` +

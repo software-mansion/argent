@@ -98,6 +98,23 @@ describe("flow-orientation geometry", () => {
     expect(nativeFrameToUi(frame, undefined)).toBe(frame);
   });
 
+  it("turns two frames that share an edge onto the same edge, free of float noise", () => {
+    // 1 - 0.1 - 0.3 and 1 - 0.3 - 0.1 differ in the last place in floating
+    // point; reading order compares exactly, so a tie between a container and
+    // its flush label must stay a tie for the area rule to decide.
+    // The label sits flush in the container's bottom-right corner.
+    const container = { x: 0.2, y: 0.1, width: 0.5, height: 0.3 };
+    const label = { x: 0.6, y: 0.3, width: 0.1, height: 0.1 };
+    expect(1 - container.y - container.height).not.toBe(1 - label.y - label.height);
+    for (const orientation of ["landscapeLeft", "landscapeRight", "portraitUpsideDown"] as const) {
+      const a = nativeFrameToUi(container, orientation);
+      const b = nativeFrameToUi(label, orientation);
+      const edge = orientation === "landscapeLeft" ? "x" : "y";
+      expect(a[edge]).toBe(b[edge]);
+      if (orientation === "portraitUpsideDown") expect(a.x).toBe(b.x);
+    }
+  });
+
   it("names the native direction a UI direction becomes", () => {
     expect(nativeDirection("down", undefined)).toBe("down");
     expect(nativeDirection("down", "landscapeLeft")).toBe("right");

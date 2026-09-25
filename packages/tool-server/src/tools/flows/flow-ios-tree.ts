@@ -10,7 +10,6 @@ import {
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
 import { stripRemotePrefix } from "../../utils/device-info";
 import { simctlTargetForUdid } from "../../utils/ios-device-sets";
-import { crossCheckTreeScreen } from "../../utils/foldable";
 import { nodeText } from "../../utils/ui-tree-match";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import type { FlowTreeTarget } from "./flow-actions";
@@ -611,9 +610,6 @@ export async function queryFullHierarchyTree(
   }
 
   const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
-  // A foldable folded behind argent's back: the app's screen has the other
-  // panel's shape, and every touch this flow sends would go to the dark one.
-  if (screen) await crossCheckTreeScreen(device.id, screen);
   return {
     tree,
     source: "native-devtools",

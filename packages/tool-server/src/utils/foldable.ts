@@ -13,34 +13,30 @@ const execFileAsync = promisify(execFile);
  * The simulator-server captures every panel and follows none: each screenshot,
  * stream, touch and wheel names the CoreSimulator screen it is for (1 is the
  * cover panel, 3 the inner one on the iPhone Duo) and gets screen 1 when it
- * names none. Which panel the guest renders to is argent's to find out, and
- * CoreDevice knows: `devicectl device info displays` reports `active` per
- * display, with the same ids, in one ~100-200 ms query.
+ * names none. Which panel the guest renders to is argent's to find out, and it
+ * finds out at the moment of each action: nothing here remembers an answer, so
+ * nothing can be stale, whoever moved the hinge.
  *
- * This module is that query plus a per-device memo of its last answer. The memo
- * is refreshed at the points where the answer can have changed — when a
- * simulator-server is spawned for the device, before and after argent's own
- * `fold`, and when a `describe` or a flow's tree read reports a panel the memo
- * disagrees with — and read by every touch and wheel in between. Callers that
- * capture without a preceding describe (`screenshot`, a live
- * `screenshot-diff`, a recording start) refresh it themselves. Nothing here
- * looks at pixels, and nothing subscribes: argent is the controller, so the
- * only unknown after a fold is which panel ended up live, and one read
- * answers that.
+ * {@link resolveLivePanel} asks two sources in turn:
  *
- * A read can fail (CoreDevice wedged, the query timing out at
- * {@link DEVICECTL_TIMEOUT_MS}). The memo then keeps its last answer, and the
- * failure is remembered: until a read succeeds again, no caller that can live
- * on the memo waits for CoreDevice. It takes the memo — or the main screen,
- * while there is none — and the next read runs in the background, at most
- * once per {@link READ_RETRY_AFTER_MS}, so a wedged CoreDevice costs one
- * query's timeout and not one per screenshot. Reads are shared while in
- * flight, so nothing piles queries onto a CoreDevice that is not answering,
- * and an older read cannot land over a newer one. A `describe`, or a flow's
- * tree read, seeds an empty memo from the panel the tree was read on, since
- * that is the panel the device renders to. The fold tool's waits keep reading
- * — they exist to see the panel change — but are bounded by their budgets as
- * wall clock; a read that outlasts them lands in the memo when it comes.
+ * 1. The ax-service, the daemon the `describe` tool reads the accessibility
+ *    tree through. Its `live_panel` command names the display the front app's
+ *    window is on — the same panel it reads a tree on — in a few milliseconds,
+ *    without walking the tree. A device whose daemon is not running yet gets
+ *    it started, as a describe would.
+ * 2. One CoreDevice query, `devicectl device info displays`, which reports
+ *    the panel that is lit, in about 100 ms.
+ *
+ * Both agree in every posture and foreground state measured on the Duo (an
+ * app in front, the home screen, a system app); the ax-service sees a
+ * hand-over about 180 ms earlier. When neither answers, the answer is the
+ * main screen with the reason, and the caller says so.
+ *
+ * Each source has a hard timeout, and a read in flight is shared by everyone
+ * who asks for the same device meanwhile, so a gesture and the capture right
+ * after it, or a recording's poll and a touch, cost one read. There is no
+ * memo, no record of which source failed, no back-off and no retry in the
+ * background: every action walks the chain from the start.
  */
 
 /** The screen every simulator has and every command defaults to. */
@@ -53,28 +49,43 @@ export interface FoldablePanel {
   height: number;
 }
 
-export interface ActiveScreenState {
-  /** CoreSimulator screen id of the panel the guest renders to. */
-  activeScreen: number;
-  /** The integrated panels CoreDevice reports, in native pixels. */
-  panels: FoldablePanel[];
-  /** Device orientation as CoreDevice names it (`portrait`, `landscapeRight`, ...). */
-  orientation?: string;
-  readAt: number;
+/**
+ * The panel the device renders to, and which source said so. `unknown` is the
+ * fall-back to the main screen when neither source answered; `reason` says why,
+ * for the warning the caller carries.
+ */
+export type LivePanel =
+  | { screen: number; source: "ax-service" | "coredevice" }
+  | { screen: typeof MAIN_SCREEN_ID; source: "unknown"; reason: string };
+
+/**
+ * What the ax-service offers this module: its `live_panel` command, answering
+ * the display id of the live panel, or null when the daemon cannot name one.
+ */
+interface LivePanelSource {
+  livePanel(): Promise<number | null>;
 }
 
 /**
- * How long one CoreDevice query may take. Measured at ~170 ms on the Duo; the
- * budget is for a wedged CoreDevice, not for normal latency.
+ * How long the ax-service gets to answer `live_panel`. A healthy daemon
+ * answers in a few milliseconds; the budget also covers starting a daemon
+ * that is not running yet. A daemon that hangs costs every touch this much
+ * before CoreDevice is asked instead — accepted, and said in the reason.
  */
-const DEVICECTL_TIMEOUT_MS = 5_000;
+export const AX_LIVE_PANEL_TIMEOUT_MS = 2_000;
 
 /**
- * The hand-over lands 0.5-1.5 s after a hinge sweep, longer when the guest is
- * busy. After a fold the one-shot is polled until it reports the panel the
- * sweep implies: `HAND_OVER_TIMEOUT_MS` bounds that wait, and
- * `SETTLE_TIMEOUT_MS` the wait for a sweep whose outcome is not predicted,
- * where the panel may legitimately stay.
+ * How long one CoreDevice query may take. Measured at ~100 ms on the Duo; the
+ * budget is for a CoreDevice that is not answering, not for normal latency.
+ */
+export const DEVICECTL_TIMEOUT_MS = 5_000;
+
+/**
+ * The hand-over lands 1.5-2 s after a hinge sweep, longer when the guest is
+ * busy. After a fold the live panel is polled until it is the panel the sweep
+ * implies: `HAND_OVER_TIMEOUT_MS` bounds that wait, and `SETTLE_TIMEOUT_MS`
+ * the wait for a sweep whose outcome is not predicted, where the panel may
+ * legitimately stay.
  */
 export const HAND_OVER_TIMEOUT_MS = 6_000;
 export const SETTLE_TIMEOUT_MS = 3_000;
@@ -82,38 +93,31 @@ const SETTLE_POLL_MS = 200;
 
 /**
  * How long the guest takes to accept input again after a hinge sweep, counted
- * from the CoreDevice read that follows it (itself ~170 ms after the sweep).
- * Measured on the iPhone Duo (iOS 27.1) with taps fired every ~150 ms: a sweep
- * that ends at a stop — closed (0°) or open (180°) — takes input within
- * ~250 ms of the read, with or without a hand-over, while one that ends at any
- * other angle (half-open included, and 30° on the cover panel) drops every tap
- * for 0.4-0.8 s more, up to ~1.2 s after the sweep, again whether or not the
- * panel changed. The fold tool holds the matching time before it answers, so
- * the next command lands; the values carry margin over what was measured.
+ * from the read that first reports the panel it settled on. Measured on the
+ * iPhone Duo (iOS 27.1) with taps fired every ~150 ms, against CoreDevice: a
+ * sweep that ends at a stop — closed (0°) or open (180°) — takes input within
+ * ~250 ms of that read, with or without a hand-over, while one that ends at
+ * any other angle (half-open included, and 30° on the cover panel) drops
+ * every tap for 0.4-0.8 s more, up to ~1.2 s after the sweep, again whether
+ * or not the panel changed. The ax-service, the usual source now, reports a
+ * hand-over about 180 ms before CoreDevice does, so the holds carry that much
+ * more. The fold tool holds the matching time before it answers, so the next
+ * command lands.
  */
-export const INPUT_READY_HOLD_MS = 500;
-export const INPUT_READY_HOLD_MID_ANGLE_MS = 1_500;
+export const INPUT_READY_HOLD_MS = 700;
+export const INPUT_READY_HOLD_MID_ANGLE_MS = 1_700;
 /**
  * The hold restarts when the panel changes under it (see
- * {@link holdActiveScreen}); this bounds the restarts, so a panel that keeps
+ * {@link holdLivePanel}); this bounds the restarts, so a panel that keeps
  * flapping still gets an answer.
  */
 const HOLD_MAX_MS = 5_000;
 
 /**
- * While reads fail, how long the callers that live on the memo go before one
- * of them starts a retry in the background (see
- * {@link refreshActiveScreenUnlessFailing}). Short, so a device left open
- * takes input again soon after CoreDevice recovers; long enough that a wedged
- * CoreDevice is not queried on every touch and screenshot.
- */
-export const READ_RETRY_AFTER_MS = 2_000;
-
-/**
  * The least a bounded read is waited for (see {@link readWithin}): a healthy
- * query answers in about 170 ms, so a wait's last read still gets to answer
- * when the budget has almost run out, and a wedged CoreDevice costs a wait
- * at most this much past its budget.
+ * read answers within a few hundred ms at most, so a wait's last read still
+ * gets to answer when the budget has almost run out, while sources that are
+ * not answering cost a wait at most this much past its budget.
  */
 const READ_GRACE_MS = 500;
 
@@ -128,7 +132,7 @@ const READ_GRACE_MS = 500;
  *
  * A sweep that starts anywhere else follows no such model: measured 75° → 90°,
  * 90° → 75°, 100° → 75° and 120° → 75° all leave the panel where it was. The
- * fold tool predicts nothing for those and reports what CoreDevice says.
+ * fold tool predicts nothing for those and reports what it reads.
  */
 const COVER_MAX_ANGLE = 75;
 const INNER_MIN_ANGLE = 90;
@@ -141,64 +145,27 @@ const INNER_MIN_ANGLE = 90;
 const DEVICECTL_BIN =
   "/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl";
 
-const cache = new Map<string, ActiveScreenState>();
-/** When the last read of a device failed, while the memo holds nothing newer. */
-const failedReadAt = new Map<string, number>();
 /** The read of a device now in flight, shared by every caller until it lands. */
-const inFlight = new Map<string, Promise<ActiveScreenState | null>>();
-/**
- * The panels the device's simulator-server reported as it attached: the panel
- * list when CoreDevice has never answered, for {@link crossCheckTreeScreen}.
- */
-const serverPanels = new Map<string, readonly FoldablePanel[]>();
+const inFlight = new Map<string, Promise<LivePanel>>();
 
-/** Test-only: forget every memoized answer and the resolved developer dir. */
+let axServiceFor: ((udid: string) => Promise<LivePanelSource>) | undefined;
+
+/**
+ * Wire the ax-service in: how to reach the daemon of a device, starting it
+ * when it is not running. Set once when the registry is built, since the
+ * daemon is a registry service and this module is not; a test sets a fake, or
+ * nothing, which leaves CoreDevice as the one source.
+ */
+export function setLivePanelSourceProvider(
+  provider: ((udid: string) => Promise<{ livePanel(): Promise<number | null> }>) | undefined
+): void {
+  axServiceFor = provider;
+}
+
+/** Test-only: drop the reads in flight and the resolved developer dir. */
 export function __resetFoldableStateForTests(): void {
-  cache.clear();
-  failedReadAt.clear();
   inFlight.clear();
-  serverPanels.clear();
   developerDirPromise = null;
-}
-
-/** The last answer read for `udid`, or undefined when it was never read. */
-export function getCachedActiveScreen(udid: string): ActiveScreenState | undefined {
-  return cache.get(udid);
-}
-
-/** Drop the memo, e.g. when the simulator-server that used it is disposed. */
-export function forgetActiveScreen(udid: string): void {
-  cache.delete(udid);
-  failedReadAt.delete(udid);
-  serverPanels.delete(udid);
-}
-
-/** Record the panels a foldable's simulator-server reported as it attached. */
-export function rememberServerPanels(udid: string, panels: readonly FoldablePanel[]): void {
-  serverPanels.set(udid, panels);
-}
-
-/**
- * The screen a command for `udid` should name: the memoized active panel, or
- * the main screen when nothing was ever read (or the last read failed).
- */
-export function activeScreenOrMain(udid: string): number {
-  return cache.get(udid)?.activeScreen ?? MAIN_SCREEN_ID;
-}
-
-/**
- * The screen a touch or wheel names. The memo, when there is one. When there
- * is none — the read a simulator-server makes as it attaches failed, and
- * nothing has read since — the touch asks CoreDevice itself, so a device left
- * open is not driven on its dark cover panel for as long as nothing else
- * happens to read. A CoreDevice that is not answering is not waited for: the
- * touch goes to the main screen at once, and the retry runs in the background
- * (see {@link refreshActiveScreenUnlessFailing}).
- */
-export async function activeScreenForCommand(udid: string): Promise<number> {
-  const cached = cache.get(udid);
-  if (cached) return cached.activeScreen;
-  return (await refreshActiveScreenUnlessFailing(udid))?.activeScreen ?? MAIN_SCREEN_ID;
 }
 
 let developerDirPromise: Promise<string | undefined> | null = null;
@@ -220,6 +187,7 @@ function developerDir(): Promise<string | undefined> {
 
 interface DevicectlDisplay {
   active?: boolean;
+  backlightState?: string;
   displayId?: number;
   nativeSize?: [number, number];
   type?: Record<string, unknown>;
@@ -233,15 +201,44 @@ interface DevicectlDisplaysPayload {
 }
 
 /**
+ * Whether a display is lit, by its `backlightState`: `activeOn`, `inactiveOn`
+ * and `activeDimmed` are lit, `off` is dark, anything else is not known.
+ */
+function backlit(d: DevicectlDisplay): boolean | undefined {
+  switch (d.backlightState) {
+    case "activeOn":
+    case "inactiveOn":
+    case "activeDimmed":
+      return true;
+    case "off":
+      return false;
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Parse `devicectl device info displays --json-output -`. Exported for the
  * unit tests; the shape is CoreDevice's, so a display missing an id or a size
  * is skipped rather than guessed at.
+ *
+ * The lit panel is told from `backlightState`, which every device reports (a
+ * regular iPhone reports no `active` at all). `active` breaks the tie when
+ * that does not decide: for about 200 ms around a hand-over the Duo reports
+ * both panels `activeOn` with `active` already moved, and a panel whose
+ * backlight state is not known is taken on `active` alone.
  */
-export function parseDisplaysPayload(json: unknown, readAt = Date.now()): ActiveScreenState | null {
+export function parseDisplaysPayload(json: unknown): {
+  activeScreen: number;
+  panels: FoldablePanel[];
+  orientation?: string;
+} | null {
   const displays = (json as DevicectlDisplaysPayload)?.result?.displays;
   if (!Array.isArray(displays)) return null;
   const panels: FoldablePanel[] = [];
-  let activeScreen: number | undefined;
+  const lit: number[] = [];
+  const flagged: number[] = [];
+  let knownBacklight = false;
   for (const d of displays) {
     if (typeof d?.displayId !== "number") continue;
     // `type` is `{ integrated: {} }` for a built-in panel; tvOut / carPlay /
@@ -252,25 +249,41 @@ export function parseDisplaysPayload(json: unknown, readAt = Date.now()): Active
     const [width, height] = size;
     if (typeof width !== "number" || typeof height !== "number") continue;
     panels.push({ screenId: d.displayId, width, height });
-    if (d.active === true && activeScreen === undefined) activeScreen = d.displayId;
+    const on = backlit(d);
+    if (on !== undefined) knownBacklight = true;
+    if (on) lit.push(d.displayId);
+    if (d.active === true) flagged.push(d.displayId);
   }
-  if (panels.length === 0 || activeScreen === undefined) return null;
+  if (panels.length === 0) return null;
+  let activeScreen: number | undefined;
+  if (lit.length === 1) activeScreen = lit[0];
+  else if (lit.length > 1) activeScreen = flagged.find((id) => lit.includes(id));
+  else if (!knownBacklight && flagged.length === 1) activeScreen = flagged[0];
+  if (activeScreen === undefined) return null;
   const orientation = (json as DevicectlDisplaysPayload).result?.orientation
     ?.currentDeviceOrientation;
   return {
     activeScreen,
     panels,
     ...(typeof orientation === "string" ? { orientation } : {}),
-    readAt,
   };
 }
 
+/** The first line of an error, for a reason a warning quotes. */
+function firstLine(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  return text.split("\n")[0]?.trim() || "unknown error";
+}
+
 /**
- * One CoreDevice query, uncached. Null on any failure: a missing binary, a
- * timeout, a device CoreDevice does not know, or a payload with no active
- * integrated panel. Callers fall back to the main screen and say so.
+ * One CoreDevice query. Null, with the reason, on any failure: a missing
+ * binary, a timeout, a device CoreDevice does not know, or a payload with no
+ * lit integrated panel.
  */
-export async function queryActiveScreen(udid: string): Promise<ActiveScreenState | null> {
+export async function readCoreDeviceDisplays(udid: string): Promise<{
+  displays: { activeScreen: number; panels: FoldablePanel[]; orientation?: string } | null;
+  reason?: string;
+}> {
   // A provider's device is keyed by its `ext:` id everywhere in argent, but
   // CoreDevice knows it by the raw UDID.
   const nativeUdid = externalNativeId(udid);
@@ -282,121 +295,118 @@ export async function queryActiveScreen(udid: string): Promise<ActiveScreenState
   const [bin, argv] = fs.existsSync(DEVICECTL_BIN)
     ? [DEVICECTL_BIN, args]
     : ["xcrun", ["devicectl", ...args]];
+  let stdout: string;
   try {
-    const { stdout } = await execFileAsync(bin, argv, {
+    ({ stdout } = await execFileAsync(bin, argv, {
       env,
       timeout: DEVICECTL_TIMEOUT_MS,
       killSignal: "SIGKILL",
       maxBuffer: 4 * 1024 * 1024,
-    });
-    return parseDisplaysPayload(JSON.parse(stdout));
+    }));
+  } catch (err) {
+    const timedOut = (err as { killed?: boolean; signal?: string })?.signal === "SIGKILL";
+    return {
+      displays: null,
+      reason: timedOut
+        ? `CoreDevice did not answer within ${DEVICECTL_TIMEOUT_MS / 1000} s`
+        : `CoreDevice failed (${firstLine(err)})`,
+    };
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(stdout);
   } catch {
-    return null;
+    return { displays: null, reason: "CoreDevice answered something that is not JSON" };
+  }
+  const displays = parseDisplaysPayload(payload);
+  if (!displays) return { displays: null, reason: "CoreDevice reported no lit integrated panel" };
+  return { displays };
+}
+
+/** Ask the ax-service; the display id, or the reason it gave none. */
+async function askAxService(udid: string): Promise<number | string> {
+  if (!axServiceFor) return "no accessibility service is wired in";
+  const provider = axServiceFor;
+  const settled = await settleWithin(
+    Promise.resolve().then(() => provider(udid).then((source) => source.livePanel())),
+    AX_LIVE_PANEL_TIMEOUT_MS
+  );
+  switch (settled.type) {
+    case "value":
+      return settled.value ?? "the accessibility service could not name the panel";
+    case "timeout":
+      return `the accessibility service did not answer within ${AX_LIVE_PANEL_TIMEOUT_MS / 1000} s`;
+    case "error":
+      return `the accessibility service failed (${firstLine(settled.cause)})`;
+    case "aborted":
+      return "the accessibility service read was aborted";
   }
 }
 
+async function resolveLivePanelUncached(udid: string): Promise<LivePanel> {
+  const ax = await askAxService(udid);
+  if (typeof ax === "number") return { screen: ax, source: "ax-service" };
+  const { displays, reason } = await readCoreDeviceDisplays(udid);
+  if (displays) return { screen: displays.activeScreen, source: "coredevice" };
+  return { screen: MAIN_SCREEN_ID, source: "unknown", reason: `${ax}; ${reason}` };
+}
+
 /**
- * Query and memoize. The memo is only replaced by a successful read, so a
- * transient CoreDevice failure keeps the last known panel rather than snapping
- * every touch back to screen 1; the null return tells the caller to say the
- * read failed. A failure is remembered, so the callers that can live on the
- * memo know not to wait for the next attempt (see
- * {@link refreshActiveScreenUnlessFailing}).
- *
- * One query per device at a time: a caller that asks while one is in flight
- * shares its answer. So a CoreDevice that is not answering has at most one
- * query hanging on it per device, whatever polls, and reads land in the memo
- * in the order they were made.
+ * The panel the device renders to, right now: the ax-service's answer, else
+ * CoreDevice's, else the main screen with the reason (see the module
+ * comment). One read per device at a time: a caller that asks while one is
+ * in flight shares its answer, so a source that is not answering has at most
+ * one query hanging on it per device, whatever polls.
  */
-export function refreshActiveScreen(udid: string): Promise<ActiveScreenState | null> {
+export function resolveLivePanel(udid: string): Promise<LivePanel> {
   const pending = inFlight.get(udid);
   if (pending) return pending;
-  const read = queryActiveScreen(udid)
-    .then((state) => {
-      if (state) {
-        cache.set(udid, state);
-        failedReadAt.delete(udid);
-      } else {
-        failedReadAt.set(udid, Date.now());
-      }
-      return state;
-    })
-    .finally(() => {
-      if (inFlight.get(udid) === read) inFlight.delete(udid);
-    });
+  const read = resolveLivePanelUncached(udid).finally(() => {
+    if (inFlight.get(udid) === read) inFlight.delete(udid);
+  });
   inFlight.set(udid, read);
   return read;
 }
 
 /**
- * Re-read for a caller that can live on the memo — a capture, a touch with no
- * memo, a recording's poll, a describe's cross-check — and so must not wait
- * on a CoreDevice that is not answering. While CoreDevice answers, this is
- * {@link refreshActiveScreen}. Once a read has failed, it answers null at
- * once and starts the next read in the background instead, at most once per
- * {@link READ_RETRY_AFTER_MS} and never while one is in flight: the memo
- * catches up when a read succeeds, and from the caller after that one, reads
- * are waited for again. The one query timeout a wedged CoreDevice costs is
- * paid by the read that fails first, and by whoever shares it.
+ * The sentence a result carries when the live panel could not be resolved:
+ * what was tried, what the commands target meanwhile, and what to check.
  */
-export function refreshActiveScreenUnlessFailing(udid: string): Promise<ActiveScreenState | null> {
-  const failedAt = failedReadAt.get(udid);
-  if (failedAt === undefined) return refreshActiveScreen(udid);
-  if (!inFlight.has(udid) && Date.now() - failedAt >= READ_RETRY_AFTER_MS) {
-    void refreshActiveScreen(udid);
-  }
-  return Promise.resolve(null);
+export function unresolvedPanelNote(
+  udid: string,
+  reason: string,
+  what: string,
+  panels?: readonly FoldablePanel[]
+): string {
+  return (
+    `The panel this foldable simulator renders to could not be resolved (${reason}), so ${what} ` +
+    `${screenLabel(MAIN_SCREEN_ID, panels)}. Check that the simulator is booted and responsive: ` +
+    `\`describe\` starts the accessibility service, and \`xcrun devicectl device info displays ` +
+    `--device ${externalNativeId(udid)}\` shows what CoreDevice answers.`
+  );
 }
 
 /**
  * One read, waited for no longer than `budgetMs` (but at least
- * {@link READ_GRACE_MS}) or until an abort: the state, or null when the read
- * failed or the wait ran out first. A read that outlasts the wait is not cut
- * short — it lands in the memo when it comes, and a caller that asks meanwhile
- * shares it — the caller only stops waiting. For the fold tool's waits, whose
- * budgets are wall clock even when CoreDevice takes its whole timeout to fail.
+ * {@link READ_GRACE_MS}) or until an abort: the panel, or null when nothing
+ * resolved it or the wait ran out first. A read that outlasts the wait is not
+ * cut short — a caller that asks meanwhile shares it — the caller only stops
+ * waiting. For the fold tool's waits, whose budgets are wall clock even when
+ * both sources take their whole timeouts to fail.
  */
 async function readWithin(
   udid: string,
   budgetMs: number,
   signal?: AbortSignal
-): Promise<ActiveScreenState | null> {
+): Promise<LivePanel | null> {
   if (signal?.aborted) return null;
   const read = await settleWithin(
-    refreshActiveScreen(udid),
+    resolveLivePanel(udid),
     Math.max(budgetMs, READ_GRACE_MS),
     signal
   );
-  return read.type === "value" ? read.value : null;
-}
-
-/**
- * Re-read the live panel, then answer the screen commands should name: the
- * fresh read, else the memo the failed read left in place, else the main
- * screen. For the callers that pick a panel to capture (a recording start,
- * the preview's stream): a read that fails must not move them off the panel
- * every touch and screenshot still targets, and a CoreDevice that is not
- * answering must not hold up the capture.
- */
-export async function readActiveScreenOrMain(udid: string): Promise<number> {
-  await refreshActiveScreenUnlessFailing(udid);
-  return activeScreenOrMain(udid);
-}
-
-/**
- * Re-read the live panel for a caller that follows it (a recording's poll):
- * the fresh read, else the memo a failed read left in place — the panel every
- * touch and screenshot targets, which a `describe` corrects while CoreDevice
- * does not answer. `fresh` tells the two apart. Null only when there is
- * neither, so the caller stays where it is.
- */
-export async function readActiveScreenOrMemo(
-  udid: string
-): Promise<{ screen: number; fresh: boolean } | null> {
-  const state = await refreshActiveScreenUnlessFailing(udid);
-  if (state) return { screen: state.activeScreen, fresh: true };
-  const cached = cache.get(udid);
-  return cached ? { screen: cached.activeScreen, fresh: false } : null;
+  if (read.type !== "value" || read.value.source === "unknown") return null;
+  return read.value;
 }
 
 /** The screen id of a foldable's inner panel: the one panel that is not the main screen. */
@@ -421,29 +431,28 @@ export function panelForHingeAngle(
 }
 
 /**
- * After a fold: poll the one-shot until a read satisfies `done`, or the budget
- * runs out. Resolves with the first read that does, else with the last read
- * made — the caller tells the two apart by applying `done` again — and null
- * only when every read failed. Every successful read refreshes the memo, so
- * the state the tools act on is the one last seen, settled or not. An abort
- * ends the wait with what was read so far. The budget is wall clock: a read
- * that CoreDevice takes its whole timeout to fail is not waited out past it
- * (see {@link readWithin}).
+ * After a fold: poll the live panel until a read satisfies `done`, or the
+ * budget runs out. Resolves with the first read that does, else with the last
+ * read made — the caller tells the two apart by applying `done` again — and
+ * null only when nothing resolved the panel. An abort ends the wait with what
+ * was read so far. The budget is wall clock: a read that the sources take
+ * their whole timeouts to fail is not waited out past it (see
+ * {@link readWithin}).
  */
-export async function awaitActiveScreen(
+export async function awaitLivePanel(
   udid: string,
-  done: (state: ActiveScreenState) => boolean,
+  done: (screen: number) => boolean,
   opts: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal } = {}
-): Promise<ActiveScreenState | null> {
+): Promise<LivePanel | null> {
   const timeoutMs = opts.timeoutMs ?? SETTLE_TIMEOUT_MS;
   const pollMs = opts.pollMs ?? SETTLE_POLL_MS;
   const deadline = Date.now() + timeoutMs;
-  let last: ActiveScreenState | null = null;
+  let last: LivePanel | null = null;
   for (;;) {
-    const state = await readWithin(udid, deadline - Date.now(), opts.signal);
-    if (state) {
-      last = state;
-      if (done(state)) return state;
+    const panel = await readWithin(udid, deadline - Date.now(), opts.signal);
+    if (panel) {
+      last = panel;
+      if (done(panel.screen)) return panel;
     }
     if (Date.now() + pollMs > deadline) return last;
     if (!(await sleepOrAbort(pollMs, opts.signal))) return last;
@@ -452,23 +461,23 @@ export async function awaitActiveScreen(
 
 /**
  * The hold after a fold, for the guest to take input again (see the
- * `INPUT_READY_HOLD_*` constants), polling the one-shot the while. The panel
- * CoreDevice reports can still change under the hold: from closed, a sweep to
- * just past the cover panel's range shows the inner panel for about a second
- * and then returns to the cover, and a memo left on that transient panel
- * would aim the next touch at a panel that went dark. A change restarts the
- * hold, so the state returned is one that stayed put for the whole hold;
- * `maxMs` bounds the restarts. Resolves with the last read, or `initial` when
- * no read succeeded. An abort ends the hold early, and so does the hold's own
- * clock: a read is waited for only as long as the hold has left, plus the
- * grace of {@link readWithin}.
+ * `INPUT_READY_HOLD_*` constants), polling the live panel the while. The panel
+ * can still change under the hold: from closed, a sweep to just past the
+ * cover panel's range shows the inner panel for about a second and then
+ * returns to the cover, and an answer taken on that transient panel would aim
+ * the next touch at a panel that went dark. A change restarts the hold, so
+ * the panel returned is one that stayed put for the whole hold; `maxMs`
+ * bounds the restarts. Resolves with the last read, or `initial` when no read
+ * succeeded. An abort ends the hold early, and so does the hold's own clock:
+ * a read is waited for only as long as the hold has left, plus the grace of
+ * {@link readWithin}.
  */
-export async function holdActiveScreen(
+export async function holdLivePanel(
   udid: string,
-  initial: ActiveScreenState | null,
+  initial: LivePanel | null,
   holdMs: number,
   opts: { maxMs?: number; pollMs?: number; signal?: AbortSignal } = {}
-): Promise<ActiveScreenState | null> {
+): Promise<LivePanel | null> {
   const pollMs = opts.pollMs ?? SETTLE_POLL_MS;
   const maxMs = opts.maxMs ?? HOLD_MAX_MS;
   const start = Date.now();
@@ -478,12 +487,12 @@ export async function holdActiveScreen(
     const remaining = holdStart + holdMs - Date.now();
     if (remaining <= 0) return last;
     if (!(await sleepOrAbort(Math.min(pollMs, remaining), opts.signal))) return last;
-    const state = await readWithin(udid, holdStart + holdMs - Date.now(), opts.signal);
-    if (!state) continue;
-    if (last && state.activeScreen !== last.activeScreen && Date.now() - start < maxMs) {
+    const panel = await readWithin(udid, holdStart + holdMs - Date.now(), opts.signal);
+    if (!panel) continue;
+    if (last && panel.screen !== last.screen && Date.now() - start < maxMs) {
       holdStart = Date.now();
     }
-    last = state;
+    last = panel;
   }
 }
 
@@ -508,89 +517,6 @@ export function streamUrlForScreen(streamUrl: string, screenId: number): string 
   if (screenId === MAIN_SCREEN_ID) return streamUrl;
   const separator = streamUrl.includes("?") ? "&" : "?";
   return `${streamUrl}${separator}screen=${screenId}`;
-}
-
-/**
- * The note a `describe` carries when the accessibility tree was read on one
- * panel and argent targets another, and the correction that goes with it.
- *
- * The memo is compared first, since a `describe` runs on every interaction
- * and CoreDevice is the cost this module exists to avoid paying twice. A memo
- * that disagrees is re-read once: a fold made outside argent (Device Hub)
- * leaves a stale memo, and the fresh read both fixes it and agrees with the
- * tree. A fresh read that still disagrees is the one case worth a note: a
- * describe issued mid-fold, where the two sides briefly differ.
- *
- * An empty memo is re-read too when a read has failed before — a
- * simulator-server attached while CoreDevice was not answering — since until
- * something reads, every touch goes to the main screen. When CoreDevice still
- * does not answer — which is not waited for, a describe runs on every
- * interaction — the panel the daemon read the tree on is the best word there
- * is on which panel is live, and the memo takes it, so the touches that
- * follow go where the frames are.
- *
- * Undefined when there is no memo and nothing has tried to read one: without a
- * simulator-server for the device nothing has targeted a panel, so there is
- * nothing to disagree with.
- */
-export async function crossCheckDescribedScreen(
-  udid: string,
-  describedScreen: number
-): Promise<string | undefined> {
-  const cached = cache.get(udid);
-  if (cached?.activeScreen === describedScreen) return undefined;
-  if (!cached && !failedReadAt.has(udid)) return undefined;
-  const fresh = await refreshActiveScreenUnlessFailing(udid);
-  if (fresh) {
-    if (fresh.activeScreen === describedScreen) return undefined;
-    return (
-      `The accessibility tree was read on ${screenLabel(describedScreen, fresh.panels)}, but ` +
-      `CoreDevice reports ${screenLabel(fresh.activeScreen, fresh.panels)} as the panel the device ` +
-      `renders to, so the frames above and the panel argent taps disagree — the device is probably ` +
-      `mid-fold. Call await-screen-idle, then describe again before tapping.`
-    );
-  }
-  // The failure stays on record: CoreDevice is still not answering, and the
-  // callers that live on the memo must keep not waiting for it.
-  const panels = cached?.panels ?? [];
-  cache.set(udid, { activeScreen: describedScreen, panels, readAt: Date.now() });
-  return (
-    `CoreDevice did not report which panel this foldable simulator renders to; commands now target ` +
-    `${screenLabel(describedScreen, panels)}, the panel this tree was read on.`
-  );
-}
-
-/**
- * The flow tree's counterpart of {@link crossCheckDescribedScreen}. A flow
- * reads the app's own view hierarchy, which names no panel, but it reports the
- * size of the screen the app's windows are on, in the screen's fixed
- * orientation — and a foldable's panels differ in shape (the Duo's cover panel
- * is 466x678 pt, its inner panel 669x951). A tree whose screen has the shape of
- * one panel while the memo names another was read after a fold made outside
- * argent (Device Hub), and without this every touch of the flow would go to
- * the panel that went dark. So the memo is re-read, or, while CoreDevice does
- * not answer, set to the panel of the tree's shape: the one the app renders to.
- *
- * An empty memo left by a failed read — a simulator-server attached while
- * CoreDevice was not answering, so every touch goes to the main screen — is
- * treated the same way, with the panel list that server reported.
- *
- * Costs nothing while the two agree, which is every read but the first after
- * such a fold. Leaves the memo alone when nothing has tried to read it (no
- * simulator-server targets a panel yet), and when the shape matches no panel,
- * or more than one.
- */
-export async function crossCheckTreeScreen(udid: string, screen: Size): Promise<void> {
-  const cached = cache.get(udid);
-  if (!cached && !failedReadAt.has(udid)) return;
-  const panels = cached?.panels ?? serverPanels.get(udid) ?? [];
-  const shaped = panels.filter((p) => sameAspect(screen, p));
-  if (shaped.length !== 1) return;
-  const treeScreen = shaped[0].screenId;
-  if (treeScreen === cached?.activeScreen) return;
-  if (await refreshActiveScreenUnlessFailing(udid)) return;
-  // The failure stays on record, as in `crossCheckDescribedScreen`.
-  cache.set(udid, { activeScreen: treeScreen, panels: [...panels], readAt: Date.now() });
 }
 
 interface Size {
@@ -623,9 +549,9 @@ function postureForSize(size: Size, panels: readonly FoldablePanel[]): string | 
  * produced each size. Undefined for any device that is not foldable, so the
  * message is unchanged everywhere else.
  *
- * The panel list comes from the memo when there is one and from a single
- * CoreDevice read otherwise (the pure-PNG diff of a foldable's screenshots
- * touches no simulator-server, so nothing memoized it).
+ * The panel list comes from one CoreDevice read (the pure-PNG diff of a
+ * foldable's screenshots touches no simulator-server, which is where argent
+ * otherwise has it); a read that fails leaves the postures unnamed.
  */
 export async function foldablePostureHint(
   udid: string,
@@ -633,7 +559,7 @@ export async function foldablePostureHint(
   actual: Size
 ): Promise<string | undefined> {
   if (!(await isFoldableSimulator(udid))) return undefined;
-  const panels = (cache.get(udid) ?? (await refreshActiveScreenUnlessFailing(udid)))?.panels;
+  const panels = (await readCoreDeviceDisplays(udid)).displays?.panels;
   const base =
     "This simulator is foldable: a baseline belongs to the posture that produced it, and the " +
     "cover and inner panels differ in size, so a capture in another posture can never match.";

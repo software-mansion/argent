@@ -8,7 +8,7 @@ import type { Registry } from "@argent/registry";
 import { track } from "@argent/telemetry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
-import { readActiveScreenOrMain, streamUrlForScreen } from "./utils/foldable";
+import { resolveLivePanel, streamUrlForScreen } from "./utils/foldable";
 import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
 import { listDevicesTool } from "./tools/devices/list-devices";
@@ -235,16 +235,16 @@ export function createPreviewRouter(registry: Registry): Router {
       }
       const { urn, options } = simulatorServerRef(device);
       const api = await registry.resolveService<SimulatorServerApi>(urn, options);
-      // A foldable is handed the stream of the panel it renders to, read fresh:
-      // the UI re-asks this route while connected to one and moves its stream
-      // (and the screen its touches name) when the answer changes. A read that
-      // fails keeps it on the panel the touches target.
+      // A foldable is handed the stream of the panel it renders to, resolved
+      // now: the UI re-asks this route while connected to one and moves its
+      // stream (and the screen its touches name) when the answer changes. When
+      // neither source answers, the main screen, as every command then does.
       let streamUrl = api.streamUrl;
       let panel: { foldable: true; activeScreen: number } | undefined;
       if (api.display?.foldable) {
-        const activeScreen = await readActiveScreenOrMain(udid);
-        streamUrl = streamUrlForScreen(api.streamUrl, activeScreen);
-        panel = { foldable: true, activeScreen };
+        const live = await resolveLivePanel(udid);
+        streamUrl = streamUrlForScreen(api.streamUrl, live.screen);
+        panel = { foldable: true, activeScreen: live.screen };
       }
       res.json({
         udid,

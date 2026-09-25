@@ -18,7 +18,7 @@ import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/io
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
-import { httpScreenshot, refreshActiveScreenForCapture } from "../../utils/simulator-client";
+import { httpScreenshot, resolveCapturePanel } from "../../utils/simulator-client";
 import { foldablePostureHint } from "../../utils/foldable";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
@@ -398,9 +398,12 @@ async function captureLiveInput(params: {
   // baselinePath + captureCurrent flow there. The server's default scale captures
   // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
   // comparable to a baseline saved at any scale.
-  // A live input follows no describe, so a foldable's live panel is read fresh
-  // (the memo may date from before a fold made outside argent).
-  await refreshActiveScreenForCapture(params.api);
+  // On a foldable the panel is resolved now, whoever moved the hinge, and
+  // handed to both attempts, so the retry is of the same panel.
+  const panel = await resolveCapturePanel(params.api);
+  const captureScreenshot: CaptureScreenshot = panel
+    ? (a, r, s, sc) => params.captureScreenshot(a, r, s, sc, panel.screen)
+    : params.captureScreenshot;
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
     capture = await captureScreenshotUpright(
@@ -409,7 +412,7 @@ async function captureLiveInput(params: {
       params.rotation,
       params.signal,
       1.0,
-      params.captureScreenshot,
+      captureScreenshot,
       params.peekFor?.(params.device)
     );
   } catch {
@@ -419,7 +422,7 @@ async function captureLiveInput(params: {
       params.rotation,
       params.signal,
       undefined,
-      params.captureScreenshot,
+      captureScreenshot,
       params.peekFor?.(params.device)
     );
   }

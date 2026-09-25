@@ -93,6 +93,9 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
+import { resolveDevice } from "./device-info";
+import { setLivePanelSourceProvider } from "./foldable";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
@@ -100,6 +103,13 @@ export function createRegistry(): Registry {
   // enable/disable <flag>` needs no tool-server restart.
   const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
+  // The panel a foldable renders to is asked of the ax-service before every
+  // touch and capture (`utils/foldable.ts`); that daemon is a service of this
+  // registry, started on first use like a `describe` starts it.
+  setLivePanelSourceProvider((udid) => {
+    const ref = axServiceRef(resolveDevice(udid));
+    return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+  });
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(iosDeviceRunnerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
