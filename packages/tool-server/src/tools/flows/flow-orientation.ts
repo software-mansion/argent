@@ -11,9 +11,11 @@ import type { UiOrientation } from "../describe/contract";
  * landscape UI) the UI's vertical axis lies along the frame space's
  * horizontal one, and a direction has to be turned before it is dispatched.
  *
- * The maps below are the UIKit interface orientations as measured on the
- * simulator against a touch probe: in `landscapeRight` a UI point (u, v),
- * normalized, is the native point (v, 1 - u); in `landscapeLeft`, (1 - v, u).
+ * The orientation is UIKit's name for the interface's (as the injected
+ * framework reports it; see `flow-ios-tree.ts`). The maps below were checked on
+ * the simulator against a touch probe: in `landscapeRight` (home side on the
+ * right, a rotated iPhone) a UI point (u, v), normalized, is the native point
+ * (1 - v, u); in `landscapeLeft` (the unfolded iPhone Duo), (v, 1 - u).
  */
 
 type Direction = "up" | "down" | "left" | "right";
@@ -28,9 +30,9 @@ interface Vec {
 export function uiPointToNative(p: Vec, orientation: UiOrientation | undefined): Vec {
   switch (orientation) {
     case "landscapeRight":
-      return { x: p.y, y: 1 - p.x };
-    case "landscapeLeft":
       return { x: 1 - p.y, y: p.x };
+    case "landscapeLeft":
+      return { x: p.y, y: 1 - p.x };
     case "portraitUpsideDown":
       return { x: 1 - p.x, y: 1 - p.y };
     default:
@@ -42,9 +44,9 @@ export function uiPointToNative(p: Vec, orientation: UiOrientation | undefined):
 export function uiVectorToNative(v: Vec, orientation: UiOrientation | undefined): Vec {
   switch (orientation) {
     case "landscapeRight":
-      return { x: v.y, y: -v.x };
-    case "landscapeLeft":
       return { x: -v.y, y: v.x };
+    case "landscapeLeft":
+      return { x: v.y, y: -v.x };
     case "portraitUpsideDown":
       return { x: -v.x, y: -v.y };
     default:

@@ -39,13 +39,13 @@ const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 
 describe("flow-orientation geometry", () => {
   it("turns UI points into the native space as measured on the simulator", () => {
-    // Unfolded Duo (landscapeRight): the UI's top-centre is the panel's left
+    // Unfolded Duo (landscapeLeft): the UI's top-centre is the panel's left
     // edge, mid-height; its bottom-right corner is the panel's top-right one.
-    expect(uiPointToNative({ x: 0.5, y: 0 }, "landscapeRight")).toEqual({ x: 0, y: 0.5 });
-    expect(uiPointToNative({ x: 1, y: 1 }, "landscapeRight")).toEqual({ x: 1, y: 0 });
-    // An iPhone rotated landscapeLeft: the mirror image.
-    expect(uiPointToNative({ x: 0.5, y: 0 }, "landscapeLeft")).toEqual({ x: 1, y: 0.5 });
-    expect(uiPointToNative({ x: 1, y: 1 }, "landscapeLeft")).toEqual({ x: 0, y: 1 });
+    expect(uiPointToNative({ x: 0.5, y: 0 }, "landscapeLeft")).toEqual({ x: 0, y: 0.5 });
+    expect(uiPointToNative({ x: 1, y: 1 }, "landscapeLeft")).toEqual({ x: 1, y: 0 });
+    // An iPhone in landscapeRight (home side on the right): the mirror image.
+    expect(uiPointToNative({ x: 0.5, y: 0 }, "landscapeRight")).toEqual({ x: 1, y: 0.5 });
+    expect(uiPointToNative({ x: 1, y: 1 }, "landscapeRight")).toEqual({ x: 0, y: 1 });
     expect(uiPointToNative({ x: 0.25, y: 0.75 }, "portraitUpsideDown")).toEqual({
       x: 0.75,
       y: 0.25,
@@ -55,20 +55,20 @@ describe("flow-orientation geometry", () => {
   });
 
   it("turns UI displacements the same way, without the offsets", () => {
-    expect(uiVectorToNative({ x: 0, y: 0.7 }, "landscapeRight")).toEqual({ x: 0.7, y: -0 });
-    expect(uiVectorToNative({ x: 0.7, y: 0 }, "landscapeRight")).toEqual({ x: 0, y: -0.7 });
-    expect(uiVectorToNative({ x: 0, y: 0.7 }, "landscapeLeft")).toEqual({ x: -0.7, y: 0 });
+    expect(uiVectorToNative({ x: 0, y: 0.7 }, "landscapeLeft")).toEqual({ x: 0.7, y: -0 });
+    expect(uiVectorToNative({ x: 0.7, y: 0 }, "landscapeLeft")).toEqual({ x: 0, y: -0.7 });
+    expect(uiVectorToNative({ x: 0, y: 0.7 }, "landscapeRight")).toEqual({ x: -0.7, y: 0 });
     expect(uiVectorToNative({ x: 0.7, y: 0 }, "portraitUpsideDown")).toEqual({ x: -0.7, y: -0 });
   });
 
   it("names the native direction a UI direction becomes", () => {
     expect(nativeDirection("down", undefined)).toBe("down");
-    expect(nativeDirection("down", "landscapeRight")).toBe("right");
-    expect(nativeDirection("up", "landscapeRight")).toBe("left");
-    expect(nativeDirection("right", "landscapeRight")).toBe("up");
-    expect(nativeDirection("left", "landscapeRight")).toBe("down");
-    expect(nativeDirection("down", "landscapeLeft")).toBe("left");
-    expect(nativeDirection("right", "landscapeLeft")).toBe("down");
+    expect(nativeDirection("down", "landscapeLeft")).toBe("right");
+    expect(nativeDirection("up", "landscapeLeft")).toBe("left");
+    expect(nativeDirection("right", "landscapeLeft")).toBe("up");
+    expect(nativeDirection("left", "landscapeLeft")).toBe("down");
+    expect(nativeDirection("down", "landscapeRight")).toBe("left");
+    expect(nativeDirection("right", "landscapeRight")).toBe("down");
     expect(nativeDirection("down", "portraitUpsideDown")).toBe("up");
   });
 });
@@ -120,7 +120,7 @@ describe("swipe on a landscape UI", () => {
   it("moves the finger along the UI's axis, in the frame space", async () => {
     // Unfolded Duo: UI `down` is the panel's +x. The preset's UI-space start
     // (0.5, 0.2) and end (0.5, 0.9) land where they are on the panel.
-    currentOrientation = "landscapeRight";
+    currentOrientation = "landscapeLeft";
     const { result, calls } = await runFlow([
       { kind: "swipe", direction: "down" },
       { kind: "swipe", direction: "left" },
@@ -133,7 +133,7 @@ describe("swipe on a landscape UI", () => {
   });
 
   it("mirrors for the other landscape", async () => {
-    currentOrientation = "landscapeLeft";
+    currentOrientation = "landscapeRight";
     const { calls } = await runFlow([{ kind: "swipe", direction: "down" }]);
     expect(calls[0]!.args).toEqual({
       udid: DEVICE,
@@ -145,7 +145,7 @@ describe("swipe on a landscape UI", () => {
   });
 
   it("travels the preset's magnitude from an anchor, along the turned axis", async () => {
-    currentOrientation = "landscapeRight";
+    currentOrientation = "landscapeLeft";
     currentTree = () =>
       screen([n({ label: "Card", frame: { x: 0.4, y: 0.1, width: 0.2, height: 0.1 } })]);
     const { calls } = await runFlow([
@@ -170,7 +170,7 @@ describe("swipe on a landscape UI", () => {
 
 describe("scroll-to on a landscape UI", () => {
   it("scrolls along the UI's axis and checks the target against the turned axis", async () => {
-    currentOrientation = "landscapeRight";
+    currentOrientation = "landscapeLeft";
     // Off-screen at first; the first increment reveals it, flush against the
     // frame-space edge that UI `down` reveals from (+x, the right edge).
     let revealed = false;
@@ -195,7 +195,7 @@ describe("scroll-to on a landscape UI", () => {
   });
 
   it("accepts a target already inside the clip along the turned axis without scrolling", async () => {
-    currentOrientation = "landscapeRight";
+    currentOrientation = "landscapeLeft";
     currentTree = () =>
       screen([n({ label: "Order", frame: { x: 0.3, y: 0.4, width: 0.3, height: 0.1 } })]);
     const { result, calls } = await runFlow([

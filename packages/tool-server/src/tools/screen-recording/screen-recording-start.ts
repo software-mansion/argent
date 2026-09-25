@@ -12,7 +12,7 @@ import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
 import {
   readActiveScreenOrMain,
-  refreshActiveScreen,
+  readActiveScreenOrMemo,
   streamUrlForScreen,
 } from "../../utils/foldable";
 import { startCapture, type PanelFollow, type PointerControl } from "./capture";
@@ -134,8 +134,9 @@ Fails if a recording is already running on the device, the device is not booted,
 
       // A foldable's stream is per panel. The recording starts on the panel the
       // device renders to now — read fresh, since nothing before this call has
-      // described the screen, and on the panel the touches target when the
-      // read fails — and follows it across folds (capture.ts).
+      // described the screen — and follows it across folds (capture.ts). While
+      // CoreDevice does not answer, both use the panel the touches target, so
+      // the video stays on the panel a `describe` moves argent to.
       let followPanel: PanelFollow | undefined;
       if (simulator.display?.foldable) {
         const base = streamUrl;
@@ -144,8 +145,7 @@ Fails if a recording is already running on the device, the device is not booted,
         followPanel = {
           initialScreen,
           streamUrlForScreen: (screen) => streamUrlForScreen(base, screen),
-          readActiveScreen: async () =>
-            (await refreshActiveScreen(device.id))?.activeScreen ?? null,
+          readActiveScreen: () => readActiveScreenOrMemo(device.id),
         };
       }
 

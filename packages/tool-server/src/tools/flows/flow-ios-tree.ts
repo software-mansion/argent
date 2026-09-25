@@ -10,6 +10,7 @@ import {
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
 import { stripRemotePrefix } from "../../utils/device-info";
 import { simctlTargetForUdid } from "../../utils/ios-device-sets";
+import { crossCheckTreeScreen } from "../../utils/foldable";
 import { nodeText } from "../../utils/ui-tree-match";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import type { FlowTreeTarget } from "./flow-actions";
@@ -217,88 +218,17 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
   return adaptFullHierarchy(raw).tree;
 }
 
-/** Two lengths in points equal to within rounding. */
-function near(a: number, b: number): boolean {
-  return Math.abs(a - b) <= 1;
-}
+const UI_ORIENTATIONS: readonly UiOrientation[] = [
+  "portrait",
+  "portraitUpsideDown",
+  "landscapeLeft",
+  "landscapeRight",
+];
 
-/** Sum of the per-field distances between two rects, in points. */
-function rectDistance(a: RawRect, b: RawRect): number {
-  return (
-    Math.abs(a.x - b.x) +
-    Math.abs(a.y - b.y) +
-    Math.abs(a.width - b.width) +
-    Math.abs(a.height - b.height)
-  );
-}
-
-/** How far a candidate orientation's prediction may miss, per view, before it is ruled out. */
-const ORIENTATION_TOLERANCE_PT = 2;
-/** Views weighed per read: enough to break every tie, bounded so a deep tree stays cheap. */
-const ORIENTATION_MAX_SAMPLES = 400;
-
-/**
- * How the UI lies on the screen's fixed space, told from the views themselves.
- * A view's `windowFrame` is in its window's space — the interface's, for a
- * window that spans the screen — and its `screenFrame` in the fixed space;
- * the two differ by exactly the interface rotation. Each candidate
- * orientation predicts the second from the first, and the one that fits the
- * views carrying both wins.
- *
- * Undefined when the views cannot tell: a framework that predates
- * `screenFrame` reports none; no window spans the screen (only a keyboard or
- * a picker is up, whose own space is not the interface's); or every view sits
- * on the centre line, where an orientation and its opposite predict the same
- * rect. The caller then leaves directions in the frame space, as before.
- */
-function inferUiOrientation(
-  windows: readonly RawViewNode[],
-  screenW: number,
-  screenH: number
-): UiOrientation | undefined {
-  const errors: Record<UiOrientation, number> = {
-    portrait: 0,
-    portraitUpsideDown: 0,
-    landscapeLeft: 0,
-    landscapeRight: 0,
-  };
-  let samples = 0;
-  for (const win of windows) {
-    const bounds = win.windowFrame ?? win.frame;
-    if (!bounds) continue;
-    const wi = bounds.width;
-    const hi = bounds.height;
-    const spans =
-      (near(wi, screenW) && near(hi, screenH)) || (near(wi, screenH) && near(hi, screenW));
-    if (!spans) continue;
-    const stack: RawViewNode[] = [win];
-    while (stack.length > 0 && samples < ORIENTATION_MAX_SAMPLES) {
-      const node = stack.pop()!;
-      if (node.children) stack.push(...node.children);
-      const wf = node.windowFrame;
-      const sf = node.screenFrame;
-      if (!wf || !sf) continue;
-      samples++;
-      // Rotated rects: a 90° turn swaps a rect's sides and mirrors one offset
-      // against the window's extent on that axis.
-      const turned = { width: wf.height, height: wf.width };
-      errors.portrait += rectDistance(wf, sf);
-      errors.portraitUpsideDown += rectDistance(
-        { x: wi - wf.x - wf.width, y: hi - wf.y - wf.height, width: wf.width, height: wf.height },
-        sf
-      );
-      errors.landscapeRight += rectDistance({ x: wf.y, y: wi - wf.x - wf.width, ...turned }, sf);
-      errors.landscapeLeft += rectDistance({ x: hi - wf.y - wf.height, y: wf.x, ...turned }, sf);
-    }
-  }
-  if (samples === 0) return undefined;
-  const ranked = (Object.keys(errors) as UiOrientation[]).sort((a, b) => errors[a] - errors[b]);
-  const [best, second] = ranked as [UiOrientation, UiOrientation];
-  const budget = samples * ORIENTATION_TOLERANCE_PT;
-  if (errors[best] > budget) return undefined;
-  // A runner-up within the budget is a tie, not a second-best fit.
-  if (errors[second] <= budget) return undefined;
-  return best;
+function asUiOrientation(v: unknown): UiOrientation | undefined {
+  return typeof v === "string" && (UI_ORIENTATIONS as readonly string[]).includes(v)
+    ? (v as UiOrientation)
+    : undefined;
 }
 
 /**
@@ -306,6 +236,13 @@ function inferUiOrientation(
  * size (points) the frames were normalized against — the rotate directive needs
  * the aspect ratio for its physical-circle geometry — and how the UI lies on
  * that space, for the directives that turn a UI-space direction into it.
+ *
+ * The orientation is the one the framework reports next to the screen size
+ * (`screen.interfaceOrientation`, as UIKit names interface orientations), not
+ * one told from the frames: a UI made only of full-screen or centred views (a
+ * game, a canvas) frames the same way in both landscape orientations. A
+ * framework that predates `screenFrame` reports neither, and its frames are in
+ * the window's space, where a direction needs no turning.
  */
 function adaptFullHierarchy(raw: unknown): {
   tree: DescribeNode;
@@ -314,6 +251,10 @@ function adaptFullHierarchy(raw: unknown): {
 } {
   const payload =
     typeof raw === "object" && raw !== null ? (raw as { windows?: unknown; screen?: unknown }) : {};
+  const reportedScreen =
+    typeof payload.screen === "object" && payload.screen !== null
+      ? (payload.screen as Record<string, unknown>)
+      : undefined;
   const windows = Array.isArray(payload.windows)
     ? payload.windows.map(asViewNode).filter((n): n is RawViewNode => n !== null)
     : [];
@@ -324,10 +265,7 @@ function adaptFullHierarchy(raw: unknown): {
   // in: the key window spans the screen.
   let screenW = 0;
   let screenH = 0;
-  const reported =
-    typeof payload.screen === "object" && payload.screen !== null
-      ? asRect({ x: 0, y: 0, ...payload.screen })
-      : undefined;
+  const reported = reportedScreen ? asRect({ ...reportedScreen, x: 0, y: 0 }) : undefined;
   if (reported && reported.width > 0 && reported.height > 0) {
     screenW = reported.width;
     screenH = reported.height;
@@ -354,7 +292,7 @@ function adaptFullHierarchy(raw: unknown): {
     children,
   });
   if (!(screenW > 0 && screenH > 0)) return { tree };
-  const uiOrientation = inferUiOrientation(windows, screenW, screenH);
+  const uiOrientation = asUiOrientation(reportedScreen?.interfaceOrientation);
   return {
     tree,
     screen: { width: screenW, height: screenH },
@@ -673,6 +611,9 @@ export async function queryFullHierarchyTree(
   }
 
   const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
+  // A foldable folded behind argent's back: the app's screen has the other
+  // panel's shape, and every touch this flow sends would go to the dark one.
+  if (screen) await crossCheckTreeScreen(device.id, screen);
   return {
     tree,
     source: "native-devtools",

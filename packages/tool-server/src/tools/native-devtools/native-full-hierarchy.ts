@@ -66,7 +66,7 @@ export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
 WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
 Use skipClasses / skipClassPrefixes to prune SwiftUI internal subtrees and reduce output size. Use the fields param to request only the properties you need.
 Use when you need deep layout debugging, finding views with no accessibility labels, or verifying view structure not exposed through the accessibility tree.
-Returns { status: "ok", windows, screen } with the full view hierarchy; screen is the screen's point size in its portrait-native space, which every screenFrame is in (windowFrame stays in the window's own, interface-oriented space).
+Returns { status: "ok", windows, screen } with the full view hierarchy; screen is the screen's point size in its portrait-native space, which every screenFrame is in (windowFrame stays in the window's own, interface-oriented space), plus interfaceOrientation, how the UI lies on that space as UIKit names it (portrait, portraitUpsideDown, landscapeLeft, landscapeRight).
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised — follow the message (re-boot the simulator) rather than retrying this tool.
 A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal — never retry it), and the hierarchy query itself can error or time out.`,
   zodSchema,
@@ -96,7 +96,8 @@ A not-connected or not-running app comes back as one of those statuses rather th
     )) as { windows?: unknown[]; screen?: unknown };
 
     // `screen` is the screen's point size in its portrait-native space, the
-    // space every `screenFrame` is in; an older injected build reports none.
+    // space every `screenFrame` is in, and the interface orientation on it;
+    // an older injected build reports none.
     return {
       status: "ok",
       windows: result.windows ?? [],

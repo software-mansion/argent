@@ -25,7 +25,12 @@ import {
   sendCommand,
   type SimulatorDisplayState,
 } from "../utils/simulator-client";
-import { forgetActiveScreen, refreshActiveScreen, screenLabel } from "../utils/foldable";
+import {
+  forgetActiveScreen,
+  refreshActiveScreen,
+  rememberServerPanels,
+  screenLabel,
+} from "../utils/foldable";
 import {
   assertExternalCapability,
   externalClaimForAnyId,
@@ -130,6 +135,7 @@ async function attachFoldableDisplay(api: SimulatorServerApi, device: DeviceInfo
     return;
   }
   api.display = display;
+  rememberServerPanels(device.id, display.panels);
   const state = await refreshActiveScreen(device.id);
   process.stderr.write(
     state

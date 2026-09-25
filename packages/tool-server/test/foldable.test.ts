@@ -35,6 +35,7 @@ import {
   activeScreenOrMain,
   awaitActiveScreen,
   crossCheckDescribedScreen,
+  crossCheckTreeScreen,
   foldablePostureHint,
   getCachedActiveScreen,
   holdActiveScreen,
@@ -43,7 +44,9 @@ import {
   queryActiveScreen,
   READ_RETRY_AFTER_MS,
   readActiveScreenOrMain,
+  readActiveScreenOrMemo,
   refreshActiveScreen,
+  rememberServerPanels,
   screenLabel,
   streamUrlForScreen,
 } from "../src/utils/foldable";
@@ -192,6 +195,19 @@ describe("the active-screen memo", () => {
     expect(await readActiveScreenOrMain(DUO)).toBe(3);
     mockDevicectl([new Error("no")]);
     expect(await readActiveScreenOrMain(DUO)).toBe(3);
+  });
+
+  it("tells a follower whether the panel it answers was read or is the memo's", async () => {
+    mockDevicectl([new Error("no")]);
+    // Nothing known: the follower stays where it is.
+    expect(await readActiveScreenOrMemo(DUO)).toBeNull();
+    mockDevicectl([duoPayload(1)]);
+    expect(await readActiveScreenOrMemo(DUO)).toEqual({ screen: 1, fresh: true });
+    // CoreDevice stops answering and a describe moves the memo to the inner
+    // panel: the follower goes where the touches go.
+    mockDevicectl([new Error("no")]);
+    await crossCheckDescribedScreen(DUO, 3);
+    expect(await readActiveScreenOrMemo(DUO)).toEqual({ screen: 3, fresh: false });
   });
 });
 
@@ -453,6 +469,75 @@ describe("crossCheckDescribedScreen", () => {
     expect(note).toContain("screen 3 (inner panel, 2007x2853)");
     expect(note).toContain("screen 1 (cover panel, 1398x2034)");
     expect(note).toContain("await-screen-idle");
+  });
+});
+
+describe("crossCheckTreeScreen", () => {
+  // The flow tree's screen, in points in the fixed orientation.
+  const COVER_PT = { width: 466, height: 678 };
+  const INNER_PT = { width: 669, height: 951 };
+  const reads = () => execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length;
+
+  it("reads nothing while the tree's screen has the memo's panel's shape", async () => {
+    mockDevicectl([duoPayload(3)]);
+    await refreshActiveScreen(DUO);
+    await crossCheckTreeScreen(DUO, INNER_PT);
+    expect(reads()).toBe(1);
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(3);
+  });
+
+  it("re-reads a memo left stale by a fold made outside argent", async () => {
+    mockDevicectl([duoPayload(1), duoPayload(3)]);
+    await refreshActiveScreen(DUO);
+    await crossCheckTreeScreen(DUO, INNER_PT);
+    expect(reads()).toBe(2);
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(3);
+  });
+
+  it("takes the panel of the tree's shape when CoreDevice does not answer", async () => {
+    mockDevicectl([duoPayload(3), new Error("no")]);
+    await refreshActiveScreen(DUO);
+    await crossCheckTreeScreen(DUO, COVER_PT);
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(1);
+    expect(getCachedActiveScreen(DUO)?.panels).toHaveLength(2);
+    // The next read of the same screen agrees and costs nothing.
+    await crossCheckTreeScreen(DUO, COVER_PT);
+    expect(reads()).toBe(2);
+  });
+
+  it("seeds an empty memo left by a failed read from the server's panel list", async () => {
+    // The simulator-server attached while CoreDevice was not answering, and
+    // the device was opened since: without a memo every touch goes to screen 1.
+    rememberServerPanels(DUO, [
+      { screenId: 1, width: 1398, height: 2034 },
+      { screenId: 3, width: 2007, height: 2853 },
+    ]);
+    mockDevicectl([new Error("no")]);
+    await refreshActiveScreen(DUO);
+    await crossCheckTreeScreen(DUO, INNER_PT);
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(3);
+    expect(activeScreenOrMain(DUO)).toBe(3);
+    // Seeded, the next read of the same screen asks CoreDevice nothing.
+    const before = reads();
+    await crossCheckTreeScreen(DUO, INNER_PT);
+    expect(reads()).toBe(before);
+  });
+
+  it("leaves an empty memo nothing tried to read, and a shape that is no panel's, alone", async () => {
+    rememberServerPanels(DUO, [
+      { screenId: 1, width: 1398, height: 2034 },
+      { screenId: 3, width: 2007, height: 2853 },
+    ]);
+    await crossCheckTreeScreen(DUO, INNER_PT);
+    expect(reads()).toBe(0);
+    expect(getCachedActiveScreen(DUO)).toBeUndefined();
+    mockDevicectl([duoPayload(1)]);
+    await refreshActiveScreen(DUO);
+    // A framework that predates the fixed-space screen size reports the
+    // landscape window's instead: no panel has that shape.
+    await crossCheckTreeScreen(DUO, { width: 951, height: 669 });
+    expect(reads()).toBe(1);
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(1);
   });
 });
 

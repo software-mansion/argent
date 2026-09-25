@@ -20,18 +20,20 @@ const execFileAsync = promisify(execFile);
  * This module is that query plus a per-device memo of its last answer. The memo
  * is refreshed at the points where the answer can have changed — when a
  * simulator-server is spawned for the device, before and after argent's own
- * `fold`, and when a `describe` reports a panel the memo disagrees with — and
- * read by every touch and wheel in between. Callers that capture without a
- * preceding describe (`screenshot`, a live `screenshot-diff`, a recording
- * start) refresh it themselves. Nothing here looks at pixels, and nothing
- * subscribes: argent is the controller, so the only unknown after a fold is
- * which panel ended up live, and one read answers that.
+ * `fold`, and when a `describe` or a flow's tree read reports a panel the memo
+ * disagrees with — and read by every touch and wheel in between. Callers that
+ * capture without a preceding describe (`screenshot`, a live
+ * `screenshot-diff`, a recording start) refresh it themselves. Nothing here
+ * looks at pixels, and nothing subscribes: argent is the controller, so the
+ * only unknown after a fold is which panel ended up live, and one read
+ * answers that.
  *
  * A read can fail (CoreDevice wedged, the query timing out). The memo then
  * keeps its last answer, and while it has none the next touch retries the
  * read, with a short back-off, rather than aiming at the cover panel of a
- * device that may be open; a `describe` seeds it from the panel the tree was
- * read on, since that is the panel the device renders to.
+ * device that may be open; a `describe`, or a flow's tree read, seeds it from
+ * the panel the tree was read on, since that is the panel the device renders
+ * to.
  */
 
 /** The screen every simulator has and every command defaults to. */
@@ -126,11 +128,17 @@ const DEVICECTL_BIN =
 const cache = new Map<string, ActiveScreenState>();
 /** When the last read of a device failed, while the memo holds nothing newer. */
 const failedReadAt = new Map<string, number>();
+/**
+ * The panels the device's simulator-server reported as it attached: the panel
+ * list when CoreDevice has never answered, for {@link crossCheckTreeScreen}.
+ */
+const serverPanels = new Map<string, readonly FoldablePanel[]>();
 
 /** Test-only: forget every memoized answer and the resolved developer dir. */
 export function __resetFoldableStateForTests(): void {
   cache.clear();
   failedReadAt.clear();
+  serverPanels.clear();
   developerDirPromise = null;
 }
 
@@ -143,6 +151,12 @@ export function getCachedActiveScreen(udid: string): ActiveScreenState | undefin
 export function forgetActiveScreen(udid: string): void {
   cache.delete(udid);
   failedReadAt.delete(udid);
+  serverPanels.delete(udid);
+}
+
+/** Record the panels a foldable's simulator-server reported as it attached. */
+export function rememberServerPanels(udid: string, panels: readonly FoldablePanel[]): void {
+  serverPanels.set(udid, panels);
 }
 
 /**
@@ -292,6 +306,22 @@ export async function refreshActiveScreen(udid: string): Promise<ActiveScreenSta
 export async function readActiveScreenOrMain(udid: string): Promise<number> {
   await refreshActiveScreen(udid);
   return activeScreenOrMain(udid);
+}
+
+/**
+ * Re-read the live panel for a caller that follows it (a recording's poll):
+ * the fresh read, else the memo a failed read left in place — the panel every
+ * touch and screenshot targets, which a `describe` corrects while CoreDevice
+ * does not answer. `fresh` tells the two apart. Null only when there is
+ * neither, so the caller stays where it is.
+ */
+export async function readActiveScreenOrMemo(
+  udid: string
+): Promise<{ screen: number; fresh: boolean } | null> {
+  const state = await refreshActiveScreen(udid);
+  if (state) return { screen: state.activeScreen, fresh: true };
+  const cached = cache.get(udid);
+  return cached ? { screen: cached.activeScreen, fresh: false } : null;
 }
 
 /** The screen id of a foldable's inner panel: the one panel that is not the main screen. */
@@ -447,6 +477,39 @@ export async function crossCheckDescribedScreen(
     `CoreDevice did not report which panel this foldable simulator renders to; commands now target ` +
     `${screenLabel(describedScreen, panels)}, the panel this tree was read on.`
   );
+}
+
+/**
+ * The flow tree's counterpart of {@link crossCheckDescribedScreen}. A flow
+ * reads the app's own view hierarchy, which names no panel, but it reports the
+ * size of the screen the app's windows are on, in the screen's fixed
+ * orientation — and a foldable's panels differ in shape (the Duo's cover panel
+ * is 466x678 pt, its inner panel 669x951). A tree whose screen has the shape of
+ * one panel while the memo names another was read after a fold made outside
+ * argent (Device Hub), and without this every touch of the flow would go to
+ * the panel that went dark. So the memo is re-read, or, while CoreDevice does
+ * not answer, set to the panel of the tree's shape: the one the app renders to.
+ *
+ * An empty memo left by a failed read — a simulator-server attached while
+ * CoreDevice was not answering, so every touch goes to the main screen — is
+ * treated the same way, with the panel list that server reported.
+ *
+ * Costs nothing while the two agree, which is every read but the first after
+ * such a fold. Leaves the memo alone when nothing has tried to read it (no
+ * simulator-server targets a panel yet), and when the shape matches no panel,
+ * or more than one.
+ */
+export async function crossCheckTreeScreen(udid: string, screen: Size): Promise<void> {
+  const cached = cache.get(udid);
+  if (!cached && !failedReadAt.has(udid)) return;
+  const panels = cached?.panels ?? serverPanels.get(udid) ?? [];
+  const shaped = panels.filter((p) => sameAspect(screen, p));
+  if (shaped.length !== 1) return;
+  const treeScreen = shaped[0].screenId;
+  if (treeScreen === cached?.activeScreen) return;
+  if (await refreshActiveScreen(udid)) return;
+  cache.set(udid, { activeScreen: treeScreen, panels: [...panels], readAt: Date.now() });
+  failedReadAt.delete(udid);
 }
 
 interface Size {

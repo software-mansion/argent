@@ -96,8 +96,8 @@ export interface DescribeTreeData {
   // space, the space touches are taken in, and a landscape UI — a rotated
   // device, an unfolded foldable — is rotated on it. The flow directions
   // (`swipe: down`, `scroll-to` `direction`) are the UI's, and are mapped
-  // into the frame space with this. Absent when the adapter cannot tell, or
-  // the two spaces coincide.
+  // into the frame space with this. Absent when the source does not report
+  // it, which is when its frames are in the UI's own space.
   uiOrientation?: UiOrientation;
 }
 

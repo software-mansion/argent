@@ -15,6 +15,7 @@ import {
 } from "../../src/tools/flows/flow-ios-tree";
 import { evaluateCondition, selectorToFrame } from "../../src/utils/ui-tree-match";
 import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
+import { crossCheckTreeScreen } from "../../src/utils/foldable";
 import {
   __resetDeviceSetCacheForTesting,
   rememberDeviceSet,
@@ -26,6 +27,13 @@ import {
 vi.mock("../../src/utils/ios-device-sets", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/utils/ios-device-sets")>();
   return { ...actual, simctlTargetForUdid: vi.fn(actual.simctlTargetForUdid) };
+});
+
+// A pass-through spy: a tree read hands the screen it was read on to the
+// foldable panel memo's cross-check.
+vi.mock("../../src/utils/foldable", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/foldable")>();
+  return { ...actual, crossCheckTreeScreen: vi.fn(actual.crossCheckTreeScreen) };
 });
 
 const DEVICE = {
@@ -109,10 +117,11 @@ describe("flow iOS full-hierarchy source", () => {
   // An unfolded foldable, or a rotated iPhone: the UI is landscape (951x669 pt
   // window) on a portrait-native screen (669x951 pt), and touches are taken in
   // the native space. The framework reports each view in that space as
-  // `screenFrame`, next to the screen's native size.
+  // `screenFrame`, next to the screen's native size and the interface
+  // orientation on it.
   it("normalizes screenFrame by the reported native screen size, not the landscape window", async () => {
     const raw = {
-      screen: { width: 669, height: 951 },
+      screen: { width: 669, height: 951, interfaceOrientation: "landscapeRight" },
       windows: [
         {
           className: "UIWindow",
@@ -144,77 +153,96 @@ describe("flow iOS full-hierarchy source", () => {
     expect(frame.y).toBeCloseTo(500 / 951, 6);
     expect(frame.width).toBeCloseTo(200 / 669, 6);
     expect(frame.height).toBeCloseTo(300 / 951, 6);
-    // The pad's window rect turns into its screen rect by one rotation only:
-    // that is how the UI lies on the panel, and what the flow directions turn by.
-    expect(uiOrientation).toBe("landscapeLeft");
+    // What the flow directions turn by, as the framework names it.
+    expect(uiOrientation).toBe("landscapeRight");
   });
 
-  // Every orientation, told from one off-centre view: the window rect and the
-  // screen rect of the same view differ by exactly the interface rotation.
-  it.each([
-    ["portrait", { x: 100, y: 400, width: 200, height: 40 }, "portrait", [669, 951]],
-    ["landscapeRight", { x: 200, y: 151, width: 200, height: 300 }, "landscapeRight", [951, 669]],
-    ["landscapeLeft", { x: 269, y: 500, width: 200, height: 300 }, "landscapeLeft", [951, 669]],
-    ["upside down", { x: 369, y: 511, width: 200, height: 40 }, "portraitUpsideDown", [669, 951]],
-  ] as const)(
-    "reports the UI orientation the views imply: %s",
-    async (_name, screenFrame, expected, [winW, winH]) => {
-      const windowFrame =
-        winW > winH
-          ? { x: 500, y: 200, width: 300, height: 200 }
-          : { x: 100, y: 400, width: 200, height: 40 };
+  it.each(["portrait", "portraitUpsideDown", "landscapeLeft", "landscapeRight"] as const)(
+    "reports the interface orientation the framework names: %s",
+    async (interfaceOrientation) => {
       const raw = {
-        screen: { width: 669, height: 951 },
+        screen: { width: 669, height: 951, interfaceOrientation },
         windows: [
           {
             className: "UIWindow",
-            frame: { x: 0, y: 0, width: winW, height: winH },
-            windowFrame: { x: 0, y: 0, width: winW, height: winH },
+            windowFrame: { x: 0, y: 0, width: 669, height: 951 },
             screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-            children: [
-              {
-                className: "UIButton",
-                identifier: "buy",
-                frame: windowFrame,
-                windowFrame,
-                screenFrame,
-                children: [],
-              },
-            ],
+            children: [],
           },
         ],
       };
       const { uiOrientation } = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
-      expect(uiOrientation).toBe(expected);
+      expect(uiOrientation).toBe(interfaceOrientation);
     }
   );
 
-  it("reports no orientation when the views cannot tell", async () => {
-    // A landscape window whose only view sits on the centre line: both
-    // landscapes predict the same screen rect, so neither is claimed.
-    const centred = {
-      screen: { width: 669, height: 951 },
+  // A game or a canvas: one full-screen view, whose screen rect is the same in
+  // both landscape orientations. The frames cannot say which way `down` is on
+  // the panel; the reported orientation can.
+  it("knows the orientation of a UI made of one full-screen view", async () => {
+    const pad = {
+      className: "PadView",
+      identifier: "sym.pad",
+      windowFrame: { x: 0, y: 0, width: 951, height: 669 },
+      screenFrame: { x: 0, y: 0, width: 669, height: 951 },
+      children: [],
+    };
+    const serving = (interfaceOrientation: string) => ({
+      screen: { width: 669, height: 951, interfaceOrientation },
       windows: [
         {
           className: "UIWindow",
           windowFrame: { x: 0, y: 0, width: 951, height: 669 },
           screenFrame: { x: 0, y: 0, width: 669, height: 951 },
-          children: [
-            {
-              className: "UILabel",
-              label: "Centre",
-              windowFrame: { x: 375.5, y: 234.5, width: 200, height: 200 },
-              screenFrame: { x: 234.5, y: 375.5, width: 200, height: 200 },
-              children: [],
-            },
-          ],
+          children: [pad],
+        },
+      ],
+    });
+    for (const orientation of ["landscapeLeft", "landscapeRight"]) {
+      const { uiOrientation } = await queryFullHierarchyTree(
+        registryFor(apiServing(serving(orientation))),
+        DEVICE
+      );
+      expect(uiOrientation).toBe(orientation);
+    }
+  });
+
+  // A foldable folded behind argent's back: the app's screen has the other
+  // panel's shape, and the memo every touch reads must hear of it.
+  it("hands the screen the tree was read on to the foldable panel memo", async () => {
+    const raw = {
+      screen: { width: 669, height: 951, interfaceOrientation: "landscapeLeft" },
+      windows: [
+        {
+          className: "UIWindow",
+          windowFrame: { x: 0, y: 0, width: 951, height: 669 },
+          screenFrame: { x: 0, y: 0, width: 669, height: 951 },
+          children: [],
+        },
+      ],
+    };
+    vi.mocked(crossCheckTreeScreen).mockClear();
+    await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+    expect(crossCheckTreeScreen).toHaveBeenCalledWith(DEVICE.id, { width: 669, height: 951 });
+  });
+
+  it("reports no orientation when the framework names none it knows", async () => {
+    const unknown = {
+      screen: { width: 669, height: 951, interfaceOrientation: "faceUp" },
+      windows: [
+        {
+          className: "UIWindow",
+          windowFrame: { x: 0, y: 0, width: 669, height: 951 },
+          screenFrame: { x: 0, y: 0, width: 669, height: 951 },
+          children: [],
         },
       ],
     };
     expect(
-      (await queryFullHierarchyTree(registryFor(apiServing(centred)), DEVICE)).uiOrientation
+      (await queryFullHierarchyTree(registryFor(apiServing(unknown)), DEVICE)).uiOrientation
     ).toBeUndefined();
-    // A framework that predates screenFrame reports nothing to compare.
+    // A framework that predates screenFrame reports neither; its frames are in
+    // the window's space, where a direction needs no turning.
     const older = {
       windows: [
         {
@@ -233,30 +261,6 @@ describe("flow iOS full-hierarchy source", () => {
     };
     expect(
       (await queryFullHierarchyTree(registryFor(apiServing(older)), DEVICE)).uiOrientation
-    ).toBeUndefined();
-    // A window that does not span the screen (a keyboard, a picker) says
-    // nothing about the interface's space.
-    const keyboardOnly = {
-      screen: { width: 669, height: 951 },
-      windows: [
-        {
-          className: "UIRemoteKeyboardWindow",
-          windowFrame: { x: 0, y: 0, width: 951, height: 300 },
-          screenFrame: { x: 0, y: 0, width: 300, height: 951 },
-          children: [
-            {
-              className: "UIButton",
-              label: "space",
-              windowFrame: { x: 100, y: 200, width: 500, height: 50 },
-              screenFrame: { x: 50, y: 100, width: 50, height: 500 },
-              children: [],
-            },
-          ],
-        },
-      ],
-    };
-    expect(
-      (await queryFullHierarchyTree(registryFor(apiServing(keyboardOnly)), DEVICE)).uiOrientation
     ).toBeUndefined();
   });
 

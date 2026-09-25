@@ -84,8 +84,11 @@ export interface PanelFollow {
   initialScreen: number;
   /** The MJPEG stream of a panel. */
   streamUrlForScreen(screen: number): string;
-  /** Which panel the device renders to now; null when it could not be read. */
-  readActiveScreen(): Promise<number | null>;
+  /**
+   * Which panel to record now: the one CoreDevice reports (`fresh`), else the
+   * one argent's commands target; null when neither is known.
+   */
+  readActiveScreen(): Promise<{ screen: number; fresh: boolean } | null>;
   /** Poll cadence; the default is {@link PANEL_POLL_MS}. */
   pollMs?: number;
 }
@@ -249,11 +252,13 @@ async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
 }
 
 /**
- * Follow the panel a foldable renders to: poll CoreDevice, and when the answer
- * changes, move the capture onto that panel's stream. The old stream is closed
- * only once the new one has delivered a frame, so a stream that fails to open
- * (or a panel that has not drawn yet) costs nothing but a retry on the next
- * tick; the recording never goes dark on argent's account.
+ * Follow the panel a foldable renders to: poll CoreDevice (or, while it does
+ * not answer, the panel argent's commands target, counted for stop's warning),
+ * and when the answer changes, move the capture onto that panel's stream. The
+ * old stream is closed only once the new one has delivered a frame, so a
+ * stream that fails to open (or a panel that has not drawn yet) costs nothing
+ * but a retry on the next tick; the recording never goes dark on argent's
+ * account.
  */
 function startPanelFollow(
   api: ScreenRecordingSessionApi,
@@ -266,8 +271,11 @@ function startPanelFollow(
     inFlight = true;
     void (async () => {
       try {
-        const screen = await follow.readActiveScreen();
-        if (screen === null || screen === api.activeScreen || api.captureProcess !== child) return;
+        const read = await follow.readActiveScreen();
+        if (api.captureProcess !== child) return;
+        if (!read?.fresh) api.panelReadFailures++;
+        const screen = read?.screen ?? null;
+        if (screen === null || screen === api.activeScreen) return;
         const next = await openMjpegStream(
           follow.streamUrlForScreen(screen),
           STREAM_CONNECT_TIMEOUT_MS
@@ -464,6 +472,7 @@ async function startCaptureLocked(
   api.frameStream = stream;
   api.activeScreen = params.followPanel?.initialScreen ?? null;
   api.panelSwitches = 0;
+  api.panelReadFailures = 0;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
@@ -613,6 +622,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const watermarkSkipped = api.watermarkSkipped;
   const pointerFailed = api.pointerFailed;
   const panelSwitches = api.panelSwitches;
+  const panelReadFailures = api.panelReadFailures;
   let warning: string | undefined;
 
   try {
@@ -678,6 +688,17 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         .filter(Boolean)
         .join(" ");
     }
+    if (panelReadFailures > 0) {
+      warning = [
+        warning,
+        `CoreDevice did not report which panel the device renders to on ${panelReadFailures} of ` +
+          `the recording's panel checks; for those the recording stayed on the panel argent's ` +
+          `commands target. After a fold made outside argent that panel is the dark one until a ` +
+          `\`describe\` corrects it, so parts of the video may be black.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
 
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // Wall-clock capture length: after the cap fires (or the encoder dies) the
@@ -734,6 +755,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.trimmedAnyFrames = false;
     api.activeScreen = null;
     api.panelSwitches = 0;
+    api.panelReadFailures = 0;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;
     api.timeLimitSeconds = null;

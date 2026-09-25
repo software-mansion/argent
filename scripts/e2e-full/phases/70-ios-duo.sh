@@ -20,8 +20,8 @@ _duo_present() { # udid
 # received as `n=<x>,<y>`, in the app's WINDOW space; argent sends the panel's
 # native (portrait) space. Unfolded, the UI is landscape on a portrait-native
 # panel, so the two differ by a rotation: the probe's `probe.info` label names
-# the interface orientation (`orient=`; 1 portrait, 3 landscapeLeft,
-# 4 landscapeRight). A tap at the pad centre from `describe` must land within
+# the interface orientation (`orient=`, UIKit's raw value; 1 portrait,
+# 3 landscapeRight, 4 landscapeLeft). A tap at the pad centre from `describe` must land within
 # 0.02 of its image on whichever panel is live.
 _probe_touch_close_to() { # udid expected-x expected-y
   local udid="$1" ex="$2" ey="$3"
@@ -82,6 +82,30 @@ PY
     pass "$P" flow-execute "swipe-down-$case" "window-space $began -> $ended"
   else
     fail "$P" flow-execute "swipe-down-$case" "the finger did not travel down the UI: $began -> $ended"
+  fi
+}
+
+# Fold the hinge behind argent's back, then run a one-step flow that taps the
+# pad: flows read the app's own view hierarchy, not `describe`, and the tap must
+# still go to the panel the device now renders to. The tap count is read
+# before the fold, since the `describe` that reads it would correct argent's
+# panel on its own.
+_flow_tap_after_external_fold() { # udid hinge-helper project-root to-angle from-angle case
+  local udid="$1" hinge="$2" root="$3" to="$4" from="$5" case="$6" before after
+  mkdir -p "$root/.argent/flows"
+  printf 'steps:\n  - tap: { id: probe.pad }\n' > "$root/.argent/flows/pad-tap.yaml"
+  before="$(_probe_taps "$udid")"
+  "$hinge" "$udid" hinge "$to" "$from" >/dev/null 2>&1; sleep 2
+  run_tool flow-execute "{\"name\":\"pad-tap\",\"project_root\":\"$root\",\"device\":\"$udid\"}"
+  if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.ok==true' >/dev/null 2>&1; then
+    fail "$P" flow-execute "$case" "$(rt_detail 200)"; return 1
+  fi
+  sleep 1
+  after="$(_probe_taps "$udid")"
+  if [ "$after" -gt "$before" ] 2>/dev/null; then
+    pass "$P" flow-execute "$case" "taps $before -> $after"
+  else
+    fail "$P" flow-execute "$case" "the flow's tap went to the dark panel (taps $before -> $after)"
   fi
 }
 
@@ -247,6 +271,9 @@ run_phase() {
     else
       fail "$P" fold after-external-fold "$(rt_detail 200) taps $taps_before -> $taps_after"
     fi
+    # A flow run after an outside fold, in both directions: the first tap lands.
+    _flow_tap_after_external_fold "$DEV" "$HINGE" "$E2E_WORK/duo-flows" 180 0 tap-after-external-unfold
+    _flow_tap_after_external_fold "$DEV" "$HINGE" "$E2E_WORK/duo-flows" 0 180 tap-after-external-close
   else
     skip "$P" fold after-external-fold "set E2E_DUO_HINGE to a hinge helper (duo-hinge) to fold behind argent's back"
   fi

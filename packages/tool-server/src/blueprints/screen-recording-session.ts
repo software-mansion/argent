@@ -84,6 +84,8 @@ export interface ScreenRecordingSessionApi {
   activeScreen: number | null;
   /** How many times the capture moved to another panel. */
   panelSwitches: number;
+  /** How many panel polls CoreDevice did not answer; reported by stop. */
+  panelReadFailures: number;
   /**
    * The frame stream's drop error, stashed when the pump is torn down (cap,
    * crash, stop) before `frameStream` is nulled, so a stop arriving after a
@@ -138,6 +140,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   }
   state.activeScreen = null;
   state.panelSwitches = 0;
+  state.panelReadFailures = 0;
   state.pointerDisable = null;
   state.pointerFailed = false;
   state.recordingTimedOut = false;
@@ -199,6 +202,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       panelPollTimer: null,
       activeScreen: null,
       panelSwitches: 0,
+      panelReadFailures: 0,
       pumpTimer: null,
       trimStatic: true,
       framesWritten: 0,
