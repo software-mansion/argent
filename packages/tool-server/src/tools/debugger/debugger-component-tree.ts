@@ -49,9 +49,11 @@ function rectsOverlap(
  * the app window's axes. An iOS simulator takes touches on the screen's fixed
  * (portrait-native) axes, and a landscape UI — a rotated device, or an unfolded
  * foldable — is turned on them. `unknown` is an iOS simulator whose orientation
- * could not be read; absent is a device whose touches use the window's axes.
+ * could not be read; `ambiguous` a session that two booted simulators of one
+ * name could run, with no `udid` to tell them apart; absent is a device whose
+ * touches use the window's axes.
  */
-type TapAxes = UiOrientation | "unknown";
+type TapAxes = UiOrientation | "unknown" | "ambiguous";
 
 export function buildTextTree(
   data: RawResult,
@@ -353,13 +355,19 @@ export function buildTextTree(
   const lines: string[] = [];
 
   const turn =
-    opts.uiOrientation && opts.uiOrientation !== "unknown" ? opts.uiOrientation : undefined;
+    opts.uiOrientation && opts.uiOrientation !== "unknown" && opts.uiOrientation !== "ambiguous"
+      ? opts.uiOrientation
+      : undefined;
 
   if (canNormalize) {
     lines.push(`Screen: ${screenW}x${screenH}`);
     if (turn && turn !== "portrait") {
       lines.push(
         `The UI is ${turn} on the screen. The tap points are on the screen's axes, which the gesture tools use.`
+      );
+    } else if (opts.uiOrientation === "ambiguous" && screenW > screenH) {
+      lines.push(
+        "Note: the UI is landscape, and two booted simulators have this device's name, so its orientation could not be read. The tap points are on the UI's axes, so a tap can miss. Call again with the simulator's udid, or use describe for tap points."
       );
     } else if (opts.uiOrientation === "unknown" && screenW > screenH) {
       lines.push(
@@ -497,53 +505,71 @@ export function buildTextTree(
 const ORIENTATION_READ_TIMEOUT_MS = 3_000;
 
 /**
- * The bundle id of the app the debugger is attached to. Its Metro target is
- * named after it ("com.example.app (iPhone 16)"); when no connected app matches
- * that name, the frontmost connected app stands in.
+ * The bundle id of the app the debugger is attached to, on the simulator `api`
+ * serves. Its Metro target is named after it ("com.example.app (iPhone 16)").
+ * A target named after a bundle id that is not connected here is another
+ * simulator's app, or an app this simulator cannot read: undefined, never a
+ * stand-in. Only a target named some other way falls back to the frontmost
+ * connected app.
  */
-async function debuggedBundleId(api: NativeDevtoolsApi, appName: string): Promise<string> {
+async function debuggedBundleId(
+  api: NativeDevtoolsApi,
+  appName: string
+): Promise<string | undefined> {
   const named = api
     .listConnectedBundleIds()
     .filter((id) => appName === id || appName.startsWith(`${id} `));
   if (named.length === 1) return named[0]!;
+  if (BUNDLE_ID_NAMED_TARGET.test(appName)) return undefined;
   return (await resolveNativeTargetApp(api)).bundleId;
 }
+
+/** A Metro target named after a bundle id: "com.example.app (iPhone 16)". */
+const BUNDLE_ID_NAMED_TARGET = /^[\w-]+(\.[\w-]+)+( \(|$)/;
 
 /** What the tree's debugger session is attached to, as the debugger knows it. */
 interface DebuggedApp {
   /** The `device_id` the tool was called with. */
   deviceId: string;
+  /** The simulator the caller names, for a session its `device_id` cannot place. */
+  udid?: string;
   /** The Metro target's name, `<bundle id> (<device name>)`. */
   appName: string;
   deviceName: string;
   logicalDeviceId: string | undefined;
 }
 
-const IOS_SIMULATOR_UNKNOWN = "ios-simulator-unknown";
+const AMBIGUOUS_SIMULATOR = "ambiguous-simulator";
+
+function isIosSimulator(device: DeviceInfo): boolean {
+  return (
+    (device.platform === "ios" && device.kind === "simulator") || device.platform === "ios-remote"
+  );
+}
 
 /**
- * The iOS simulator the session runs on; undefined for any other device. A
- * session keyed by a Metro logicalDeviceId (two devices share one Metro) names
- * no device, so it is found by name among the booted simulators; a name two of
- * them share leaves it an iOS simulator that cannot be told apart.
+ * The iOS simulator the session runs on; undefined for any other device. The
+ * caller's `udid` decides when given. Otherwise a session keyed by a Metro
+ * logicalDeviceId (two devices share one Metro) names no device, so it is found
+ * by name among the booted simulators; a name two of them share leaves it
+ * ambiguous.
  */
 async function iosSimulatorOf(
   app: DebuggedApp
-): Promise<DeviceInfo | typeof IOS_SIMULATOR_UNKNOWN | undefined> {
-  const device = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
-  if (
-    (device.platform === "ios" && device.kind === "simulator") ||
-    device.platform === "ios-remote"
-  ) {
-    return device;
+): Promise<DeviceInfo | typeof AMBIGUOUS_SIMULATOR | undefined> {
+  if (app.udid) {
+    const named = resolveDevice(app.udid);
+    return isIosSimulator(named) ? named : undefined;
   }
+  const device = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
+  if (isIosSimulator(device)) return device;
   const logicalKeyed = app.deviceId === app.logicalDeviceId || isLogicalKeyedDevice(app.deviceId);
   if (!logicalKeyed) return undefined;
   const named = (await listIosSimulators()).filter(
     (sim) => sim.state === "Booted" && sim.runtimeKind === "mobile" && sim.name === app.deviceName
   );
   if (named.length === 1) return resolveDevice(named[0]!.udid);
-  return named.length > 1 ? IOS_SIMULATOR_UNKNOWN : undefined;
+  return named.length > 1 ? AMBIGUOUS_SIMULATOR : undefined;
 }
 
 /**
@@ -560,10 +586,11 @@ export async function readTapAxes(
   const read = (async (): Promise<TapAxes | undefined> => {
     const device = await iosSimulatorOf(app);
     if (device === undefined) return undefined;
-    if (device === IOS_SIMULATOR_UNKNOWN) return "unknown";
+    if (device === AMBIGUOUS_SIMULATOR) return "ambiguous";
     const ref = nativeDevtoolsRef(device);
     const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
     const bundleId = await debuggedBundleId(api, app.appName);
+    if (!bundleId) return "unknown";
     const raw = (await api.queryViewHierarchy(bundleId, "ViewHierarchy.getFullHierarchy", {
       fields: ["className"],
       maxDepth: 1,
@@ -588,6 +615,12 @@ const zodSchema = z.object({
     .string()
     .describe(
       "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+    ),
+  udid: z
+    .string()
+    .optional()
+    .describe(
+      "iOS simulator UDID from list-devices. Pass it when device_id is a logicalDeviceId (two or more devices share one Metro), so that the tap coordinates of a landscape UI are on the screen's axes."
     ),
   onScreenOnly: z
     .boolean()
@@ -633,8 +666,9 @@ full-screen transparent wrappers, and implementation-detail components are prune
 Each visible component is listed with its name, text content, and normalized
 tap coordinates in [0,1] space (fractions of the screen, not pixels — same space as tap/swipe/gesture).
 On an iOS simulator with a landscape UI (a rotated device, or an unfolded foldable), the tap
-coordinates are on the screen's axes, which the gesture tools use. If the result says that the
-orientation could not be read, take tap coordinates from describe.
+coordinates are on the screen's axes, which the gesture tools use. When two or more devices share
+one Metro, pass the simulator's udid too. If the result says that the orientation could not be
+read, take tap coordinates from describe.
 
 This is the preferred element discovery tool for React Native apps. More information in argent-react-native-app-workflow skill.
 
@@ -660,6 +694,7 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
       // Read alongside the tree; it never fails, so it never fails the tree.
       const tapAxes = readTapAxes(registry, {
         deviceId: params.device_id,
+        udid: params.udid,
         appName: api.appName,
         deviceName: api.deviceName,
         logicalDeviceId: api.logicalDeviceId,

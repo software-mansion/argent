@@ -91,6 +91,18 @@ describe("buildTextTree — tap points on the axes the gesture tools take", () =
     expect(text).toContain("Use describe for tap points.");
   });
 
+  it("asks for the udid when two same-named simulators leave a landscape UI unread", () => {
+    const text = buildTextTree(tree(LANDSCAPE, 0.8, 0.25), { ...base, uiOrientation: "ambiguous" });
+    expect(tapOf(text)).toBe("0.80,0.25");
+    expect(text).toContain("two booted simulators have this device's name");
+    expect(text).toContain("Call again with the simulator's udid");
+  });
+
+  it("does not warn about a portrait UI that two same-named simulators could run", () => {
+    const text = buildTextTree(tree(PORTRAIT, 0.8, 0.25), { ...base, uiOrientation: "ambiguous" });
+    expect(text).not.toContain("Note:");
+  });
+
   it("does not warn about a portrait UI whose orientation could not be read", () => {
     const text = buildTextTree(tree(PORTRAIT, 0.8, 0.25), { ...base, uiOrientation: "unknown" });
     expect(tapOf(text)).toBe("0.80,0.25");
@@ -101,9 +113,9 @@ describe("buildTextTree — tap points on the axes the gesture tools take", () =
 const SIM_UDID = "B6C52FD4-5408-402B-9369-EF7C66B98E6F";
 const LOGICAL_ID = "742492b137e6ca0e09576c54528e4249017ccd55";
 
-function app(deviceId: string, appName: string, logicalDeviceId?: string) {
+function app(deviceId: string, appName: string, logicalDeviceId?: string, udid?: string) {
   const deviceName = /\(([^)]*)\)$/.exec(appName)?.[1] ?? "";
-  return { deviceId, appName, deviceName, logicalDeviceId };
+  return { deviceId, appName, deviceName, logicalDeviceId, udid };
 }
 
 function appState(bundleId: string, active: boolean): NativeAppState {
@@ -131,7 +143,7 @@ function fakeNative(opts: {
         opts.query(bundleId, params)
     ),
   } as unknown as NativeDevtoolsApi & { queryViewHierarchy: ReturnType<typeof vi.fn> };
-  const registry = { resolveService: vi.fn(async () => api) };
+  const registry = { resolveService: vi.fn(async (_urn: string, _options?: unknown) => api) };
   return { api, registry };
 }
 
@@ -239,7 +251,7 @@ describe("readTapAxes", () => {
       );
     });
 
-    it("is unknown when two booted simulators share the name", async () => {
+    it("is ambiguous when two booted simulators share the name and no udid is given", async () => {
       simulators.list = [
         { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
         {
@@ -255,7 +267,60 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID)
         )
+      ).toBe("ambiguous");
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it("reads the simulator the udid names, whatever the names", async () => {
+      simulators.list = [
+        { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+        {
+          udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+          name: "iPhone 18 Pro",
+          state: "Booted",
+          runtimeKind: "mobile",
+        },
+      ];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      const axes = await readTapAxes(
+        registry as never,
+        app(
+          LOGICAL_ID,
+          "com.example.app (iPhone 18 Pro)",
+          LOGICAL_ID,
+          "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+        )
+      );
+      expect(axes).toBe("landscapeRight");
+      expect(registry.resolveService).toHaveBeenCalledTimes(1);
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(
+        "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+      );
+    });
+
+    it("is unknown when the udid names a simulator that does not run the debugged app", async () => {
+      const { api, registry } = fakeNative({
+        connected: ["com.example.other"],
+        active: "com.example.other",
+        query: landscape,
+      });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, SIM_UDID)
+        )
       ).toBe("unknown");
+      expect(api.queryViewHierarchy).not.toHaveBeenCalled();
+    });
+
+    it("reads nothing when the udid names an Android device", async () => {
+      const { registry } = fakeNative({ connected: [], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (Pixel 9)", LOGICAL_ID, "emulator-5554")
+        )
+      ).toBeUndefined();
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
