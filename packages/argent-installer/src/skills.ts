@@ -10,9 +10,9 @@ import {
   getProjectSkillLockPath,
   listArgentSkillsInLock,
   listBundledSkills,
-  withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
+import { resolveSkillsRunner } from "./skills-runner.js";
 
 type SkillScope = "project" | "global";
 
@@ -74,6 +74,8 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   if (bundled.size === 0) return [];
   const results: SkillScopeResult[] = [];
   const primarySource = buildArgentSkillsSource(getInstalledVersion());
+  // Resolved once for the whole refresh — every scope's calls share it.
+  const runner = resolveSkillsRunner();
   // Project-scope `skills` commands act on their cwd, and this can run from a
   // detached updater that inherited the tool-server's editor-chosen cwd (often
   // `/` or `$HOME`) — pin every run to the project.
@@ -96,7 +98,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     };
 
     try {
-      execFileSync("npx", withNpmForce(spec.buildAddArgs(primarySource)), execOpts);
+      execFileSync(runner.bin, runner.buildArgs(spec.buildAddArgs(primarySource)), execOpts);
       result.synced = bundled.size;
     } catch (primaryErr) {
       if (primarySource === SKILLS_DIR) {
@@ -104,7 +106,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
           primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
       } else {
         try {
-          execFileSync("npx", withNpmForce(spec.buildAddArgs(SKILLS_DIR)), execOpts);
+          execFileSync(runner.bin, runner.buildArgs(spec.buildAddArgs(SKILLS_DIR)), execOpts);
           result.synced = bundled.size;
         } catch (fallbackErr) {
           result.syncError =
@@ -115,7 +117,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (orphaned.length > 0) {
       try {
-        execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), execOpts);
+        execFileSync(runner.bin, runner.buildArgs([...spec.removeArgs, ...orphaned]), execOpts);
         result.pruned = orphaned;
       } catch (err) {
         result.pruneError = err instanceof Error ? err.message.split("\n")[0] : String(err);

@@ -37,7 +37,29 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   };
 });
 
+// `resolveSkillsRunner` scans the real PATH, which may lack npx (#1206). Mock
+// it so these tests see a fixed npx runner, and switch to pnpm dlx on demand.
+const { resolveSkillsRunnerMock } = vi.hoisted(() => ({
+  resolveSkillsRunnerMock: vi.fn(),
+}));
+
+vi.mock("../src/skills-runner.js", () => ({
+  resolveSkillsRunner: resolveSkillsRunnerMock,
+}));
+
 import { refreshArgentSkills, formatSkillRefreshSummary } from "../src/skills.js";
+
+const npxRunner = {
+  bin: "npx",
+  buildArgs: (args: string[]) => ["--force", ...args],
+  label: "npx",
+};
+
+const pnpmDlxRunner = {
+  bin: "pnpm",
+  buildArgs: (args: string[]) => ["dlx", ...args],
+  label: "pnpm dlx",
+};
 
 let tmpDir: string;
 const originalXdg = process.env.XDG_STATE_HOME;
@@ -51,6 +73,8 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-skills-test-"));
   execFileSyncMock.mockReset();
   listBundledSkillsMock.mockReset();
+  resolveSkillsRunnerMock.mockReset();
+  resolveSkillsRunnerMock.mockReturnValue(npxRunner);
   // Point the global lock at a per-test directory so we never touch the
   // user's real ~/.agents/.skill-lock.json during the suite.
   process.env.XDG_STATE_HOME = path.join(tmpDir, "xdg");
@@ -128,6 +152,24 @@ describe("refreshArgentSkills", () => {
     // flag has to precede the `skills` command for npm to consume it.
     expect(args.indexOf("--force")).toBe(0);
     expect(args.indexOf("--force")).toBeLessThan(args.indexOf("skills"));
+  });
+
+  it("runs the skills CLI through `pnpm dlx` when the resolver picks pnpm (#1206)", () => {
+    resolveSkillsRunnerMock.mockReturnValue(pnpmDlxRunner);
+    listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
+    writeLock(path.join(tmpDir, "skills-lock.json"), {
+      "argent-create-flow": {},
+    });
+
+    refreshArgentSkills(tmpDir);
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    const [bin, args] = execFileSyncMock.mock.calls[0]! as [string, string[]];
+    expect(bin).toBe("pnpm");
+    // pnpm dlx has no npm-only `--force` flag; it just needs the leading `dlx`.
+    expect(args[0]).toBe("dlx");
+    expect(args).not.toContain("--force");
+    expect(args).toContain("add");
   });
 
   it("resyncs a tracked global scope with the -g flag", () => {
