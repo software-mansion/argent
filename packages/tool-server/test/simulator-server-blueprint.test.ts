@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import type { DeviceInfo } from "@argent/registry";
+import { getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { toSimulatorNetworkError } from "../src/utils/format-error";
 
 // ─── Mocks ───────────────────────────────────────────────────────────
@@ -277,6 +277,128 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await expect(simulatorServerBlueprint.factory({}, stub)).rejects.toThrow(
       /requires a resolved DeviceInfo via options\.device/
     );
+  });
+
+  // Regression: this read the literal "simulator-server exited with code before
+  // becoming ready" — no code, and the binary's own explanation went only to
+  // the tool-server's log, so the failing tool call never said why.
+  it("names the exit code and the binary's error when it exits before becoming ready", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      fakeProc.stderr.push(
+        "[2026-09-23T16:23:35Z INFO  simulator_server::media_handler::screenshot_service] Screenshot service stopped\n"
+      );
+      fakeProc.stderr.push("Error: Failed to find any running emulator\n");
+      // `exit` can fire before stderr drains; the reason must still make it in.
+      fakeProc.emit("exit", 1, null);
+      setImmediate(() => fakeProc.stderr.push(null));
+    });
+
+    const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
+    expect(error.message).toMatch(/^simulator-server exited with code 1 before becoming ready/);
+    expect(error.message).toContain("Error: Failed to find any running emulator");
+    expect(error.message).not.toContain("Screenshot service stopped");
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: "SIMULATOR_SERVER_READY_EXITED",
+      failure_exit_code: 1,
+    });
+  });
+
+  it("names the signal when simulator-server is killed before becoming ready", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      fakeProc.stderr.push(null);
+      fakeProc.emit("exit", null, "SIGKILL");
+    });
+
+    const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
+    expect(error.message).toBe("simulator-server was killed by SIGKILL before becoming ready");
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: "SIMULATOR_SERVER_READY_EXITED",
+      failure_signal: "SIGKILL",
+    });
+  });
+
+  it("keeps the binary's error when routine shutdown lines follow it", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      fakeProc.stderr.push("Error: Failed to find any running emulator\n");
+      for (let i = 0; i < 12; i++) {
+        fakeProc.stderr.push(
+          `[2026-09-23T16:23:35Z INFO  simulator_server::media_handler] shutdown step ${i}\n`
+        );
+      }
+      fakeProc.stderr.push(null);
+      fakeProc.emit("exit", 1, null);
+    });
+
+    const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
+    expect(error.message).toContain("Error: Failed to find any running emulator");
+    expect(error.message).not.toContain("shutdown step");
+  });
+
+  // Stdio can outlive `exit`, so readiness lines may still be buffered while the
+  // rejection waits for stderr. A process that already exited is never ready.
+  it("never resolves readiness after the process has exited", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      fakeProc.emit("exit", 1, null);
+      fakeProc.stdout.push("stream_ready http://127.0.0.1:55571\n");
+      fakeProc.stdout.push("api_ready http://127.0.0.1:55570\n");
+      setImmediate(() => fakeProc.stderr.push(null));
+    });
+
+    const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toMatch(/^simulator-server exited with code 1 before becoming ready/);
+  });
+
+  it("reports the exit, not the ready timeout, when the process exits just before the deadline", async () => {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    vi.useFakeTimers();
+    try {
+      const fakeProc = makeFakeProc();
+      spawnMock.mockReturnValue(fakeProc);
+
+      const device = androidDevice("emulator-5554");
+      const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+      const settled = factoryPromise.catch((e: unknown) => e);
+
+      // Exit 100 ms before the 30 s readiness deadline, with stderr still open,
+      // so the deadline falls inside the wait for stderr to drain.
+      await vi.advanceTimersByTimeAsync(29_900);
+      fakeProc.emit("exit", 1, null);
+      await vi.advanceTimersByTimeAsync(300);
+
+      const error = (await settled) as Error;
+      expect(getFailureSignal(error)).toMatchObject({
+        error_code: "SIMULATOR_SERVER_READY_EXITED",
+        failure_exit_code: 1,
+      });
+      expect(fakeProc.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to the STREAM_GRACE_MS resolve when only api_ready arrives (non-streaming build)", async () => {

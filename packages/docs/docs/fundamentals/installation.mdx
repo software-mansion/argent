@@ -87,6 +87,7 @@ Argent runs Android emulators on Linux, but a few host-side knobs matter:
   # log out and back in so the new group takes effect
   ```
 
+- **glibc version.** The gesture tools, `screenshot`, `rotate` and `paste` start the bundled `simulator-server` binary. This binary needs glibc 2.39 or newer, for example Ubuntu 24.04 or Debian 13. On an older host, the binary does not start. These tools then fail with ``version `GLIBC_2.39' not found``. Run `ldd --version` to see the glibc version of the host.
 - **GPU mode.** Argent picks `-gpu swiftshader` on Linux for universal compatibility. Override it with `ARGENT_EMULATOR_GPU_MODE=host` if you have verified that hardware GL works on your machine.
 - **System image.** Prefer the `default` or `google_apis` variants of `x86_64` images. Always pick `x86_64` on Intel and AMD hosts, since ARM images run through QEMU translation and are dramatically slower.
 - **AVD resources.** Stock 2 GB / 4 vCPU AVDs can be CPU-starved by a concurrent Gradle build. Bump `hw.ramSize`, `hw.cpu.ncore` and `vm.heapSize` in `~/.android/avd/<name>.avd/config.ini`.
