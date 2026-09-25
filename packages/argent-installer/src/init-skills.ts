@@ -108,7 +108,7 @@ export async function runSkillsStep(args: {
     // `--no-install` is npx-only. isSkillsCliAvailable() probes npx, so
     // offlineWithCache already implies it; the check keeps that explicit.
     const baseArgs =
-      offlineWithCache && runner.bin === "npx" ? ["--no-install", ...skillsArgs] : skillsArgs;
+      offlineWithCache && runner.kind === "npx" ? ["--no-install", ...skillsArgs] : skillsArgs;
     // skillsCommand adds whatever the runner needs (npx: --force; pnpm: dlx);
     // baseArgs stays clean for the displayed and manual-fallback commands.
     const command = skillsCommand(runner, baseArgs);

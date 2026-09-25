@@ -59,12 +59,14 @@ import { refreshArgentSkills, formatSkillRefreshSummary } from "../src/skills.js
 import type { SkillsRunner } from "../src/skills-runner.js";
 
 const npxRunner = {
+  kind: "npx" as const,
   bin: "npx",
   buildArgs: (args: string[]) => ["--force", ...args],
   label: "npx",
 };
 
 const pnpmDlxRunner = {
+  kind: "pnpm" as const,
   bin: "pnpm",
   buildArgs: (args: string[]) => ["dlx", ...args],
   label: "pnpm dlx",

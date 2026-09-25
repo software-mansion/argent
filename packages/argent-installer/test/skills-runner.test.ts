@@ -37,7 +37,8 @@ describe("resolveSkillsRunner", () => {
 
     const runner = resolveSkillsRunner({ PATH: bin }, "linux");
 
-    expect(runner.bin).toBe("npx");
+    expect(runner.kind).toBe("npx");
+    expect(runner.bin).toBe(path.join(bin, "npx"));
     expect(runner.label).toBe("npx");
     expect(runner.buildArgs(["skills", "add", "x"])).toEqual(withNpmForce(["skills", "add", "x"]));
   });
@@ -48,7 +49,8 @@ describe("resolveSkillsRunner", () => {
 
     const runner = resolveSkillsRunner({ PATH: bin }, "linux");
 
-    expect(runner.bin).toBe("pnpm");
+    expect(runner.kind).toBe("pnpm");
+    expect(runner.bin).toBe(path.join(bin, "pnpm"));
     expect(runner.label).toBe("pnpm dlx");
     expect(runner.buildArgs(["skills", "add", "x"])).toEqual(["dlx", "skills", "add", "x"]);
   });
@@ -75,7 +77,7 @@ describe("resolveSkillsRunner", () => {
 
       const runner = resolveSkillsRunner({ PATH: bin }, "linux");
 
-      expect(runner.bin).toBe("pnpm");
+      expect(runner.bin).toBe(path.join(bin, "pnpm"));
     }
   );
 
@@ -85,7 +87,9 @@ describe("resolveSkillsRunner", () => {
 
     const runner = resolveSkillsRunner({ PATH: bin, PATHEXT: ".COM;.EXE;.BAT;.CMD" }, "win32");
 
-    expect(runner.bin).toBe("pnpm");
+    // The full path, extension included: cmd.exe then never searches the
+    // working directory for a same-named shim.
+    expect(runner.bin).toBe(path.join(bin, "pnpm.CMD"));
     expect(runner.label).toBe("pnpm dlx");
   });
 
@@ -95,12 +99,29 @@ describe("resolveSkillsRunner", () => {
 
     const runner = resolveSkillsRunner({ PATH: bin }, "win32");
 
-    expect(runner.bin).toBe("pnpm");
+    expect(runner.bin).toBe(path.join(bin, "pnpm.CMD"));
+  });
+
+  it("skips relative PATH entries, which resolve against the working directory", () => {
+    const cwd = makeTmpDir();
+    fs.mkdirSync(path.join(cwd, "rel"));
+    writePosixExecutable(path.join(cwd, "rel", "pnpm"));
+    const originalCwd = process.cwd();
+    process.chdir(cwd);
+    try {
+      const runner = resolveSkillsRunner({ PATH: "rel" }, "linux");
+
+      expect(runner.kind).toBe("npx");
+      expect(runner.bin).toBe("npx");
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });
 
 describe("skillsCommand", () => {
   const pnpmDlx = {
+    kind: "pnpm" as const,
     bin: "pnpm",
     buildArgs: (args: string[]) => ["dlx", ...args],
     label: "pnpm dlx",
@@ -127,6 +148,18 @@ describe("skillsCommand", () => {
       args: [],
       shell: true,
     });
+  });
+
+  it("quotes a resolved runner path that holds a space on win32", () => {
+    const npx = {
+      kind: "npx" as const,
+      bin: "C:\\Program Files\\nodejs\\npx.cmd",
+      buildArgs: (args: string[]) => ["--force", ...args],
+      label: "npx",
+    };
+    expect(skillsCommand(npx, ["skills", "add", "x"], "win32").file).toBe(
+      '"C:\\Program Files\\nodejs\\npx.cmd" --force skills add x'
+    );
   });
 
   it("quotes cmd.exe metacharacters and doubles embedded quotes on win32", () => {
