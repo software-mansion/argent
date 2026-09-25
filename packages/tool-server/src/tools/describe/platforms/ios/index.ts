@@ -9,6 +9,7 @@ import {
 } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
+import { crossCheckDescribedScreen } from "../../../../utils/foldable";
 import {
   externalSupportHint,
   findExternalDevice,
@@ -208,9 +209,16 @@ export async function describeIos(
     degraded = resolverHint === undefined;
   }
 
+  // On a foldable the daemon reports which panel it read; when argent captures
+  // and touches another one, the frames above are in the wrong space.
+  let panelHint: string | undefined;
   if (axApi) {
     try {
-      tree = adaptAXDescribeToDescribeResult(await axApi.describe());
+      const response = await axApi.describe();
+      tree = adaptAXDescribeToDescribeResult(response);
+      if (response.displayId !== undefined) {
+        panelHint = await crossCheckDescribedScreen(device.id, response.displayId);
+      }
     } catch (err) {
       readFailureHint = `The accessibility read failed (${errMsg(err)}).`;
     }
@@ -237,13 +245,16 @@ export async function describeIos(
         )
       : degradedHint;
 
-  const hint =
+  const baseHint =
     resolverHint ??
     (readFailureHint
       ? deviceDegradedHint
         ? `${deviceDegradedHint}. ${readFailureHint}`
         : readFailureHint
       : deviceDegradedHint);
+  // The panel note rides behind whatever the read already had to say: it is
+  // about THIS tree's coordinates, so it belongs on the result that carries them.
+  const hint = panelHint ? (baseHint ? `${baseHint} ${panelHint}` : panelHint) : baseHint;
 
   if (tree.children.length > 0) {
     return { tree, source: "ax-service", hint };

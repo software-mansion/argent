@@ -15,6 +15,12 @@ import {
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
+import {
+  activeScreenOrMain,
+  refreshActiveScreen,
+  screenLabel,
+  type FoldablePanel,
+} from "./foldable";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -242,10 +248,11 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  */
 export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): Promise<void> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
+  // MoQ carries no screen: a remote simulator is driven on its main screen.
   if (api.transport) return sendViaTransport(api.transport, cmd, cmdName);
   const conn = getOrCreateConnection(api);
   const id = String(++cmdId);
-  const payload = JSON.stringify({ id, ...cmd });
+  const payload = JSON.stringify({ id, ...withActiveScreen(api, cmd) });
 
   return new Promise<void>((resolve, reject) => {
     let done = false;
@@ -301,6 +308,186 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
     if (conn.ws.readyState === WebSocket.OPEN) write();
     else conn.ws.once("open", write);
   });
+}
+
+/**
+ * The screen a touch or wheel is for, on a foldable. The simulator-server
+ * captures every panel and follows none: a command that names no screen goes
+ * to screen 1, the cover panel, which is black once the device is open. So on
+ * a foldable every touch and wheel names the panel the guest renders to, read
+ * from the active-screen memo (`utils/foldable.ts`).
+ *
+ * `api.display` is set only when the device profile is foldable AND the server
+ * reported its panels, so the payload of every other device is byte-identical
+ * to what it was. A caller that already named a screen keeps it.
+ */
+function withActiveScreen(
+  api: SimulatorServerApi,
+  cmd: Record<string, unknown>
+): Record<string, unknown> {
+  if (!api.display?.foldable || cmd.screen !== undefined) return cmd;
+  if (cmd.cmd !== "touch" && cmd.cmd !== "wheel") return cmd;
+  return { ...cmd, screen: activeScreenOrMain(api.deviceId ?? "") };
+}
+
+/**
+ * The display state a simulator-server reports (`GET /api/display`): whether
+ * the device is foldable and, if so, the panels it captures. `hingeAngle` is
+ * only what that server last set; the hinge can be moved by others and its
+ * angle cannot be read back.
+ */
+export interface SimulatorDisplayState {
+  foldable: boolean;
+  panels: FoldablePanel[];
+  hingeAngle: number | null;
+}
+
+function parseDisplayState(body: unknown): SimulatorDisplayState | null {
+  const b = body as { foldable?: unknown; panels?: unknown; hingeAngle?: unknown } | null;
+  if (!b || typeof b.foldable !== "boolean" || !Array.isArray(b.panels)) return null;
+  const panels: FoldablePanel[] = [];
+  for (const p of b.panels as Array<Record<string, unknown>>) {
+    if (
+      typeof p?.screenId === "number" &&
+      typeof p.width === "number" &&
+      typeof p.height === "number"
+    ) {
+      panels.push({ screenId: p.screenId, width: p.width, height: p.height });
+    }
+  }
+  return {
+    foldable: b.foldable,
+    panels,
+    hingeAngle: typeof b.hingeAngle === "number" ? b.hingeAngle : null,
+  };
+}
+
+/**
+ * Read the server's display state. Null for a server that has no such route
+ * (a build that predates foldable support, a provider's), for a remote
+ * simulator, and on any network failure: the caller then treats the device as
+ * single-panel, which is what every client got before there were foldables.
+ */
+export async function fetchDisplayState(
+  api: SimulatorServerApi,
+  signal?: AbortSignal
+): Promise<SimulatorDisplayState | null> {
+  if (api.transport) return null;
+  try {
+    if (api.external) assertAllowedSimServerEndpoint("/api/display");
+    const res = await fetch(`${api.apiUrl}/api/display`, { signal });
+    if (!res.ok) return null;
+    return parseDisplayState(await res.json());
+  } catch {
+    return null;
+  }
+}
+
+/** What `POST /api/hinge` takes: an angle or a posture, and where the hinge is. */
+export interface HingeRequest {
+  angle?: number;
+  posture?: "closed" | "half-open" | "open";
+  from?: number | "closed" | "half-open" | "open";
+}
+
+/**
+ * Move the hinge of a foldable (`POST /api/hinge`). Resolves with the display
+ * state once the sweep has been sent; the guest hands over to the other panel
+ * some time after that, which the caller waits out with the active-screen
+ * memo. Rejects with the server's own reason on a device that is not foldable,
+ * and names the missing route on a build that predates the hinge.
+ */
+export async function postHinge(
+  api: SimulatorServerApi,
+  request: HingeRequest,
+  signal?: AbortSignal
+): Promise<SimulatorDisplayState> {
+  if (api.transport) {
+    throw new FailureError(
+      "Fold failed: a remote simulator is driven on its main screen and has no hinge control.",
+      {
+        error_code: FAILURE_CODES.IOS_FOLD_UNSUPPORTED,
+        failure_stage: "simulator_hinge_transport",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+  if (api.external) assertAllowedSimServerEndpoint("/api/hinge");
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}/api/hinge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError("Fold", err, api.apiUrl);
+  }
+  if (res.status === 404) {
+    const fix = api.external
+      ? "The provider that supplied this device would have to ship a simulator-server build with foldable support."
+      : "Update argent so its bundled simulator-server includes foldable support.";
+    throw new FailureError(
+      `Fold failed: this simulator-server build has no hinge endpoint. ${fix}`,
+      {
+        error_code: FAILURE_CODES.IOS_FOLD_UNSUPPORTED,
+        failure_stage: "simulator_hinge_endpoint_missing",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (!res.ok || body?.error) {
+    throw new FailureError(`Fold failed: ${body?.error ?? `HTTP ${res.status}`}.`, {
+      error_code: FAILURE_CODES.IOS_FOLD_FAILED,
+      failure_stage: "simulator_hinge_rejected",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+      failure_command: "simulator_server",
+    });
+  }
+  const display = parseDisplayState(body);
+  if (!display) {
+    throw new FailureError(
+      "Fold failed: simulator-server answered the hinge request without a display state.",
+      {
+        error_code: FAILURE_CODES.SIMULATOR_MISSING_RESPONSE_FIELDS,
+        failure_stage: "simulator_hinge_response_shape",
+        failure_area: "tool_server",
+        error_kind: "network",
+        network_failure: "invalid_response",
+      }
+    );
+  }
+  return display;
+}
+
+/**
+ * Re-read which panel a foldable renders to, for a capture that follows no
+ * `describe` (the `screenshot` tool, a live `screenshot-diff` input, a
+ * recording start): the memo those paths would otherwise read may date from
+ * before a fold made outside argent. Resolves with the note the capture should
+ * carry — which panel it is — and undefined for any device that is not
+ * foldable, so their results are unchanged.
+ */
+export async function refreshActiveScreenForCapture(
+  api: SimulatorServerApi
+): Promise<string | undefined> {
+  if (!api.display?.foldable || !api.deviceId) return undefined;
+  const state = await refreshActiveScreen(api.deviceId);
+  if (!state) {
+    return (
+      "The panel this foldable simulator renders to could not be read (CoreDevice did not " +
+      `answer), so this capture is ${screenLabel(activeScreenOrMain(api.deviceId), api.display.panels)}.`
+    );
+  }
+  return (
+    `This foldable simulator renders to ${screenLabel(state.activeScreen, state.panels)}, which ` +
+    "this capture shows; describe frames and touch coordinates are in the same space."
+  );
 }
 
 /**
@@ -497,7 +684,14 @@ export async function httpScreenshot(
   api: SimulatorServerApi,
   rotation?: string,
   signal?: AbortSignal,
-  scale?: number
+  scale?: number,
+  /**
+   * The panel to capture on a foldable. Defaults to the active-screen memo;
+   * a caller that captures without a preceding `describe` refreshes that memo
+   * first (see `utils/foldable.ts`). Never sent for a device that is not
+   * foldable, so its request body is unchanged.
+   */
+  screen?: number
 ): Promise<{ url: string; path: string }> {
   if (api.transport) {
     return api.transport.screenshot({
@@ -510,6 +704,9 @@ export async function httpScreenshot(
   const body: Record<string, unknown> = {};
   if (rotation) body.rotation = rotation;
   if (resolvedScale !== 1.0) body.scale = resolvedScale;
+  const resolvedScreen =
+    screen ?? (api.display?.foldable ? activeScreenOrMain(api.deviceId ?? "") : undefined);
+  if (resolvedScreen !== undefined) body.screen = resolvedScreen;
 
   const deadline = Date.now() + FIRST_FRAME_WAIT_MS;
   for (;;) {

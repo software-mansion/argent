@@ -60,6 +60,35 @@ const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 const STATIC_GRACE_MS = 1_000;
 const STREAM_CONNECT_TIMEOUT_MS = 10_000;
 const FIRST_FRAME_TIMEOUT_MS = 10_000;
+/**
+ * How often a recording of a foldable asks CoreDevice which panel is live —
+ * the only place argent polls it. A fold made outside argent is then in the
+ * video within about a second of the hand-over.
+ */
+const PANEL_POLL_MS = 1_000;
+/**
+ * The panel the device just switched to has drawn (that is what made it
+ * live), so its stream's first frame lands within a few hundred ms; a panel
+ * that never draws again would leave the recording on the old stream.
+ */
+const PANEL_FIRST_FRAME_TIMEOUT_MS = 5_000;
+
+/**
+ * How a recording of a foldable follows the panel the device renders to. The
+ * MJPEG stream is per panel and keeps one size for its lifetime, so following
+ * a fold means closing one stream and opening another; the frames keep going
+ * into the same ffmpeg, which keeps the size of the first frame it saw.
+ */
+export interface PanelFollow {
+  /** The panel the recording starts on. */
+  initialScreen: number;
+  /** The MJPEG stream of a panel. */
+  streamUrlForScreen(screen: number): string;
+  /** Which panel the device renders to now; null when it could not be read. */
+  readActiveScreen(): Promise<number | null>;
+  /** Poll cadence; the default is {@link PANEL_POLL_MS}. */
+  pollMs?: number;
+}
 /** Hold briefly after spawn so bad args fail the start instead of the stop. */
 const START_FAILFAST_GRACE_MS = 800;
 /** ffmpeg finalizes on stdin EOF; bound the wait anyway. */
@@ -169,7 +198,9 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
   api.pumpTimer = setInterval(() => {
     const stdin = child?.stdin;
     if (!stdin || !stdin.writable) return;
-    const frame = stream.latest;
+    // Read through the session, not the closure: a foldable's recording swaps
+    // `api.frameStream` for the other panel's stream mid-capture.
+    const frame = (api.frameStream ?? stream).latest ?? null;
     if (!frame) return;
     // Never queue in Node: if ffmpeg is behind, drop this tick's frames and let
     // the counter catch up once it drains.
@@ -214,11 +245,68 @@ async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
   if (disable) await disable().catch(() => {});
 }
 
+/**
+ * Follow the panel a foldable renders to: poll CoreDevice, and when the answer
+ * changes, move the capture onto that panel's stream. The old stream is closed
+ * only once the new one has delivered a frame, so a stream that fails to open
+ * (or a panel that has not drawn yet) costs nothing but a retry on the next
+ * tick; the recording never goes dark on argent's account.
+ */
+function startPanelFollow(
+  api: ScreenRecordingSessionApi,
+  follow: PanelFollow,
+  child: ReturnType<typeof spawn>
+): void {
+  let inFlight = false;
+  api.panelPollTimer = setInterval(() => {
+    if (inFlight || api.captureProcess !== child) return;
+    inFlight = true;
+    void (async () => {
+      try {
+        const screen = await follow.readActiveScreen();
+        if (screen === null || screen === api.activeScreen || api.captureProcess !== child) return;
+        const next = await openMjpegStream(
+          follow.streamUrlForScreen(screen),
+          STREAM_CONNECT_TIMEOUT_MS
+        );
+        try {
+          await next.waitForFirstFrame(PANEL_FIRST_FRAME_TIMEOUT_MS);
+        } catch (err) {
+          next.close();
+          throw err;
+        }
+        // The poll may have outlived the capture while the stream connected.
+        if (api.captureProcess !== child || !api.pumpTimer) {
+          next.close();
+          return;
+        }
+        const previous = api.frameStream;
+        api.frameStream = next;
+        api.activeScreen = screen;
+        api.panelSwitches++;
+        previous?.close();
+      } catch (err) {
+        process.stderr.write(
+          `[screen-recording ${api.deviceId.slice(0, 8)}] could not follow the device onto its ` +
+            `other panel: ${err instanceof Error ? err.message : String(err)}; retrying\n`
+        );
+      } finally {
+        inFlight = false;
+      }
+    })();
+  }, follow.pollMs ?? PANEL_POLL_MS);
+  api.panelPollTimer.unref?.();
+}
+
 /** Stop pacing and release the stream subscription; safe to call repeatedly. */
 function stopPump(api: ScreenRecordingSessionApi): void {
   if (api.pumpTimer) {
     clearInterval(api.pumpTimer);
     api.pumpTimer = null;
+  }
+  if (api.panelPollTimer) {
+    clearInterval(api.panelPollTimer);
+    api.panelPollTimer = null;
   }
   if (api.frameStream) {
     // Preserve a real drop before dropping the reference: a stop arriving after
@@ -248,6 +336,8 @@ export async function startCapture(
     watermark: boolean;
     trimStatic: boolean;
     pointer?: PointerControl;
+    /** Set for a foldable: the capture then moves with the live panel. */
+    followPanel?: PanelFollow;
   }
 ): Promise<StartRecordingResult> {
   assertNoActiveRecording(api, "screen_recording_start");
@@ -271,6 +361,7 @@ async function startCaptureLocked(
     watermark: boolean;
     trimStatic: boolean;
     pointer?: PointerControl;
+    followPanel?: PanelFollow;
   }
 ): Promise<StartRecordingResult> {
   const ffmpeg = await resolveFfmpeg();
@@ -366,6 +457,8 @@ async function startCaptureLocked(
   api.framesWritten = 0;
   api.captureProcess = child;
   api.frameStream = stream;
+  api.activeScreen = params.followPanel?.initialScreen ?? null;
+  api.panelSwitches = 0;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
@@ -376,6 +469,7 @@ async function startCaptureLocked(
   // recording" on an unrelated teardown.
   takeReapedSession("screen-recording", api.deviceId);
   startPump(api, stream);
+  if (params.followPanel) startPanelFollow(api, params.followPanel, child);
 
   // Arm the exit handler BEFORE the pointer-enable await below: readiness
   // already removed its own 'exit' listener, so an encoder death during that
@@ -513,6 +607,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const streamError = api.frameStream?.error ?? api.lastFrameStreamError ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   const pointerFailed = api.pointerFailed;
+  const panelSwitches = api.panelSwitches;
   let warning: string | undefined;
 
   try {
@@ -602,6 +697,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
       sizeBytes: size,
       durationMs,
       ...(trimmedMs !== undefined ? { wallClockMs: wallClockMs!, trimmedMs } : {}),
+      ...(panelSwitches > 0 ? { panelSwitches } : {}),
       ...(warning ? { warning } : {}),
     };
   } catch (err) {
@@ -631,6 +727,8 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.pointerFailed = false;
     api.framesWritten = 0;
     api.trimmedAnyFrames = false;
+    api.activeScreen = null;
+    api.panelSwitches = 0;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;
     api.timeLimitSeconds = null;

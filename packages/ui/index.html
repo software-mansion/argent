@@ -1976,6 +1976,11 @@
       let ws = null;
       let wsOpen = false;
       let currentUdid = null;
+      // A foldable's panel: the CoreSimulator screen id its stream shows and
+      // its touches name (1 the cover panel, 3 the inner one on the iPhone
+      // Duo). null for a device with one panel, where commands name none.
+      let activeScreen = null;
+      let panelPollTimer = null;
       let img = null;
       let stage = null;
       // Auto-reconnect bookkeeping (see scheduleReconnect): the simulator-server
@@ -2021,7 +2026,14 @@
         // While the element-comment inspector is active the stream is a
         // read-only annotation surface — never drive the device.
         if (typeof vp !== "undefined" && vp.inspect) return;
-        ws.send(JSON.stringify({ id: nextCmdId(), ...obj }));
+        const payload = { id: nextCmdId(), ...obj };
+        // simulator-server captures every panel of a foldable and follows
+        // none: a touch or wheel that names no screen goes to the cover panel,
+        // black once the device is open.
+        if (activeScreen !== null && (obj.cmd === "touch" || obj.cmd === "wheel")) {
+          payload.screen = activeScreen;
+        }
+        ws.send(JSON.stringify(payload));
         // Every command (touch/scroll/key) likely moved the screen — wake the
         // describe loop *now* so connectors/pins track interaction, not just
         // the fixed cadence. Only when something is actually anchored to the
@@ -2311,6 +2323,8 @@
         // /preview/describe/<oldUdid> after teardown.
         setDeviceIndicator(null);
         currentUdid = null;
+        stopPanelPoll();
+        activeScreen = null;
         describeWarmupPending = false;
         // Explicitly clear the img src — otherwise the browser keeps the MJPEG
         // HTTP connection open after the element is detached, and re-selecting
@@ -2338,6 +2352,46 @@
       // route) heals it instead of stranding the user on a refresh. The
       // reconnectTimer guard collapses the simultaneous img.onerror + ws.onclose
       // into a single attempt; backoff resets on a successful ws.onopen.
+      // A foldable's stream URL already carries `?screen=<id>`.
+      function withCacheBuster(url) {
+        return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+      }
+
+      function stopPanelPoll() {
+        if (panelPollTimer) {
+          clearInterval(panelPollTimer);
+          panelPollTimer = null;
+        }
+      }
+
+      // Follow a foldable across folds: re-ask the tool-server which panel the
+      // device renders to, and move the stream and the touches when it changes.
+      function startPanelPoll(udid) {
+        stopPanelPoll();
+        let inFlight = false;
+        panelPollTimer = setInterval(async () => {
+          if (inFlight || currentUdid !== udid || !img) return;
+          inFlight = true;
+          try {
+            const res = await fetch(
+              `${TOOL_SERVER}/preview/simulator-server/${encodeURIComponent(udid)}`
+            );
+            if (!res.ok) return;
+            const info = await res.json();
+            if (currentUdid !== udid || !img || !info.foldable) return;
+            if (info.activeScreen !== activeScreen) {
+              activeScreen = info.activeScreen;
+              img.src = withCacheBuster(info.streamUrl);
+              setStatus("");
+            }
+          } catch {
+            /* transient; the next tick asks again */
+          } finally {
+            inFlight = false;
+          }
+        }, 1500);
+      }
+
       function scheduleReconnect(udid) {
         if (currentUdid !== udid || reconnectTimer) return;
         const delay = Math.min(1000 * 2 ** reconnectAttempts, 8000);
@@ -2428,7 +2482,9 @@
         img.alt = `Simulator ${udid.slice(0, 8)}`;
         img.draggable = false;
         // Append a cache-buster so re-connects don't reuse a stale MJPEG stream.
-        img.src = `${info.streamUrl}?t=${Date.now()}`;
+        img.src = withCacheBuster(info.streamUrl);
+        activeScreen = info.foldable ? info.activeScreen : null;
+        if (info.foldable) startPanelPoll(udid);
         img.onerror = () => {
           setStatus("stream error", "error");
           scheduleReconnect(udid);

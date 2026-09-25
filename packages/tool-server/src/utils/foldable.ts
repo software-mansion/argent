@@ -1,0 +1,345 @@
+import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import { promisify } from "node:util";
+import { externalNativeId } from "./external-devices";
+import { isFoldableSimulator } from "./ios-devices";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Which panel of a foldable simulator argent captures and touches.
+ *
+ * The simulator-server captures every panel and follows none: each screenshot,
+ * stream, touch and wheel names the CoreSimulator screen it is for (1 is the
+ * cover panel, 3 the inner one on the iPhone Duo) and gets screen 1 when it
+ * names none. Which panel the guest renders to is argent's to find out, and
+ * CoreDevice knows: `devicectl device info displays` reports `active` per
+ * display, with the same ids, in one ~100-200 ms query.
+ *
+ * This module is that query plus a per-device memo of its last answer. The memo
+ * is refreshed at the points where the answer can have changed — when a
+ * simulator-server is spawned for the device, after argent's own `fold`, and
+ * when a `describe` reports a panel the memo disagrees with — and read by every
+ * touch and wheel in between. Callers that capture without a preceding describe
+ * (`screenshot`, a live `screenshot-diff`, `screen-recording-start`) refresh it
+ * themselves. Nothing here looks at pixels, and nothing subscribes: argent is
+ * the controller, so the only unknown after a fold is which panel ended up
+ * live, and one read answers that.
+ */
+
+/** The screen every simulator has and every command defaults to. */
+export const MAIN_SCREEN_ID = 1;
+
+export interface FoldablePanel {
+  screenId: number;
+  /** Native pixel size of the panel. */
+  width: number;
+  height: number;
+}
+
+export interface ActiveScreenState {
+  /** CoreSimulator screen id of the panel the guest renders to. */
+  activeScreen: number;
+  /** The integrated panels CoreDevice reports, in native pixels. */
+  panels: FoldablePanel[];
+  /** Device orientation as CoreDevice names it (`portrait`, `landscapeRight`, ...). */
+  orientation?: string;
+  readAt: number;
+}
+
+/**
+ * How long one CoreDevice query may take. Measured at ~170 ms on the Duo; the
+ * budget is for a wedged CoreDevice, not for normal latency.
+ */
+const DEVICECTL_TIMEOUT_MS = 5_000;
+
+/**
+ * The hand-over lands 0.5-1.1 s after a hinge sweep, longer when the guest is
+ * busy. The wait after a fold polls the one-shot until the answer changes.
+ */
+export const SETTLE_TIMEOUT_MS = 3_000;
+export const SETTLE_POLL_MS = 200;
+
+/**
+ * CoreDevice's own binary. `xcrun devicectl` resolves to the same file for the
+ * selected Xcode, but the direct path skips the xcrun shim and is what the
+ * measurement was taken with.
+ */
+const DEVICECTL_BIN =
+  "/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl";
+
+const cache = new Map<string, ActiveScreenState>();
+
+/** Test-only: forget every memoized answer and the resolved developer dir. */
+export function __resetFoldableStateForTests(): void {
+  cache.clear();
+  developerDirPromise = null;
+}
+
+/** The last answer read for `udid`, or undefined when it was never read. */
+export function getCachedActiveScreen(udid: string): ActiveScreenState | undefined {
+  return cache.get(udid);
+}
+
+/** Drop the memo, e.g. when the simulator-server that used it is disposed. */
+export function forgetActiveScreen(udid: string): void {
+  cache.delete(udid);
+}
+
+/**
+ * The screen a command for `udid` should name: the memoized active panel, or
+ * the main screen when nothing was ever read (or the last read failed).
+ */
+export function activeScreenOrMain(udid: string): number {
+  return cache.get(udid)?.activeScreen ?? MAIN_SCREEN_ID;
+}
+
+let developerDirPromise: Promise<string | undefined> | null = null;
+
+/**
+ * `DEVELOPER_DIR` for the query: CoreDevice's binary is shared by every Xcode
+ * on the machine and needs to be told which one is selected. Resolved once per
+ * process from `xcode-select -p`; an explicit `DEVELOPER_DIR` wins.
+ */
+function developerDir(): Promise<string | undefined> {
+  if (process.env.DEVELOPER_DIR) return Promise.resolve(process.env.DEVELOPER_DIR);
+  if (!developerDirPromise) {
+    developerDirPromise = execFileAsync("xcode-select", ["-p"], { timeout: 5_000 })
+      .then(({ stdout }) => stdout.trim() || undefined)
+      .catch(() => undefined);
+  }
+  return developerDirPromise;
+}
+
+interface DevicectlDisplay {
+  active?: boolean;
+  displayId?: number;
+  nativeSize?: [number, number];
+  type?: Record<string, unknown>;
+}
+
+interface DevicectlDisplaysPayload {
+  result?: {
+    displays?: DevicectlDisplay[];
+    orientation?: { currentDeviceOrientation?: string };
+  };
+}
+
+/**
+ * Parse `devicectl device info displays --json-output -`. Exported for the
+ * unit tests; the shape is CoreDevice's, so a display missing an id or a size
+ * is skipped rather than guessed at.
+ */
+export function parseDisplaysPayload(json: unknown, readAt = Date.now()): ActiveScreenState | null {
+  const displays = (json as DevicectlDisplaysPayload)?.result?.displays;
+  if (!Array.isArray(displays)) return null;
+  const panels: FoldablePanel[] = [];
+  let activeScreen: number | undefined;
+  for (const d of displays) {
+    if (typeof d?.displayId !== "number") continue;
+    // `type` is `{ integrated: {} }` for a built-in panel; tvOut / carPlay /
+    // scene surfaces are not panels.
+    if (!d.type || typeof d.type !== "object" || !("integrated" in d.type)) continue;
+    const size = d.nativeSize;
+    if (!Array.isArray(size) || size.length !== 2) continue;
+    const [width, height] = size;
+    if (typeof width !== "number" || typeof height !== "number") continue;
+    panels.push({ screenId: d.displayId, width, height });
+    if (d.active === true && activeScreen === undefined) activeScreen = d.displayId;
+  }
+  if (panels.length === 0 || activeScreen === undefined) return null;
+  const orientation = (json as DevicectlDisplaysPayload).result?.orientation
+    ?.currentDeviceOrientation;
+  return {
+    activeScreen,
+    panels,
+    ...(typeof orientation === "string" ? { orientation } : {}),
+    readAt,
+  };
+}
+
+/**
+ * One CoreDevice query, uncached. Null on any failure: a missing binary, a
+ * timeout, a device CoreDevice does not know, or a payload with no active
+ * integrated panel. Callers fall back to the main screen and say so.
+ */
+export async function queryActiveScreen(udid: string): Promise<ActiveScreenState | null> {
+  // A provider's device is keyed by its `ext:` id everywhere in argent, but
+  // CoreDevice knows it by the raw UDID.
+  const nativeUdid = externalNativeId(udid);
+  const args = ["device", "info", "displays", "--device", nativeUdid, "--json-output", "-"];
+  const dir = await developerDir();
+  const env = dir ? { ...process.env, DEVELOPER_DIR: dir } : process.env;
+  // The JSON goes to stdout and the human-readable listing to stderr; only
+  // stdout is read.
+  const [bin, argv] = fs.existsSync(DEVICECTL_BIN)
+    ? [DEVICECTL_BIN, args]
+    : ["xcrun", ["devicectl", ...args]];
+  try {
+    const { stdout } = await execFileAsync(bin, argv, {
+      env,
+      timeout: DEVICECTL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return parseDisplaysPayload(JSON.parse(stdout));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Query and memoize. The memo is only replaced by a successful read, so a
+ * transient CoreDevice failure keeps the last known panel rather than snapping
+ * every touch back to screen 1; the null return tells the caller to say the
+ * read failed.
+ */
+export async function refreshActiveScreen(udid: string): Promise<ActiveScreenState | null> {
+  const state = await queryActiveScreen(udid);
+  if (state) cache.set(udid, state);
+  return state;
+}
+
+/**
+ * The memo, filled on first use. Unlike {@link refreshActiveScreen} this never
+ * re-queries once an answer is memoized.
+ */
+export async function ensureActiveScreen(udid: string): Promise<ActiveScreenState | null> {
+  return cache.get(udid) ?? refreshActiveScreen(udid);
+}
+
+/**
+ * After a fold: poll the one-shot until the active panel differs from
+ * `previous`, or the budget runs out. A fold that leaves the panel where it was
+ * (open to open, or a small angle change) legitimately never changes it, so the
+ * timeout is an answer too, not a failure: the last state read is returned.
+ * Null only when every read failed.
+ */
+export async function awaitActiveScreenSettled(
+  udid: string,
+  previous: number | undefined,
+  opts: { timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<ActiveScreenState | null> {
+  const timeoutMs = opts.timeoutMs ?? SETTLE_TIMEOUT_MS;
+  const pollMs = opts.pollMs ?? SETTLE_POLL_MS;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const deadline = Date.now() + timeoutMs;
+  let last: ActiveScreenState | null = null;
+  for (;;) {
+    const state = await refreshActiveScreen(udid);
+    if (state) {
+      last = state;
+      if (previous === undefined || state.activeScreen !== previous) return state;
+    }
+    if (Date.now() + pollMs > deadline) return last;
+    await sleep(pollMs);
+  }
+}
+
+/** `cover panel` for the main screen, `inner panel` for any other. */
+export function panelName(screenId: number): string {
+  return screenId === MAIN_SCREEN_ID ? "cover panel" : "inner panel";
+}
+
+/** `screen 3 (inner panel, 2007x2853)` — the size only when a panel list knows it. */
+export function screenLabel(screenId: number, panels?: readonly FoldablePanel[]): string {
+  const panel = panels?.find((p) => p.screenId === screenId);
+  const size = panel ? `, ${panel.width}x${panel.height}` : "";
+  return `screen ${screenId} (${panelName(screenId)}${size})`;
+}
+
+/**
+ * `?screen=<id>` on the MJPEG stream URL for a panel other than the main one.
+ * The main screen keeps the bare `stream_ready` URL, byte-identical to what a
+ * device that is not foldable streams.
+ */
+export function streamUrlForScreen(streamUrl: string, screenId: number): string {
+  if (screenId === MAIN_SCREEN_ID) return streamUrl;
+  const separator = streamUrl.includes("?") ? "&" : "?";
+  return `${streamUrl}${separator}screen=${screenId}`;
+}
+
+/**
+ * The note a `describe` carries when the accessibility tree was read on one
+ * panel and CoreDevice says the device renders to another.
+ *
+ * The memo is compared first, since a `describe` runs on every interaction
+ * and CoreDevice is the cost this module exists to avoid paying twice. A memo
+ * that disagrees is re-read once: a fold made outside argent (Device Hub)
+ * leaves a stale memo, and the fresh read both fixes it and agrees with the
+ * tree. A fresh read that still disagrees is the one case worth a note: a
+ * describe issued mid-fold, where the two sides briefly differ.
+ *
+ * Undefined when there is no memo yet: without a simulator-server for the
+ * device nothing has targeted a panel, so there is nothing to disagree with.
+ */
+export async function crossCheckDescribedScreen(
+  udid: string,
+  describedScreen: number
+): Promise<string | undefined> {
+  const cached = cache.get(udid);
+  if (!cached || cached.activeScreen === describedScreen) return undefined;
+  const fresh = await refreshActiveScreen(udid);
+  if (!fresh || fresh.activeScreen === describedScreen) return undefined;
+  return (
+    `The accessibility tree was read on ${screenLabel(describedScreen, fresh.panels)}, but ` +
+    `CoreDevice reports ${screenLabel(fresh.activeScreen, fresh.panels)} as the panel the device ` +
+    `renders to, so the frames above and the panel argent taps disagree — the device is probably ` +
+    `mid-fold. Call await-screen-idle, then describe again before tapping.`
+  );
+}
+
+interface Size {
+  width: number;
+  height: number;
+}
+
+/** Aspect of two sizes within half a percent: the same panel at some scale. */
+function sameAspect(a: Size, b: Size): boolean {
+  if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) return false;
+  return Math.abs(a.width / a.height - b.width / b.height) < 0.005;
+}
+
+/**
+ * The posture that produced a capture of `size`, for the aspect-mismatch
+ * message of the visual tools: `the cover panel (closed)` or `the inner panel
+ * (half-open or open)`. Undefined when the size matches no panel.
+ */
+function postureForSize(size: Size, panels: readonly FoldablePanel[]): string | undefined {
+  const panel = panels.find((p) => sameAspect(size, p));
+  if (!panel) return undefined;
+  return panel.screenId === MAIN_SCREEN_ID
+    ? "the cover panel (closed)"
+    : "the inner panel (half-open or open)";
+}
+
+/**
+ * The sentence the visual tools add to their aspect-mismatch failure on a
+ * foldable simulator: baselines are per posture, and here is which posture
+ * produced each size. Undefined for any device that is not foldable, so the
+ * message is unchanged everywhere else.
+ *
+ * The panel list comes from the memo when there is one and from a single
+ * CoreDevice read otherwise (the pure-PNG diff of a foldable's screenshots
+ * touches no simulator-server, so nothing memoized it).
+ */
+export async function foldablePostureHint(
+  udid: string,
+  expected: Size,
+  actual: Size
+): Promise<string | undefined> {
+  if (!(await isFoldableSimulator(udid))) return undefined;
+  const panels = (cache.get(udid) ?? (await refreshActiveScreen(udid)))?.panels;
+  const base =
+    "This simulator is foldable: a baseline belongs to the posture that produced it, and the " +
+    "cover and inner panels differ in size, so a capture in another posture can never match.";
+  if (!panels) return `${base} Take the baseline in the posture under test.`;
+  const from = postureForSize(expected, panels);
+  const to = postureForSize(actual, panels);
+  if (!from || !to) return `${base} Take the baseline in the posture under test.`;
+  return (
+    `${base} ${expected.width}x${expected.height} is ${from}; ${actual.width}x${actual.height} is ` +
+    `${to}. Fold the device to the baseline's posture with the fold tool, or take a baseline ` +
+    `for this posture.`
+  );
+}

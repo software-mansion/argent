@@ -8,6 +8,7 @@ import type { Registry } from "@argent/registry";
 import { track } from "@argent/telemetry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
+import { MAIN_SCREEN_ID, refreshActiveScreen, streamUrlForScreen } from "./utils/foldable";
 import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
 import { listDevicesTool } from "./tools/devices/list-devices";
@@ -234,11 +235,23 @@ export function createPreviewRouter(registry: Registry): Router {
       }
       const { urn, options } = simulatorServerRef(device);
       const api = await registry.resolveService<SimulatorServerApi>(urn, options);
+      // A foldable is handed the stream of the panel it renders to, read fresh:
+      // the UI re-asks this route while connected to one and moves its stream
+      // (and the screen its touches name) when the answer changes.
+      let streamUrl = api.streamUrl;
+      let panel: { foldable: true; activeScreen: number } | undefined;
+      if (api.display?.foldable) {
+        const state = await refreshActiveScreen(udid);
+        const activeScreen = state?.activeScreen ?? MAIN_SCREEN_ID;
+        streamUrl = streamUrlForScreen(api.streamUrl, activeScreen);
+        panel = { foldable: true, activeScreen };
+      }
       res.json({
         udid,
         apiUrl: api.apiUrl,
-        streamUrl: api.streamUrl,
+        streamUrl,
         wsUrl: wsUrlFromHttp(api.apiUrl),
+        ...(panel ?? {}),
       });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

@@ -714,8 +714,21 @@ export type FlowStep =
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
+  /**
+   * Fold or unfold a foldable simulator: exactly one of `posture` and `angle`,
+   * plus where the hinge is now when something other than the flow moved it.
+   * The `fold` tool's own contract; the runner dispatches it to that tool.
+   */
+  | { kind: "fold"; posture?: FoldPosture; angle?: number; from?: number | FoldPosture }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
   | { kind: "script"; path: string; timeout?: number };
+
+export const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
+export type FoldPosture = (typeof FOLD_POSTURES)[number];
+
+function isFoldPosture(value: unknown): value is FoldPosture {
+  return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
+}
 
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
@@ -778,6 +791,7 @@ export function precedesLeadingLaunch(step: FlowStep): boolean {
     case "scroll-to":
     case "pinch":
     case "rotate":
+    case "fold":
     case "snapshot":
       return false;
     default: {
@@ -972,8 +986,14 @@ type YamlStep =
   | { "scroll-to": YamlScrollBody }
   | { pinch: { on?: YamlSelector; scale: number } }
   | { rotate: { on?: YamlSelector; by: number } }
+  | { fold: YamlFoldBody }
   | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
   | { script: { path: string; timeout?: number } };
+
+type YamlFoldBody =
+  | FoldPosture
+  | number
+  | { posture?: FoldPosture; angle?: number; from?: number | FoldPosture };
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
@@ -1572,6 +1592,19 @@ function toYamlStep(step: FlowStep): YamlStep {
           ? { on: selectorToYaml(step.selector), by: step.by }
           : { by: step.by },
       };
+    case "fold": {
+      // Sugar the common case back to the bare form: a posture or an angle with
+      // no `from`. parseFold is the exact inverse.
+      if (step.from === undefined) {
+        if (step.posture !== undefined && step.angle === undefined) return { fold: step.posture };
+        if (step.angle !== undefined && step.posture === undefined) return { fold: step.angle };
+      }
+      const body: Exclude<YamlFoldBody, FoldPosture | number> = {};
+      if (step.posture !== undefined) body.posture = step.posture;
+      if (step.angle !== undefined) body.angle = step.angle;
+      if (step.from !== undefined) body.from = step.from;
+      return { fold: body };
+    }
     case "snapshot": {
       // A name-only snapshot sugars to a bare string.
       if (step.maxMismatch === undefined && step.cropOn === undefined) {
@@ -2305,6 +2338,7 @@ export const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "scroll-to",
   "pinch",
   "rotate",
+  "fold",
   "snapshot",
   "script",
 ];
@@ -2597,6 +2631,68 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
   const step: FlowStep = { kind: "rotate", by: obj.by };
   if (obj.on !== undefined) step.selector = parseSelector(obj.on, "rotate.on");
   return step;
+}
+
+const FOLD_SHAPE_HINT =
+  `fold takes a posture (${FOLD_POSTURES.join(", ")}), an angle in degrees (0-180), or an ` +
+  `options map — e.g. fold: open, fold: 120, fold: { posture: open, from: closed }`;
+
+function parseFoldAngle(value: unknown, entry: unknown, what: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 180) {
+    badEntry(entry, `${what} must be a number of degrees between 0 (closed) and 180 (open)`);
+  }
+  return value;
+}
+
+/**
+ * Parse a `fold` body: a bare posture (`fold: open`), a bare angle
+ * (`fold: 120`), or an options map with exactly one of `posture` and `angle`
+ * plus an optional `from` — where the hinge is now, when something other than
+ * the flow moved it. The same contract as the `fold` tool the step dispatches to.
+ */
+function parseFold(body: unknown, entry: unknown): FlowStep {
+  if (typeof body === "string") {
+    if (!isFoldPosture(body)) badEntry(entry, FOLD_SHAPE_HINT);
+    return { kind: "fold", posture: body };
+  }
+  if (typeof body === "number") {
+    return { kind: "fold", angle: parseFoldAngle(body, entry, "fold") };
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    badEntry(entry, FOLD_SHAPE_HINT);
+  }
+  const obj = body as Record<string, unknown>;
+  rejectUnknownKeys(entry, obj, ["posture", "angle", "from"], "fold");
+  const hasPosture = obj.posture !== undefined;
+  const hasAngle = obj.angle !== undefined;
+  if (hasPosture === hasAngle) {
+    badEntry(entry, "fold takes exactly one of posture and angle");
+  }
+  const step: FlowStep = { kind: "fold" };
+  if (hasPosture) {
+    if (!isFoldPosture(obj.posture)) {
+      badEntry(entry, `fold.posture must be one of ${FOLD_POSTURES.join(", ")}`);
+    }
+    step.posture = obj.posture;
+  }
+  if (hasAngle) step.angle = parseFoldAngle(obj.angle, entry, "fold.angle");
+  if (obj.from !== undefined) {
+    step.from = isFoldPosture(obj.from) ? obj.from : parseFoldAngle(obj.from, entry, "fold.from");
+  }
+  return step;
+}
+
+/**
+ * The `fold:` step a recorded `fold` tool call becomes, or undefined when the
+ * call's args are not the directive's (the recorder then keeps a raw
+ * `tool: fold` step, as it does for any call it cannot rewrite).
+ */
+export function foldStepFromArgs(args: Record<string, unknown>): FlowStep | undefined {
+  try {
+    return parseFold(args, { fold: args });
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -3121,6 +3217,7 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
     case "run":
     case "idle":
     case "wait":
+    case "fold":
       return;
     default: {
       const unclassified: never = step;
@@ -3481,6 +3578,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   if ("pinch" in raw) return parsePinch((raw as { pinch: unknown }).pinch, raw);
 
   if ("rotate" in raw) return parseRotate((raw as { rotate: unknown }).rotate, raw);
+
+  if ("fold" in raw) return parseFold((raw as { fold: unknown }).fold, raw);
 
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;

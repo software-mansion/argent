@@ -22,12 +22,15 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `open-url`                   | Open a URL or URL scheme on the device                                                        |
 | `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                 |
 | `rotate`                     | Set the device orientation to portrait or either landscape                                    |
+| `fold`                       | Fold or unfold a foldable iOS simulator to a posture or a hinge angle                         |
 | `shake`                      | Shake the device                                                                              |
 | `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                 |
 | `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                            |
 | `stop-simulator-server`      | Stop the transport session for one device and free its resources                              |
 | `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons              |
 | `stop-metro`                 | Stop the Metro bundler listening on a given port                                              |
+
+Argent drives a foldable iOS simulator (the iPhone Duo) in every posture. `list-devices` marks it with `foldable: true`. `fold` moves the hinge to `closed`, `half-open` or `open`, or to an angle from 0 to 180 degrees, and waits until the device renders to the panel for that posture. Closed, the device renders to the cover panel; half-open and open, to the inner panel. Argent names that panel on every screenshot, describe, touch, stream and recording, so the tools follow the fold. The coordinate space changes with the panel: run `describe` again after a fold, and expect a different screenshot size. A fold during a gesture is not supported. Unfolded, `rotate` sets the orientation of the device, not of the UI: `Portrait` gives a landscape UI on the inner panel.
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 

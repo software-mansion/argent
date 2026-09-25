@@ -22,6 +22,8 @@
 #
 # Phases: install introspection validation android chromium rn
 #   (default: all that apply to this OS; iOS/tvOS/Vega are intentionally omitted)
+#   ios-duo is opt-in: --phase ios-duo with E2E_IOS_DUO_UDID set to a booted
+#   iPhone Duo (and optionally E2E_IOS_FLAT_UDID to a booted non-foldable sim)
 set -uo pipefail
 
 E2E_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,7 +61,7 @@ done
 
 # A misspelled phase would otherwise select nothing, and a run that executes no
 # phase records no failure: "pass:0 fail:0" and exit 0 for an untested release.
-ALL_PHASES="install introspection validation android chromium rn device-provider"
+ALL_PHASES="install introspection validation android chromium rn device-provider ios-duo"
 for _p in ${PHASES//,/ }; do
   case " $ALL_PHASES " in
     *" $_p "*) ;;
@@ -260,6 +262,9 @@ if selected introspection;   then run_one introspection   "$E2E_ROOT/phases/10-i
 if selected validation;      then run_one validation      "$E2E_ROOT/phases/20-validation.sh"; fi
 if selected android;         then run_one android         "$E2E_ROOT/phases/30-android.sh"; fi
 if selected chromium;        then run_one chromium        "$E2E_ROOT/phases/40-chromium.sh"; fi
+# Opt-in: never in the default list (iOS tiers are out of scope there), so it
+# runs only when named with --phase and given E2E_IOS_DUO_UDID.
+if selected ios-duo;         then run_one ios-duo         "$E2E_ROOT/phases/70-ios-duo.sh"; fi
 if selected rn;              then run_one rn              "$E2E_ROOT/phases/50-rn-bluesky.sh"; fi
 if selected device-provider; then run_one device-provider "$E2E_ROOT/phases/60-device-provider.sh"; fi
 

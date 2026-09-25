@@ -21,6 +21,7 @@ import {
   classifyOnDiskSpelling,
   describeSelector,
   flowsDirFor,
+  foldStepFromArgs,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -796,6 +797,8 @@ function isToolNotFound(err: unknown, command: string): boolean {
 export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
   // A real `rotate` tool is registered, so the not-found path never fires.
   "rotate",
+  // Likewise `fold`: the tool runs, and the recorder rewrites it into `fold:`.
+  "fold",
   // `command` already is the tool name a `tool:` step wants.
   "tool",
 ];
@@ -1334,6 +1337,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof strippedArgs.bundleId === "string" &&
         Object.keys(strippedArgs).length === 1;
 
+      // A recorded `fold` becomes the `fold:` directive, the same posture change
+      // the tool made; args the directive does not take keep the raw tool step.
+      const foldStep =
+        params.command === "fold" && params.delayMs === undefined
+          ? foldStepFromArgs(strippedArgs)
+          : undefined;
+
       // A multi-tap (`clickCount: 2` = double-tap) must survive the rewrite as
       // `times`, or replay would fire a single tap for a recorded double.
       // Bounds match the tool's clickCount; 1 is the default (absent).
@@ -1355,6 +1365,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         warning = captured?.warning;
       } else if (isLaunch) {
         step = { kind: "launch", app: strippedArgs.bundleId as string };
+      } else if (foldStep) {
+        step = foldStep;
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
       } else {

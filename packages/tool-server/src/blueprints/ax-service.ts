@@ -61,6 +61,13 @@ export interface AXDescribeResponse {
   alertVisible: boolean;
   screenFrame?: { width: number; height: number };
   elements: AXDescribeElement[];
+  /**
+   * On a foldable only: the CoreSimulator screen id of the panel the daemon
+   * read the tree on and normalized the frames to (1 cover, 3 inner on the
+   * iPhone Duo). The client cross-checks it against the panel it captures and
+   * touches; absent on every other device.
+   */
+  displayId?: number;
 }
 
 export interface AXServiceApi {
@@ -437,6 +444,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
+          ...(typeof result.displayId === "number" ? { displayId: result.displayId } : {}),
         };
       },
 

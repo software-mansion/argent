@@ -36,6 +36,12 @@ interface ScreenRecordingStopResult {
   wallClockMs?: number;
   /** Dead-air time removed. Present only when trimming actually removed frames. */
   trimmedMs?: number;
+  /**
+   * Foldables only, and only when it happened: how many times the capture
+   * moved to the other panel because the device was folded or unfolded. The
+   * video keeps one size, the panel it started on.
+   */
+  panelSwitches?: number;
   warning?: string;
 }
 
@@ -59,7 +65,7 @@ export const screenRecordingStopTool: ToolDefinition<
   description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the video: frame capture ends and ffmpeg finalizes the mp4.
 Also retrieves the video when the recording already ended on its own (time limit reached, capture process died) — call it even after the cap fired.
 Use when the interaction being captured is finished, or a tool-result note reminds you a recording is still running.
-Returns { video, durationMs, wallClockMs?, trimmedMs?, warning? }; video is a downloadable artifact materialized to a local path. When static-frame trimming removed dead air, durationMs is the trimmed video length and wallClockMs/trimmedMs report the real duration and how much was cut.
+Returns { video, durationMs, wallClockMs?, trimmedMs?, panelSwitches?, warning? }; video is a downloadable artifact materialized to a local path. When static-frame trimming removed dead air, durationMs is the trimmed video length and wallClockMs/trimmedMs report the real duration and how much was cut. On a foldable simulator the recording follows the panel the device renders to; panelSwitches counts the folds it followed, and the video keeps the size of the panel it started on.
 Fails if no recording (running or finished-but-unretrieved) exists for the given udid.`,
   searchHint: "stop end finish screen recording video capture save retrieve",
   zodSchema,
@@ -89,6 +95,7 @@ Fails if no recording (running or finished-but-unretrieved) exists for the given
     const result: ScreenRecordingStopResult = { video, durationMs: stopped.durationMs };
     if (stopped.wallClockMs !== undefined) result.wallClockMs = stopped.wallClockMs;
     if (stopped.trimmedMs !== undefined) result.trimmedMs = stopped.trimmedMs;
+    if (stopped.panelSwitches !== undefined) result.panelSwitches = stopped.panelSwitches;
     if (stopped.warning) result.warning = stopped.warning;
     return result;
   },

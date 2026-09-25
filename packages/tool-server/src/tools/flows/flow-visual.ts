@@ -13,6 +13,7 @@ import {
 } from "./flow-actions";
 import { authoringPlatform, describeSelector, type FlowSelector } from "./flow-utils";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
+import { foldablePostureHint } from "../../utils/foldable";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 /** Default visual tolerance (percent of pixels) when a step sets none. */
@@ -356,6 +357,11 @@ export async function runSnapshot(
       // snapshots keep normalization and only reach this on an aspect change.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
+        // A full-screen mismatch on a foldable is usually a posture mismatch:
+        // the panels differ in size. Wording only; the step fails either way.
+        const posture = opts.cropOn
+          ? undefined
+          : await foldablePostureHint(env.device.id, expected, actual);
         return {
           status: "fail",
           reason:
@@ -365,7 +371,8 @@ export async function runSnapshot(
             (opts.cropOn
               ? `. The element's size drifted — crop a fixed-size container, or re-adopt ` +
                 `with updateBaselines`
-              : ""),
+              : "") +
+            (posture ? `. ${posture}` : ""),
           snapshotKey,
           artifacts: {
             baseline: await store.register({

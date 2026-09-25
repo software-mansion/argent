@@ -109,7 +109,9 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 ## Directives
 
-Directives stop the flow on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
+Directives stop the flow on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `fold`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
+
+`fold` folds or unfolds a foldable iOS simulator: `fold: open`, `fold: 120`, or `fold: { posture: closed, from: open }` (`posture` closed / half-open / open, or `angle` 0–180, one of the two; `from` is where the hinge is now). The runner dispatches it to the `fold` tool and waits for the device to switch panels. A recorded `fold` tool call is rewritten into this directive. The coordinate space changes with the panel, so selectors resolve against a fresh tree afterwards; a `snapshot` baseline belongs to the posture that produced it.
 
 Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 

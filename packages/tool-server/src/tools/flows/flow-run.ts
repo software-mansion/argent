@@ -2343,6 +2343,51 @@ async function runScriptStep(
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
 
+/**
+ * A `fold:` step runs the `fold` tool on the run device. The app survives a
+ * fold, so the pinned tree target stays; what changes is the panel and its
+ * coordinate space, and the runner caches no screen geometry — every gesture
+ * that needs the screen aspect reads it afresh (`fetchScreenAspect`). A proven
+ * tree outage is retired the way a relaunch retires it: the screen the verdict
+ * was proven on is gone.
+ */
+async function runFold(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "fold" }>
+): Promise<DirectiveOutcome> {
+  const { registry, ctx, signal } = state;
+  const device = deviceEnv(state).device;
+  if (signal?.aborted) return ABORTED_OUTCOME;
+  if (state.treeOutage) state.treeOutage.proven = undefined;
+  const args = bindDeviceArgs(registry, "fold", device.id, {
+    ...(step.posture !== undefined ? { posture: step.posture } : {}),
+    ...(step.angle !== undefined ? { angle: step.angle } : {}),
+    ...(step.from !== undefined ? { from: step.from } : {}),
+  });
+  try {
+    const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
+      activeScreen?: number;
+      screen?: { panel?: string; width?: number; height?: number };
+      posture?: string;
+      warning?: string;
+    };
+    const size =
+      result.screen?.width !== undefined && result.screen?.height !== undefined
+        ? ` ${result.screen.width}x${result.screen.height}`
+        : "";
+    return {
+      ok: true,
+      reason: `${result.posture ?? "folded"}: screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`,
+      ...(result.warning !== undefined ? { warning: result.warning } : {}),
+    };
+  } catch (err) {
+    // The tool rejects when cancelled mid-fold; per ABORTED_OUTCOME that must
+    // read as an aborted skip, never a step failure with the tool's message.
+    if (signal?.aborted) return ABORTED_OUTCOME;
+    return { ok: false, reason: errMsg(err) };
+  }
+}
+
 async function execLeafStep(
   state: ExecState,
   step: LeafStep,
@@ -2415,6 +2460,17 @@ async function execLeafStep(
         return { ...base, status: "skip", reason: "run aborted during wait" };
       }
       return { ...base, status: "pass" };
+    }
+
+    case "fold": {
+      const r = await runFold(state, step);
+      if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "fail",
+        reason: r.reason,
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
     }
 
     case "snapshot": {

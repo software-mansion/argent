@@ -10,7 +10,8 @@ import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
-import { startCapture, type PointerControl } from "./capture";
+import { MAIN_SCREEN_ID, refreshActiveScreen, streamUrlForScreen } from "../../utils/foldable";
+import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
@@ -111,7 +112,7 @@ Fails if a recording is already running on the device, the device is not booted,
       // resolving here attaches to it, or starts it if nothing else needed it yet.
       const ref = simulatorServerRef(device);
       const simulator = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
-      const streamUrl = simulator.streamUrl;
+      let streamUrl = simulator.streamUrl;
       if (!streamUrl || !/^https?:\/\//.test(streamUrl)) {
         throw new FailureError(
           `simulator-server is not exposing a frame stream for device ${device.id}, so there is ` +
@@ -125,6 +126,23 @@ Fails if a recording is already running on the device, the device is not booted,
             failure_command: "simulator_server",
           }
         );
+      }
+
+      // A foldable's stream is per panel. The recording starts on the panel the
+      // device renders to now — read fresh, since nothing before this call has
+      // described the screen — and follows it across folds (capture.ts).
+      let followPanel: PanelFollow | undefined;
+      if (simulator.display?.foldable) {
+        const base = streamUrl;
+        const state = await refreshActiveScreen(device.id);
+        const initialScreen = state?.activeScreen ?? MAIN_SCREEN_ID;
+        streamUrl = streamUrlForScreen(base, initialScreen);
+        followPanel = {
+          initialScreen,
+          streamUrlForScreen: (screen) => streamUrlForScreen(base, screen),
+          readActiveScreen: async () =>
+            (await refreshActiveScreen(device.id))?.activeScreen ?? null,
+        };
       }
 
       // capture.ts arms the visualizer once the encoder is live and restores it
@@ -143,6 +161,7 @@ Fails if a recording is already running on the device, the device is not booted,
         watermark: isFeatureEnabled("video-watermark"),
         trimStatic: params.trimStatic ?? true,
         pointer,
+        followPanel,
       });
     },
   };
@@ -151,6 +170,11 @@ Fails if a recording is already running on the device, the device is not booted,
 /**
  * Touch-visualizer control for the life of a recording. `enable`'s result
  * reflects only the `show` toggle; the trail is cosmetic.
+ *
+ * Neither toggle names a screen: on a foldable the server then applies the
+ * setting to every panel, so the markers keep landing in the recording after
+ * it has moved to the other panel. Each touch is drawn on the stream of the
+ * screen the touch named, which is the one the recording follows.
  *
  * `disable` waits for an in-flight `enable` first: enabling is the one
  * suspension point after a recording is stamped, so a dispose can call

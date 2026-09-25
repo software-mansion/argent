@@ -18,7 +18,8 @@ import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/io
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
-import { httpScreenshot } from "../../utils/simulator-client";
+import { httpScreenshot, refreshActiveScreenForCapture } from "../../utils/simulator-client";
+import { foldablePostureHint } from "../../utils/foldable";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import type { RotationPeek } from "../../utils/device-orientation";
@@ -182,9 +183,22 @@ export async function executeScreenshotDiffTool(
     outputDir,
   });
 
+  // On a foldable an aspect mismatch is usually a posture mismatch: the two
+  // panels differ in size, and a baseline belongs to the posture that produced
+  // it. Name the posture behind each size; every other device is unchanged.
+  let summary = result.summary;
+  if (result.dimensionMismatch) {
+    const posture = await foldablePostureHint(
+      params.udid,
+      result.dimensionMismatch.expected,
+      result.dimensionMismatch.actual
+    );
+    if (posture) summary = `${summary}\n- posture: ${posture}`;
+  }
+
   const artifacts = requireArtifacts(options);
   return {
-    summary: result.summary,
+    summary,
     ...(result.diffPath
       ? {
           diffPath: await artifacts.register({
@@ -384,6 +398,9 @@ async function captureLiveInput(params: {
   // baselinePath + captureCurrent flow there. The server's default scale captures
   // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
   // comparable to a baseline saved at any scale.
+  // A live input follows no describe, so a foldable's live panel is read fresh
+  // (the memo may date from before a fold made outside argent).
+  await refreshActiveScreenForCapture(params.api);
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
     capture = await captureScreenshotUpright(

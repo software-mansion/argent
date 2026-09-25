@@ -27,6 +27,10 @@ export const ALLOWED_TOOLS = new Set([
   // Shake's interesting cases are races (shake while a sheet is dismissing,
   // shake right after typing), which need back-to-back dispatch.
   "shake",
+  // A fold between two interactions (tap, unfold, tap the same control on the
+  // other panel) is the sequence a foldable app is tested with. Like `rotate`,
+  // it returns state only; the capture comes once, after the last step.
+  "fold",
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
@@ -43,7 +47,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, fold, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -122,6 +126,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP — keyboard otherwise)   [ios sim/android emu]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
+  fold:           { posture?: "closed"|"half-open"|"open", angle?: 0-180, from?: number|posture }  (one of posture/angle; re-describe after, the panel and its coordinate space change)  [foldable ios sim]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
                   buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute — work on Android TV and Vega; rejected on the Apple TV simulator)
   await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium]

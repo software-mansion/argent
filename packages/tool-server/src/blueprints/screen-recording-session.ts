@@ -68,8 +68,22 @@ export interface ScreenRecordingSessionApi {
   logoFile: string | null;
   /** Why the watermark was requested but not drawn; surfaced by stop's warning. */
   watermarkSkipped: string | null;
-  /** Live subscription to simulator-server's frame stream. */
-  frameStream: { readonly error: Error | null; close(): void } | null;
+  /**
+   * Live subscription to simulator-server's frame stream. Replaced mid-capture
+   * on a foldable when the device switches panels (see `capture.ts`), so the
+   * pump reads frames from here rather than from the stream it started on.
+   */
+  frameStream: {
+    readonly latest?: Buffer | null;
+    readonly error: Error | null;
+    close(): void;
+  } | null;
+  /** Polls which panel a foldable renders to while a recording runs. */
+  panelPollTimer: NodeJS.Timeout | null;
+  /** The panel the frame stream is on; null when the device has one panel. */
+  activeScreen: number | null;
+  /** How many times the capture moved to another panel. */
+  panelSwitches: number;
   /**
    * The frame stream's drop error, stashed when the pump is torn down (cap,
    * crash, stop) before `frameStream` is nulled, so a stop arriving after a
@@ -118,6 +132,12 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.pendingChild = null;
   state.frameStream = null;
   state.lastFrameStreamError = null;
+  if (state.panelPollTimer) {
+    clearInterval(state.panelPollTimer);
+    state.panelPollTimer = null;
+  }
+  state.activeScreen = null;
+  state.panelSwitches = 0;
   state.pointerDisable = null;
   state.pointerFailed = false;
   state.recordingTimedOut = false;
@@ -176,6 +196,9 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       watermarkSkipped: null,
       frameStream: null,
       lastFrameStreamError: null,
+      panelPollTimer: null,
+      activeScreen: null,
+      panelSwitches: 0,
       pumpTimer: null,
       trimStatic: true,
       framesWritten: 0,
@@ -214,6 +237,10 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         if (state.pumpTimer) {
           clearInterval(state.pumpTimer);
           state.pumpTimer = null;
+        }
+        if (state.panelPollTimer) {
+          clearInterval(state.panelPollTimer);
+          state.panelPollTimer = null;
         }
         state.frameStream?.close();
 

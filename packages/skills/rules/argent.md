@@ -87,6 +87,16 @@ Decision order:
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
 
+<foldable_rules>
+A foldable iOS simulator (the iPhone Duo) is listed by `list-devices` with `foldable: true`. Argent, not the simulator, chooses the panel: every screenshot, describe, touch, stream and recording names the panel the device renders to (the cover panel closed, the inner panel half-open and open), read from CoreDevice.
+
+- Fold with the `fold` tool (`posture`: closed / half-open / open, or `angle` 0–180). It waits for the device to switch panels and returns the panel and its size.
+- A fold changes the coordinate space: **re-describe after every fold** before tapping (the tree appended to the fold result is already on the new panel). `screenshot` size follows the panel: 1398×2034 closed, 2007×2853 open on the Duo.
+- Unfolded, the UI is landscape on the inner panel's portrait-native framebuffer. Frames and touch coordinates stay in that native space, like landscape on any iPhone. `rotate` sets the device's orientation, so `Portrait` is a landscape UI there.
+- A fold during a gesture is not supported: the gesture completes on the panel it started on. Fold between actions.
+- If a `describe` says its tree and argent's panel disagree, call `await-screen-idle` and describe again.
+  </foldable_rules>
+
 <react_native_detection>
 Project type is determined by the `argent-environment-inspector` subagent (see `subagents` section).
 When the subagent result is available, use its `is_react_native` field as the authoritative

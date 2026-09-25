@@ -63,6 +63,13 @@ function yamlTextConditionLabel(
       : `text ${selector} contains ${JSON.stringify(expected)}`;
 }
 
+/** `open`, `120°`, `open from closed`, `120° from 0°`. */
+function foldLabel(step: Extract<FlowStep, { kind: "fold" }>): string {
+  const target = step.posture ?? `${step.angle}°`;
+  if (step.from === undefined) return target;
+  return `${target} from ${typeof step.from === "number" ? `${step.from}°` : step.from}`;
+}
+
 /** A UI condition in the summary's spelling, for every step kind that carries one. */
 function yamlConditionLabel(cond: UiCondition): string {
   return cond.condition === "text"
@@ -404,6 +411,12 @@ const FLOW_STEP_DEFINITIONS: {
       const by = `by ${step.by}°`;
       return step.selector ? `${selectorLabel(step.selector)} (${by})` : by;
     },
+  },
+  "fold": {
+    // `from` changes what replays (the path decides which panel the device
+    // ends on), so both surfaces spell it.
+    summary: foldLabel,
+    target: foldLabel,
   },
   "script": {
     // `path` is the as-written, flow-relative spelling (parseScriptPath rejects

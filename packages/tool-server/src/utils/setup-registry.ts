@@ -39,6 +39,7 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
 import { rotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
@@ -140,6 +141,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createPasteTool(registry));
   registry.registerTool(rotateTool);
   registry.registerTool(shakeTool);
+  registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);

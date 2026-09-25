@@ -32,6 +32,7 @@ export const rotateTool: ToolDefinition<Params, Result> = {
   },
   description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
 Use to test layout in a different orientation. Re-run \`describe\` afterwards — frame coordinates change with the orientation.
+On a foldable iOS simulator (iPhone Duo) that is unfolded, the value is the DEVICE's orientation, not the UI's: the inner panel is mounted at 270°, so \`Portrait\` gives a landscape UI (951x669 pt) and \`LandscapeLeft\` a portrait one. Frames and touch coordinates stay in the panel's native (unrotated) space either way, like landscape on any iPhone; fold with the \`fold\` tool.
 Returns { orientation }. Fails if the target device is not booted.`,
   zodSchema,
   capability,

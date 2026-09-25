@@ -35,6 +35,7 @@ import { scopeTempHome } from "./helpers/temp-home";
 
 vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
+  isFoldableSimulator: vi.fn(async () => false),
   listIosSimulators: vi.fn(async () => []),
   getSimulatorRuntimeKind: vi.fn(async () => undefined),
   getCachedSimulatorRuntimeKind: vi.fn(() => undefined),
