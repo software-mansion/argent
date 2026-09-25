@@ -40,6 +40,7 @@ export {
   readLocalPackageVersionUncached,
   getLocalArgentBinRelPath,
   probeLocalInstall,
+  probeGlobalPackageRemoval,
 } from "./topology.js";
 export {
   getInstallRecordPath,
