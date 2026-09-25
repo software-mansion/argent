@@ -24,7 +24,7 @@ import {
   MAIN_SCREEN_ID,
   panelForHingeAngle,
   panelName,
-  refreshActiveScreen,
+  refreshActiveScreenUnlessFailing,
   screenLabel,
   SETTLE_TIMEOUT_MS,
   type ActiveScreenState,
@@ -231,10 +231,13 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAng
     // will start (the angle it last set; null when it never did or when
     // another client moved the hinge since), and CoreDevice says which panel
     // the device renders to now — the memo may date from before a fold made
-    // outside argent. A server without the display route answers null and is
-    // left to reject the hinge itself.
+    // outside argent. A CoreDevice that is not answering is not waited for
+    // here (the waits below keep asking, within their budgets): `before` is
+    // then null, and the sweep starts where the server has the hinge. A server
+    // without the display route answers null and is left to reject the hinge
+    // itself.
     const known = (await fetchDisplayState(api, signal)) ?? api.display;
-    const before = known?.foldable ? await refreshActiveScreen(udid) : null;
+    const before = known?.foldable ? await refreshActiveScreenUnlessFailing(udid) : null;
 
     const request = hingeRequest(params);
     if (request.from === undefined && known && before) {

@@ -18,7 +18,7 @@ import { assertAllowedSimServerEndpoint } from "./external-devices";
 import {
   activeScreenForCommand,
   activeScreenOrMain,
-  refreshActiveScreen,
+  refreshActiveScreenUnlessFailing,
   screenLabel,
   type FoldablePanel,
 } from "./foldable";
@@ -496,17 +496,18 @@ export async function postHinge(
  * recording start): the memo those paths would otherwise read may date from
  * before a fold made outside argent. Resolves with the note the capture should
  * carry — which panel it is — and undefined for any device that is not
- * foldable, so their results are unchanged.
+ * foldable, so their results are unchanged. A CoreDevice that is not answering
+ * is not waited for: the capture is of the memo's panel, and the note says so.
  */
 export async function refreshActiveScreenForCapture(
   api: SimulatorServerApi
 ): Promise<string | undefined> {
   if (!api.display?.foldable || !api.deviceId) return undefined;
-  const state = await refreshActiveScreen(api.deviceId);
+  const state = await refreshActiveScreenUnlessFailing(api.deviceId);
   if (!state) {
     return (
-      "The panel this foldable simulator renders to could not be read (CoreDevice did not " +
-      `answer), so this capture is ${screenLabel(activeScreenOrMain(api.deviceId), api.display.panels)}.`
+      "The panel this foldable simulator renders to could not be read (CoreDevice is not " +
+      `answering), so this capture is ${screenLabel(activeScreenOrMain(api.deviceId), api.display.panels)}.`
     );
   }
   return (

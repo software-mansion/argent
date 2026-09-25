@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { promisify } from "node:util";
 import { externalNativeId } from "./external-devices";
 import { isFoldableSimulator } from "./ios-devices";
-import { sleepOrAbort } from "./timing";
+import { settleWithin, sleepOrAbort } from "./timing";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,12 +28,19 @@ const execFileAsync = promisify(execFile);
  * only unknown after a fold is which panel ended up live, and one read
  * answers that.
  *
- * A read can fail (CoreDevice wedged, the query timing out). The memo then
- * keeps its last answer, and while it has none the next touch retries the
- * read, with a short back-off, rather than aiming at the cover panel of a
- * device that may be open; a `describe`, or a flow's tree read, seeds it from
- * the panel the tree was read on, since that is the panel the device renders
- * to.
+ * A read can fail (CoreDevice wedged, the query timing out at
+ * {@link DEVICECTL_TIMEOUT_MS}). The memo then keeps its last answer, and the
+ * failure is remembered: until a read succeeds again, no caller that can live
+ * on the memo waits for CoreDevice. It takes the memo — or the main screen,
+ * while there is none — and the next read runs in the background, at most
+ * once per {@link READ_RETRY_AFTER_MS}, so a wedged CoreDevice costs one
+ * query's timeout and not one per screenshot. Reads are shared while in
+ * flight, so nothing piles queries onto a CoreDevice that is not answering,
+ * and an older read cannot land over a newer one. A `describe`, or a flow's
+ * tree read, seeds an empty memo from the panel the tree was read on, since
+ * that is the panel the device renders to. The fold tool's waits keep reading
+ * — they exist to see the panel change — but are bounded by their budgets as
+ * wall clock; a read that outlasts them lands in the memo when it comes.
  */
 
 /** The screen every simulator has and every command defaults to. */
@@ -94,12 +101,21 @@ export const INPUT_READY_HOLD_MID_ANGLE_MS = 1_500;
 const HOLD_MAX_MS = 5_000;
 
 /**
- * After a failed read, how long touches keep targeting the main screen before
- * one of them asks CoreDevice again. Short, so a device left open takes input
- * again as soon as CoreDevice recovers; long enough that a wedged CoreDevice
- * does not cost every touch its query timeout.
+ * While reads fail, how long the callers that live on the memo go before one
+ * of them starts a retry in the background (see
+ * {@link refreshActiveScreenUnlessFailing}). Short, so a device left open
+ * takes input again soon after CoreDevice recovers; long enough that a wedged
+ * CoreDevice is not queried on every touch and screenshot.
  */
 export const READ_RETRY_AFTER_MS = 2_000;
+
+/**
+ * The least a bounded read is waited for (see {@link readWithin}): a healthy
+ * query answers in about 170 ms, so a wait's last read still gets to answer
+ * when the budget has almost run out, and a wedged CoreDevice costs a wait
+ * at most this much past its budget.
+ */
+const READ_GRACE_MS = 500;
 
 /**
  * Where the guest hands over between the panels, in hinge degrees, for a sweep
@@ -128,6 +144,8 @@ const DEVICECTL_BIN =
 const cache = new Map<string, ActiveScreenState>();
 /** When the last read of a device failed, while the memo holds nothing newer. */
 const failedReadAt = new Map<string, number>();
+/** The read of a device now in flight, shared by every caller until it lands. */
+const inFlight = new Map<string, Promise<ActiveScreenState | null>>();
 /**
  * The panels the device's simulator-server reported as it attached: the panel
  * list when CoreDevice has never answered, for {@link crossCheckTreeScreen}.
@@ -138,6 +156,7 @@ const serverPanels = new Map<string, readonly FoldablePanel[]>();
 export function __resetFoldableStateForTests(): void {
   cache.clear();
   failedReadAt.clear();
+  inFlight.clear();
   serverPanels.clear();
   developerDirPromise = null;
 }
@@ -172,15 +191,14 @@ export function activeScreenOrMain(udid: string): number {
  * is none — the read a simulator-server makes as it attaches failed, and
  * nothing has read since — the touch asks CoreDevice itself, so a device left
  * open is not driven on its dark cover panel for as long as nothing else
- * happens to read. A wedged CoreDevice is asked again no more than once per
- * {@link READ_RETRY_AFTER_MS}; in between, the main screen.
+ * happens to read. A CoreDevice that is not answering is not waited for: the
+ * touch goes to the main screen at once, and the retry runs in the background
+ * (see {@link refreshActiveScreenUnlessFailing}).
  */
 export async function activeScreenForCommand(udid: string): Promise<number> {
   const cached = cache.get(udid);
   if (cached) return cached.activeScreen;
-  const failedAt = failedReadAt.get(udid);
-  if (failedAt !== undefined && Date.now() - failedAt < READ_RETRY_AFTER_MS) return MAIN_SCREEN_ID;
-  return (await refreshActiveScreen(udid))?.activeScreen ?? MAIN_SCREEN_ID;
+  return (await refreshActiveScreenUnlessFailing(udid))?.activeScreen ?? MAIN_SCREEN_ID;
 }
 
 let developerDirPromise: Promise<string | undefined> | null = null;
@@ -281,19 +299,75 @@ export async function queryActiveScreen(udid: string): Promise<ActiveScreenState
  * Query and memoize. The memo is only replaced by a successful read, so a
  * transient CoreDevice failure keeps the last known panel rather than snapping
  * every touch back to screen 1; the null return tells the caller to say the
- * read failed. A failure is remembered, so the paths that would otherwise
- * settle for the main screen know to ask again (see
- * {@link activeScreenForCommand} and {@link crossCheckDescribedScreen}).
+ * read failed. A failure is remembered, so the callers that can live on the
+ * memo know not to wait for the next attempt (see
+ * {@link refreshActiveScreenUnlessFailing}).
+ *
+ * One query per device at a time: a caller that asks while one is in flight
+ * shares its answer. So a CoreDevice that is not answering has at most one
+ * query hanging on it per device, whatever polls, and reads land in the memo
+ * in the order they were made.
  */
-export async function refreshActiveScreen(udid: string): Promise<ActiveScreenState | null> {
-  const state = await queryActiveScreen(udid);
-  if (state) {
-    cache.set(udid, state);
-    failedReadAt.delete(udid);
-  } else {
-    failedReadAt.set(udid, Date.now());
+export function refreshActiveScreen(udid: string): Promise<ActiveScreenState | null> {
+  const pending = inFlight.get(udid);
+  if (pending) return pending;
+  const read = queryActiveScreen(udid)
+    .then((state) => {
+      if (state) {
+        cache.set(udid, state);
+        failedReadAt.delete(udid);
+      } else {
+        failedReadAt.set(udid, Date.now());
+      }
+      return state;
+    })
+    .finally(() => {
+      if (inFlight.get(udid) === read) inFlight.delete(udid);
+    });
+  inFlight.set(udid, read);
+  return read;
+}
+
+/**
+ * Re-read for a caller that can live on the memo — a capture, a touch with no
+ * memo, a recording's poll, a describe's cross-check — and so must not wait
+ * on a CoreDevice that is not answering. While CoreDevice answers, this is
+ * {@link refreshActiveScreen}. Once a read has failed, it answers null at
+ * once and starts the next read in the background instead, at most once per
+ * {@link READ_RETRY_AFTER_MS} and never while one is in flight: the memo
+ * catches up when a read succeeds, and from the caller after that one, reads
+ * are waited for again. The one query timeout a wedged CoreDevice costs is
+ * paid by the read that fails first, and by whoever shares it.
+ */
+export function refreshActiveScreenUnlessFailing(udid: string): Promise<ActiveScreenState | null> {
+  const failedAt = failedReadAt.get(udid);
+  if (failedAt === undefined) return refreshActiveScreen(udid);
+  if (!inFlight.has(udid) && Date.now() - failedAt >= READ_RETRY_AFTER_MS) {
+    void refreshActiveScreen(udid);
   }
-  return state;
+  return Promise.resolve(null);
+}
+
+/**
+ * One read, waited for no longer than `budgetMs` (but at least
+ * {@link READ_GRACE_MS}) or until an abort: the state, or null when the read
+ * failed or the wait ran out first. A read that outlasts the wait is not cut
+ * short — it lands in the memo when it comes, and a caller that asks meanwhile
+ * shares it — the caller only stops waiting. For the fold tool's waits, whose
+ * budgets are wall clock even when CoreDevice takes its whole timeout to fail.
+ */
+async function readWithin(
+  udid: string,
+  budgetMs: number,
+  signal?: AbortSignal
+): Promise<ActiveScreenState | null> {
+  if (signal?.aborted) return null;
+  const read = await settleWithin(
+    refreshActiveScreen(udid),
+    Math.max(budgetMs, READ_GRACE_MS),
+    signal
+  );
+  return read.type === "value" ? read.value : null;
 }
 
 /**
@@ -301,10 +375,11 @@ export async function refreshActiveScreen(udid: string): Promise<ActiveScreenSta
  * fresh read, else the memo the failed read left in place, else the main
  * screen. For the callers that pick a panel to capture (a recording start,
  * the preview's stream): a read that fails must not move them off the panel
- * every touch and screenshot still targets.
+ * every touch and screenshot still targets, and a CoreDevice that is not
+ * answering must not hold up the capture.
  */
 export async function readActiveScreenOrMain(udid: string): Promise<number> {
-  await refreshActiveScreen(udid);
+  await refreshActiveScreenUnlessFailing(udid);
   return activeScreenOrMain(udid);
 }
 
@@ -318,7 +393,7 @@ export async function readActiveScreenOrMain(udid: string): Promise<number> {
 export async function readActiveScreenOrMemo(
   udid: string
 ): Promise<{ screen: number; fresh: boolean } | null> {
-  const state = await refreshActiveScreen(udid);
+  const state = await refreshActiveScreenUnlessFailing(udid);
   if (state) return { screen: state.activeScreen, fresh: true };
   const cached = cache.get(udid);
   return cached ? { screen: cached.activeScreen, fresh: false } : null;
@@ -351,7 +426,9 @@ export function panelForHingeAngle(
  * made — the caller tells the two apart by applying `done` again — and null
  * only when every read failed. Every successful read refreshes the memo, so
  * the state the tools act on is the one last seen, settled or not. An abort
- * ends the wait with what was read so far.
+ * ends the wait with what was read so far. The budget is wall clock: a read
+ * that CoreDevice takes its whole timeout to fail is not waited out past it
+ * (see {@link readWithin}).
  */
 export async function awaitActiveScreen(
   udid: string,
@@ -363,7 +440,7 @@ export async function awaitActiveScreen(
   const deadline = Date.now() + timeoutMs;
   let last: ActiveScreenState | null = null;
   for (;;) {
-    const state = await refreshActiveScreen(udid);
+    const state = await readWithin(udid, deadline - Date.now(), opts.signal);
     if (state) {
       last = state;
       if (done(state)) return state;
@@ -382,7 +459,9 @@ export async function awaitActiveScreen(
  * would aim the next touch at a panel that went dark. A change restarts the
  * hold, so the state returned is one that stayed put for the whole hold;
  * `maxMs` bounds the restarts. Resolves with the last read, or `initial` when
- * no read succeeded. An abort ends the hold early.
+ * no read succeeded. An abort ends the hold early, and so does the hold's own
+ * clock: a read is waited for only as long as the hold has left, plus the
+ * grace of {@link readWithin}.
  */
 export async function holdActiveScreen(
   udid: string,
@@ -399,7 +478,7 @@ export async function holdActiveScreen(
     const remaining = holdStart + holdMs - Date.now();
     if (remaining <= 0) return last;
     if (!(await sleepOrAbort(Math.min(pollMs, remaining), opts.signal))) return last;
-    const state = await refreshActiveScreen(udid);
+    const state = await readWithin(udid, holdStart + holdMs - Date.now(), opts.signal);
     if (!state) continue;
     if (last && state.activeScreen !== last.activeScreen && Date.now() - start < maxMs) {
       holdStart = Date.now();
@@ -445,8 +524,9 @@ export function streamUrlForScreen(streamUrl: string, screenId: number): string 
  * An empty memo is re-read too when a read has failed before — a
  * simulator-server attached while CoreDevice was not answering — since until
  * something reads, every touch goes to the main screen. When CoreDevice still
- * does not answer, the panel the daemon read the tree on is the best word
- * there is on which panel is live, and the memo takes it, so the touches that
+ * does not answer — which is not waited for, a describe runs on every
+ * interaction — the panel the daemon read the tree on is the best word there
+ * is on which panel is live, and the memo takes it, so the touches that
  * follow go where the frames are.
  *
  * Undefined when there is no memo and nothing has tried to read one: without a
@@ -460,7 +540,7 @@ export async function crossCheckDescribedScreen(
   const cached = cache.get(udid);
   if (cached?.activeScreen === describedScreen) return undefined;
   if (!cached && !failedReadAt.has(udid)) return undefined;
-  const fresh = await refreshActiveScreen(udid);
+  const fresh = await refreshActiveScreenUnlessFailing(udid);
   if (fresh) {
     if (fresh.activeScreen === describedScreen) return undefined;
     return (
@@ -470,9 +550,10 @@ export async function crossCheckDescribedScreen(
       `mid-fold. Call await-screen-idle, then describe again before tapping.`
     );
   }
+  // The failure stays on record: CoreDevice is still not answering, and the
+  // callers that live on the memo must keep not waiting for it.
   const panels = cached?.panels ?? [];
   cache.set(udid, { activeScreen: describedScreen, panels, readAt: Date.now() });
-  failedReadAt.delete(udid);
   return (
     `CoreDevice did not report which panel this foldable simulator renders to; commands now target ` +
     `${screenLabel(describedScreen, panels)}, the panel this tree was read on.`
@@ -507,9 +588,9 @@ export async function crossCheckTreeScreen(udid: string, screen: Size): Promise<
   if (shaped.length !== 1) return;
   const treeScreen = shaped[0].screenId;
   if (treeScreen === cached?.activeScreen) return;
-  if (await refreshActiveScreen(udid)) return;
+  if (await refreshActiveScreenUnlessFailing(udid)) return;
+  // The failure stays on record, as in `crossCheckDescribedScreen`.
   cache.set(udid, { activeScreen: treeScreen, panels: [...panels], readAt: Date.now() });
-  failedReadAt.delete(udid);
 }
 
 interface Size {
@@ -552,7 +633,7 @@ export async function foldablePostureHint(
   actual: Size
 ): Promise<string | undefined> {
   if (!(await isFoldableSimulator(udid))) return undefined;
-  const panels = (cache.get(udid) ?? (await refreshActiveScreen(udid)))?.panels;
+  const panels = (cache.get(udid) ?? (await refreshActiveScreenUnlessFailing(udid)))?.panels;
   const base =
     "This simulator is foldable: a baseline belongs to the posture that produced it, and the " +
     "cover and inner panels differ in size, so a capture in another posture can never match.";

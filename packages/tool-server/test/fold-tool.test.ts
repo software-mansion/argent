@@ -12,7 +12,7 @@ vi.mock("../src/utils/foldable", async () => {
     await vi.importActual<typeof import("../src/utils/foldable")>("../src/utils/foldable");
   return {
     ...actual,
-    refreshActiveScreen: (udid: string) => refreshActiveScreenMock(udid),
+    refreshActiveScreenUnlessFailing: (udid: string) => refreshActiveScreenMock(udid),
     activeScreenOrMain: (udid: string) => activeScreenOrMainMock(udid),
     awaitActiveScreen: (
       udid: string,
