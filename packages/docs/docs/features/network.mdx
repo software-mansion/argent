@@ -19,15 +19,15 @@ Argent records the HTTP requests of the running app. The agent reads this record
 
 Argent captures the traffic in three different layers.
 
-| Layer                    | Platforms             | Content                                                         |
-| ------------------------ | --------------------- | --------------------------------------------------------------- |
-| JS runtime               | iOS, Android, Vega    | The `fetch()` calls of your JavaScript code                     |
-| Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers |
-| Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets  |
+| Layer                    | Platforms             | Content                                                                           |
+| ------------------------ | --------------------- | --------------------------------------------------------------------------------- |
+| JS runtime               | iOS, Android, Vega    | The `fetch()` and `XMLHttpRequest` calls of your JavaScript code, also from axios |
+| Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers                   |
+| Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets                    |
 
 Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
 
-In React Native, Argent changes the `fetch()` function only. In React Native, the `fetch()` function uses `XMLHttpRequest`. If Argent changed both functions, it would count each request two times. Native code does not use the `fetch()` function. For native code, use the iOS native layer.
+In React Native, the JS runtime layer records the `XMLHttpRequest` calls and the `fetch()` calls. Thus Argent also records the requests of libraries that use `XMLHttpRequest`, for example axios. The `fetch()` function of React Native uses `XMLHttpRequest`. Expo can replace it with a native `fetch()` function. In both cases, Argent records each request one time. Native code does not use these functions. For native code, use the iOS native layer.
 
 ## The request record
 
@@ -52,8 +52,9 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the record. 
 
 ## Limits
 
-- Argent starts the capture at one of these three moments: the debugger connects, Argent attaches to the Chromium app, or you activate the native inspection. Argent does not capture the earlier requests. Do the operation again after the agent connects.
-- The record keeps the most recent requests only. The limits are 2000 requests for the JS layer and 1000 requests for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native record holds fewer than 1000 requests.
+- Argent starts the capture at one of these three moments: the agent reads the JS runtime record, Argent attaches to the Chromium app, or you activate the native inspection. Argent does not capture the earlier requests. Do the operation again after the capture starts.
+- A reload or a restart of the app clears the JS runtime record. Argent starts the capture again when the agent reads the record.
+- The record keeps the most recent requests only. The limits are 2000 requests for the JS layer and 1000 requests for Chromium. The JS layer also removes the oldest requests when their bodies contain more than 50 MB of text. The JS layer keeps approximately the first 1 MB of each body. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native record holds fewer than 1000 requests.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
 - The `NSURLProtocol` layer is available on iOS only. On Android, use the JS layer.
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a record of requests as you protect other data of the app.
