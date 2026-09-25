@@ -23,8 +23,7 @@ const WIN32_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD";
 // a skills refresh is the project being configured.
 function findOnPath(bin: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | null {
   const pathValue = env.PATH ?? env.Path ?? "";
-  const isAbsolute = platform === "win32" ? path.win32.isAbsolute : path.posix.isAbsolute;
-  const dirs = pathValue.split(path.delimiter).filter((dir) => dir.length > 0 && isAbsolute(dir));
+  const dirs = pathValue.split(path.delimiter).filter((dir) => path.isAbsolute(dir));
 
   if (platform === "win32") {
     const exts = (env.PATHEXT ?? WIN32_DEFAULT_PATHEXT).split(";").filter(Boolean);
