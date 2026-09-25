@@ -2,13 +2,14 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { spawn } from "node:child_process";
 import { track } from "@argent/telemetry";
+import { SKILLS_DIR, buildArgentSkillsSource, isOnline } from "./utils.js";
 import {
-  SKILLS_DIR,
-  buildArgentSkillsSource,
-  isOnline,
-  isSkillsCliAvailable,
-  withNpmForce,
-} from "./utils.js";
+  NO_SKILLS_RUNNER_MESSAGE,
+  isSkillsCliCached,
+  resolveSkillsRunner,
+  skillsCommand,
+  type SkillsCommand,
+} from "./skills-runner.js";
 import { InitCancelled } from "./init-args.js";
 import type { Scope } from "./init-scope.js";
 
@@ -30,11 +31,18 @@ export async function runSkillsStep(args: {
 
   let skillsMethod: SkillsMethod;
 
+  const runner = resolveSkillsRunner();
+  const label = runner?.label ?? "npx";
   const online = await isOnline();
-  const offlineWithCache = !online && isSkillsCliAvailable();
-  const skillsCliReady = online || offlineWithCache;
+  const offlineWithCache = !online && runner !== null && isSkillsCliCached(runner);
+  const skillsCliReady = runner !== null && (online || offlineWithCache);
 
-  if (!skillsCliReady) {
+  if (runner === null) {
+    p.log.warn(
+      pc.yellow("Neither npx nor pnpm is on PATH. ") +
+        "Automatic skills installation requires one of them."
+    );
+  } else if (!skillsCliReady) {
     p.log.warn(
       pc.yellow("You appear to be offline. ") +
         "Automatic skills installation requires a network connection."
@@ -54,12 +62,12 @@ export async function runSkillsStep(args: {
         {
           value: "default" as const,
           label: "Automatic",
-          hint: "Installs all skills automatically with npx skills",
+          hint: `Installs all skills automatically with ${label} skills`,
         },
         {
           value: "interactive" as const,
           label: "Interactive",
-          hint: "Full npx skills TUI - choose skills, agents, and method",
+          hint: `Full ${label} skills TUI - choose skills, agents, and method`,
         },
         {
           value: "manual" as const,
@@ -91,9 +99,14 @@ export async function runSkillsStep(args: {
         ``,
         `  ${pc.dim("# Cursor")}`,
         `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
-        ``,
-        `  ${pc.dim("# Or use npx skills directly:")}`,
-        `  npx skills add ${skillsSource}`,
+        // Without a runner the skills CLI is not an option, so do not offer it.
+        ...(runner
+          ? [
+              ``,
+              `  ${pc.dim(`# Or use ${label} skills directly:`)}`,
+              `  ${label} skills add ${skillsSource}`,
+            ]
+          : []),
       ].join("\n"),
       "Manual Skills Installation"
     );
@@ -109,12 +122,9 @@ export async function runSkillsStep(args: {
       skillsArgs.push("--skill", "*", "-y");
     }
 
+    // `--no-install` is npx-only; isSkillsCliCached() is true only for npx.
     const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
-    // `--force` softens the host project's npm engine gate (see withNpmForce);
-    // baseArgs stays clean for the displayed and manual-fallback commands.
-    const npxArgs = withNpmForce(baseArgs);
-
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(baseArgs.join(" "))}`);
+    p.log.info(`Running: ${pc.dim(label)} ${pc.cyan(baseArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -122,8 +132,13 @@ export async function runSkillsStep(args: {
     }
 
     try {
+      if (!runner) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
+      // skillsCommand adds whatever the runner needs (npx: --force; pnpm:
+      // dlx), and throws for an argument cmd.exe cannot take safely; baseArgs
+      // stays clean for the displayed and manual-fallback commands.
+      const command = skillsCommand(runner, baseArgs);
       const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
+      await runSkillsCli(command, label, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
@@ -132,8 +147,8 @@ export async function runSkillsStep(args: {
       if (skillsMethod === "default") {
         spinner.stop(pc.red("Skills installation failed."));
       }
-      p.log.error(`Failed to run npx skills: ${err}`);
-      p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
+      p.log.error(`Failed to run ${label} skills: ${err}`);
+      p.log.info(`You can install skills manually:\n  ${label} ${skillsArgs.join(" ")}`);
       skillOutcome = "failure";
     }
   }
@@ -148,12 +163,16 @@ export async function runSkillsStep(args: {
   return skillsMethod;
 }
 
-function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
+function runSkillsCli(
+  command: SkillsCommand,
+  label: string,
+  interactive: boolean,
+  cwd?: string
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
-    const child = spawn(npxCmd, args, {
+    const child = spawn(command.file, command.args, {
       stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
+      shell: command.shell,
       ...(cwd ? { cwd } : {}),
     });
 
@@ -174,7 +193,7 @@ function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promi
         resolve();
       } else {
         const output = [stderr, stdout].filter(Boolean).join("\n").trim();
-        reject(new Error(output || `npx skills exited with code ${code}`));
+        reject(new Error(output || `${label} skills exited with code ${code}`));
       }
     });
 

@@ -45,7 +45,6 @@ import {
   listArgentSkillsInLock,
   isNewerVersion,
   isOnline,
-  isSkillsCliAvailable,
   listBundledSkills,
   resolveProjectRoot,
   SKILLS_DIR,
@@ -741,54 +740,6 @@ describe("isOnline", () => {
     // settled promise. This mirrors what happens when DNS responds after
     // we have already given up waiting.
     expect(() => dnsCallback?.(null)).not.toThrow();
-  });
-});
-
-// ── isSkillsCliAvailable ─────────────────────────────────────────────────────
-
-describe("isSkillsCliAvailable", () => {
-  beforeEach(() => {
-    execSyncMock.mockReset();
-  });
-
-  it("probes `npx --force --no-install skills --version` and returns true on success", () => {
-    execSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
-
-    expect(isSkillsCliAvailable()).toBe(true);
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
-    const [cmd] = execSyncMock.mock.calls[0]!;
-    // `--force` softens the host project's npm engine gate so the probe can't
-    // hard-fail with EBADDEVENGINES in a devEngines-pinned repo (#298).
-    expect(cmd).toBe("npx --force --no-install skills --version");
-  });
-
-  it("returns false when the probe throws (skills CLI not in npx cache)", () => {
-    execSyncMock.mockImplementation(() => {
-      throw new Error("command failed");
-    });
-
-    expect(isSkillsCliAvailable()).toBe(false);
-  });
-
-  it("fully silences stdio so nothing leaks to the terminal", () => {
-    execSyncMock.mockReturnValue(Buffer.from(""));
-
-    isSkillsCliAvailable();
-
-    const opts = execSyncMock.mock.calls[0]![1] as
-      | { stdio?: [unknown, unknown, unknown] }
-      | undefined;
-    expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
-  });
-
-  it("passes a timeout so a wedged npx cannot hang init forever", () => {
-    execSyncMock.mockReturnValue(Buffer.from(""));
-
-    isSkillsCliAvailable();
-
-    const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
-    expect(typeof opts?.timeout).toBe("number");
-    expect(opts!.timeout!).toBeGreaterThan(0);
   });
 });
 

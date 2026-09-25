@@ -451,18 +451,6 @@ export function withNpmForce(npxArgs: string[]): string[] {
   return ["--force", ...npxArgs];
 }
 
-export function isSkillsCliAvailable(): boolean {
-  try {
-    execSync("npx --force --no-install skills --version", {
-      stdio: ["ignore", "ignore", "ignore"],
-      timeout: PROBE_TIMEOUT_MS,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   let host: string;
   try {

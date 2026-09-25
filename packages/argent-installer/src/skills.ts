@@ -10,11 +10,13 @@ import {
   getProjectSkillLockPath,
   listArgentSkillsInLock,
   listBundledSkills,
-  withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
+import { NO_SKILLS_RUNNER_MESSAGE, resolveSkillsRunner, skillsCommand } from "./skills-runner.js";
 
 type SkillScope = "project" | "global";
+
+const ARGENT_SKILL_NAME = /^argent-[a-z0-9-]+$/;
 
 interface SkillScopeResult {
   scope: SkillScope;
@@ -74,6 +76,8 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   if (bundled.size === 0) return [];
   const results: SkillScopeResult[] = [];
   const primarySource = buildArgentSkillsSource(getInstalledVersion());
+  // Resolved once for the whole refresh — every scope's calls share it.
+  const runner = resolveSkillsRunner();
   // Project-scope `skills` commands act on their cwd, and this can run from a
   // detached updater that inherited the tool-server's editor-chosen cwd (often
   // `/` or `$HOME`) — pin every run to the project.
@@ -81,12 +85,19 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     stdio: ["ignore", "pipe", "pipe"];
     cwd: string;
   };
+  const runSkills = (skillsArgs: string[]): void => {
+    if (!runner) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
+    const command = skillsCommand(runner, skillsArgs);
+    execFileSync(command.file, command.args, { ...execOpts, shell: command.shell });
+  };
 
   for (const spec of getScopeSpecs(projectRoot)) {
     const tracked = listArgentSkillsInLock(spec.lockPath);
     if (tracked.length === 0) continue;
 
-    const orphaned = tracked.filter((name) => !bundled.has(name));
+    // Lockfile names are project data and end up in the skills CLI's argv, so
+    // only names shaped like argent's own skills are pruned.
+    const orphaned = tracked.filter((name) => !bundled.has(name) && ARGENT_SKILL_NAME.test(name));
     const result: SkillScopeResult = {
       scope: spec.scope,
       synced: 0,
@@ -96,7 +107,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     };
 
     try {
-      execFileSync("npx", withNpmForce(spec.buildAddArgs(primarySource)), execOpts);
+      runSkills(spec.buildAddArgs(primarySource));
       result.synced = bundled.size;
     } catch (primaryErr) {
       if (primarySource === SKILLS_DIR) {
@@ -104,7 +115,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
           primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
       } else {
         try {
-          execFileSync("npx", withNpmForce(spec.buildAddArgs(SKILLS_DIR)), execOpts);
+          runSkills(spec.buildAddArgs(SKILLS_DIR));
           result.synced = bundled.size;
         } catch (fallbackErr) {
           result.syncError =
@@ -115,7 +126,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (orphaned.length > 0) {
       try {
-        execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), execOpts);
+        runSkills([...spec.removeArgs, ...orphaned]);
         result.pruned = orphaned;
       } catch (err) {
         result.pruneError = err instanceof Error ? err.message.split("\n")[0] : String(err);
