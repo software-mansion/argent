@@ -46,7 +46,7 @@ import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
 import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro";
-import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
 import { createDebuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
@@ -158,7 +158,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(debuggerComponentTreeTool);
+  registry.registerTool(createDebuggerComponentTreeTool(registry));
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);

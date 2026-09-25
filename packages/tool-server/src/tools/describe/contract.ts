@@ -104,6 +104,19 @@ export interface DescribeTreeData {
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */
 export type UiOrientation = "portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown";
 
+const UI_ORIENTATIONS: readonly UiOrientation[] = [
+  "portrait",
+  "portraitUpsideDown",
+  "landscapeLeft",
+  "landscapeRight",
+];
+
+export function asUiOrientation(v: unknown): UiOrientation | undefined {
+  return typeof v === "string" && (UI_ORIENTATIONS as readonly string[]).includes(v)
+    ? (v as UiOrientation)
+    : undefined;
+}
+
 export interface DescribeResult {
   description: string;
   source: DescribeSource;

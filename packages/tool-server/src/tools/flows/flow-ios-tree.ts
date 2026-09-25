@@ -19,6 +19,7 @@ import {
   type DescribeNode,
   type DescribeTreeData,
   type UiOrientation,
+  asUiOrientation,
   parseDescribeResult,
 } from "../describe/contract";
 
@@ -215,19 +216,6 @@ function projectIosNode(
  */
 export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
   return adaptFullHierarchy(raw).tree;
-}
-
-const UI_ORIENTATIONS: readonly UiOrientation[] = [
-  "portrait",
-  "portraitUpsideDown",
-  "landscapeLeft",
-  "landscapeRight",
-];
-
-function asUiOrientation(v: unknown): UiOrientation | undefined {
-  return typeof v === "string" && (UI_ORIENTATIONS as readonly string[]).includes(v)
-    ? (v as UiOrientation)
-    : undefined;
 }
 
 /**

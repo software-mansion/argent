@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Registry } from "@argent/registry";
 import {
   DEBUGGER_TOOL_CAPABILITY,
   RN_ONLY_TOOL_CAPABILITY,
@@ -13,7 +14,7 @@ import { resolveDevice } from "../src/utils/device-info";
 // block on one of these) breaks this single test instead of slipping into a
 // release. Kept exhaustive on purpose — a per-tool assertion is cheap and the
 // list is the contract.
-import { debuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
 import { debuggerReloadMetroTool } from "../src/tools/debugger/debugger-reload-metro";
 import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
 import { networkLogsTool } from "../src/tools/network/network-logs";
@@ -103,7 +104,7 @@ describe("RN-only tool registry — every locked tool actually rejects Chromium"
   // Source of truth for what must stay locked. If a tool is added/removed
   // here, the maintainer is making an explicit Chromium-support decision.
   const LOCKED_TOOLS = [
-    debuggerComponentTreeTool,
+    createDebuggerComponentTreeTool(new Registry()),
     debuggerReloadMetroTool,
     debuggerInspectElementTool,
     reactProfilerAnalyzeTool,
