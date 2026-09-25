@@ -28,27 +28,41 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
-// The global install's OWN on-disk location beats npm_config_user_agent for a
-// global-mode command: user_agent reflects whoever LAUNCHED `argent` (bare
-// `argent update` has none at all, and npx/pnpm dlx/etc. carry the RUNNER's
-// agent, not the target install's), while a pnpm-owned path is unambiguous —
-// npm and yarn never write into pnpm's store or its global dir (#1207). Kept
-// narrow on purpose: no attempt to spot npm/yarn/bun from a path, since
-// nothing about their global layouts is as distinctive as pnpm's.
+// Where pnpm, yarn and bun keep global packages, as path fragments with `/`
+// separators. npm has no fragment of its own: its root is
+// `<prefix>/lib/node_modules` or `%APPDATA%\npm\node_modules`, so npm is what
+// remains once the others are ruled out.
+const GLOBAL_ROOT_MARKERS: ReadonlyArray<readonly [PackageManager, string]> = [
+  ["pnpm", "/pnpm/global/"],
+  ["pnpm", "/.pnpm/"],
+  ["yarn", "/yarn/global/node_modules/"],
+  ["yarn", "/yarn/data/global/node_modules/"],
+  ["bun", "/.bun/install/global/"],
+];
+
+// The package manager that owns a global install, read from where the install
+// lives (#1207). npm_config_user_agent names whoever LAUNCHED `argent` — empty
+// for a bare `argent update`, and the runner's for `npx` or `pnpm dlx` — so it
+// is used only when there is no global install to look at.
 export function detectGlobalPackageManager(
   packageRoot: string | null,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
 ): PackageManager {
-  if (packageRoot !== null) {
-    const normalized = packageRoot.split("\\").join("/");
-    const pnpmHome = env.PNPM_HOME?.split("\\").join("/").replace(/\/$/, "");
-    const insidePnpmHome =
-      Boolean(pnpmHome) && (normalized === pnpmHome || normalized.startsWith(`${pnpmHome}/`));
-    if (normalized.includes("/.pnpm/") || normalized.includes("/pnpm/global/") || insidePnpmHome) {
-      return "pnpm";
-    }
+  if (packageRoot === null) return detectPackageManager();
+  // Windows paths are case-insensitive; POSIX paths are not.
+  const normalize = (p: string): string => {
+    const slashed = p.split("\\").join("/").replace(/\/+$/, "");
+    return platform === "win32" ? slashed.toLowerCase() : slashed;
+  };
+  const root = normalize(packageRoot);
+  const pnpmHome = env.PNPM_HOME ? normalize(env.PNPM_HOME) : "";
+  if (pnpmHome && (root === pnpmHome || root.startsWith(`${pnpmHome}/`))) return "pnpm";
+  const rootWithSlash = `${root}/`;
+  for (const [pm, marker] of GLOBAL_ROOT_MARKERS) {
+    if (rootWithSlash.includes(marker)) return pm;
   }
-  return detectPackageManager();
+  return "npm";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {

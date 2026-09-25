@@ -1023,10 +1023,51 @@ describe("detectGlobalPackageManager", () => {
     ).toBe("npm");
   });
 
-  it("falls back to the user agent for an npm-looking path", () => {
+  it("treats a root outside pnpm, yarn and bun global dirs as npm's, whatever launched argent", () => {
+    // `pnpm dlx @swmansion/argent update` on an npm-owned install must not
+    // run `pnpm add -g` and leave a second copy behind.
     process.env.npm_config_user_agent = "pnpm/9.0.0";
     const root = "/usr/lib/node_modules/@swmansion/argent";
-    expect(detectGlobalPackageManager(root)).toBe("pnpm");
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "linux")).toBe("npm");
+  });
+
+  it("returns yarn for a yarn classic global install", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/home/user/.config/yarn/global/node_modules/@swmansion/argent";
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "linux")).toBe("yarn");
+  });
+
+  it("returns yarn for a yarn classic global install on Windows", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root =
+      "C:\\Users\\me\\AppData\\Local\\Yarn\\Data\\global\\node_modules\\@swmansion\\argent";
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "win32")).toBe("yarn");
+  });
+
+  it("returns bun for a bun global install", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/home/user/.bun/install/global/node_modules/@swmansion/argent";
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "linux")).toBe("bun");
+  });
+
+  it("matches PNPM_HOME without case sensitivity on Windows", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "C:\\Tools\\ArgentPnpm\\global\\v11\\abc\\node_modules\\@swmansion\\argent";
+    expect(
+      detectGlobalPackageManager(
+        root,
+        { PNPM_HOME: "c:\\tools\\argentpnpm" } as NodeJS.ProcessEnv,
+        "win32"
+      )
+    ).toBe("pnpm");
+  });
+
+  it("keeps the PNPM_HOME match case-sensitive on POSIX", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "/Custom/Home/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(root, { PNPM_HOME: "/custom/home" } as NodeJS.ProcessEnv, "linux")
+    ).toBe("npm");
   });
 
   it("falls back to the user agent when the root is null", () => {
