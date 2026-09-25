@@ -200,6 +200,59 @@ _tap_pad_case() { # udid case
   fi
 }
 
+# A recording that starts on the inner panel keeps that panel's size (evened
+# for the encoder), and the cover panel's stretch is pillarboxed into it: the
+# two panels differ in aspect ratio by 2.4 %, so a fitted cover leaves ~23
+# black columns on each side. Stretched, it would fill the frame and no frame
+# would have them. Bars are read across a band of rows at the centre, where
+# the content lies between them and the corner watermark does not reach.
+_recording_letterbox_case() { # video panel-width panel-height
+  local video="$1" pw="$2" ph="$3" out
+  if [ ! -s "$video" ] || [ -z "$pw" ] || [ -z "$ph" ]; then
+    fail "$P" screen-recording letterbox "no video ($video) or no panel size (${pw}x${ph})"; return 1
+  fi
+  out="$(python3 - "$video" "$pw" "$ph" <<'PY'
+import json, subprocess, sys
+video, pw, ph = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+w, h = pw - pw % 2, ph - ph % 2
+streams = json.loads(subprocess.run(
+    ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height", "-of", "json", video],
+    capture_output=True, text=True).stdout or "{}").get("streams", [])
+if [(s.get("codec_type"), s.get("width"), s.get("height")) for s in streams] != [("video", w, h)]:
+    print(f"expected one {w}x{h} video stream, got {streams}"); sys.exit(1)
+dec = subprocess.Popen(["ffmpeg", "-v", "error", "-i", video, "-fps_mode", "passthrough", "-f", "rawvideo",
+                        "-pix_fmt", "gray", "-"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+y0, y1 = int(h * 0.4), int(h * 0.6)
+frames = boxed = 0
+bars = set()
+while True:
+    buf = dec.stdout.read(w * h)
+    if len(buf) < w * h:
+        break
+    frames += 1
+    def black(x):
+        return sum(buf[y * w + x] for y in range(y0, y1, 4)) / len(range(y0, y1, 4)) < 40
+    left = next((i for i in range(w) if not black(i)), w)
+    right = next((i for i in range(w) if not black(w - 1 - i)), w)
+    if 16 <= left <= 30 and 16 <= right <= 30:
+        boxed += 1
+        bars.add((left, right))
+err = dec.stderr.read().decode().strip()
+dec.wait()
+if err or dec.returncode != 0:
+    print(f"the video does not decode cleanly: {err[:160]}"); sys.exit(1)
+if boxed < 30:
+    print(f"{boxed} of {frames} frames pillarboxed, expected the cover's stretch (30+)"); sys.exit(1)
+print(f"{w}x{h}, {boxed} of {frames} frames pillarboxed, bars {sorted(bars)}")
+PY
+)"
+  if [ $? -eq 0 ]; then
+    pass "$P" screen-recording letterbox "$out"
+  else
+    fail "$P" screen-recording letterbox "$out"
+  fi
+}
+
 run_phase() {
   local P=ios-duo
   [ "$E2E_OS" = darwin ] || { skip "$P" tier all "macOS only"; return 0; }
@@ -277,8 +330,13 @@ run_phase() {
   assert_field "$P" fold closed-for-flow "{\"udid\":\"$DEV\",\"posture\":\"closed\"}" '.activeScreen' '1'
   _flow_swipe_case "$DEV" "$E2E_WORK/duo-flows" pad-down closed
   assert_field "$P" fold half-open-again "{\"udid\":\"$DEV\",\"posture\":\"half-open\"}" '.activeScreen' '3'
+  # The recording below starts on this panel, so the video keeps its size.
+  local rec_w rec_h
+  rec_w="$(printf '%s' "$RT_JSON" | jq -r '.screen.width // empty' 2>/dev/null)"
+  rec_h="$(printf '%s' "$RT_JSON" | jq -r '.screen.height // empty' 2>/dev/null)"
 
-  # A recording across a fold: one file, and the switch counted.
+  # A recording across a fold: one file at the first panel's size, the switch
+  # counted, and the other panel letterboxed into it.
   run_tool screen-recording-start "{\"udid\":\"$DEV\",\"timeLimitSeconds\":30,\"trimStatic\":false}"
   if [ "$RT_RC" -eq 0 ]; then
     run_tool fold "{\"udid\":\"$DEV\",\"posture\":\"closed\"}"
@@ -288,6 +346,7 @@ run_phase() {
     run_tool screen-recording-stop "$U"
     if [ "$RT_RC" -eq 0 ] && printf '%s' "$RT_JSON" | jq -e '(.panelSwitches // 0) >= 2' >/dev/null 2>&1; then
       pass "$P" screen-recording follows-fold "$(printf '%s' "$RT_JSON" | jq -c '{panelSwitches,durationMs}')"
+      _recording_letterbox_case "$(printf '%s' "$RT_JSON" | jq -r '.video // empty')" "$rec_w" "$rec_h"
     else
       fail "$P" screen-recording follows-fold "$(rt_detail 200)"
     fi
