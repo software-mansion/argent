@@ -19,6 +19,7 @@ vi.mock("../src/tools/screen-recording/watermark", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/tools/screen-recording/watermark")>();
   return {
     ...actual,
+    buildWatermarkGraph: vi.fn(actual.buildWatermarkGraph),
     resolveFfmpeg: vi.fn(async () => "/fake/ffmpeg"),
     writeLogoTemp: vi.fn(async () => "/tmp/fake-logo.png"),
   };
@@ -31,6 +32,7 @@ import {
 } from "../src/blueprints/screen-recording-session";
 import { startCapture, stopCapture, type PanelFollow } from "../src/tools/screen-recording/capture";
 import { openMjpegStream } from "../src/tools/screen-recording/mjpeg-stream";
+import { buildWatermarkGraph } from "../src/tools/screen-recording/watermark";
 import { __resetActiveScreenRecordingsForTesting } from "../src/utils/screen-recording-reminder";
 import { __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
@@ -281,5 +283,45 @@ describe("a recording of a foldable follows the live panel", () => {
     expect(api.panelPollTimer).toBeNull();
     expect(api.activeScreen).toBeNull();
     await stop(api);
+  });
+
+  it("pins the watermark base only when following a panel", async () => {
+    const graph = vi.mocked(buildWatermarkGraph);
+    graph.mockClear();
+    serveStreams(() => INNER);
+    fakeChild();
+    const following = await makeSession();
+    const follow: PanelFollow = {
+      initialScreen: 3,
+      streamUrlForScreen: (screen) => `${BASE_URL}?screen=${screen}`,
+      readActiveScreen: async () => 3,
+    };
+    const start = startCapture(following, {
+      streamUrl: follow.streamUrlForScreen(3),
+      timeLimitSeconds: 60,
+      watermark: true,
+      trimStatic: false,
+      followPanel: follow,
+    });
+    start.catch(() => {});
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    await start;
+    expect(graph).toHaveBeenCalledWith({ width: 2007, height: 2853 }, { pinSize: true });
+    await stop(following);
+
+    graph.mockClear();
+    fakeChild();
+    const plain = await makeSession();
+    const plainStart = startCapture(plain, {
+      streamUrl: BASE_URL,
+      timeLimitSeconds: 60,
+      watermark: true,
+      trimStatic: false,
+    });
+    plainStart.catch(() => {});
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    await plainStart;
+    expect(graph).toHaveBeenCalledWith({ width: 2007, height: 2853 }, { pinSize: false });
+    await stop(plain);
   });
 });

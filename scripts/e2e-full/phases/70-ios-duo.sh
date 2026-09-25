@@ -52,6 +52,39 @@ _pad_centre() { # udid
   printf '%s' "$RT_JSON" | jq -r '.description' | grep 'probe.pad' | head -1 | python3 -c 'import re,sys; m=re.search(r"\(([0-9.]+), ?([0-9.]+), ?([0-9.]+), ?([0-9.]+)\)", sys.stdin.read()); print(round(float(m.group(1))+float(m.group(3))/2, 3), round(float(m.group(2))+float(m.group(4))/2, 3)) if m else print("")'
 }
 
+# The probe's `probe.touch` label carries the window-space start and end of
+# the last touch on the pad (`began=(... n=<x>,<y>)`, `ended=(... n=<x>,<y>)`).
+# Run a one-step flow `swipe: { from: { id: probe.pad }, direction: down }` and
+# check the finger travelled down the UI: window-space y grew, x held.
+_flow_swipe_case() { # udid project-root flow-name case
+  local udid="$1" root="$2" flow="$3" case="$4"
+  mkdir -p "$root/.argent/flows"
+  printf 'steps:\n  - swipe: { from: { id: probe.pad }, direction: down }\n' > "$root/.argent/flows/$flow.yaml"
+  run_tool flow-execute "{\"name\":\"$flow\",\"project_root\":\"$root\",\"device\":\"$udid\"}"
+  if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.ok==true' >/dev/null 2>&1; then
+    fail "$P" flow-execute "swipe-down-$case" "$(rt_detail 200)"; return 1
+  fi
+  sleep 1
+  run_tool describe "{\"udid\":\"$udid\"}" || { fail "$P" describe "swipe-down-$case" "$(rt_detail 120)"; return 1; }
+  local began ended
+  began="$(printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'began=([^)]*n=[0-9.]*,[0-9.]*' | grep -o 'n=[0-9.]*,[0-9.]*' | head -1)"
+  ended="$(printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'ended=([^)]*n=[0-9.]*,[0-9.]*' | grep -o 'n=[0-9.]*,[0-9.]*' | head -1)"
+  if [ -z "$began" ] || [ -z "$ended" ]; then
+    fail "$P" flow-execute "swipe-down-$case" "probe reported no swipe: $(rt_detail 120)"; return 1
+  fi
+  if python3 - "$began" "$ended" <<'PY'
+import sys
+b = [float(v) for v in sys.argv[1][2:].split(",")]
+e = [float(v) for v in sys.argv[2][2:].split(",")]
+sys.exit(0 if e[1] - b[1] > 0.2 and abs(e[0] - b[0]) < 0.05 else 1)
+PY
+  then
+    pass "$P" flow-execute "swipe-down-$case" "window-space $began -> $ended"
+  else
+    fail "$P" flow-execute "swipe-down-$case" "the finger did not travel down the UI: $began -> $ended"
+  fi
+}
+
 # Tap the centre of `probe.pad` as `describe` frames it, then check the probe
 # received that point. One case per posture.
 _tap_pad_case() { # udid case
@@ -125,6 +158,29 @@ run_phase() {
   # Half-open: still the inner panel.
   assert_field "$P" fold half-open "{\"udid\":\"$DEV\",\"posture\":\"half-open\"}" '.activeScreen' '3'
   _tap_pad_case "$DEV" half-open
+
+  # A sweep between two angles short of closed and open does not make the
+  # guest switch panels (75° -> 90° stays on the cover panel). The tool must
+  # report the panel the device kept rather than time out, and the tap after
+  # it must land on that panel.
+  assert_field "$P" fold closed-before-short-sweep "{\"udid\":\"$DEV\",\"posture\":\"closed\"}" '.activeScreen' '1'
+  assert_field "$P" fold angle-75 "{\"udid\":\"$DEV\",\"angle\":75}" '.activeScreen' '1'
+  assert_ok "$P" fold short-sweep-75-to-90 "{\"udid\":\"$DEV\",\"angle\":90}"
+  _tap_pad_case "$DEV" short-sweep-75-to-90
+  # From closed to just past the cover panel's range the guest shows the inner
+  # panel for about a second and returns to the cover. The tool must not latch
+  # that transient: it answers the cover panel, and the tap after it lands.
+  assert_field "$P" fold closed-before-transient "{\"udid\":\"$DEV\",\"posture\":\"closed\"}" '.activeScreen' '1'
+  assert_field "$P" fold transient-78 "{\"udid\":\"$DEV\",\"angle\":78}" '.activeScreen' '1'
+  _tap_pad_case "$DEV" transient-78
+
+  # Flow directions are the UI's. Unfolded, the UI is landscape on the
+  # portrait-native inner panel, so a `swipe: down` anchored on the pad must
+  # travel down the UI (window-space +y), not along the panel's own y.
+  _flow_swipe_case "$DEV" "$E2E_WORK/duo-flows" pad-down open
+  assert_field "$P" fold closed-for-flow "{\"udid\":\"$DEV\",\"posture\":\"closed\"}" '.activeScreen' '1'
+  _flow_swipe_case "$DEV" "$E2E_WORK/duo-flows" pad-down closed
+  assert_field "$P" fold half-open-again "{\"udid\":\"$DEV\",\"posture\":\"half-open\"}" '.activeScreen' '3'
 
   # A recording across a fold: one file, and the switch counted.
   run_tool screen-recording-start "{\"udid\":\"$DEV\",\"timeLimitSeconds\":30,\"trimStatic\":false}"

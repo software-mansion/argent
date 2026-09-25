@@ -5,8 +5,10 @@ import {
   type DescribeNode,
   type DescribeSource,
   type DescribeTreeData,
+  type UiOrientation,
 } from "../describe/contract";
 import { isBlindRead } from "../describe/blind-read";
+import { nativeDirection, uiPointToNative, uiVectorToNative } from "./flow-orientation";
 import {
   selectorToFrame,
   findAll,
@@ -141,6 +143,17 @@ export interface ActionEnv {
    * `ActionEnv` by hand, which leaves every settle on its own budget.
    */
   treeOutage?: { proven?: { deviceId: string; error: Error } };
+  /**
+   * What the run's most recent tree read said about how the UI lies on the
+   * frame space, for the directives that turn a UI-space direction into it
+   * (`swipe: down`, `scroll-to`; see `flow-orientation.ts`). Written by every
+   * read that goes through {@link readFlowTree} — the settle a swipe or a
+   * scroll round makes before it dispatches is the read that fills it — and
+   * one holder per run, shared with nested `run:` flows like
+   * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
+   * `ActionEnv` by hand, which leaves every direction in the frame space.
+   */
+  lastRead?: { uiOrientation?: UiOrientation };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -439,6 +452,7 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
   return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
+    if (env.lastRead) env.lastRead.uiOrientation = data.uiOrientation;
     return data;
   });
 }
@@ -766,6 +780,12 @@ async function scrollToVisible(
     const tree = await settleTree(env);
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
+    // The direction is the UI's; the frames, the clip and the gesture are in
+    // the frame space, so the direction is turned into it (flow-orientation.ts)
+    // as the settle above read it. Re-read every round: a fold or a rotation
+    // mid-scroll is a settle away.
+    const axisDirection = nativeDirection(direction, env.lastRead?.uiOrientation);
+
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named. Its frame is also the
     // clip window the axis check measures the target against.
@@ -775,7 +795,7 @@ async function scrollToVisible(
     }
 
     const frame = flowSelectorToFrame(tree, target);
-    if (frame && axisFullyInside(frame, direction, region)) return { frame };
+    if (frame && axisFullyInside(frame, axisDirection, region)) return { frame };
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
@@ -802,7 +822,7 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
-    await scrollIncrement(env, direction, region);
+    await scrollIncrement(env, axisDirection, region);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
@@ -1320,15 +1340,20 @@ async function runSwipe(
     toPoint = p;
   }
 
+  // A direction is the UI's; the points dispatched are in the frame space, and
+  // on a landscape UI the two differ by a rotation (flow-orientation.ts). The
+  // settle above is the read that said which.
+  const orientation = env.lastRead?.uiOrientation;
+
   let start: { x: number; y: number };
   if (step.from) {
     const p = targetPointFromFrame(step.from, fromFrame);
     if ("fail" in p) return p.fail;
     start = p;
   } else if (step.direction) {
-    // Copied, not aliased: SWIPE_GEOMETRY is shared by every swipe in the
-    // process, and the unanchored `by` arm below slides the local start in place.
-    start = { ...SWIPE_GEOMETRY[step.direction].start };
+    // A fresh object: SWIPE_GEOMETRY is shared by every swipe in the process,
+    // and the unanchored `by` arm below slides the local start in place.
+    start = uiPointToNative(SWIPE_GEOMETRY[step.direction].start, orientation);
   } else {
     start = { x: 0.5, y: 0.5 };
   }
@@ -1355,22 +1380,32 @@ async function runSwipe(
   let end: { x: number; y: number };
   if (step.direction) {
     const g = SWIPE_GEOMETRY[step.direction];
-    const startOnTravelAxis = start[g.axis];
+    // The preset's travel, as a UI-space vector along its axis, turned into the
+    // frame space. Its magnitude is the same in both.
+    const travelVector = uiVectorToNative(
+      g.axis === "x" ? { x: g.end - g.start.x, y: 0 } : { x: 0, y: g.end - g.start.y },
+      orientation
+    );
+    const axis: "x" | "y" = travelVector.x !== 0 ? "x" : "y";
+    const startOnTravelAxis = start[axis];
     // The preset line is the endpoint only for the unanchored default start; any
     // other anchor travels the preset's signed magnitude from where the finger
     // goes down, so an element in the last band of the axis still swipes in the
     // requested direction instead of reversing.
     const endOnTravelAxis = step.from
-      ? clamp01(startOnTravelAxis + (g.end - g.start[g.axis]))
-      : g.end;
-    end = g.axis === "x" ? { x: endOnTravelAxis, y: start.y } : { x: start.x, y: endOnTravelAxis };
+      ? clamp01(startOnTravelAxis + travelVector[axis])
+      : uiPointToNative(
+          g.axis === "x" ? { x: g.end, y: g.start.y } : { x: g.start.x, y: g.end },
+          orientation
+        )[axis];
+    end = axis === "x" ? { x: endOnTravelAxis, y: start.y } : { x: start.x, y: endOnTravelAxis };
     // Clamping can only shorten travel, never flip its sign, so a below-floor
     // result means the anchor sits too near the edge to swipe.
     const travel = Math.abs(endOnTravelAxis - startOnTravelAxis);
     if (travel < SWIPE_MIN_TRAVEL) {
       return {
         ok: false,
-        reason: `cannot swipe ${step.direction} from ${g.axis}=${startOnTravelAxis}: only ${travel} of travel to the screen edge, less than the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a tap, not a swipe`,
+        reason: `cannot swipe ${step.direction} from ${axis}=${startOnTravelAxis}: only ${travel} of travel to the screen edge, less than the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a tap, not a swipe`,
       };
     }
   } else if (step.by) {

@@ -117,8 +117,9 @@ export function ffmpegArgs(opts: {
   if (opts.logoFile && opts.graph) {
     // The still logo is looped so the graph has a logo frame for every video
     // frame; `shortest=1` in the graph ends the output with the capture.
-    // `buildWatermarkGraph` pins the base to the first frame's evened size, so
-    // the yuv420p encoder below always gets a valid, constant size.
+    // `buildWatermarkGraph` evens the base (and, for a capture that follows a
+    // foldable's panel, pins it to the first frame's size), so the yuv420p
+    // encoder below always gets a valid size.
     args.push(
       "-framerate",
       String(OUTPUT_FPS),
@@ -137,7 +138,9 @@ export function ffmpegArgs(opts: {
     // native resolution is odd on either axis (iPhone 16 / 15 Pro / 15 / 14 Pro
     // stream at 1179x2556) would fail the encode after the readiness grace and
     // leave a 0-byte file. Dropping the odd edge pixel leaves even frames
-    // unchanged.
+    // unchanged. A frame of another size mid-stream (a foldable's other panel)
+    // needs no pin here: with nothing in the graph sized to the first frame,
+    // ffmpeg fits it to the encoder's size itself.
     args.push("-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
   }
   args.push(
@@ -396,7 +399,9 @@ async function startCaptureLocked(
     let graph: string | null = null;
     if (dims) {
       logoFile = await writeLogoTemp();
-      graph = buildWatermarkGraph(dims);
+      // A capture that follows the panel of a foldable sees frames of the
+      // other panel's size after a fold; only that capture pins the base.
+      graph = buildWatermarkGraph(dims, { pinSize: params.followPanel !== undefined });
     } else if (params.watermark) {
       // Only an unreadable JPEG header gets here. Record anyway, but say so
       // rather than handing back a silently unwatermarked file.

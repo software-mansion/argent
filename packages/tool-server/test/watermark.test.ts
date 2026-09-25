@@ -94,10 +94,13 @@ describe("buildWatermarkGraph", () => {
   it("evens an odd-resolution base before splitting so yuv420p can encode it", () => {
     // iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556 (odd width). Without
     // an even base the overlayed output stays 1179 wide and libx264 rejects it
-    // ("width not divisible by 2"), killing the whole recording. Pin the base
-    // to 1178 up front, and derive the box from that so the mask stays inside.
+    // ("width not divisible by 2"), killing the whole recording. Crop the base
+    // to 1178 up front — a crop, never a scale: a resample of every frame is
+    // a quality loss on those devices — and derive the box from that so the
+    // mask stays inside.
     const odd = buildWatermarkGraph({ width: 1179, height: 2556 });
-    expect(odd.startsWith("[0:v]fps=30,scale=1178:2556,split=2[base][under]")).toBe(true);
+    expect(odd.startsWith("[0:v]fps=30,crop=1178:2556:0:0,split=2[base][under]")).toBe(true);
+    expect(odd).not.toContain("scale=1178");
     const box = computeWatermarkBox({ width: 1178, height: 2556 });
     expect(box.x + box.w).toBeLessThanOrEqual(1178);
     // the mask crop reads from within the evened base
@@ -107,9 +110,27 @@ describe("buildWatermarkGraph", () => {
 
   it("leaves an already-even frame's graph unchanged (no redundant base crop)", () => {
     const even = buildWatermarkGraph({ width: 1320, height: 2868 });
-    // An even frame is pinned to its own size, which the scale passes through;
-    // a frame of another size mid-capture (a foldable's other panel) is fitted
-    // to it, so the box stays inside the encoded frame.
-    expect(even.startsWith("[0:v]fps=30,scale=1320:2868,split=2[base][under]")).toBe(true);
+    expect(even.startsWith("[0:v]fps=30,split=2[base][under]")).toBe(true);
+  });
+
+  it("pins the base to the first frame's size only for a capture whose frames can change size", () => {
+    // A foldable's recording moves to the other panel's stream on a fold, and
+    // its frames arrive at that panel's size. The base is evened by a crop
+    // (lossless, and a same-size frame then passes the scale untouched) and
+    // fitted to the first frame's size otherwise, so the box stays inside the
+    // encoded frame. The explicit format keeps the scale from negotiating the
+    // mask branch's gray onto the whole recording.
+    const pinned = buildWatermarkGraph({ width: 2007, height: 2853 }, { pinSize: true });
+    expect(
+      pinned.startsWith(
+        "[0:v]fps=30,crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,scale=2006:2852,format=yuv420p,split=2[base][under]"
+      )
+    ).toBe(true);
+    const box = computeWatermarkBox({ width: 2006, height: 2852 });
+    expect(pinned).toContain(`overlay=${box.x}:${box.y}`);
+    // Not asked for, not pinned: every other device keeps the plain graph.
+    expect(buildWatermarkGraph({ width: 2007, height: 2853 }, { pinSize: false })).toBe(
+      buildWatermarkGraph({ width: 2007, height: 2853 })
+    );
   });
 });

@@ -91,7 +91,18 @@ export interface DescribeTreeData {
   // which is what the rotate directive's circle geometry reads it for. Set
   // only by the flow tree adapters that know it.
   screen?: { width: number; height: number };
+  // How the UI lies on the space the frames are in, when the two differ: the
+  // iOS simulator adapter frames in the screen's fixed (portrait-native)
+  // space, the space touches are taken in, and a landscape UI — a rotated
+  // device, an unfolded foldable — is rotated on it. The flow directions
+  // (`swipe: down`, `scroll-to` `direction`) are the UI's, and are mapped
+  // into the frame space with this. Absent when the adapter cannot tell, or
+  // the two spaces coincide.
+  uiOrientation?: UiOrientation;
 }
+
+/** Interface orientation as UIKit names it, relative to the portrait-native screen. */
+export type UiOrientation = "portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown";
 
 export interface DescribeResult {
   description: string;

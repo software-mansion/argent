@@ -10,7 +10,11 @@ import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
-import { MAIN_SCREEN_ID, refreshActiveScreen, streamUrlForScreen } from "../../utils/foldable";
+import {
+  readActiveScreenOrMain,
+  refreshActiveScreen,
+  streamUrlForScreen,
+} from "../../utils/foldable";
 import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import type { StartRecordingResult } from "./session-guards";
 
@@ -130,12 +134,12 @@ Fails if a recording is already running on the device, the device is not booted,
 
       // A foldable's stream is per panel. The recording starts on the panel the
       // device renders to now — read fresh, since nothing before this call has
-      // described the screen — and follows it across folds (capture.ts).
+      // described the screen, and on the panel the touches target when the
+      // read fails — and follows it across folds (capture.ts).
       let followPanel: PanelFollow | undefined;
       if (simulator.display?.foldable) {
         const base = streamUrl;
-        const state = await refreshActiveScreen(device.id);
-        const initialScreen = state?.activeScreen ?? MAIN_SCREEN_ID;
+        const initialScreen = await readActiveScreenOrMain(device.id);
         streamUrl = streamUrlForScreen(base, initialScreen);
         followPanel = {
           initialScreen,

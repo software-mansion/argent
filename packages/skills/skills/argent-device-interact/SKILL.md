@@ -209,14 +209,14 @@ On an unfolded foldable simulator the value is the device's orientation, not the
 
 `posture`: `closed`, `half-open` or `open` — or `angle`: 0–180 (one of the two). The sweep starts on the panel the device renders to, read fresh, so a fold made outside argent (Device Hub) needs nothing extra; the optional `from` (an angle or a posture) names the exact angle the hinge was left at.
 
-Only a foldable iOS simulator (`list-devices` shows `foldable: true`, e.g. the iPhone Duo); any other device is rejected with a clear error. Argent picks the panel: closed, the device renders to the cover panel (screen 1); half-open and open, to the inner panel (screen 3). Every screenshot, describe, touch, stream and recording names that panel, so the tools follow the fold. The tool waits for the hand-over and for the device to take input again (about 0.5 s after the sweep for `closed` and `open`, about 1.5 s for any other angle, `half-open` included), then returns `{ activeScreen, screen: { id, panel, width, height }, posture, hingeAngle }`: the next tap lands, also as the next `run-sequence` step. It fails when the device has not switched to the expected panel 6 s after the sweep.
+Only a foldable iOS simulator (`list-devices` shows `foldable: true`, e.g. the iPhone Duo); any other device is rejected with a clear error. Argent picks the panel: closed, the device renders to the cover panel (screen 1); half-open and open, to the inner panel (screen 3). Every screenshot, describe, touch, stream and recording names that panel, so the tools follow the fold. The tool waits for the device to settle on its panel and to take input again (about 0.5 s after the sweep for `closed` and `open`, about 1.5 s for any other angle, `half-open` included), then returns `{ activeScreen, screen: { id, panel, width, height }, posture, hingeAngle, warning? }`: the next tap lands, also as the next `run-sequence` step. The device switches panels on a sweep from `closed` or `open`; a sweep between two angles short of those stops (75° → 90°, say) can leave it on the panel it had, and the result then names that panel with a `warning` — fold to `closed` or `open` first to switch panels.
 
 Rules:
 
 - The coordinate space changes with the panel. Use the element tree appended to the fold result, or `describe` again, before tapping. Do not reuse frames from before the fold.
 - `screenshot` size follows the panel (1398×2034 closed, 2007×2853 open on the Duo). Screenshot-diff baselines are per posture.
 - Unfolded, the UI runs landscape on the inner panel's portrait-native framebuffer; frames and touch coordinates stay in that native space, like landscape on any iPhone.
-- A fold during a gesture is not supported: the gesture completes on the panel it started on. Fold between actions, e.g. as a `run-sequence` step.
+- A gesture completes on the panel it started on, also when the device is folded during it. Fold between actions, e.g. as a `run-sequence` step.
 - A `describe` may carry a hint that its tree and argent's panel disagree (a describe issued mid-fold): call `await-screen-idle`, then describe again.
 
 ### await-ui-element — Block until a UI element reaches a state

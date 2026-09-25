@@ -137,15 +137,59 @@ describe("sendCommand on a foldable", () => {
     }
   });
 
-  it("falls back to the main screen while the panel was never read", async () => {
+  it("reads the panel itself while the memo is empty, and falls back to the main screen when that fails", async () => {
     const server = await startWs();
     try {
       const api = apiFor(server.port, {
         deviceId: DUO,
         display: { foldable: true, panels: PANELS, hingeAngle: null },
       });
+      // The attach-time read failed and nothing has read since: the touch
+      // asks CoreDevice, which now answers.
+      mockActivePanel(3);
       await sendCommand(api, TOUCH);
-      expect(server.received[0]!.screen).toBe(1);
+      expect(server.received[0]!.screen).toBe(3);
+    } finally {
+      await server.close();
+    }
+    const failing = await startWs();
+    try {
+      __resetFoldableStateForTests();
+      const api = apiFor(failing.port, {
+        deviceId: DUO,
+        display: { foldable: true, panels: PANELS, hingeAngle: null },
+      });
+      mockActivePanel(null);
+      await sendCommand(api, TOUCH);
+      expect(failing.received[0]!.screen).toBe(1);
+    } finally {
+      await failing.close();
+    }
+  });
+
+  it("completes a touch sequence on the panel it started on, whatever the memo says meanwhile", async () => {
+    const server = await startWs();
+    try {
+      mockActivePanel(3);
+      await refreshActiveScreen(DUO);
+      const api = apiFor(server.port, {
+        deviceId: DUO,
+        display: { foldable: true, panels: PANELS, hingeAngle: null },
+      });
+      await sendCommand(api, TOUCH);
+      // A fold made outside argent mid-swipe, seen by a recording's poll.
+      mockActivePanel(1);
+      await refreshActiveScreen(DUO);
+      await sendCommand(api, { ...TOUCH, type: "Move", y: 0.4 });
+      await sendCommand(api, { ...TOUCH, type: "Up", y: 0.3 });
+      // The next touch sequence starts on the panel the device renders to now.
+      await sendCommand(api, TOUCH);
+      expect(server.received.map((m) => [m.type, m.screen])).toEqual([
+        ["Down", 3],
+        ["Move", 3],
+        ["Up", 3],
+        ["Down", 1],
+      ]);
     } finally {
       await server.close();
     }

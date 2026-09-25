@@ -18,6 +18,7 @@ import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeTreeData,
+  type UiOrientation,
   parseDescribeResult,
 } from "../describe/contract";
 
@@ -216,14 +217,100 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
   return adaptFullHierarchy(raw).tree;
 }
 
+/** Two lengths in points equal to within rounding. */
+function near(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 1;
+}
+
+/** Sum of the per-field distances between two rects, in points. */
+function rectDistance(a: RawRect, b: RawRect): number {
+  return (
+    Math.abs(a.x - b.x) +
+    Math.abs(a.y - b.y) +
+    Math.abs(a.width - b.width) +
+    Math.abs(a.height - b.height)
+  );
+}
+
+/** How far a candidate orientation's prediction may miss, per view, before it is ruled out. */
+const ORIENTATION_TOLERANCE_PT = 2;
+/** Views weighed per read: enough to break every tie, bounded so a deep tree stays cheap. */
+const ORIENTATION_MAX_SAMPLES = 400;
+
+/**
+ * How the UI lies on the screen's fixed space, told from the views themselves.
+ * A view's `windowFrame` is in its window's space — the interface's, for a
+ * window that spans the screen — and its `screenFrame` in the fixed space;
+ * the two differ by exactly the interface rotation. Each candidate
+ * orientation predicts the second from the first, and the one that fits the
+ * views carrying both wins.
+ *
+ * Undefined when the views cannot tell: a framework that predates
+ * `screenFrame` reports none; no window spans the screen (only a keyboard or
+ * a picker is up, whose own space is not the interface's); or every view sits
+ * on the centre line, where an orientation and its opposite predict the same
+ * rect. The caller then leaves directions in the frame space, as before.
+ */
+function inferUiOrientation(
+  windows: readonly RawViewNode[],
+  screenW: number,
+  screenH: number
+): UiOrientation | undefined {
+  const errors: Record<UiOrientation, number> = {
+    portrait: 0,
+    portraitUpsideDown: 0,
+    landscapeLeft: 0,
+    landscapeRight: 0,
+  };
+  let samples = 0;
+  for (const win of windows) {
+    const bounds = win.windowFrame ?? win.frame;
+    if (!bounds) continue;
+    const wi = bounds.width;
+    const hi = bounds.height;
+    const spans =
+      (near(wi, screenW) && near(hi, screenH)) || (near(wi, screenH) && near(hi, screenW));
+    if (!spans) continue;
+    const stack: RawViewNode[] = [win];
+    while (stack.length > 0 && samples < ORIENTATION_MAX_SAMPLES) {
+      const node = stack.pop()!;
+      if (node.children) stack.push(...node.children);
+      const wf = node.windowFrame;
+      const sf = node.screenFrame;
+      if (!wf || !sf) continue;
+      samples++;
+      // Rotated rects: a 90° turn swaps a rect's sides and mirrors one offset
+      // against the window's extent on that axis.
+      const turned = { width: wf.height, height: wf.width };
+      errors.portrait += rectDistance(wf, sf);
+      errors.portraitUpsideDown += rectDistance(
+        { x: wi - wf.x - wf.width, y: hi - wf.y - wf.height, width: wf.width, height: wf.height },
+        sf
+      );
+      errors.landscapeRight += rectDistance({ x: wf.y, y: wi - wf.x - wf.width, ...turned }, sf);
+      errors.landscapeLeft += rectDistance({ x: hi - wf.y - wf.height, y: wf.x, ...turned }, sf);
+    }
+  }
+  if (samples === 0) return undefined;
+  const ranked = (Object.keys(errors) as UiOrientation[]).sort((a, b) => errors[a] - errors[b]);
+  const [best, second] = ranked as [UiOrientation, UiOrientation];
+  const budget = samples * ORIENTATION_TOLERANCE_PT;
+  if (errors[best] > budget) return undefined;
+  // A runner-up within the budget is a tie, not a second-best fit.
+  if (errors[second] <= budget) return undefined;
+  return best;
+}
+
 /**
  * Like {@link adaptFullHierarchyToDescribeResult}, but also reports the screen
  * size (points) the frames were normalized against — the rotate directive needs
- * the aspect ratio for its physical-circle geometry.
+ * the aspect ratio for its physical-circle geometry — and how the UI lies on
+ * that space, for the directives that turn a UI-space direction into it.
  */
 function adaptFullHierarchy(raw: unknown): {
   tree: DescribeNode;
   screen?: { width: number; height: number };
+  uiOrientation?: UiOrientation;
 } {
   const payload =
     typeof raw === "object" && raw !== null ? (raw as { windows?: unknown; screen?: unknown }) : {};
@@ -266,9 +353,13 @@ function adaptFullHierarchy(raw: unknown): {
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
-  return screenW > 0 && screenH > 0
-    ? { tree, screen: { width: screenW, height: screenH } }
-    : { tree };
+  if (!(screenW > 0 && screenH > 0)) return { tree };
+  const uiOrientation = inferUiOrientation(windows, screenW, screenH);
+  return {
+    tree,
+    screen: { width: screenW, height: screenH },
+    ...(uiOrientation ? { uiOrientation } : {}),
+  };
 }
 
 /**
@@ -581,8 +672,13 @@ export async function queryFullHierarchyTree(
     );
   }
 
-  const { tree, screen } = adaptFullHierarchy(rawResult);
-  return { tree, source: "native-devtools", ...(screen ? { screen } : {}) };
+  const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
+  return {
+    tree,
+    source: "native-devtools",
+    ...(screen ? { screen } : {}),
+    ...(uiOrientation ? { uiOrientation } : {}),
+  };
 }
 
 function errMsg(err: unknown): string {

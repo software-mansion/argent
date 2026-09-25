@@ -134,13 +134,130 @@ describe("flow iOS full-hierarchy source", () => {
         },
       ],
     };
-    const { tree, screen } = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+    const { tree, screen, uiOrientation } = await queryFullHierarchyTree(
+      registryFor(apiServing(raw)),
+      DEVICE
+    );
     expect(screen).toEqual({ width: 669, height: 951 });
     const frame = selectorToFrame(tree, { identifier: "probe.pad" })!;
     expect(frame.x).toBeCloseTo(269 / 669, 6);
     expect(frame.y).toBeCloseTo(500 / 951, 6);
     expect(frame.width).toBeCloseTo(200 / 669, 6);
     expect(frame.height).toBeCloseTo(300 / 951, 6);
+    // The pad's window rect turns into its screen rect by one rotation only:
+    // that is how the UI lies on the panel, and what the flow directions turn by.
+    expect(uiOrientation).toBe("landscapeLeft");
+  });
+
+  // Every orientation, told from one off-centre view: the window rect and the
+  // screen rect of the same view differ by exactly the interface rotation.
+  it.each([
+    ["portrait", { x: 100, y: 400, width: 200, height: 40 }, "portrait", [669, 951]],
+    ["landscapeRight", { x: 200, y: 151, width: 200, height: 300 }, "landscapeRight", [951, 669]],
+    ["landscapeLeft", { x: 269, y: 500, width: 200, height: 300 }, "landscapeLeft", [951, 669]],
+    ["upside down", { x: 369, y: 511, width: 200, height: 40 }, "portraitUpsideDown", [669, 951]],
+  ] as const)(
+    "reports the UI orientation the views imply: %s",
+    async (_name, screenFrame, expected, [winW, winH]) => {
+      const windowFrame =
+        winW > winH
+          ? { x: 500, y: 200, width: 300, height: 200 }
+          : { x: 100, y: 400, width: 200, height: 40 };
+      const raw = {
+        screen: { width: 669, height: 951 },
+        windows: [
+          {
+            className: "UIWindow",
+            frame: { x: 0, y: 0, width: winW, height: winH },
+            windowFrame: { x: 0, y: 0, width: winW, height: winH },
+            screenFrame: { x: 0, y: 0, width: 669, height: 951 },
+            children: [
+              {
+                className: "UIButton",
+                identifier: "buy",
+                frame: windowFrame,
+                windowFrame,
+                screenFrame,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+      const { uiOrientation } = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+      expect(uiOrientation).toBe(expected);
+    }
+  );
+
+  it("reports no orientation when the views cannot tell", async () => {
+    // A landscape window whose only view sits on the centre line: both
+    // landscapes predict the same screen rect, so neither is claimed.
+    const centred = {
+      screen: { width: 669, height: 951 },
+      windows: [
+        {
+          className: "UIWindow",
+          windowFrame: { x: 0, y: 0, width: 951, height: 669 },
+          screenFrame: { x: 0, y: 0, width: 669, height: 951 },
+          children: [
+            {
+              className: "UILabel",
+              label: "Centre",
+              windowFrame: { x: 375.5, y: 234.5, width: 200, height: 200 },
+              screenFrame: { x: 234.5, y: 375.5, width: 200, height: 200 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    expect(
+      (await queryFullHierarchyTree(registryFor(apiServing(centred)), DEVICE)).uiOrientation
+    ).toBeUndefined();
+    // A framework that predates screenFrame reports nothing to compare.
+    const older = {
+      windows: [
+        {
+          className: "UIWindow",
+          windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children: [
+            {
+              className: "UIButton",
+              identifier: "buy",
+              windowFrame: { x: 100, y: 400, width: 200, height: 40 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    expect(
+      (await queryFullHierarchyTree(registryFor(apiServing(older)), DEVICE)).uiOrientation
+    ).toBeUndefined();
+    // A window that does not span the screen (a keyboard, a picker) says
+    // nothing about the interface's space.
+    const keyboardOnly = {
+      screen: { width: 669, height: 951 },
+      windows: [
+        {
+          className: "UIRemoteKeyboardWindow",
+          windowFrame: { x: 0, y: 0, width: 951, height: 300 },
+          screenFrame: { x: 0, y: 0, width: 300, height: 951 },
+          children: [
+            {
+              className: "UIButton",
+              label: "space",
+              windowFrame: { x: 100, y: 200, width: 500, height: 50 },
+              screenFrame: { x: 50, y: 100, width: 50, height: 500 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    expect(
+      (await queryFullHierarchyTree(registryFor(apiServing(keyboardOnly)), DEVICE)).uiOrientation
+    ).toBeUndefined();
   });
 
   it("falls back to windowFrame and the largest window for a framework that predates screenFrame", async () => {

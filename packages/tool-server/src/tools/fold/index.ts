@@ -1,17 +1,13 @@
 import { z } from "zod";
-import {
-  FAILURE_CODES,
-  FailureError,
-  type ToolCapability,
-  type ToolDefinition,
-} from "@argent/registry";
+import { type ToolCapability, type ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { fetchDisplayState, postHinge, type HingeRequest } from "../../utils/simulator-client";
-import { sleepOrAbort } from "../../utils/timing";
 import {
+  activeScreenOrMain,
   awaitActiveScreen,
   HAND_OVER_TIMEOUT_MS,
+  holdActiveScreen,
   INPUT_READY_HOLD_MID_ANGLE_MS,
   INPUT_READY_HOLD_MS,
   MAIN_SCREEN_ID,
@@ -78,7 +74,10 @@ interface Result {
   posture: Posture;
   /** The angle the hinge was swept to. */
   hingeAngle: number;
-  /** Set when the active panel could not be confirmed after the sweep. */
+  /**
+   * Set when the active panel could not be confirmed after the sweep, or when
+   * the device kept rendering to a panel other than the one the sweep implied.
+   */
   warning?: string;
 }
 
@@ -112,6 +111,11 @@ function targetAngle(params: Params): number {
   return params.angle ?? POSTURE_ANGLE[params.posture ?? "closed"];
 }
 
+/** A stop of the hinge: closed or open, where the guest settles fastest and hands over predictably. */
+function atStop(angle: number): boolean {
+  return angle <= POSTURE_ANGLE.closed || angle >= POSTURE_ANGLE.open;
+}
+
 /**
  * Where to tell the server the hinge is, when the caller did not say.
  *
@@ -135,6 +139,18 @@ function sweepStartFor(
   return live.activeScreen === MAIN_SCREEN_ID ? "closed" : "open";
 }
 
+/**
+ * The angle the sweep starts at: the caller's `from`, else the angle the
+ * server last set, else closed, where a server that never moved the hinge
+ * starts. Decides whether the outcome is predicted at all (see
+ * `panelForHingeAngle`).
+ */
+function sweepStartAngle(from: HingeRequest["from"], serverAngle: number | null): number {
+  if (typeof from === "number") return from;
+  if (from !== undefined) return POSTURE_ANGLE[from];
+  return serverAngle ?? POSTURE_ANGLE.closed;
+}
+
 function screenResult(
   activeScreen: number,
   panels: readonly FoldablePanel[] | undefined
@@ -156,10 +172,11 @@ export const foldTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to fold device to ${targetLabel(params)}: ${failureSignal.error_code}`,
   },
-  description: `Fold or unfold a foldable iOS simulator (the iPhone Duo): move its hinge to a \`posture\` (closed, half-open, open) or an \`angle\` (0-180°), then wait until the device renders to the panel that posture implies and takes input again, so the next tap lands (about 0.5 s after the sweep for closed and open, about 1.5 s for any other angle, half-open included).
+  description: `Fold or unfold a foldable iOS simulator (the iPhone Duo): move its hinge to a \`posture\` (closed, half-open, open) or an \`angle\` (0-180°), then wait until the device has settled on the panel it renders to and takes input again, so the next tap lands (about 0.5 s after the sweep for closed and open, about 1.5 s for any other angle, half-open included).
 Closed, the device renders to the cover panel (screen 1, 1398x2034 px on the Duo); half-open and open, to the inner panel (screen 3, 2007x2853 px). The other panel is black. Argent names the live panel on every screenshot, describe, touch and stream, so the tools follow the fold — but their coordinate space changes with it: re-run \`describe\` (or read the element tree appended to this result) before tapping, and expect \`screenshot\` to change size. Unfolded, the UI runs landscape on the inner panel's portrait-native framebuffer; frames and touch coordinates stay in that native space, like landscape on any iPhone.
+The device switches panels on a sweep from closed or open past its own threshold (about 75-90°); a sweep between two angles short of those stops leaves it on the panel it had. The result reports the panel the device renders to either way, with a \`warning\` when that is not the panel the sweep implied — fold to closed or open first to switch panels.
 The sweep starts on the panel the device renders to, read fresh, so a fold made outside argent (Device Hub) needs no \`from\`; pass \`from\` only to name the exact angle the hinge was left at. A fold during a gesture is not supported: the gesture completes on the screen it started on.
-Returns { activeScreen, screen: { id, panel, width, height }, posture, hingeAngle }. Fails when the device has not switched to the expected panel 6 s after the sweep, on a device that is not foldable (the server's own message), on a remote simulator, and on a simulator-server build that predates foldables.`,
+Returns { activeScreen, screen: { id, panel, width, height }, posture, hingeAngle, warning? }. Fails on a device that is not foldable (the server's own message), on a remote simulator, and on a simulator-server build that predates foldables.`,
   searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
   zodSchema,
   capability,
@@ -198,61 +215,64 @@ Returns { activeScreen, screen: { id, panel, width, height }, posture, hingeAngl
     const posture = params.posture ?? postureForAngle(hingeAngle);
     const panels = display.panels.length > 0 ? display.panels : (before?.panels ?? []);
 
-    // The guest hands over to the other panel 0.5-1.1 s after the sweep, longer
+    // The guest hands over to the other panel 0.5-1.5 s after the sweep, longer
     // when busy; the server does not wait for it, so the client does, by
-    // re-reading CoreDevice until it reports the panel the target angle
-    // implies. An angle near the hand-over implies no panel: there any change
-    // from where the device was is the answer, and so is none.
-    const expected = panelForHingeAngle(angle, panels);
-    const settled =
+    // re-reading CoreDevice. Which panel to wait for is only predicted for a
+    // sweep from a stop (closed or open): one that starts mid-way may leave
+    // the panel where it was, and there — as at an angle near the hand-over —
+    // any change from where the device was is the answer, and so is none.
+    const startAngle = sweepStartAngle(request.from, known?.hingeAngle ?? null);
+    const expected = atStop(startAngle) ? panelForHingeAngle(angle, panels) : undefined;
+    let settled =
       expected !== undefined
         ? await awaitActiveScreen(udid, (s) => s.activeScreen === expected, {
             timeoutMs: HAND_OVER_TIMEOUT_MS,
+            signal: ctx?.signal,
           })
         : await awaitActiveScreen(
             udid,
             (s) => before !== null && s.activeScreen !== before.activeScreen,
-            { timeoutMs: SETTLE_TIMEOUT_MS }
+            { timeoutMs: SETTLE_TIMEOUT_MS, signal: ctx?.signal }
           );
-
-    if (settled && expected !== undefined && settled.activeScreen !== expected) {
-      throw new FailureError(
-        `Fold to ${targetLabel(params)} was sent, but ${HAND_OVER_TIMEOUT_MS / 1000} s later ` +
-          `CoreDevice still reports ${screenLabel(settled.activeScreen, panels)} as the panel the ` +
-          `device renders to, not ${screenLabel(expected, panels)}. Commands target the panel ` +
-          `CoreDevice reports; take a screenshot to see the screen, and pass \`from\` with the angle ` +
-          `the hinge was really at if something other than argent moved it.`,
-        {
-          error_code: FAILURE_CODES.IOS_FOLD_FAILED,
-          failure_stage: "simulator_hinge_hand_over_timeout",
-          failure_area: "tool_server",
-          error_kind: "timeout",
-        }
-      );
-    }
 
     // The guest takes no input for a while after the hinge moves, hand-over or
     // not, and for longer when the hinge stops anywhere but closed or open
     // (see the constants). CoreDevice does not report that, so the tool holds
-    // the measured time before it answers.
-    const atStop = angle <= POSTURE_ANGLE.closed || angle >= POSTURE_ANGLE.open;
-    await sleepOrAbort(atStop ? INPUT_READY_HOLD_MS : INPUT_READY_HOLD_MID_ANGLE_MS, ctx?.signal);
+    // the measured time before it answers — still watching the panel, since a
+    // hand-over near the threshold can be transient and would otherwise be
+    // latched by the wait above.
+    settled = await holdActiveScreen(
+      udid,
+      settled,
+      atStop(angle) ? INPUT_READY_HOLD_MS : INPUT_READY_HOLD_MID_ANGLE_MS,
+      { signal: ctx?.signal }
+    );
 
-    const activeScreen = settled?.activeScreen ?? before?.activeScreen ?? MAIN_SCREEN_ID;
+    // What the tools target: the last read, or the memo a failed read left in
+    // place — never the main screen while the memo says otherwise.
+    const activeScreen = settled?.activeScreen ?? activeScreenOrMain(udid);
+
+    let warning: string | undefined;
+    if (!settled) {
+      warning =
+        "CoreDevice did not report which panel the device renders to after the fold; " +
+        `commands target ${screenLabel(activeScreen, panels)} until a later read succeeds. ` +
+        "Take a screenshot to see the screen.";
+    } else if (expected !== undefined && settled.activeScreen !== expected) {
+      warning =
+        `The hinge was swept to ${targetLabel(params)}, but the device kept rendering to ` +
+        `${screenLabel(activeScreen, panels)} rather than switching to ${screenLabel(expected, panels)}. ` +
+        `Commands target the panel the device renders to. To switch panels, fold to closed or open ` +
+        `first, then to the angle wanted; if something other than argent moved the hinge, pass ` +
+        "`from` with the angle it was really at.";
+    }
 
     return {
       activeScreen,
       screen: screenResult(activeScreen, panels),
       posture,
       hingeAngle,
-      ...(settled
-        ? {}
-        : {
-            warning:
-              "CoreDevice did not report which panel the device renders to after the fold; " +
-              `commands target screen ${activeScreen} (${panelName(activeScreen)}) until a later read succeeds. ` +
-              "Take a screenshot to see the screen.",
-          }),
+      ...(warning ? { warning } : {}),
     };
   },
 };

@@ -723,7 +723,7 @@ export type FlowStep =
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
   | { kind: "script"; path: string; timeout?: number };
 
-export const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
+const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
 export type FoldPosture = (typeof FOLD_POSTURES)[number];
 
 function isFoldPosture(value: unknown): value is FoldPosture {

@@ -16,6 +16,7 @@ import {
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
 import {
+  activeScreenForCommand,
   activeScreenOrMain,
   refreshActiveScreen,
   screenLabel,
@@ -246,13 +247,17 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  * reported as delivered. That is strictly narrower than the WebSocket ack, and
  * it is still the difference between a failed gesture and `{ tapped: true }`.
  */
-export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): Promise<void> {
+export async function sendCommand(
+  api: SimulatorServerApi,
+  cmd: Record<string, unknown>
+): Promise<void> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
   // MoQ carries no screen: a remote simulator is driven on its main screen.
   if (api.transport) return sendViaTransport(api.transport, cmd, cmdName);
   const conn = getOrCreateConnection(api);
+  const targeted = await withActiveScreen(api, cmd);
   const id = String(++cmdId);
-  const payload = JSON.stringify({ id, ...withActiveScreen(api, cmd) });
+  const payload = JSON.stringify({ id, ...targeted });
 
   return new Promise<void>((resolve, reject) => {
     let done = false;
@@ -311,23 +316,43 @@ export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown
 }
 
 /**
+ * The panel the touch sequence in flight on a server started on, from its
+ * Down to its Up. Keyed by the api object, which is one per attached server.
+ */
+const gestureScreens = new WeakMap<SimulatorServerApi, number>();
+
+/**
  * The screen a touch or wheel is for, on a foldable. The simulator-server
  * captures every panel and follows none: a command that names no screen goes
  * to screen 1, the cover panel, which is black once the device is open. So on
  * a foldable every touch and wheel names the panel the guest renders to, read
- * from the active-screen memo (`utils/foldable.ts`).
+ * from the active-screen memo (`utils/foldable.ts`) — or, while that memo is
+ * empty, from CoreDevice itself.
+ *
+ * A gesture completes on the panel it started on: the memo can be refreshed
+ * under a gesture (a recording polls it, the preview re-asks it), and a fold
+ * made outside argent in the middle of a swipe would otherwise send the
+ * swipe's tail to the other panel, leaving a finger down on the first and
+ * the next tap on the second consumed by its lift. So the screen a `Down`
+ * resolved is kept for every `Move` and the `Up` of that touch sequence.
  *
  * `api.display` is set only when the device profile is foldable AND the server
  * reported its panels, so the payload of every other device is byte-identical
  * to what it was. A caller that already named a screen keeps it.
  */
-function withActiveScreen(
+async function withActiveScreen(
   api: SimulatorServerApi,
   cmd: Record<string, unknown>
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   if (!api.display?.foldable || cmd.screen !== undefined) return cmd;
   if (cmd.cmd !== "touch" && cmd.cmd !== "wheel") return cmd;
-  return { ...cmd, screen: activeScreenOrMain(api.deviceId ?? "") };
+  const udid = api.deviceId ?? "";
+  if (cmd.cmd === "wheel") return { ...cmd, screen: await activeScreenForCommand(udid) };
+  const latched = cmd.type === "Down" ? undefined : gestureScreens.get(api);
+  const screen = latched ?? (await activeScreenForCommand(udid));
+  if (cmd.type === "Up") gestureScreens.delete(api);
+  else gestureScreens.set(api, screen);
+  return { ...cmd, screen };
 }
 
 /**

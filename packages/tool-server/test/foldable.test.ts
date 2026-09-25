@@ -31,14 +31,18 @@ vi.mock("../src/utils/ios-devices", async () => {
 
 import {
   __resetFoldableStateForTests,
+  activeScreenForCommand,
   activeScreenOrMain,
   awaitActiveScreen,
   crossCheckDescribedScreen,
   foldablePostureHint,
   getCachedActiveScreen,
+  holdActiveScreen,
   panelForHingeAngle,
   parseDisplaysPayload,
   queryActiveScreen,
+  READ_RETRY_AFTER_MS,
+  readActiveScreenOrMain,
   refreshActiveScreen,
   screenLabel,
   streamUrlForScreen,
@@ -180,17 +184,63 @@ describe("the active-screen memo", () => {
     // A transient failure must not snap every touch back to the cover panel.
     expect(activeScreenOrMain(DUO)).toBe(3);
   });
+
+  it("answers a read that fails with the memo, and with the main screen only without one", async () => {
+    mockDevicectl([new Error("no")]);
+    expect(await readActiveScreenOrMain(DUO)).toBe(1);
+    mockDevicectl([duoPayload(3)]);
+    expect(await readActiveScreenOrMain(DUO)).toBe(3);
+    mockDevicectl([new Error("no")]);
+    expect(await readActiveScreenOrMain(DUO)).toBe(3);
+  });
+});
+
+describe("activeScreenForCommand", () => {
+  const devicectlCalls = () => execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length;
+
+  it("answers the memo without a read", async () => {
+    mockDevicectl([duoPayload(3)]);
+    await refreshActiveScreen(DUO);
+    expect(await activeScreenForCommand(DUO)).toBe(3);
+    expect(devicectlCalls()).toBe(1);
+  });
+
+  it("reads for itself while the memo is empty, backing off after a failure", async () => {
+    vi.useFakeTimers();
+    try {
+      // The attach-time read failed: nothing memoized, a failure on record.
+      mockDevicectl([new Error("no")]);
+      expect(await refreshActiveScreen(DUO)).toBeNull();
+      // CoreDevice recovers, but the back-off is still running: main screen, no read.
+      mockDevicectl([duoPayload(3)]);
+      expect(await activeScreenForCommand(DUO)).toBe(1);
+      expect(devicectlCalls()).toBe(1);
+      // Past the back-off, the touch asks again and lands on the live panel.
+      vi.advanceTimersByTime(READ_RETRY_AFTER_MS);
+      expect(await activeScreenForCommand(DUO)).toBe(3);
+      expect(devicectlCalls()).toBe(2);
+      expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(3);
+      // From here on the memo answers.
+      expect(await activeScreenForCommand(DUO)).toBe(3);
+      expect(devicectlCalls()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads at once when nothing has failed yet", async () => {
+    mockDevicectl([duoPayload(3)]);
+    expect(await activeScreenForCommand(DUO)).toBe(3);
+    expect(devicectlCalls()).toBe(1);
+  });
 });
 
 describe("awaitActiveScreen", () => {
-  const sleep = vi.fn(async () => {});
-
   it("polls until a read satisfies the predicate, memoizing every read", async () => {
     mockDevicectl([duoPayload(1), duoPayload(1), duoPayload(3)]);
     const state = await awaitActiveScreen(DUO, (s) => s.activeScreen === 3, {
       pollMs: 1,
       timeoutMs: 1000,
-      sleep,
     });
     expect(state?.activeScreen).toBe(3);
     expect(execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length).toBe(3);
@@ -202,7 +252,6 @@ describe("awaitActiveScreen", () => {
     const state = await awaitActiveScreen(DUO, (s) => s.activeScreen === 3, {
       pollMs: 1,
       timeoutMs: 5,
-      sleep,
     });
     // The caller tells a settled read from the last one by applying the predicate again.
     expect(state?.activeScreen).toBe(1);
@@ -211,7 +260,92 @@ describe("awaitActiveScreen", () => {
 
   it("is null only when every read failed", async () => {
     mockDevicectl([new Error("no")]);
-    expect(await awaitActiveScreen(DUO, () => true, { pollMs: 1, timeoutMs: 5, sleep })).toBeNull();
+    expect(await awaitActiveScreen(DUO, () => true, { pollMs: 1, timeoutMs: 5 })).toBeNull();
+  });
+
+  it("stops at an abort with what it read so far", async () => {
+    mockDevicectl([duoPayload(1)]);
+    const controller = new AbortController();
+    controller.abort();
+    const state = await awaitActiveScreen(DUO, (s) => s.activeScreen === 3, {
+      pollMs: 1,
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+    expect(state?.activeScreen).toBe(1);
+    expect(execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length).toBe(1);
+  });
+});
+
+describe("holdActiveScreen", () => {
+  const devicectlCalls = () => execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length;
+
+  it("keeps polling through the hold and answers the state it ended on", async () => {
+    mockDevicectl([duoPayload(3)]);
+    const state = await holdActiveScreen(DUO, { activeScreen: 3, panels: [], readAt: 0 }, 20, {
+      pollMs: 5,
+    });
+    expect(state?.activeScreen).toBe(3);
+    expect(devicectlCalls()).toBeGreaterThanOrEqual(2);
+  });
+
+  it("restarts the hold when the panel changes under it, so a transient hand-over is not latched", async () => {
+    // From closed to 78°: the wait saw the inner panel; during the hold the
+    // device returns to the cover. The hold starts over on the cover and ends
+    // there, and the memo follows.
+    const reads: number[] = [];
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd === "xcode-select") return { stdout: "/x\n" };
+      if (isDevicectl(cmd, args)) {
+        reads.push(Date.now());
+        // The first read still sees the transient inner panel; the second, the cover.
+        const payload = reads.length === 1 ? duoPayload(3) : duoPayload(1);
+        return { stdout: JSON.stringify(payload) };
+      }
+      return new Error("unexpected");
+    });
+    const holdMs = 30;
+    const state = await holdActiveScreen(DUO, { activeScreen: 3, panels: [], readAt: 0 }, holdMs, {
+      pollMs: 5,
+    });
+    const finished = Date.now();
+    expect(state?.activeScreen).toBe(1);
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(1);
+    // A whole hold ran again from the read that saw the change (the second one).
+    expect(reads.length).toBeGreaterThanOrEqual(2);
+    expect(finished - reads[1]!).toBeGreaterThanOrEqual(holdMs - 2);
+  });
+
+  it("bounds the restarts", async () => {
+    let flip = 1;
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd === "xcode-select") return { stdout: "/x\n" };
+      if (isDevicectl(cmd, args)) {
+        flip = flip === 1 ? 3 : 1;
+        return { stdout: JSON.stringify(duoPayload(flip as 1 | 3)) };
+      }
+      return new Error("unexpected");
+    });
+    const started = Date.now();
+    const state = await holdActiveScreen(DUO, { activeScreen: 1, panels: [], readAt: 0 }, 20, {
+      pollMs: 5,
+      maxMs: 60,
+    });
+    expect(state).not.toBeNull();
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
+  it("answers what it was given when no read succeeds, and ends early on an abort", async () => {
+    mockDevicectl([new Error("no")]);
+    const initial = { activeScreen: 3, panels: [], readAt: 0 };
+    expect(await holdActiveScreen(DUO, initial, 10, { pollMs: 2 })).toBe(initial);
+    const controller = new AbortController();
+    controller.abort();
+    const started = Date.now();
+    expect(
+      await holdActiveScreen(DUO, initial, 1000, { pollMs: 5, signal: controller.signal })
+    ).toBe(initial);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });
 
@@ -263,11 +397,44 @@ describe("labels", () => {
 describe("crossCheckDescribedScreen", () => {
   it("has nothing to say without a memo, or when the memo agrees", async () => {
     expect(await crossCheckDescribedScreen(DUO, 3)).toBeUndefined();
+    // Nothing ever tried to read: no simulator-server targets a panel.
+    expect(execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length).toBe(0);
     mockDevicectl([duoPayload(3)]);
     await refreshActiveScreen(DUO);
     expect(await crossCheckDescribedScreen(DUO, 3)).toBeUndefined();
     // No re-query for an agreeing memo: one read, the refresh above.
     expect(execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length).toBe(1);
+  });
+
+  it("re-reads on an empty memo left by a failed read, so touches follow the tree", async () => {
+    // The attach-time read failed; CoreDevice has recovered since.
+    mockDevicectl([new Error("no"), duoPayload(3)]);
+    await refreshActiveScreen(DUO);
+    expect(await crossCheckDescribedScreen(DUO, 3)).toBeUndefined();
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(3);
+  });
+
+  it("takes the panel the tree was read on when CoreDevice still does not answer", async () => {
+    mockDevicectl([new Error("no")]);
+    await refreshActiveScreen(DUO);
+    const note = await crossCheckDescribedScreen(DUO, 3);
+    expect(note).toContain("CoreDevice did not report");
+    expect(note).toContain("commands now target screen 3 (inner panel)");
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(3);
+    expect(activeScreenOrMain(DUO)).toBe(3);
+    // The next describe on the same panel has nothing to add, and reads nothing.
+    const reads = execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length;
+    expect(await crossCheckDescribedScreen(DUO, 3)).toBeUndefined();
+    expect(execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length).toBe(reads);
+  });
+
+  it("moves a stale memo to the tree's panel when the re-read fails, keeping the panel list", async () => {
+    mockDevicectl([duoPayload(3), new Error("no")]);
+    await refreshActiveScreen(DUO);
+    const note = await crossCheckDescribedScreen(DUO, 1);
+    expect(note).toContain("commands now target screen 1 (cover panel, 1398x2034)");
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(1);
+    expect(getCachedActiveScreen(DUO)?.panels).toHaveLength(2);
   });
 
   it("re-reads once on a stale memo and says nothing when the fresh read agrees", async () => {
