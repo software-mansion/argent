@@ -9,6 +9,12 @@ export interface StartRecordingResult {
   timeLimitSeconds: number;
   /** Host path the finished video will land at once stop is called. */
   outputFile: string;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the recording started on the cover panel. Says why and
+   * what to check.
+   */
+  warning?: string;
 }
 
 export interface StopRecordingFile {

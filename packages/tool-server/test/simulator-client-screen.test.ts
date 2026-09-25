@@ -139,18 +139,16 @@ afterEach(() => {
 });
 
 describe("sendCommand on a foldable", () => {
-  it("names the live panel on touch and wheel, and on nothing else", async () => {
+  it("names the live panel on a touch, and on nothing else", async () => {
     const server = await startWs();
     try {
       livePanelMock.mockResolvedValue(3);
       const api = foldableApi(server.port);
       expect(await sendCommand(api, TOUCH)).toEqual({});
-      await sendCommand(api, { cmd: "wheel", x: 0.5, y: 0.5, dx: 0, dy: 3 });
       await sendCommand(api, { cmd: "key", direction: "Down", code: 4 });
       await sendCommand(api, { cmd: "rotate", direction: "Portrait" });
       expect(server.received.map((m) => [m.cmd, m.screen])).toEqual([
         ["touch", 3],
-        ["wheel", 3],
         ["key", undefined],
         ["rotate", undefined],
       ]);
@@ -284,6 +282,7 @@ describe("resolveCapturePanel", () => {
     const panel = await resolveCapturePanel(api);
     expect(panel?.screen).toBe(3);
     expect(panel?.note).toContain("renders to screen 3 (inner panel, 2007x2853)");
+    expect(panel).not.toHaveProperty("warning");
     expect(await resolveCapturePanel(apiFor(4949, { deviceId: DUO }))).toBeUndefined();
     expect(livePanelMock).toHaveBeenCalledTimes(1);
   });
@@ -295,6 +294,8 @@ describe("resolveCapturePanel", () => {
     expect(panel?.screen).toBe(1);
     expect(panel?.note).toContain("could not be resolved (the accessibility service failed");
     expect(panel?.note).toContain("this capture is of screen 1 (cover panel, 1398x2034)");
+    // The same text as a warning, for the results that carry only warnings.
+    expect(panel?.warning).toBe(panel?.note);
   });
 });
 

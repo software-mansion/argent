@@ -25,7 +25,19 @@ vi.mock("../src/tools/screen-recording/watermark", async (importOriginal) => {
   };
 });
 
+const resolveLivePanelMock = vi.fn<(udid: string) => Promise<LivePanel>>();
+vi.mock("../src/utils/foldable", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/foldable")>()),
+  resolveLivePanel: (udid: string) => resolveLivePanelMock(udid),
+}));
+vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+
 import { spawn } from "child_process";
+import type { Registry } from "@argent/registry";
+import { createScreenRecordingStartTool } from "../src/tools/screen-recording/screen-recording-start";
 import {
   screenRecordingSessionBlueprint,
   type ScreenRecordingSessionApi,
@@ -42,6 +54,10 @@ const mockSpawn = vi.mocked(spawn);
 const mockOpenStream = vi.mocked(openMjpegStream);
 
 const DUO = "B6C52FD4-5408-402B-9369-EF7C66B98E6F";
+const PANELS = [
+  { screenId: 1, width: 1398, height: 2034 },
+  { screenId: 3, width: 2007, height: 2853 },
+];
 const BASE_URL = "http://127.0.0.1:61830/stream.mjpeg";
 const READY_GRACE_MS = 800;
 const PANEL_POLL_MS = 1_000;
@@ -171,15 +187,15 @@ const UNKNOWN: LivePanel = { screen: 1, source: "unknown", reason: "nothing answ
 async function startFollowing(
   api: ScreenRecordingSessionApi,
   resolveLivePanel: PanelFollow["resolveLivePanel"],
-  initialScreen = 1
+  initial: LivePanel = live(1)
 ) {
   const follow: PanelFollow = {
-    initialScreen,
+    initial,
     streamUrlForScreen: (screen) => (screen === 1 ? BASE_URL : `${BASE_URL}?screen=${screen}`),
     resolveLivePanel,
   };
   const promise = startCapture(api, {
-    streamUrl: follow.streamUrlForScreen(initialScreen),
+    streamUrl: follow.streamUrlForScreen(initial.screen),
     timeLimitSeconds: 60,
     watermark: false,
     trimStatic: false,
@@ -264,7 +280,7 @@ describe("a recording of a foldable follows the live panel", () => {
     fakeChild();
     const api = await makeSession();
     let answer: LivePanel = UNKNOWN;
-    await startFollowing(api, async () => answer, 3);
+    await startFollowing(api, async () => answer, live(3));
     await vi.advanceTimersByTimeAsync(PANEL_POLL_MS * 3);
     // An unresolved panel is not the main screen: the capture stays where it is.
     expect(opened).toHaveLength(1);
@@ -277,8 +293,63 @@ describe("a recording of a foldable follows the live panel", () => {
     expect(api.activeScreen).toBe(1);
     const stopped = await stop(api);
     expect(stopped.panelSwitches).toBe(1);
-    expect(stopped.warning).toContain("could not be resolved on 3 of the recording's panel checks");
+    expect(stopped.warning).toContain("could not be resolved 3 time(s) during the recording");
     expect(stopped.warning).toContain("neither the accessibility service nor CoreDevice answered");
+  });
+
+  it("warns at start when nothing resolved the panel, through the tool", async () => {
+    serveStreams(() => COVER);
+    fakeChild();
+    const api = await makeSession();
+    resolveLivePanelMock.mockResolvedValue(UNKNOWN);
+    const registry = {
+      resolveService: vi.fn(async () => ({
+        apiUrl: "http://127.0.0.1:61830",
+        streamUrl: BASE_URL,
+        deviceId: DUO,
+        display: { foldable: true, panels: PANELS, hingeAngle: null },
+      })),
+    } as unknown as Registry;
+    const tool = createScreenRecordingStartTool(registry);
+    const start = tool.execute(
+      { session: api },
+      { udid: DUO, showTouches: false, trimStatic: false, timeLimitSeconds: 60 }
+    );
+    start.catch(() => {});
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    const started = await start;
+    expect(started.status).toBe("recording");
+    expect(started.warning).toContain("could not be resolved (nothing answered)");
+    expect(started.warning).toContain("the recording started on screen 1 (cover panel, 1398x2034)");
+    expect(api.panelReadFailures).toBe(1);
+    await stop(api);
+
+    // Resolved: the same start carries no warning.
+    resolveLivePanelMock.mockResolvedValue(live(3));
+    serveStreams(() => INNER);
+    fakeChild();
+    const resolved = tool.execute(
+      { session: api },
+      { udid: DUO, showTouches: false, trimStatic: false, timeLimitSeconds: 60 }
+    );
+    resolved.catch(() => {});
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    expect(await resolved).not.toHaveProperty("warning");
+    expect(api.activeScreen).toBe(3);
+    await stop(api);
+  });
+
+  it("counts a start that resolved nothing with the checks that failed", async () => {
+    serveStreams(() => COVER);
+    fakeChild();
+    const api = await makeSession();
+    await startFollowing(api, async () => UNKNOWN, UNKNOWN);
+    expect(api.activeScreen).toBe(1);
+    expect(api.panelReadFailures).toBe(1);
+    await vi.advanceTimersByTimeAsync(PANEL_POLL_MS * 2);
+    const stopped = await stop(api);
+    expect(stopped.warning).toContain("could not be resolved 3 time(s) during the recording");
+    expect(stopped.warning).toContain("at its start, and on its checks every second");
   });
 
   it("warns about nothing while every panel check is answered", async () => {
@@ -316,7 +387,7 @@ describe("a recording of a foldable follows the live panel", () => {
     fakeChild();
     const following = await makeSession();
     const follow: PanelFollow = {
-      initialScreen: 3,
+      initial: live(3),
       streamUrlForScreen: (screen) => `${BASE_URL}?screen=${screen}`,
       resolveLivePanel: async () => live(3),
     };

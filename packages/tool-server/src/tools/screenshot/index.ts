@@ -84,7 +84,12 @@ interface Result {
    * server's `127.0.0.1` media URL, which is unreachable when the tool-server
    * is remote.
    */
-  image: ArtifactHandle;
+  image: ArtifactHandle; /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the capture is of the cover panel. The note above says
+   * the same; this rides the field the flow `snapshot` step reports.
+   */
+  warning?: string;
 }
 
 const capability: ToolCapability = {
@@ -310,7 +315,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         kind: "screenshot",
         mimeType: "image/png",
       });
-      return { image, ...(panel ? { [RESULT_NOTE_KEY]: panel.note } : {}) };
+      return {
+        image,
+        ...(panel ? { [RESULT_NOTE_KEY]: panel.note } : {}),
+        ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
+      };
     },
   };
 }

@@ -708,6 +708,8 @@ interface ScrollResolve {
   reason?: string;
   /** The run was cancelled mid-scroll. */
   aborted?: boolean;
+  /** What the scroll gestures had to say (see {@link toolWarning}). */
+  warning?: string;
 }
 
 /**
@@ -726,7 +728,7 @@ async function scrollIncrement(
   env: ActionEnv,
   direction: ScrollDirection,
   region: DescribeFrame
-): Promise<void> {
+): Promise<string | undefined> {
   const cx = clamp01(region.x + region.width / 2);
   const cy = clamp01(region.y + region.height / 2);
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
@@ -742,8 +744,7 @@ async function scrollIncrement(
           : direction === "right"
             ? { deltaX: dist }
             : { deltaX: -dist };
-    await invokeOnDevice(env, "gesture-scroll", { x: cx, y: cy, ...delta });
-    return;
+    return toolWarning(await invokeOnDevice(env, "gesture-scroll", { x: cx, y: cy, ...delta }));
   }
 
   // To reveal content below the fold the finger travels UP (toY < fromY), etc.
@@ -763,18 +764,20 @@ async function scrollIncrement(
       break;
   }
   try {
-    await invokeOnDevice(env, "gesture-swipe", {
-      fromX: cx,
-      fromY: cy,
-      toX: to.x,
-      toY: to.y,
-      momentum: false,
-      durationMs: 600,
-    });
+    return toolWarning(
+      await invokeOnDevice(env, "gesture-swipe", {
+        fromX: cx,
+        fromY: cy,
+        toX: to.x,
+        toY: to.y,
+        momentum: false,
+        durationMs: 600,
+      })
+    );
   } catch (err) {
     // The tool rejects when cancelled mid-gesture. Let scrollToVisible's next
     // abort check produce the uniform aborted skip instead of surfacing that.
-    if (env.signal?.aborted) return;
+    if (env.signal?.aborted) return undefined;
     throw err;
   }
 }
@@ -800,6 +803,7 @@ async function scrollToVisible(
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
+  let warning: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
@@ -823,7 +827,9 @@ async function scrollToVisible(
     }
 
     const frame = flowSelectorToFrame(tree, target, orientation);
-    if (frame && axisFullyInside(frame, axisDirection, region)) return { frame };
+    if (frame && axisFullyInside(frame, axisDirection, region)) {
+      return { frame, ...warnedBy(warning) };
+    }
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
@@ -843,17 +849,19 @@ async function scrollToVisible(
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
-      if (frame) return { frame };
+      if (frame) return { frame, ...warnedBy(warning) };
       return {
         reason: `reached the end of the scroll without finding ${describeSelector(target)}`,
+        ...warnedBy(warning),
       };
     }
     prevFp = fp;
 
-    await scrollIncrement(env, axisDirection, region);
+    warning ??= await scrollIncrement(env, axisDirection, region);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
+    ...warnedBy(warning),
   };
 }
 
@@ -928,7 +936,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       if (r.aborted) return ABORTED_OUTCOME;
-      return { ok: Boolean(r.frame), reason: r.reason };
+      return { ok: Boolean(r.frame), reason: r.reason, ...warnedBy(r.warning) };
     }
     case "pinch":
       return runPinch(env, step);
@@ -988,6 +996,22 @@ async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
 /** Spread a settle's warning onto an outcome, leaving no `warning: undefined` key behind. */
 function warned(settle: { warning?: string }): { warning?: string } {
   return settle.warning !== undefined ? { warning: settle.warning } : {};
+}
+
+/**
+ * The warning a dispatched tool's result carries, if any: a gesture on a
+ * foldable whose panel could not be resolved, so it went to the cover panel.
+ * The step owes it to the report like a settle's warning.
+ */
+function toolWarning(result: unknown): string | undefined {
+  const warning = (result as { warning?: unknown } | null | undefined)?.warning;
+  return typeof warning === "string" && warning.length > 0 ? warning : undefined;
+}
+
+/** Every warning a step owes, joined, leaving no `warning: undefined` key behind. */
+function warnedBy(...warnings: Array<string | undefined>): { warning?: string } {
+  const text = warnings.filter((w): w is string => w !== undefined).join(" ");
+  return text.length > 0 ? { warning: text } : {};
 }
 
 /**
@@ -1070,11 +1094,11 @@ async function runTap(
 ): Promise<DirectiveOutcome> {
   const resolved = await resolveTargetPoint(env, target);
   if ("fail" in resolved) return resolved.fail;
-  await invokeOnDevice(env, "gesture-tap", {
+  const sent = await invokeOnDevice(env, "gesture-tap", {
     ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
   });
-  return { ok: true, ...warned(resolved) };
+  return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
 
 /**
@@ -1102,6 +1126,7 @@ async function runLongPress(
   if ("fail" in resolved) return resolved.fail;
   const point = resolved.point;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
+  let sent: unknown;
   if (env.device.platform === "chromium") {
     try {
       await invokeOnDevice(env, "gesture-drag", {
@@ -1118,14 +1143,14 @@ async function runLongPress(
       throw err;
     }
   } else {
-    await invokeOnDevice(env, "gesture-custom", {
+    sent = await invokeOnDevice(env, "gesture-custom", {
       events: [
         { type: "Down", x: point.x, y: point.y, delayMs: 0 },
         { type: "Up", x: point.x, y: point.y, delayMs: duration },
       ],
     });
   }
-  return { ok: true, ...warned(resolved) };
+  return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
 
 /**
@@ -1188,12 +1213,13 @@ async function runPinch(
     args[selected.angle === 0 ? "endCenterX" : "endCenterY"] = selected.endCenter;
   }
 
+  let sentWarning: string | undefined;
   for (let i = 0; i < n; i++) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
-    await invokeOnDevice(env, "gesture-pinch", args);
+    sentWarning ??= toolWarning(await invokeOnDevice(env, "gesture-pinch", args));
     if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
   }
-  return { ok: true, ...warned(settle) };
+  return { ok: true, ...warnedBy(settle.warning, sentWarning) };
 }
 
 /**
@@ -1291,8 +1317,9 @@ async function runRotate(
   }
 
   if (env.signal?.aborted) return ABORTED_OUTCOME;
+  let sent: unknown;
   try {
-    await invokeOnDevice(env, "gesture-rotate", {
+    sent = await invokeOnDevice(env, "gesture-rotate", {
       centerX: center.x,
       centerY: center.y,
       ...(aspect === undefined
@@ -1309,7 +1336,7 @@ async function runRotate(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     throw err;
   }
-  return { ok: true, ...warned(settle) };
+  return { ok: true, ...warnedBy(settle.warning, toolWarning(sent)) };
 }
 
 /**
@@ -1535,8 +1562,9 @@ async function runSwipe(
     ...(step.duration !== undefined ? { durationMs: step.duration } : {}),
     ...(step.momentum === false ? { momentum: false } : {}),
   };
+  let sent: unknown;
   try {
-    await invokeOnDevice(
+    sent = await invokeOnDevice(
       env,
       env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
       travel
@@ -1562,7 +1590,7 @@ async function runSwipe(
   // settleTree returns undefined only on abort, which must read as the uniform
   // aborted skip, never a pass.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  return { ok: true, ...warned(settle) };
+  return { ok: true, ...warnedBy(settle.warning, toolWarning(sent)) };
 }
 
 /**
@@ -1580,7 +1608,7 @@ async function runType(
   if (!frame) {
     return { ok: false, reason: offscreenHint(step.into) };
   }
-  await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
+  const focusTap = await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
   // Keys are injected at the HID level and go to whatever holds focus, so the
   // tap→type gap must cover the app's focus round-trip (see the constants).
   if (!(await sleepOrAbort(TYPE_FOCUS_SETTLE_MS, env.signal))) {
@@ -1604,7 +1632,7 @@ async function runType(
     // UDID.)
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
-  return { ok: true };
+  return { ok: true, ...warnedBy(toolWarning(focusTap)) };
 }
 
 /**
@@ -1961,6 +1989,9 @@ async function waitForIdle(
   // frame in a run of twenty says nothing about that.
   let comparedAPair = false;
   let firstCapture = true;
+  // What the captures had to say: on a foldable whose panel could not be
+  // resolved, that they are of the cover panel.
+  let panelWarning: string | undefined;
 
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
@@ -1987,6 +2018,7 @@ async function waitForIdle(
       capturePixelsWithin(env, deadline, firstCapture),
     ]);
     firstCapture = false;
+    panelWarning ??= frame?.warning;
     // A capture abandoned by an abort comes back indistinguishable from one that
     // failed, and no verdict may be derived from a run that was cancelled.
     if (env.signal?.aborted || read.type === "aborted") return ABORTED_OUTCOME;
@@ -2123,9 +2155,13 @@ async function waitForIdle(
           heldForMs = now - bothSince;
           if (localizedThisInterval) localizedMotionDuringHold = true;
           if (stillIntervals >= MIN_STILL_INTERVALS && heldForMs >= stableFor) {
-            return localizedMotionDuringHold
-              ? { ok: true, warning: LOCALIZED_MOTION_WARNING }
-              : { ok: true };
+            return {
+              ok: true,
+              ...warnedBy(
+                localizedMotionDuringHold ? LOCALIZED_MOTION_WARNING : undefined,
+                panelWarning
+              ),
+            };
           }
         }
         // Otherwise the tree held and no pair could be compared: this round

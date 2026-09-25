@@ -84,7 +84,11 @@ export interface ScreenRecordingSessionApi {
   activeScreen: number | null;
   /** How many times the capture moved to another panel. */
   panelSwitches: number;
-  /** How many panel polls CoreDevice did not answer; reported by stop. */
+  /**
+   * How many times the panel could not be resolved — at the start, or on a
+   * check — because neither the accessibility service nor CoreDevice
+   * answered; reported by stop.
+   */
   panelReadFailures: number;
   /**
    * The frame stream's drop error, stashed when the pump is torn down (cap,

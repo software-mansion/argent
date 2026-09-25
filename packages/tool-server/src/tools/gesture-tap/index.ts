@@ -41,7 +41,8 @@ interface Result {
    * re-fronted it to run this tap, so the foreground screen changed as a side
    * effect. Set only when true.
    */
-  reactivated?: true; /**
+  reactivated?: true;
+  /**
    * Foldable iOS simulators only: the panel the device renders to could not
    * be resolved, so the tap went to the cover panel. Says why and what to check.
    */

@@ -71,11 +71,11 @@ export interface AXServiceApi {
   ping(): Promise<boolean>;
   /**
    * The display id of the panel the guest renders to (1 the cover panel, 3
-   * the inner one on the iPhone Duo): the display the front app's window is
-   * on, which is the panel `describe` reads its tree on. Null when the daemon
-   * names none — a device with one panel, or a window on no known display.
-   * Answered in a few milliseconds without walking the tree; every touch of a
-   * foldable asks it (`utils/foldable.ts`), so its budget is short.
+   * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
+   * Null when the daemon names none, as on a device with one panel. Answered
+   * in a few milliseconds; every touch of a foldable asks it
+   * (`utils/foldable.ts`), so its budget is short. A daemon build that
+   * predates the command answers an error.
    */
   livePanel(): Promise<number | null>;
 }

@@ -20,10 +20,10 @@ const execFileAsync = promisify(execFile);
  * {@link resolveLivePanel} asks two sources in turn:
  *
  * 1. The ax-service, the daemon the `describe` tool reads the accessibility
- *    tree through. Its `live_panel` command names the display the front app's
- *    window is on — the same panel it reads a tree on — in a few milliseconds,
- *    without walking the tree. A device whose daemon is not running yet gets
- *    it started, as a describe would.
+ *    tree through. Its `live_panel` command names the panel it reads a tree
+ *    on, in a few milliseconds. A device whose daemon is not running yet gets
+ *    it started, as a describe would; a daemon build that predates the command
+ *    answers an error, and the next source is asked.
  * 2. One CoreDevice query, `devicectl device info displays`, which reports
  *    the panel that is lit, in about 100 ms.
  *
@@ -194,10 +194,7 @@ interface DevicectlDisplay {
 }
 
 interface DevicectlDisplaysPayload {
-  result?: {
-    displays?: DevicectlDisplay[];
-    orientation?: { currentDeviceOrientation?: string };
-  };
+  result?: { displays?: DevicectlDisplay[] };
 }
 
 /**
@@ -228,11 +225,9 @@ function backlit(d: DevicectlDisplay): boolean | undefined {
  * both panels `activeOn` with `active` already moved, and a panel whose
  * backlight state is not known is taken on `active` alone.
  */
-export function parseDisplaysPayload(json: unknown): {
-  activeScreen: number;
-  panels: FoldablePanel[];
-  orientation?: string;
-} | null {
+export function parseDisplaysPayload(
+  json: unknown
+): { activeScreen: number; panels: FoldablePanel[] } | null {
   const displays = (json as DevicectlDisplaysPayload)?.result?.displays;
   if (!Array.isArray(displays)) return null;
   const panels: FoldablePanel[] = [];
@@ -260,13 +255,7 @@ export function parseDisplaysPayload(json: unknown): {
   else if (lit.length > 1) activeScreen = flagged.find((id) => lit.includes(id));
   else if (!knownBacklight && flagged.length === 1) activeScreen = flagged[0];
   if (activeScreen === undefined) return null;
-  const orientation = (json as DevicectlDisplaysPayload).result?.orientation
-    ?.currentDeviceOrientation;
-  return {
-    activeScreen,
-    panels,
-    ...(typeof orientation === "string" ? { orientation } : {}),
-  };
+  return { activeScreen, panels };
 }
 
 /** The first line of an error, for a reason a warning quotes. */
@@ -280,8 +269,10 @@ function firstLine(err: unknown): string {
  * binary, a timeout, a device CoreDevice does not know, or a payload with no
  * lit integrated panel.
  */
-export async function readCoreDeviceDisplays(udid: string): Promise<{
-  displays: { activeScreen: number; panels: FoldablePanel[]; orientation?: string } | null;
+export async function readCoreDeviceDisplays(
+  udid: string
+): Promise<{
+  displays: { activeScreen: number; panels: FoldablePanel[] } | null;
   reason?: string;
 }> {
   // A provider's device is keyed by its `ext:` id everywhere in argent, but

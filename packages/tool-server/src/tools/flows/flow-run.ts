@@ -2500,6 +2500,7 @@ async function execLeafStep(
           ...base,
           status: r.status,
           reason: r.reason,
+          ...(r.warning !== undefined ? { warning: r.warning } : {}),
           snapshotKey: r.snapshotKey,
           ...(r.snapshotKey !== undefined && state.device?.platform === "ios-remote"
             ? { snapshotRemote: true as const }

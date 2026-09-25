@@ -82,8 +82,12 @@ const PANEL_FIRST_FRAME_TIMEOUT_MS = 5_000;
  * into the same ffmpeg, which keeps the size of the first frame it saw.
  */
 export interface PanelFollow {
-  /** The panel the recording starts on. */
-  initialScreen: number;
+  /**
+   * The panel the recording starts on, as resolved at start: the main screen
+   * when nothing resolved it, which then counts as the first check that
+   * failed, for stop's warning.
+   */
+  initial: LivePanel;
   /** The MJPEG stream of a panel. */
   streamUrlForScreen(screen: number): string;
   /**
@@ -475,9 +479,9 @@ async function startCaptureLocked(
   api.framesWritten = 0;
   api.captureProcess = child;
   api.frameStream = stream;
-  api.activeScreen = params.followPanel?.initialScreen ?? null;
+  api.activeScreen = params.followPanel?.initial.screen ?? null;
   api.panelSwitches = 0;
-  api.panelReadFailures = 0;
+  api.panelReadFailures = params.followPanel?.initial.source === "unknown" ? 1 : 0;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
@@ -696,10 +700,11 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     if (panelReadFailures > 0) {
       warning = [
         warning,
-        `The panel the device renders to could not be resolved on ${panelReadFailures} of the ` +
-          `recording's panel checks (neither the accessibility service nor CoreDevice answered); ` +
-          `the recording stayed on its panel for those, so a fold made during them is in the ` +
-          `video only from the next check that answered, and parts of it may be black.`,
+        `The panel the device renders to could not be resolved ${panelReadFailures} time(s) during ` +
+          `the recording (at its start, and on its checks every second): neither the accessibility ` +
+          `service nor CoreDevice answered. The recording stayed on its panel for those, so a ` +
+          `fold made during them is in the video only from the next check that answered, and ` +
+          `parts of it may be black.`,
       ]
         .filter(Boolean)
         .join(" ");

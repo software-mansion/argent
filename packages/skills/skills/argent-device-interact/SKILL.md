@@ -217,7 +217,7 @@ Rules:
 - `screenshot` size follows the panel (1398×2034 closed, 2007×2853 open on the Duo). Screenshot-diff baselines are per posture.
 - Unfolded, the UI runs landscape on the inner panel's portrait-native framebuffer; frames and touch coordinates stay in that native space, like landscape on any iPhone.
 - A gesture completes on the panel it started on, also when the device is folded during it. Fold between actions, e.g. as a `run-sequence` step.
-- A gesture, a screenshot or a fold result may carry a `warning` that the panel could not be resolved and the cover panel was targeted: it says what to check (the simulator's accessibility service and CoreDevice). Take a screenshot to see what the device shows.
+- A gesture, a screenshot, a fold, a flow step or a recording start may carry a `warning` that the panel could not be resolved and the cover panel was targeted (a screenshot-diff summary carries a `panel:` line, and a recording stop counts the checks that failed): it says what to check (the simulator's accessibility service and CoreDevice). Take a screenshot to see what the device shows.
 
 ### await-ui-element — Block until a UI element reaches a state
 

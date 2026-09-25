@@ -1979,6 +1979,11 @@
       // A foldable's panel: the CoreSimulator screen id its stream shows and
       // its touches name (1 the cover panel, 3 the inner one on the iPhone
       // Duo). null for a device with one panel, where commands name none.
+      // This page's touches and wheels go to the simulator-server directly and
+      // name this value, which the panel poll below refreshes every 1.5 s: for
+      // up to that long after a fold, a preview touch can go to the panel that
+      // went dark. An accepted limitation of the manual preview; the agent
+      // tools resolve the panel on every touch.
       let activeScreen = null;
       let panelPollTimer = null;
       let img = null;

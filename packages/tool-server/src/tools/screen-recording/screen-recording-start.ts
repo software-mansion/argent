@@ -10,7 +10,7 @@ import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
-import { resolveLivePanel, streamUrlForScreen } from "../../utils/foldable";
+import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../../utils/foldable";
 import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import type { StartRecordingResult } from "./session-guards";
 
@@ -132,17 +132,24 @@ Fails if a recording is already running on the device, the device is not booted,
       // device renders to now, and follows it across folds (capture.ts) with
       // the same resolution every touch and screenshot makes. A start that
       // resolves nothing records the main screen, as every command then
-      // targets it; the poll moves the capture as soon as a source answers.
+      // targets it, says so in its result, and counts it for stop's warning;
+      // the checks move the capture as soon as a source answers.
       let followPanel: PanelFollow | undefined;
+      let warning: string | undefined;
       if (simulator.display?.foldable) {
         const base = streamUrl;
-        const initialScreen = (await resolveLivePanel(device.id)).screen;
-        streamUrl = streamUrlForScreen(base, initialScreen);
+        const initial = await resolveLivePanel(device.id);
+        streamUrl = streamUrlForScreen(base, initial.screen);
         followPanel = {
-          initialScreen,
+          initial,
           streamUrlForScreen: (screen) => streamUrlForScreen(base, screen),
           resolveLivePanel: () => resolveLivePanel(device.id),
         };
+        if (initial.source === "unknown") {
+          warning =
+            `${unresolvedPanelNote(device.id, initial.reason, "the recording started on", simulator.display.panels)} ` +
+            "It moves to the panel the device renders to as soon as a check resolves it.";
+        }
       }
 
       // capture.ts arms the visualizer once the encoder is live and restores it
@@ -155,7 +162,7 @@ Fails if a recording is already running on the device, the device is not booted,
 
       // Read the flag live per call so `argent enable/disable video-watermark`
       // takes effect without restarting the long-lived tool-server.
-      return startCapture(api, {
+      const started = await startCapture(api, {
         streamUrl,
         timeLimitSeconds,
         watermark: isFeatureEnabled("video-watermark"),
@@ -163,6 +170,7 @@ Fails if a recording is already running on the device, the device is not booted,
         pointer,
         followPanel,
       });
+      return warning !== undefined ? { ...started, warning } : started;
     },
   };
 }

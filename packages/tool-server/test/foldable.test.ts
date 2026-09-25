@@ -163,12 +163,8 @@ afterEach(() => {
 });
 
 describe("parseDisplaysPayload", () => {
-  it("reads the lit integrated panel, every panel's size and the orientation", () => {
-    expect(parseDisplaysPayload(duoPayload(3, "landscapeRight"))).toEqual({
-      activeScreen: 3,
-      panels: PANELS,
-      orientation: "landscapeRight",
-    });
+  it("reads the lit integrated panel and every panel's size", () => {
+    expect(parseDisplaysPayload(duoPayload(3))).toEqual({ activeScreen: 3, panels: PANELS });
     expect(parseDisplaysPayload(duoPayload(1))?.activeScreen).toBe(1);
   });
 
@@ -189,7 +185,6 @@ describe("parseDisplaysPayload", () => {
     expect(parseDisplaysPayload(iphone)).toEqual({
       activeScreen: 1,
       panels: [{ screenId: 1, width: 1206, height: 2622 }],
-      orientation: "unknown",
     });
     // `active` alone, for a payload whose backlight states are not known.
     const noBacklight = {

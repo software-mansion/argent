@@ -168,7 +168,7 @@ export async function executeScreenshotDiffTool(
 ): Promise<ScreenshotDiffResult> {
   const outputDir = await resolveOutputDir(params, options);
 
-  const { baselinePath, currentPath } = await resolveInputPaths(
+  const { baselinePath, currentPath, warnings } = await resolveInputPaths(
     services,
     params,
     outputDir,
@@ -183,10 +183,14 @@ export async function executeScreenshotDiffTool(
     outputDir,
   });
 
+  // A live capture of a foldable whose panel could not be resolved is of the
+  // cover panel; the summary is the one channel this result has, so it says so
+  // there, once per distinct warning.
+  let summary = result.summary;
+  for (const warning of new Set(warnings)) summary = `${summary}\n- panel: ${warning}`;
   // On a foldable an aspect mismatch is usually a posture mismatch: the two
   // panels differ in size, and a baseline belongs to the posture that produced
   // it. Name the posture behind each size; every other device is unchanged.
-  let summary = result.summary;
   if (result.dimensionMismatch) {
     const posture = await foldablePostureHint(
       params.udid,
@@ -261,12 +265,15 @@ async function resolveInputPaths(
   options: Partial<ToolContext> | undefined,
   captureScreenshot: CaptureScreenshot,
   peekFor?: (device: DeviceInfo) => RotationPeek
-): Promise<{ baselinePath: string; currentPath: string }> {
+): Promise<{ baselinePath: string; currentPath: string; warnings: string[] }> {
   validateInputSources(params);
 
+  // What the live captures had to say: on a foldable whose panel could not be
+  // resolved, that the capture is of the cover panel.
+  const warnings: string[] = [];
   // Physical iPhones capture through the on-device XCUITest runner. Simulators
   // and Android capture through the simulator-server.
-  const captureLive = (name: "baseline" | "current"): Promise<string> => {
+  const captureLive = async (name: "baseline" | "current"): Promise<string> => {
     const device = resolveDevice(params.udid);
     if (isIosPhysicalDevice(device)) {
       return captureIosDeviceLiveInput({
@@ -275,7 +282,7 @@ async function resolveInputPaths(
         name,
       });
     }
-    return captureLiveInput({
+    const captured = await captureLiveInput({
       api: requireSimulatorServer(services),
       device,
       peekFor,
@@ -285,6 +292,8 @@ async function resolveInputPaths(
       signal: options?.signal,
       captureScreenshot,
     });
+    if (captured.warning !== undefined) warnings.push(captured.warning);
+    return captured.path;
   };
 
   const baselinePath = params.captureBaseline
@@ -292,7 +301,7 @@ async function resolveInputPaths(
     : params.baselinePath!;
   const currentPath = params.captureCurrent ? await captureLive("current") : params.currentPath!;
 
-  return { baselinePath, currentPath };
+  return { baselinePath, currentPath, warnings };
 }
 
 function validateInputSources(params: Params): void {
@@ -392,7 +401,7 @@ async function captureLiveInput(params: {
   rotation?: Params["rotation"];
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
-}): Promise<string> {
+}): Promise<{ path: string; warning?: string }> {
   // Full-res gives the best diff fidelity, but some Android emulators reject a
   // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
   // baselinePath + captureCurrent flow there. The server's default scale captures
@@ -430,5 +439,8 @@ async function captureLiveInput(params: {
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
   await fs.mkdir(params.outputDir, { recursive: true });
   await fs.copyFile(capture.path, destination);
-  return destination;
+  return {
+    path: destination,
+    ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
+  };
 }

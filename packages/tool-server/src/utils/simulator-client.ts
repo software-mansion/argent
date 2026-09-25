@@ -315,8 +315,8 @@ export async function sendCommand(
 
 /**
  * What `sendCommand` reports back besides delivery: on a foldable, a warning
- * when the panel the command should name could not be resolved and it went
- * to the main screen. Empty for every other device and command.
+ * when the panel a touch should name could not be resolved and it went to
+ * the main screen. Empty for every other device and command.
  */
 export interface SendCommandOutcome {
   warning?: string;
@@ -329,12 +329,14 @@ export interface SendCommandOutcome {
 const gestureScreens = new WeakMap<SimulatorServerApi, number>();
 
 /**
- * The screen a touch or wheel is for, on a foldable. The simulator-server
- * captures every panel and follows none: a command that names no screen goes
- * to screen 1, the cover panel, which is black once the device is open. So on
- * a foldable every touch and wheel names the panel the guest renders to,
- * resolved at that moment (`utils/foldable.ts`): the ax-service's answer,
- * else CoreDevice's, else the main screen with a warning the tool carries.
+ * The screen a touch is for, on a foldable. The simulator-server captures
+ * every panel and follows none: a command that names no screen goes to
+ * screen 1, the cover panel, which is black once the device is open. So on a
+ * foldable every touch names the panel the guest renders to, resolved at that
+ * moment (`utils/foldable.ts`): the accessibility service's answer, else
+ * CoreDevice's, else the main screen with a warning the tool carries. Touches
+ * are the only screen-taking command the tool-server sends; the preview page
+ * names the screen on its own touches and wheels.
  *
  * A gesture completes on the panel it started on: a fold made outside argent
  * in the middle of a swipe would otherwise send the swipe's tail to the other
@@ -351,28 +353,20 @@ async function withActiveScreen(
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
   if (!api.display?.foldable || cmd.screen !== undefined) return { cmd };
-  if (cmd.cmd !== "touch" && cmd.cmd !== "wheel") return { cmd };
+  if (cmd.cmd !== "touch") return { cmd };
   const udid = api.deviceId ?? "";
-  const latched = cmd.cmd === "touch" && cmd.type !== "Down" ? gestureScreens.get(api) : undefined;
-  let screen = latched;
+  let screen = cmd.type !== "Down" ? gestureScreens.get(api) : undefined;
   let warning: string | undefined;
   if (screen === undefined) {
     const panel = await resolveLivePanel(udid);
     screen = panel.screen;
     if (panel.source === "unknown") {
-      warning = unresolvedPanelNote(
-        udid,
-        panel.reason,
-        `this ${cmd.cmd === "wheel" ? "wheel" : "touch"} went to`,
-        api.display.panels
-      );
+      warning = unresolvedPanelNote(udid, panel.reason, "this touch went to", api.display.panels);
       process.stderr.write(`[sim ${udid.slice(0, 8)}] ${warning}\n`);
     }
   }
-  if (cmd.cmd === "touch") {
-    if (cmd.type === "Up") gestureScreens.delete(api);
-    else gestureScreens.set(api, screen);
-  }
+  if (cmd.type === "Up") gestureScreens.delete(api);
+  else gestureScreens.set(api, screen);
   return { cmd: { ...cmd, screen }, ...(warning !== undefined ? { warning } : {}) };
 }
 
@@ -514,26 +508,25 @@ export async function postHinge(
 
 /**
  * The panel a capture of a foldable is of, resolved now, and the note the
- * result carries about it — which panel it is, or why it is the main screen.
- * Undefined for any device that is not foldable, so their results are
- * unchanged. The caller hands `screen` to {@link httpScreenshot}, so the
- * capture asks nothing again.
+ * result carries about it — which panel it is, or why it is the main screen;
+ * `warning` is that note again when nothing resolved the panel, for the
+ * callers whose result carries only warnings. Undefined for any device that
+ * is not foldable, so their results are unchanged. The caller hands `screen`
+ * to {@link httpScreenshot}, so the capture asks nothing again.
  */
 export async function resolveCapturePanel(
   api: SimulatorServerApi
-): Promise<{ screen: number; note: string } | undefined> {
+): Promise<{ screen: number; note: string; warning?: string } | undefined> {
   if (!api.display?.foldable || !api.deviceId) return undefined;
   const panel = await resolveLivePanel(api.deviceId);
   if (panel.source === "unknown") {
-    return {
-      screen: panel.screen,
-      note: unresolvedPanelNote(
-        api.deviceId,
-        panel.reason,
-        "this capture is of",
-        api.display.panels
-      ),
-    };
+    const note = unresolvedPanelNote(
+      api.deviceId,
+      panel.reason,
+      "this capture is of",
+      api.display.panels
+    );
+    return { screen: panel.screen, note, warning: note };
   }
   return {
     screen: panel.screen,
