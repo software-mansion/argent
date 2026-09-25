@@ -126,7 +126,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP — keyboard otherwise)   [ios sim/android emu]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
-  fold:           { posture?: "closed"|"half-open"|"open", angle?: 0-180, from?: number|posture }  (one of posture/angle; re-describe after, the panel and its coordinate space change)  [foldable ios sim]
+  fold:           { posture?: "closed"|"half-open"|"open", angle?: 0-180, from?: number|posture }  (one of posture/angle; returns once the new panel takes input, so the next step lands; re-describe after, the panel and its coordinate space change)  [foldable ios sim]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
                   buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute — work on Android TV and Vega; rejected on the Apple TV simulator)
   await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium]

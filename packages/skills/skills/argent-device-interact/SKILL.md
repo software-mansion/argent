@@ -207,9 +207,9 @@ On an unfolded foldable simulator the value is the device's orientation, not the
 { "udid": "<UDID>", "posture": "open" }
 ```
 
-`posture`: `closed`, `half-open` or `open` — or `angle`: 0–180 (one of the two). Optional `from` (an angle or a posture) says where the hinge is now when something other than argent moved it; the path decides which panel the device ends on.
+`posture`: `closed`, `half-open` or `open` — or `angle`: 0–180 (one of the two). The sweep starts on the panel the device renders to, read fresh, so a fold made outside argent (Device Hub) needs nothing extra; the optional `from` (an angle or a posture) names the exact angle the hinge was left at.
 
-Only a foldable iOS simulator (`list-devices` shows `foldable: true`, e.g. the iPhone Duo); any other device is rejected with a clear error. Argent picks the panel: closed, the device renders to the cover panel (screen 1); half-open and open, to the inner panel (screen 3). Every screenshot, describe, touch, stream and recording names that panel, so the tools follow the fold. The tool waits for the hand-over and returns `{ activeScreen, screen: { id, panel, width, height }, posture, hingeAngle }`.
+Only a foldable iOS simulator (`list-devices` shows `foldable: true`, e.g. the iPhone Duo); any other device is rejected with a clear error. Argent picks the panel: closed, the device renders to the cover panel (screen 1); half-open and open, to the inner panel (screen 3). Every screenshot, describe, touch, stream and recording names that panel, so the tools follow the fold. The tool waits for the hand-over and for the device to take input again (about 0.5 s after the sweep for `closed` and `open`, about 1.5 s for any other angle, `half-open` included), then returns `{ activeScreen, screen: { id, panel, width, height }, posture, hingeAngle }`: the next tap lands, also as the next `run-sequence` step. It fails when the device has not switched to the expected panel 6 s after the sweep.
 
 Rules:
 

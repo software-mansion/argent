@@ -48,9 +48,10 @@ export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
-- raw native point-space frame and tapPoint
-- normalizedFrame and normalizedTapPoint relative to the app's main screen bounds
-- top-level screenFrame metadata
+- raw point-space frame and tapPoint, in the screen's portrait-native space
+- normalizedFrame and normalizedTapPoint relative to that space (the same space
+  gesture-tap takes, whatever the interface orientation)
+- top-level screenFrame metadata: the screen's portrait-native bounds
 - traits and optional labels/identifiers
 
 This is a low-level native inspection tool. The normalized fields are intended to help

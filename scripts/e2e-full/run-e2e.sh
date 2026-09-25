@@ -206,6 +206,15 @@ if [ "$_selected" -eq 0 ]; then
 fi
 unset _p _selected
 
+# The iOS simulators of the default device set live under
+# ~/Library/Developer/CoreSimulator, which simctl resolves via $HOME as well, so
+# under the sandbox HOME the ios-duo tier would list none. Only that tier needs
+# them, and it names its device, so only it gets the real set.
+if [ "$E2E_OS" = darwin ] && selected ios-duo && [ -d "$HOME_REAL/Library/Developer/CoreSimulator" ]; then
+  mkdir -p "$E2E_HOME/Library/Developer"
+  ln -s "$HOME_REAL/Library/Developer/CoreSimulator" "$E2E_HOME/Library/Developer/CoreSimulator"
+fi
+
 if [ "$SKIP_INSTALL" -eq 1 ]; then
   export ARGENT_BIN="node $E2E_UNPACKED/dist/cli.js"
   read -ra ARGENT_CMD <<< "$ARGENT_BIN"

@@ -32,10 +32,11 @@ vi.mock("../src/utils/ios-devices", async () => {
 import {
   __resetFoldableStateForTests,
   activeScreenOrMain,
-  awaitActiveScreenSettled,
+  awaitActiveScreen,
   crossCheckDescribedScreen,
   foldablePostureHint,
   getCachedActiveScreen,
+  panelForHingeAngle,
   parseDisplaysPayload,
   queryActiveScreen,
   refreshActiveScreen,
@@ -181,27 +182,57 @@ describe("the active-screen memo", () => {
   });
 });
 
-describe("awaitActiveScreenSettled", () => {
+describe("awaitActiveScreen", () => {
   const sleep = vi.fn(async () => {});
 
-  it("polls until the panel differs from where the fold started", async () => {
+  it("polls until a read satisfies the predicate, memoizing every read", async () => {
     mockDevicectl([duoPayload(1), duoPayload(1), duoPayload(3)]);
-    const state = await awaitActiveScreenSettled(DUO, 1, { pollMs: 1, timeoutMs: 1000, sleep });
+    const state = await awaitActiveScreen(DUO, (s) => s.activeScreen === 3, {
+      pollMs: 1,
+      timeoutMs: 1000,
+      sleep,
+    });
     expect(state?.activeScreen).toBe(3);
     expect(execFileMock.mock.calls.filter(([c, a]) => isDevicectl(c, a)).length).toBe(3);
     expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(3);
   });
 
-  it("answers with the last state read when the panel never changes", async () => {
-    // Open to open: the panel legitimately stays; the timeout is an answer.
-    mockDevicectl([duoPayload(3)]);
-    const state = await awaitActiveScreenSettled(DUO, 3, { pollMs: 1, timeoutMs: 5, sleep });
-    expect(state?.activeScreen).toBe(3);
+  it("answers with the last state read when the predicate never holds", async () => {
+    mockDevicectl([duoPayload(1)]);
+    const state = await awaitActiveScreen(DUO, (s) => s.activeScreen === 3, {
+      pollMs: 1,
+      timeoutMs: 5,
+      sleep,
+    });
+    // The caller tells a settled read from the last one by applying the predicate again.
+    expect(state?.activeScreen).toBe(1);
+    expect(getCachedActiveScreen(DUO)?.activeScreen).toBe(1);
   });
 
   it("is null only when every read failed", async () => {
     mockDevicectl([new Error("no")]);
-    expect(await awaitActiveScreenSettled(DUO, 1, { pollMs: 1, timeoutMs: 5, sleep })).toBeNull();
+    expect(await awaitActiveScreen(DUO, () => true, { pollMs: 1, timeoutMs: 5, sleep })).toBeNull();
+  });
+});
+
+describe("panelForHingeAngle", () => {
+  const panels = [
+    { screenId: 1, width: 1398, height: 2034 },
+    { screenId: 3, width: 2007, height: 2853 },
+  ];
+
+  it("names the cover panel up to 75°, the inner panel from 90°, and nothing in between", () => {
+    expect(panelForHingeAngle(0, panels)).toBe(1);
+    expect(panelForHingeAngle(75, panels)).toBe(1);
+    expect(panelForHingeAngle(80, panels)).toBeUndefined();
+    expect(panelForHingeAngle(90, panels)).toBe(3);
+    expect(panelForHingeAngle(120, panels)).toBe(3);
+    expect(panelForHingeAngle(180, panels)).toBe(3);
+  });
+
+  it("has no inner panel to name without a panel list", () => {
+    expect(panelForHingeAngle(180, [])).toBeUndefined();
+    expect(panelForHingeAngle(0, [])).toBe(1);
   });
 });
 

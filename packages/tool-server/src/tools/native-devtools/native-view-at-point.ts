@@ -15,12 +15,12 @@ const zodSchema = z.object({
   x: z
     .number()
     .describe(
-      "Raw X coordinate in the app window's native point space. NOT normalized [0,1] tap space."
+      "Raw X coordinate in points, in the screen's portrait-native space (the space native-describe-screen frames are in). NOT normalized [0,1] tap space."
     ),
   y: z
     .number()
     .describe(
-      "Raw Y coordinate in the app window's native point space. NOT normalized [0,1] tap space."
+      "Raw Y coordinate in points, in the screen's portrait-native space (the space native-describe-screen frames are in). NOT normalized [0,1] tap space."
     ),
   includeAncestors: z
     .boolean()
@@ -35,7 +35,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "View fields to include. Defaults: pointer, className, tag, frame, " +
-        "windowFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
+        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
         "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
         "Additional: center, transform, contentMode, backgroundColor, tintColor"
     ),
@@ -80,8 +80,9 @@ Returns { status: "ok", view }: the matched view with its class name, frames,
 identifier, label and layer name, its ancestor chain by default, and its subviews on
 request. view is null when nothing is drawn at that point.
 
-IMPORTANT: x and y are raw iOS window coordinates in points, NOT normalized [0,1]
-simulator tap coordinates.
+IMPORTANT: x and y are raw points in the screen's portrait-native space — a
+normalized describe frame times the screen's point size, whatever the interface
+orientation — NOT normalized [0,1] simulator tap coordinates.
 
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised — follow the message (re-boot the simulator) rather than retrying this tool.
 A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal — never retry it), and the point query itself can error or time out.`,

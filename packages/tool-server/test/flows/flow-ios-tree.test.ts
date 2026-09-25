@@ -34,6 +34,23 @@ const DEVICE = {
   kind: "simulator",
 } as DeviceInfo;
 
+/** A connected, frontmost app whose hierarchy read answers `raw`. */
+function apiServing(raw: unknown): NativeDevtoolsApi {
+  return {
+    listConnectedBundleIds: () => ["com.example.app"],
+    getAppState: vi.fn(async (bundleId: string) => ({
+      bundleId,
+      applicationState: "active",
+      foregroundActiveSceneCount: 1,
+      foregroundInactiveSceneCount: 0,
+      backgroundSceneCount: 0,
+      unattachedSceneCount: 0,
+      isFrontmostCandidate: true,
+    })),
+    queryViewHierarchy: vi.fn(async () => raw),
+  } as unknown as NativeDevtoolsApi;
+}
+
 function registryFor(api: Partial<NativeDevtoolsApi>): Registry {
   return {
     resolveService: vi.fn(async () => api),
@@ -87,6 +104,79 @@ describe("flow iOS full-hierarchy source", () => {
       "ViewHierarchy.getFullHierarchy",
       expect.objectContaining({ maxDepth: 100 })
     );
+  });
+
+  // An unfolded foldable, or a rotated iPhone: the UI is landscape (951x669 pt
+  // window) on a portrait-native screen (669x951 pt), and touches are taken in
+  // the native space. The framework reports each view in that space as
+  // `screenFrame`, next to the screen's native size.
+  it("normalizes screenFrame by the reported native screen size, not the landscape window", async () => {
+    const raw = {
+      screen: { width: 669, height: 951 },
+      windows: [
+        {
+          className: "UIWindow",
+          frame: { x: 0, y: 0, width: 951, height: 669 },
+          windowFrame: { x: 0, y: 0, width: 951, height: 669 },
+          screenFrame: { x: 0, y: 0, width: 669, height: 951 },
+          children: [
+            {
+              className: "PadView",
+              identifier: "probe.pad",
+              // Window space: right of centre, mid-height. Native space: the
+              // same view rotated onto the portrait framebuffer.
+              frame: { x: 500, y: 200, width: 300, height: 200 },
+              windowFrame: { x: 500, y: 200, width: 300, height: 200 },
+              screenFrame: { x: 269, y: 500, width: 200, height: 300 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const { tree, screen } = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+    expect(screen).toEqual({ width: 669, height: 951 });
+    const frame = selectorToFrame(tree, { identifier: "probe.pad" })!;
+    expect(frame.x).toBeCloseTo(269 / 669, 6);
+    expect(frame.y).toBeCloseTo(500 / 951, 6);
+    expect(frame.width).toBeCloseTo(200 / 669, 6);
+    expect(frame.height).toBeCloseTo(300 / 951, 6);
+  });
+
+  it("falls back to windowFrame and the largest window for a framework that predates screenFrame", async () => {
+    const raw = {
+      windows: [
+        {
+          className: "UIWindow",
+          frame: { x: 0, y: 0, width: 400, height: 800 },
+          windowFrame: { x: 0, y: 0, width: 400, height: 800 },
+          children: [
+            {
+              className: "UIButton",
+              identifier: "buy",
+              frame: { x: 100, y: 400, width: 200, height: 40 },
+              windowFrame: { x: 100, y: 400, width: 200, height: 40 },
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const { tree, screen } = await queryFullHierarchyTree(registryFor(apiServing(raw)), DEVICE);
+    expect(screen).toEqual({ width: 400, height: 800 });
+    expect(selectorToFrame(tree, { identifier: "buy" })).toEqual({
+      x: 0.25,
+      y: 0.5,
+      width: 0.5,
+      height: 0.05,
+    });
+  });
+
+  it("asks the framework for screenFrame next to windowFrame", async () => {
+    const api = apiServing({ screen: { width: 400, height: 800 }, windows: [] });
+    await queryFullHierarchyTree(registryFor(api), DEVICE).catch(() => undefined);
+    const params = vi.mocked(api.queryViewHierarchy).mock.calls[0]![2] as { fields: string[] };
+    expect(params.fields).toEqual(expect.arrayContaining(["screenFrame", "windowFrame"]));
   });
 
   it("adapts and resolves a view buried deeper than the old 40-level cap", async () => {

@@ -81,7 +81,7 @@ alone.
 
 ```
 --tgz PATH             tarball to test (default: newest swmansion-argent-*.tgz at repo root)
---phase a,b,c          subset of: install introspection validation android chromium rn device-provider
+--phase a,b,c          subset of: install introspection validation android chromium rn device-provider ios-duo (opt-in)
 --skip-install         drive the unpacked bundle directly (offline phases only; skips `install`)
 --system               install to the REAL global prefix (dedicated release machine only)
 --android-serial S     use an already-booted Android device

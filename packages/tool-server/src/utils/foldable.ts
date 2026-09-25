@@ -18,9 +18,9 @@ const execFileAsync = promisify(execFile);
  *
  * This module is that query plus a per-device memo of its last answer. The memo
  * is refreshed at the points where the answer can have changed — when a
- * simulator-server is spawned for the device, after argent's own `fold`, and
- * when a `describe` reports a panel the memo disagrees with — and read by every
- * touch and wheel in between. Callers that capture without a preceding describe
+ * simulator-server is spawned for the device, before and after argent's own
+ * `fold`, and when a `describe` reports a panel the memo disagrees with — and
+ * read by every touch and wheel in between. Callers that capture without a preceding describe
  * (`screenshot`, a live `screenshot-diff`, `screen-recording-start`) refresh it
  * themselves. Nothing here looks at pixels, and nothing subscribes: argent is
  * the controller, so the only unknown after a fold is which panel ended up
@@ -55,10 +55,37 @@ const DEVICECTL_TIMEOUT_MS = 5_000;
 
 /**
  * The hand-over lands 0.5-1.1 s after a hinge sweep, longer when the guest is
- * busy. The wait after a fold polls the one-shot until the answer changes.
+ * busy. After a fold the one-shot is polled until it reports the panel the
+ * target angle implies: `HAND_OVER_TIMEOUT_MS` bounds that wait, and
+ * `SETTLE_TIMEOUT_MS` the wait for an angle near the hand-over, where the
+ * panel may legitimately stay.
  */
+export const HAND_OVER_TIMEOUT_MS = 6_000;
 export const SETTLE_TIMEOUT_MS = 3_000;
 export const SETTLE_POLL_MS = 200;
+
+/**
+ * How long the guest takes to accept input again after a hinge sweep, counted
+ * from the CoreDevice read that follows it (itself ~170 ms after the sweep).
+ * Measured on the iPhone Duo (iOS 27.1) with taps fired every ~150 ms: a sweep
+ * that ends at a stop — closed (0°) or open (180°) — takes input within
+ * ~250 ms of the read, with or without a hand-over, while one that ends at any
+ * other angle (half-open included, and 30° on the cover panel) drops every tap
+ * for 0.4-0.8 s more, up to ~1.2 s after the sweep, again whether or not the
+ * panel changed. The fold tool holds the matching time before it answers, so
+ * the next command lands; the values carry margin over what was measured.
+ */
+export const INPUT_READY_HOLD_MS = 500;
+export const INPUT_READY_HOLD_MID_ANGLE_MS = 1_500;
+
+/**
+ * Where the guest hands over between the panels, in hinge degrees. Measured on
+ * the iPhone Duo (iOS 27.1) in both directions: at 75° and below the device
+ * renders to the cover panel, at 90° and above to the inner one, with no
+ * hysteresis. In between, the panel is not predicted.
+ */
+export const COVER_MAX_ANGLE = 75;
+export const INNER_MIN_ANGLE = 90;
 
 /**
  * CoreDevice's own binary. `xcrun devicectl` resolves to the same file for the
@@ -208,16 +235,35 @@ export async function ensureActiveScreen(udid: string): Promise<ActiveScreenStat
   return cache.get(udid) ?? refreshActiveScreen(udid);
 }
 
+/** The screen id of a foldable's inner panel: the one panel that is not the main screen. */
+export function innerScreenId(panels: readonly FoldablePanel[]): number | undefined {
+  return panels.find((p) => p.screenId !== MAIN_SCREEN_ID)?.screenId;
+}
+
 /**
- * After a fold: poll the one-shot until the active panel differs from
- * `previous`, or the budget runs out. A fold that leaves the panel where it was
- * (open to open, or a small angle change) legitimately never changes it, so the
- * timeout is an answer too, not a failure: the last state read is returned.
- * Null only when every read failed.
+ * The panel a foldable renders to with its hinge at `angle`: the main screen
+ * up to {@link COVER_MAX_ANGLE}, the inner panel from {@link INNER_MIN_ANGLE},
+ * and undefined in between (or when the panel list names no inner panel).
  */
-export async function awaitActiveScreenSettled(
+export function panelForHingeAngle(
+  angle: number,
+  panels: readonly FoldablePanel[]
+): number | undefined {
+  if (angle <= COVER_MAX_ANGLE) return MAIN_SCREEN_ID;
+  if (angle >= INNER_MIN_ANGLE) return innerScreenId(panels);
+  return undefined;
+}
+
+/**
+ * After a fold: poll the one-shot until a read satisfies `done`, or the budget
+ * runs out. Resolves with the first read that does, else with the last read
+ * made — the caller tells the two apart by applying `done` again — and null
+ * only when every read failed. Every successful read refreshes the memo, so
+ * the state the tools act on is the one last seen, settled or not.
+ */
+export async function awaitActiveScreen(
   udid: string,
-  previous: number | undefined,
+  done: (state: ActiveScreenState) => boolean,
   opts: { timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void> } = {}
 ): Promise<ActiveScreenState | null> {
   const timeoutMs = opts.timeoutMs ?? SETTLE_TIMEOUT_MS;
@@ -229,7 +275,7 @@ export async function awaitActiveScreenSettled(
     const state = await refreshActiveScreen(udid);
     if (state) {
       last = state;
-      if (previous === undefined || state.activeScreen !== previous) return state;
+      if (done(state)) return state;
     }
     if (Date.now() + pollMs > deadline) return last;
     await sleep(pollMs);

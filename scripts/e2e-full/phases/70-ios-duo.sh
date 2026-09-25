@@ -6,6 +6,8 @@
 # that landed on the wrong panel is a failure here, not a silent success. The
 # device is injected already booted (E2E_IOS_DUO_UDID); with it unset the tier
 # records one skip. DuoProbe (com.swmansion.duoprobe) must be installed on it.
+# E2E_DUO_HINGE, optional, names a helper that moves the hinge behind argent's
+# back (`<helper> <udid> hinge <angle> [from]`), for the out-of-band case.
 #
 # Needs an Xcode with the iPhone Duo device type (27.1 or later) selected.
 
@@ -15,32 +17,49 @@ _duo_present() { # udid
 }
 
 # The probe's `probe.touch` label carries the normalized point the app
-# received as `n=<x>,<y>`; a tap at the pad centre from `describe` must land
-# within 0.02 of it on whichever panel is live.
+# received as `n=<x>,<y>`, in the app's WINDOW space; argent sends the panel's
+# native (portrait) space. Unfolded, the UI is landscape on a portrait-native
+# panel, so the two differ by a rotation: the probe's `probe.info` label names
+# the interface orientation (`orient=`; 1 portrait, 3 landscapeLeft,
+# 4 landscapeRight). A tap at the pad centre from `describe` must land within
+# 0.02 of its image on whichever panel is live.
 _probe_touch_close_to() { # udid expected-x expected-y
   local udid="$1" ex="$2" ey="$3"
   run_tool describe "{\"udid\":\"$udid\"}" || return 1
-  local n
-  n="$(printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'n=[0-9.]*,[0-9.]*' | head -1)"
+  local n orient
+  n="$(printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'last=([^)]*n=[0-9.]*,[0-9.]*' | grep -o 'n=[0-9.]*,[0-9.]*' | head -1)"
+  orient="$(printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'orient=[0-9]' | head -1 | cut -d= -f2)"
   [ -n "$n" ] || return 1
-  python3 - "$n" "$ex" "$ey" <<'PY'
+  python3 - "$n" "$ex" "$ey" "${orient:-1}" <<'PY'
 import sys
-n = sys.argv[1][2:].split(",")
-dx = abs(float(n[0]) - float(sys.argv[2])); dy = abs(float(n[1]) - float(sys.argv[3]))
-sys.exit(0 if dx < 0.02 and dy < 0.02 else 1)
+n = [float(v) for v in sys.argv[1][2:].split(",")]
+x, y, orient = float(sys.argv[2]), float(sys.argv[3]), int(sys.argv[4])
+# Native (portrait) point -> window point, per interface orientation.
+expected = {4: (1 - y, x), 3: (y, 1 - x)}.get(orient, (x, y))
+sys.exit(0 if abs(n[0] - expected[0]) < 0.02 and abs(n[1] - expected[1]) < 0.02 else 1)
 PY
 }
 
+# The probe counts the taps its pad recognized (`taps=<n>` on `probe.gesture`).
+_probe_taps() { # udid
+  run_tool describe "{\"udid\":\"$1\"}" || { printf '%s' "-1"; return; }
+  printf '%s' "$RT_JSON" | jq -r '.description' | grep -o 'taps=[0-9]*' | head -1 | cut -d= -f2
+}
+
+# The centre of `probe.pad` as `describe` frames it, as "<x> <y>"; empty when absent.
+_pad_centre() { # udid
+  run_tool describe "{\"udid\":\"$1\"}" || return 1
+  printf '%s' "$RT_JSON" | jq -r '.description' | grep 'probe.pad' | head -1 | python3 -c 'import re,sys; m=re.search(r"\(([0-9.]+), ?([0-9.]+), ?([0-9.]+), ?([0-9.]+)\)", sys.stdin.read()); print(round(float(m.group(1))+float(m.group(3))/2, 3), round(float(m.group(2))+float(m.group(4))/2, 3)) if m else print("")'
+}
+
 # Tap the centre of `probe.pad` as `describe` frames it, then check the probe
-# received the same normalized point. One case per posture.
+# received that point. One case per posture.
 _tap_pad_case() { # udid case
-  local udid="$1" case="$2" frame cx cy
-  run_tool describe "{\"udid\":\"$udid\"}"
-  frame="$(printf '%s' "$RT_JSON" | jq -r '.description' | grep 'probe.pad' | head -1)"
-  cx="$(printf '%s' "$frame" | python3 -c 'import re,sys; m=re.search(r"\(([0-9.]+), ?([0-9.]+), ?([0-9.]+), ?([0-9.]+)\)", sys.stdin.read()); print(round(float(m.group(1))+float(m.group(3))/2, 3) if m else "")')"
-  cy="$(printf '%s' "$frame" | python3 -c 'import re,sys; m=re.search(r"\(([0-9.]+), ?([0-9.]+), ?([0-9.]+), ?([0-9.]+)\)", sys.stdin.read()); print(round(float(m.group(2))+float(m.group(4))/2, 3) if m else "")')"
+  local udid="$1" case="$2" centre cx cy
+  centre="$(_pad_centre "$udid")"
+  cx="${centre%% *}"; cy="${centre##* }"
   if [ -z "$cx" ] || [ -z "$cy" ]; then
-    fail "$P" describe "$case-pad-frame" "probe.pad not in describe: $(printf '%s' "$frame" | cut -c1-120)"; return 1
+    fail "$P" describe "$case-pad-frame" "probe.pad not in describe: $(rt_detail 120)"; return 1
   fi
   run_tool gesture-tap "{\"udid\":\"$udid\",\"x\":$cx,\"y\":$cy}"
   if [ "$RT_RC" -ne 0 ]; then fail "$P" gesture-tap "$case" "$(rt_detail 160)"; return 1; fi
@@ -124,10 +143,57 @@ run_phase() {
     fail "$P" screen-recording-start start "$(rt_detail 160)"
   fi
 
-  # Fold inside a sequence, then a tap on the new panel in the same call.
-  assert_field "$P" run-sequence fold-then-tap \
-    "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"fold\",\"args\":{\"posture\":\"closed\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":0.5,\"y\":0.5}}]}" \
-    '.completed' '2'
+  # Fold inside a sequence, then a tap on the new panel in the same call, with
+  # the default inter-step delay. The sequence completing proves nothing: a tap
+  # sent before the guest takes input on the new panel is acknowledged and
+  # dropped. The probe's tap counter is what has to move — in both directions.
+  local taps_before taps_after centre
+  centre="$(_pad_centre "$DEV")"  # half-open: the inner panel's pad
+  taps_before="$(_probe_taps "$DEV")"
+  run_tool run-sequence "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"fold\",\"args\":{\"posture\":\"closed\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":0.41,\"y\":0.53}}]}"
+  if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.completed==2' >/dev/null 2>&1; then
+    fail "$P" run-sequence fold-closed-then-tap "$(rt_detail 200)"
+  else
+    sleep 1
+    taps_after="$(_probe_taps "$DEV")"
+    if [ "$taps_after" -gt "$taps_before" ] 2>/dev/null; then
+      pass "$P" run-sequence fold-closed-then-tap "taps $taps_before -> $taps_after"
+    else
+      fail "$P" run-sequence fold-closed-then-tap "the tap after the fold was dropped (taps $taps_before -> $taps_after)"
+    fi
+  fi
+  taps_before="$(_probe_taps "$DEV")"
+  run_tool run-sequence "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"fold\",\"args\":{\"posture\":\"open\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":${centre%% *},\"y\":${centre##* }}}]}"
+  if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.completed==2' >/dev/null 2>&1; then
+    fail "$P" run-sequence fold-open-then-tap "$(rt_detail 200)"
+  else
+    sleep 1
+    taps_after="$(_probe_taps "$DEV")"
+    if [ "$taps_after" -gt "$taps_before" ] 2>/dev/null; then
+      pass "$P" run-sequence fold-open-then-tap "taps $taps_before -> $taps_after"
+    else
+      fail "$P" run-sequence fold-open-then-tap "the tap after the fold was dropped (taps $taps_before -> $taps_after)"
+    fi
+  fi
+
+  # A fold made outside argent leaves the hinge where the server did not put
+  # it. The next fold must still end on the right panel, with no `from`, and the
+  # tap after it must land. The helper moves the hinge the way Device Hub does.
+  local HINGE="${E2E_DUO_HINGE:-}"
+  if [ -n "$HINGE" ] && [ -x "$HINGE" ]; then
+    "$HINGE" "$DEV" hinge 0 180 >/dev/null 2>&1; sleep 2   # closed, behind argent's back
+    taps_before="$(_probe_taps "$DEV")"
+    run_tool run-sequence "{\"udid\":\"$DEV\",\"steps\":[{\"tool\":\"fold\",\"args\":{\"posture\":\"closed\"}},{\"tool\":\"gesture-tap\",\"args\":{\"x\":0.41,\"y\":0.53}}]}"
+    sleep 1
+    taps_after="$(_probe_taps "$DEV")"
+    if [ "$RT_RC" -eq 0 ] && printf '%s' "$RT_JSON" | jq -e '.steps[0].result.activeScreen==1' >/dev/null 2>&1 && [ "$taps_after" -gt "$taps_before" ] 2>/dev/null; then
+      pass "$P" fold after-external-fold "closed -> screen 1, taps $taps_before -> $taps_after"
+    else
+      fail "$P" fold after-external-fold "$(rt_detail 200) taps $taps_before -> $taps_after"
+    fi
+  else
+    skip "$P" fold after-external-fold "set E2E_DUO_HINGE to a hinge helper (duo-hinge) to fold behind argent's back"
+  fi
 
   # Back where the tier started, and the app survived every fold.
   assert_field "$P" fold closed-again "{\"udid\":\"$DEV\",\"posture\":\"closed\"}" '.activeScreen' '1'
