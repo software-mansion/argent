@@ -56,8 +56,18 @@ export function detectGlobalPackageManager(
     return platform === "win32" ? slashed.toLowerCase() : slashed;
   };
   const root = normalize(packageRoot);
-  const pnpmHome = env.PNPM_HOME ? normalize(env.PNPM_HOME) : "";
-  if (pnpmHome && (root === pnpmHome || root.startsWith(`${pnpmHome}/`))) return "pnpm";
+  // Global dirs moved by an environment variable. Settings kept in
+  // bunfig.toml or .yarnrc files are not read.
+  const configuredDirs: Array<readonly [PackageManager, string | undefined]> = [
+    ["pnpm", env.PNPM_HOME],
+    ["bun", env.BUN_INSTALL_GLOBAL_DIR],
+    ["bun", env.BUN_INSTALL && `${env.BUN_INSTALL}/install/global`],
+  ];
+  for (const [pm, dir] of configuredDirs) {
+    if (!dir) continue;
+    const home = normalize(dir);
+    if (root === home || root.startsWith(`${home}/`)) return pm;
+  }
   const rootWithSlash = `${root}/`;
   for (const [pm, marker] of GLOBAL_ROOT_MARKERS) {
     if (rootWithSlash.includes(marker)) return pm;

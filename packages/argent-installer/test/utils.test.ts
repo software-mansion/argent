@@ -1050,6 +1050,38 @@ describe("detectGlobalPackageManager", () => {
     expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "linux")).toBe("bun");
   });
 
+  it("returns bun for a root inside BUN_INSTALL_GLOBAL_DIR", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/opt/argent-bun/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(
+        root,
+        { BUN_INSTALL_GLOBAL_DIR: "/opt/argent-bun" } as NodeJS.ProcessEnv,
+        "linux"
+      )
+    ).toBe("bun");
+  });
+
+  it("returns bun for a root under a moved BUN_INSTALL", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/opt/bun/install/global/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(root, { BUN_INSTALL: "/opt/bun" } as NodeJS.ProcessEnv, "linux")
+    ).toBe("bun");
+  });
+
+  it("does not match BUN_INSTALL_GLOBAL_DIR as a bare string prefix", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "/opt/argent-bun-2/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(
+        root,
+        { BUN_INSTALL_GLOBAL_DIR: "/opt/argent-bun" } as NodeJS.ProcessEnv,
+        "linux"
+      )
+    ).toBe("npm");
+  });
+
   it("matches PNPM_HOME without case sensitivity on Windows", () => {
     delete process.env.npm_config_user_agent;
     const root = "C:\\Tools\\ArgentPnpm\\global\\v11\\abc\\node_modules\\@swmansion\\argent";
