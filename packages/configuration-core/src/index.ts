@@ -1,5 +1,6 @@
 export {
   FLAG_REGISTRY,
+  flagSupportsPlatform,
   getFlagDefinition,
   findProjectRoot,
   resolveProjectRoot,
