@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildWatermarkGraph, computeWatermarkBox } from "../src/tools/screen-recording/watermark";
+import {
+  buildWatermarkGraph,
+  computeWatermarkBox,
+  letterboxFilter,
+} from "../src/tools/screen-recording/watermark";
 
 describe("computeWatermarkBox", () => {
   it("sizes the box relative to frame width and pins it bottom-left", () => {
@@ -94,10 +98,15 @@ describe("buildWatermarkGraph", () => {
   it("evens an odd-resolution base before splitting so yuv420p can encode it", () => {
     // iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556 (odd width). Without
     // an even base the overlayed output stays 1179 wide and libx264 rejects it
-    // ("width not divisible by 2"), killing the whole recording. Crop the base
-    // to 1178 up front, and derive the box from that so the mask stays inside.
+    // ("width not divisible by 2"), killing the whole recording. The base is
+    // letterboxed into 1178x2556 before the split, and the box derived from
+    // that size so the mask stays inside.
     const odd = buildWatermarkGraph({ width: 1179, height: 2556 });
-    expect(odd.startsWith("[0:v]fps=30,crop=1178:2556:0:0,split=2[base][under]")).toBe(true);
+    expect(
+      odd.startsWith(
+        `[0:v]fps=30,${letterboxFilter({ width: 1178, height: 2556 })},format=yuv420p,split=2[base][under]`
+      )
+    ).toBe(true);
     const box = computeWatermarkBox({ width: 1178, height: 2556 });
     expect(box.x + box.w).toBeLessThanOrEqual(1178);
     // the mask crop reads from within the evened base
@@ -105,10 +114,42 @@ describe("buildWatermarkGraph", () => {
     expect(Number(maskCrop?.[3]) + Number(maskCrop?.[1])).toBeLessThanOrEqual(1178);
   });
 
-  it("leaves an already-even frame's graph unchanged (no redundant base crop)", () => {
-    const even = buildWatermarkGraph({ width: 1320, height: 2868 });
-    expect(even.startsWith("[0:v]fps=30,split=2[base][under]")).toBe(true);
-    // the only crop is the mask crop; there is no base even-crop of the frame
-    expect(even).not.toMatch(/crop=1320:2868/);
+  it("letterboxes the base into the first frame's size, whatever size later frames have", () => {
+    // A foldable's recording moves to the other panel's stream on a fold, and
+    // its frames arrive at that panel's size. Fitted into the first frame's
+    // size ahead of the split, they still meet a mask crop and an overlay that
+    // lie inside the frame. The explicit format keeps the scale from
+    // negotiating the mask branch's gray onto the whole recording.
+    const graph = buildWatermarkGraph({ width: 1398, height: 2034 });
+    expect(graph).toContain(
+      "[0:v]fps=30,crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
+        "scale=1398:2034:force_original_aspect_ratio=decrease," +
+        "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
+        "pad=1398:2034:(ow-iw)/2:(oh-ih)/2,format=yuv420p,split=2[base][under]"
+    );
+    const box = computeWatermarkBox({ width: 1398, height: 2034 });
+    expect(graph).toContain(`overlay=${box.x}:${box.y}`);
+  });
+});
+
+describe("letterboxFilter", () => {
+  it("fits into the evened canvas, keeping the aspect ratio, centred on bars", () => {
+    // Only options that ffmpeg 4.2 knows: the scale's `force_divisible_by`
+    // (4.3+) would fail every recording on it, so a crop evens the fit.
+    expect(letterboxFilter({ width: 2007, height: 2853 })).toBe(
+      "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
+        "scale=2006:2852:force_original_aspect_ratio=decrease," +
+        "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
+        "pad=2006:2852:(ow-iw)/2:(oh-ih)/2"
+    );
+  });
+
+  it("evens a frame before fitting it, so a frame of the canvas's size is never resampled", () => {
+    // Scaled first, a 1179x2556 frame would be resampled into 1178x2556 on
+    // every frame of those devices; cropped first, it loses the odd column
+    // and then fits the canvas exactly.
+    const filter = letterboxFilter({ width: 1179, height: 2556 });
+    expect(filter.indexOf("crop=")).toBe(0);
+    expect(filter.indexOf("crop=")).toBeLessThan(filter.indexOf("scale="));
   });
 });

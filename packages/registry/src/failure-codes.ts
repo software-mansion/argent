@@ -121,6 +121,11 @@ export const FAILURE_CODES = {
   IOS_SETTINGS_PERMISSION_FAILED: "IOS_SETTINGS_PERMISSION_FAILED",
   IOS_SHAKE_FAILED: "IOS_SHAKE_FAILED",
   ANDROID_SHAKE_FAILED: "ANDROID_SHAKE_FAILED",
+  // The hinge of a foldable iOS simulator: the server refused the request on a
+  // foldable (a bad angle, a hinge that would not move) vs. nothing to fold —
+  // a device that is not foldable, no hinge route, a remote simulator.
+  IOS_FOLD_FAILED: "IOS_FOLD_FAILED",
+  IOS_FOLD_UNSUPPORTED: "IOS_FOLD_UNSUPPORTED",
   PASTE_CLIPBOARD_SET_FAILED: "PASTE_CLIPBOARD_SET_FAILED",
   PASTE_CLIPBOARD_UNSUPPORTED: "PASTE_CLIPBOARD_UNSUPPORTED",
   SETTINGS_PERMISSION_UNSUPPORTED: "SETTINGS_PERMISSION_UNSUPPORTED",

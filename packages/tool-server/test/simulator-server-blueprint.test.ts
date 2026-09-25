@@ -45,8 +45,12 @@ vi.mock("@argent/native-devtools-ios", () => ({
 // The factory now probes the runtime kind to reject tvOS sims. Mock it to the
 // iOS path (false) so these spawn/stdio tests stay hermetic — no real `simctl`,
 // which would otherwise hang the fake-timer test waiting on a child process.
+const isFoldableSimulatorMock = vi.fn(async (_udid: string) => false);
 vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
+  // A foldable's factory probes the server for its panels; every case here is
+  // a plain device unless it flips this.
+  isFoldableSimulator: (udid: string) => isFoldableSimulatorMock(udid),
 }));
 
 // Device-set resolution reads the user's config + probes simctl — mock it to
@@ -104,6 +108,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     spawnMock.mockReset();
     androidSdkRootMock.mockReturnValue(null);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    isFoldableSimulatorMock.mockReset().mockResolvedValue(false);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
     // and the real probe would surface as a DependencyMissingError unrelated
@@ -355,5 +360,88 @@ describe("simulatorServerBlueprint.recoverable — self-heal a wedged sim-server
   it("does NOT recover on an unrelated error carrying no failure signal", async () => {
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
     expect(simulatorServerBlueprint.recoverable!(new Error("boom"))).toBe(false);
+  });
+});
+
+describe("simulatorServerBlueprint.factory — a foldable simulator's panels", () => {
+  const realFetch = globalThis.fetch;
+  const fetchMock = vi.fn();
+  const PANELS = [
+    { screenId: 1, width: 1398, height: 2034 },
+    { screenId: 3, width: 2007, height: 2853 },
+  ];
+
+  beforeEach(async () => {
+    spawnMock.mockReset();
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    isFoldableSimulatorMock.mockReset().mockResolvedValue(true);
+    fetchMock.mockReset();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const { __resetDepCacheForTests, __primeDepCacheForTests } =
+      await import("../src/utils/check-deps");
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    vi.clearAllMocks();
+  });
+
+  it("probes /api/display and keeps the panels, without reading which panel is live", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ foldable: true, panels: PANELS, hingeAngle: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const udid = "B6C52FD4-5408-402B-9369-EF7C66B98E6F";
+    const device = iosDevice(udid);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 61830);
+    const instance = await factoryPromise;
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("http://127.0.0.1:61830/api/display");
+    expect(instance.api.deviceId).toBe(udid);
+    expect(instance.api.display).toEqual({ foldable: true, panels: PANELS, hingeAngle: null });
+    // Which panel is live is every command's to resolve when it runs: the
+    // probe is the one request the attach makes.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await instance.dispose();
+  });
+
+  it("leaves a foldable single-panel when its server reports no panels (an older build)", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 404 }));
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = iosDevice("B6C52FD4-5408-402B-9369-EF7C66B98E6F");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 61831);
+    const instance = await factoryPromise;
+
+    expect(instance.api.display).toBeUndefined();
+    await instance.dispose();
+  });
+
+  it("never probes a device whose profile is not foldable", async () => {
+    isFoldableSimulatorMock.mockResolvedValue(false);
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = iosDevice("11111111-2222-3333-4444-555555555555");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 61832);
+    const instance = await factoryPromise;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(instance.api.display).toBeUndefined();
+    await instance.dispose();
   });
 });

@@ -29,6 +29,7 @@ const ALL_STEP_KINDS: Record<FlowStep["kind"], true> = {
   "scroll-to": true,
   "pinch": true,
   "rotate": true,
+  "fold": true,
   "snapshot": true,
   "script": true,
 };
@@ -133,6 +134,7 @@ describe("precedesLeadingLaunch's arms", () => {
     "scroll-to": false,
     "pinch": false,
     "rotate": false,
+    "fold": false,
     "snapshot": false,
   };
 
@@ -154,6 +156,7 @@ describe("precedesLeadingLaunch's arms", () => {
     "scroll-to": { kind: "scroll-to", target: { text: "f" }, direction: "down" },
     "pinch": { kind: "pinch", scale: 2 },
     "rotate": { kind: "rotate", by: 90 },
+    "fold": { kind: "fold", posture: "open" },
     "snapshot": { kind: "snapshot", name: "s" },
   };
 

@@ -9,6 +9,12 @@ export interface StartRecordingResult {
   timeLimitSeconds: number;
   /** Host path the finished video will land at once stop is called. */
   outputFile: string;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the recording started on the cover panel. Says why and
+   * what to check.
+   */
+  warning?: string;
 }
 
 export interface StopRecordingFile {
@@ -25,6 +31,11 @@ export interface StopRecordingFile {
   wallClockMs?: number;
   /** How much wall-clock time trimming removed. Present only when trimming applied. */
   trimmedMs?: number;
+  /**
+   * Foldables only, and only when it happened: how many times the capture
+   * moved to the other panel because the device was folded or unfolded.
+   */
+  panelSwitches?: number;
   warning?: string;
 }
 

@@ -243,6 +243,8 @@ export const CAPABILITY_SET: ReadonlySet<string> = new Set(EXTERNAL_CAPABILITIES
  */
 export const ALLOWED_SIM_SERVER_ENDPOINTS = [
   "/api/clipboard/text",
+  "/api/display",
+  "/api/hinge",
   "/api/pointer",
   "/api/screenshot",
   "/ws",

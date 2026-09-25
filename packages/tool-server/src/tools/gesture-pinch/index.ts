@@ -61,6 +61,11 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   pinched: boolean;
   timestampMs: number;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the gesture went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
 }
 
 const capability: ToolCapability = {
@@ -100,6 +105,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
     const endCenterY = params.endCenterY ?? params.centerY;
 
     let timestampMs = 0;
+    let warning: string | undefined;
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
@@ -116,10 +122,12 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      await sendTouchEvent(api, type, x1, y1, x2, y2);
+      const sent = await sendTouchEvent(api, type, x1, y1, x2, y2);
+      // Only the Down resolves the panel; the rest of the sequence keeps it.
+      if (type === "Down") warning = sent.warning;
       if (i < steps) await sleep(16);
     }
 
-    return { pinched: true, timestampMs };
+    return { pinched: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
   },
 };

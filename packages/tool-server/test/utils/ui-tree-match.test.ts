@@ -6,6 +6,7 @@ import {
   deriveSelector,
   evaluateCondition,
   findAll,
+  firstInReadingOrder,
   identifierMatches,
   matchNode,
   textMatches,
@@ -1665,5 +1666,117 @@ describe("after / next (sibling) scoping", () => {
     expect(ids(findAll(tree, { text: "leaf", next: { role: "AXAnchor" } }))).toEqual(
       ids([...picked])
     );
+  });
+});
+
+describe("reading order on a landscape UI", () => {
+  // The settings list of the sibling-scoping tests — three rows, a label and
+  // its switch each — as the flow adapter frames it on an iOS simulator whose
+  // UI is landscape: in the screen's portrait-native space, where the UI lies
+  // turned a quarter. The rows then run ACROSS the frame space, and the
+  // frame space's "below" is the user's "beside" (`landscapeRight`, a rotated
+  // iPhone: the UI's +y is the frame's -x; `landscapeLeft`, the unfolded
+  // iPhone Duo: the UI's +y is the frame's +x).
+  type Orientation = "landscapeRight" | "landscapeLeft";
+  const rowY = { airplane: 0.2, wifi: 0.3, bluetooth: 0.4 };
+  const uiRows = Object.entries(rowY).flatMap(([name, y]) => [
+    node({
+      role: "AXStaticText",
+      label: name === "wifi" ? "Wi-Fi" : name,
+      identifier: `label-${name}`,
+      frame: { x: 0.05, y, width: 0.3, height: 0.04 },
+    }),
+    node({
+      role: "AXSwitch",
+      identifier: `sw-${name}`,
+      frame: { x: 0.8, y: y - 0.005, width: 0.15, height: 0.05 },
+    }),
+  ]);
+  /** A UI-space frame where the frame space has it: the inverse of `nativeFrameToUi`. */
+  const toNative = (f: DescribeNode["frame"], o: Orientation): DescribeNode["frame"] =>
+    o === "landscapeRight"
+      ? { x: 1 - f.y - f.height, y: f.x, width: f.height, height: f.width }
+      : { x: f.y, y: 1 - f.x - f.width, width: f.height, height: f.width };
+  const turned = (o: Orientation): DescribeNode =>
+    node({
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: uiRows.map((n) => ({ ...n, frame: toNative(n.frame, o) })),
+    });
+  const ids = (ns: DescribeNode[]): string[] => ns.map((n) => n.identifier!).sort();
+
+  it.each(["landscapeRight", "landscapeLeft"] as const)(
+    "after and next follow the user's reading order in %s, given the orientation",
+    (o) => {
+      const tree = turned(o);
+      expect(ids(findAll(tree, { role: "AXSwitch", next: { text: "Wi-Fi" } }, o))).toEqual([
+        "sw-wifi",
+      ]);
+      expect(ids(findAll(tree, { role: "AXSwitch", after: { text: "Wi-Fi" } }, o))).toEqual([
+        "sw-bluetooth",
+        "sw-wifi",
+      ]);
+      // The label is left of its own switch to the user, so it never follows it.
+      expect(findAll(tree, { text: "Wi-Fi", after: { identifier: "sw-wifi" } }, o)).toEqual([]);
+      // `next` unions over anchors, one row each.
+      expect(ids(findAll(tree, { role: "AXSwitch", next: { role: "AXStaticText" } }, o))).toEqual([
+        "sw-airplane",
+        "sw-bluetooth",
+        "sw-wifi",
+      ]);
+    }
+  );
+
+  it("reads the frame space's order without the orientation — another row's control, or none", () => {
+    // The same trees, compared as they lie on the panel. Rotated iPhone: every
+    // switch is "below" the Wi-Fi label there, and the nearest is another
+    // row's. Unfolded Duo: the switches all lie ABOVE the label on the panel,
+    // so nothing follows it at all.
+    const right = turned("landscapeRight");
+    expect(ids(findAll(right, { role: "AXSwitch", next: { text: "Wi-Fi" } }))).toEqual([
+      "sw-bluetooth",
+    ]);
+    const left = turned("landscapeLeft");
+    expect(findAll(left, { role: "AXSwitch", next: { text: "Wi-Fi" } })).toEqual([]);
+    expect(findAll(left, { role: "AXSwitch", after: { text: "Wi-Fi" } })).toEqual([]);
+  });
+
+  it("picks the element the user sees first, and hands back its frame-space frame", () => {
+    const o = "landscapeRight";
+    const tree = turned(o);
+    const labels = findAll(tree, { role: "AXStaticText" }, o);
+    expect(firstInReadingOrder(labels, o)?.identifier).toBe("label-airplane");
+    // In the frame space the rows run right to left: the last row comes first.
+    expect(firstInReadingOrder(labels)?.identifier).toBe("label-bluetooth");
+    expect(evaluateCondition("text", "airplane", labels, "contains", o)).toBe(true);
+    expect(evaluateCondition("text", "airplane", labels, "contains")).toBe(false);
+    // A field-less selector resolves to the user's next element, and the frame
+    // returned is the one to act on: the switch where the panel has it.
+    expect(selectorToFrame(tree, { next: { text: "Wi-Fi" } }, o)).toEqual(
+      toNative({ x: 0.8, y: 0.295, width: 0.15, height: 0.05 }, o)
+    );
+    // Without it, the panel's next element: the label of the row ABOVE, which
+    // lies to the right of the Wi-Fi label on the panel.
+    expect(selectorToFrame(tree, { next: { text: "Wi-Fi" } })).toEqual(
+      toNative({ x: 0.05, y: 0.2, width: 0.3, height: 0.04 }, o)
+    );
+  });
+
+  it("leaves containment alone: `within` holds either way", () => {
+    const o = "landscapeLeft";
+    const card = node({
+      role: "AXWindow",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node({ identifier: "card", frame: toNative({ x: 0, y: 0.15, width: 1, height: 0.2 }, o) }),
+        ...uiRows.map((n) => ({ ...n, frame: toNative(n.frame, o) })),
+      ],
+    });
+    // The airplane and Wi-Fi rows sit in the card (UI y 0.15-0.35); Bluetooth does not.
+    for (const orientation of [o, undefined] as const) {
+      expect(
+        ids(findAll(card, { role: "AXSwitch", within: { identifier: "card" } }, orientation))
+      ).toEqual(["sw-airplane", "sw-wifi"]);
+    }
   });
 });

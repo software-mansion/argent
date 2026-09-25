@@ -227,9 +227,10 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
         ? interpolateEvents(params.events, params.interpolate)
         : params.events;
 
+    let warning: string | undefined;
     for (const event of events) {
       await sleep(event.delayMs ?? 16);
-      await sendCommand(api, {
+      const sent = await sendCommand(api, {
         cmd: "touch",
         type: event.type,
         x: event.x,
@@ -237,7 +238,8 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
         second_x: event.x2 ?? null,
         second_y: event.y2 ?? null,
       });
+      warning ??= sent.warning;
     }
-    return { events: events.length };
+    return { events: events.length, ...(warning !== undefined ? { warning } : {}) };
   },
 };

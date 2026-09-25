@@ -287,6 +287,7 @@ Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a 
 Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = cabled and usable; 'paired' = not reachable over USB, never auto-bound.
 TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android TV / leanback devices on Android) — these are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses (up/down/left/right/select/back/menu/home), and \`keyboard\` to type, rather than the coordinate/gesture tools.
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration — e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
+A foldable iOS simulator (the iPhone Duo) has 'foldable: true'. Use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select, Android platform-tools, or the Vega SDK is not installed.`,
   alwaysLoad: true,

@@ -190,6 +190,19 @@ afterEach(async () => {
 });
 
 describe("runSnapshot baselines", () => {
+  it("carries the capture's warning, and none without one", async () => {
+    // A foldable whose panel could not be resolved: the screenshot tool warns,
+    // and the step owes that to the report on whatever outcome it reaches.
+    const warning = "The panel this foldable simulator renders to could not be resolved (…)";
+    vi.mocked(invokeOnDevice).mockResolvedValueOnce({ image: { hostPath: h.shotPath }, warning });
+    const warned = await runSnapshot(env, opts({ updateBaselines: true }));
+    expect(warned.status).toBe("pass");
+    expect(warned.warning).toBe(warning);
+
+    const plain = await runSnapshot(env, opts());
+    expect(plain).not.toHaveProperty("warning");
+  });
+
   it("fails a missing baseline without seeding one", async () => {
     const r = await runSnapshot(env, opts());
 

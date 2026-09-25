@@ -8,6 +8,7 @@ import type { Registry } from "@argent/registry";
 import { track } from "@argent/telemetry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
+import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "./utils/foldable";
 import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
 import { listDevicesTool } from "./tools/devices/list-devices";
@@ -234,11 +235,34 @@ export function createPreviewRouter(registry: Registry): Router {
       }
       const { urn, options } = simulatorServerRef(device);
       const api = await registry.resolveService<SimulatorServerApi>(urn, options);
+      // A foldable is handed the stream of the panel it renders to, resolved
+      // now: the UI re-asks this route while connected to one and moves its
+      // stream (and the screen its touches name) when the answer changes. When
+      // neither source answers, the main screen, as every command then does,
+      // and the answer says so.
+      let streamUrl = api.streamUrl;
+      let panel:
+        | { foldable: true; activeScreen: number; panelSource: string; warning?: string }
+        | undefined;
+      if (api.display?.foldable) {
+        const live = await resolveLivePanel(udid);
+        streamUrl = streamUrlForScreen(api.streamUrl, live.screen);
+        panel = { foldable: true, activeScreen: live.screen, panelSource: live.source };
+        if (live.source === "unknown") {
+          panel.warning = unresolvedPanelNote(
+            udid,
+            live.reason,
+            "the preview shows",
+            api.display.panels
+          );
+        }
+      }
       res.json({
         udid,
         apiUrl: api.apiUrl,
-        streamUrl: api.streamUrl,
+        streamUrl,
         wsUrl: wsUrlFromHttp(api.apiUrl),
+        ...(panel ?? {}),
       });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

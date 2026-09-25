@@ -347,6 +347,10 @@ const CASES = {
     },
     { step: { kind: "rotate", by: -45 }, summary: "1. rotate: by -45°", target: "by -45°" },
   ],
+  "fold": [
+    { step: { kind: "fold", posture: "open" }, summary: "1. fold: open", target: "open" },
+    { step: { kind: "fold", angle: 120 }, summary: "1. fold: 120°", target: "120°" },
+  ],
   "snapshot": [
     { step: { kind: "snapshot", name: "home" }, summary: "1. snapshot: home", target: '"home"' },
     {

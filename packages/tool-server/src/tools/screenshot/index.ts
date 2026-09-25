@@ -13,7 +13,11 @@ import {
   chromiumDropNote,
   unsupportedDropNote,
 } from "./dropped-geometry";
-import { getScreenshotScale } from "../../utils/simulator-client";
+import {
+  getScreenshotScale,
+  httpScreenshot,
+  resolveCapturePanel,
+} from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
@@ -80,7 +84,12 @@ interface Result {
    * server's `127.0.0.1` media URL, which is unreachable when the tool-server
    * is remote.
    */
-  image: ArtifactHandle;
+  image: ArtifactHandle; /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the capture is of the cover panel. The note above says
+   * the same; this rides the field the flow `snapshot` step reports.
+   */
+  warning?: string;
 }
 
 const capability: ToolCapability = {
@@ -288,13 +297,17 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
 
       const ref = simulatorServerRef(device);
       const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
+      // On a foldable the panel is resolved now, whoever moved the hinge, and
+      // handed to the capture. The server cannot say which panel a frame is
+      // from, so the result names it.
+      const panel = await resolveCapturePanel(api);
       const { path: capturedPath } = await captureScreenshotUpright(
         api,
         device,
         params.rotation,
         signal,
         params.scale,
-        undefined,
+        panel ? (a, r, s, sc) => httpScreenshot(a, r, s, sc, panel.screen) : undefined,
         androidDevtoolsRotationPeek(registry, device)
       );
       const image = await requireArtifacts(ctx).register({
@@ -302,7 +315,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         kind: "screenshot",
         mimeType: "image/png",
       });
-      return { image };
+      return {
+        image,
+        ...(panel ? { [RESULT_NOTE_KEY]: panel.note } : {}),
+        ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
+      };
     },
   };
 }
