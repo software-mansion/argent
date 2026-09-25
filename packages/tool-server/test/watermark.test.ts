@@ -123,7 +123,8 @@ describe("buildWatermarkGraph", () => {
     const graph = buildWatermarkGraph({ width: 1398, height: 2034 });
     expect(graph).toContain(
       "[0:v]fps=30,crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
-        "scale=1398:2034:force_original_aspect_ratio=decrease:force_divisible_by=2," +
+        "scale=1398:2034:force_original_aspect_ratio=decrease," +
+        "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
         "pad=1398:2034:(ow-iw)/2:(oh-ih)/2,format=yuv420p,split=2[base][under]"
     );
     const box = computeWatermarkBox({ width: 1398, height: 2034 });
@@ -133,9 +134,12 @@ describe("buildWatermarkGraph", () => {
 
 describe("letterboxFilter", () => {
   it("fits into the evened canvas, keeping the aspect ratio, centred on bars", () => {
+    // Only options that ffmpeg 4.2 knows: the scale's `force_divisible_by`
+    // (4.3+) would fail every recording on it, so a crop evens the fit.
     expect(letterboxFilter({ width: 2007, height: 2853 })).toBe(
       "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
-        "scale=2006:2852:force_original_aspect_ratio=decrease:force_divisible_by=2," +
+        "scale=2006:2852:force_original_aspect_ratio=decrease," +
+        "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
         "pad=2006:2852:(ow-iw)/2:(oh-ih)/2"
     );
   });

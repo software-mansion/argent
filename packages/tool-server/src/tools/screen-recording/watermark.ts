@@ -88,15 +88,19 @@ const evenFloor = (n: number) => 2 * Math.floor(n / 2);
  * resampled: it only loses the odd edge pixel (1179x2556 -> 1178x2556), and
  * then fits the canvas exactly, which the scale and the pad pass through
  * unchanged. Scaled the other way round, every frame of an odd-sized device
- * would be resampled into a canvas one pixel narrower. `force_divisible_by`
- * keeps the fitted size even, so the bars sit on yuv420p's 2x2 chroma grid.
+ * would be resampled into a canvas one pixel narrower. The second even-crop
+ * trims a fitted size that came out odd by its edge row or column, so the
+ * content ends on yuv420p's 2x2 chroma grid. The scale's `force_divisible_by`
+ * would do that too, but only ffmpeg 4.3 and later have it, and on an older
+ * ffmpeg the unknown option fails every recording.
  */
 export function letterboxFilter(canvas: Dimensions): string {
   const w = evenFloor(canvas.width);
   const h = evenFloor(canvas.height);
   return (
     `crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,` +
-    `scale=${w}:${h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+    `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+    `crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,` +
     `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`
   );
 }

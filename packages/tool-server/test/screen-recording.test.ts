@@ -541,7 +541,8 @@ describe("screen recording capture", () => {
     expect(vf).toBeGreaterThan(-1);
     expect(args[vf + 1]).toBe(
       "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
-        "scale=1178:2556:force_original_aspect_ratio=decrease:force_divisible_by=2," +
+        "scale=1178:2556:force_original_aspect_ratio=decrease," +
+        "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
         "pad=1178:2556:(ow-iw)/2:(oh-ih)/2"
     );
     expect(args).not.toContain("-filter_complex");
