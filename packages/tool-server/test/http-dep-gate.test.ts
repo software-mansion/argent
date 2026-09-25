@@ -109,8 +109,9 @@ describe("http dependency gate", () => {
     expect(res.status).toBe(400);
     expect(recordFailure).toHaveBeenCalledWith(
       "validated-thing",
-      // Schema-declared names of the failing params only — never values.
-      { invalid_params: ["count"] },
+      // Schema-declared names of the failing params only — never values —
+      // plus the deduped set of zod constraints they broke.
+      { invalid_params: ["count"], invalid_param_issues: ["invalid_type"] },
       {
         error_code: "HTTP_ZOD_VALIDATION_FAILED",
         failure_stage: "http_zod_validation",
@@ -141,7 +142,7 @@ describe("http dependency gate", () => {
     expect(res.status).toBe(400);
     expect(recordFailure).toHaveBeenCalledWith(
       "strict-thing",
-      { invalid_params: ["unrecognized_keys"] },
+      { invalid_params: ["unrecognized_keys"], invalid_param_issues: ["unrecognized_keys"] },
       expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
       expect.any(Number)
     );
