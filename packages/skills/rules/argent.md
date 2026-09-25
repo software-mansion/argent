@@ -85,7 +85,6 @@ Decision order:
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc. Not on a physical iPhone.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
-- A foldable iOS simulator (`foldable: true` in `list-devices`, e.g. the iPhone Duo) is folded with the `fold` tool; every screenshot, describe and touch follows the panel it renders to. See the `fold` section of the `argent-device-interact` skill.
   </general_rules>
 
 <react_native_detection>
@@ -120,7 +119,7 @@ Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`
