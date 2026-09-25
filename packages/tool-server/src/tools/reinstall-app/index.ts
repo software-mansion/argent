@@ -23,7 +23,7 @@ const zodSchema = z.object({
   appPath: z
     .string()
     .describe(
-      "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app). Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Vega: `.vpkg` file. Relative paths are resolved from the current working directory."
+      "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app); a physical iPhone also takes an `.ipa`. Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Vega: `.vpkg` file. Relative paths are resolved from the current working directory."
     ),
 });
 
@@ -46,7 +46,7 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   },
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android, .vpkg for Vega).`,
+Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .app or .ipa for a physical iPhone, .apk for Android, .vpkg for Vega).`,
   zodSchema,
   capability,
   fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],

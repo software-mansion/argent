@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // The handler shells out via vegaDevice; mock it so we can feed crafted install-app
 // output and assert success/failure detection deterministically.
@@ -10,10 +13,17 @@ import { vegaImpl } from "../src/tools/reinstall-app/platforms/vega";
 import type { ReinstallAppParams, ReinstallAppServices } from "../src/tools/reinstall-app/types";
 
 const SERVICES: ReinstallAppServices = {};
+// A real file on disk: the handler now validates the artifact before it
+// uninstalls anything, so a path that does not exist is rejected outright.
+const TMP_DIR = mkdtempSync(join(tmpdir(), "argent-vega-reinstall-"));
+const VPKG_PATH = join(TMP_DIR, "app.vpkg");
+writeFileSync(VPKG_PATH, "vega package fixture");
+afterAll(() => rmSync(TMP_DIR, { recursive: true, force: true }));
+
 const PARAMS: ReinstallAppParams = {
   udid: "amazon-1",
   bundleId: "com.example.app.main",
-  appPath: "/tmp/app.vpkg",
+  appPath: VPKG_PATH,
 };
 // The handler ignores device/options; a stub satisfies the (services, params, device) arity.
 const DEVICE = { platform: "vega", kind: "vvd", udid: "amazon-1" } as unknown as DeviceInfo;
