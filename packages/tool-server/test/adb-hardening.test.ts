@@ -30,7 +30,7 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { checkSnapshotLoadable, listAndroidDevices, listAvds } from "../src/utils/adb";
+import { checkSnapshotLoadable, listAndroidDevices, listAvds, runAdb } from "../src/utils/adb";
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -175,6 +175,47 @@ describe("listAvds noise filter (review #9)", () => {
     });
     const avds = await listAvds();
     expect(avds.map((a) => a.name)).toEqual(["Pixel_7_API_34", "Pixel_3a_API_29"]);
+  });
+});
+
+describe("windowsHide (Windows console-popup fix)", () => {
+  /**
+   * Every adb/emulator spawn behind runAdb, listAvds and checkSnapshotLoadable
+   * must pass windowsHide: true. Without it, a console-subsystem binary
+   * (adb.exe, emulator.exe) spawned from the tool-server — a detached
+   * background process with no console of its own — gets a fresh popup
+   * console window on Windows for every call. The option is a documented
+   * no-op on macOS/Linux, so this is safe everywhere.
+   */
+
+  it("runAdb passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+    await runAdb(["devices"]);
+    expect(execFileMock).toHaveBeenCalledWith(
+      "adb",
+      ["devices"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("listAvds passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+    await listAvds();
+    expect(execFileMock).toHaveBeenCalledWith(
+      "emulator",
+      ["-list-avds"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("checkSnapshotLoadable passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "Loadable\n", stderr: "" });
+    await checkSnapshotLoadable("Pixel_7_API_34");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "emulator",
+      expect.arrayContaining(["-check-snapshot-loadable"]),
+      expect.objectContaining({ windowsHide: true })
+    );
   });
 });
 

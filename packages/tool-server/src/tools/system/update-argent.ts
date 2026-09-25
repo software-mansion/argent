@@ -228,6 +228,11 @@ export const updateArgentTool: ToolDefinition<{
         detached: true,
         stdio: "ignore",
         env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
+        // `detached: true` on Windows otherwise pops a console window for the
+        // updater — worse here than most spawns in this codebase, since a bare
+        // "argent" resolves to argent.cmd, which Windows already routes
+        // through cmd.exe. No-op off Windows.
+        windowsHide: true,
       });
       // Without an error listener a spawn failure (ENOENT when `argent` isn't
       // on PATH — the norm in local mode) crashes the tool-server. The next
