@@ -119,8 +119,9 @@ export function isSkillsCliCached(
   platform: NodeJS.Platform = process.platform
 ): boolean {
   if (runner.kind !== "npx") return false;
-  const command = skillsCommand(runner, ["--no-install", "skills", "--version"], platform);
   try {
+    // Inside the try: skillsCommand throws for a path cmd.exe cannot take.
+    const command = skillsCommand(runner, ["--no-install", "skills", "--version"], platform);
     execFileSync(command.file, command.args, {
       stdio: ["ignore", "ignore", "ignore"],
       timeout: OFFLINE_PROBE_TIMEOUT_MS,

@@ -227,6 +227,13 @@ describe("isSkillsCliCached", () => {
     expect(isSkillsCliCached(npx, "linux")).toBe(false);
   });
 
+  it("returns false, without spawning, for an npx path cmd.exe cannot take on win32", () => {
+    const oddNpx = { ...npx, bin: "C:\\Users\\100%\\npm\\npx.cmd" };
+
+    expect(isSkillsCliCached(oddNpx, "win32")).toBe(false);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
   it("returns false for pnpm dlx without spawning anything, as it has no offline mode", () => {
     const pnpmDlx = {
       kind: "pnpm" as const,
