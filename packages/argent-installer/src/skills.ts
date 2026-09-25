@@ -16,6 +16,8 @@ import { NO_SKILLS_RUNNER_MESSAGE, resolveSkillsRunner, skillsCommand } from "./
 
 type SkillScope = "project" | "global";
 
+const ARGENT_SKILL_NAME = /^argent-[a-z0-9-]+$/;
+
 interface SkillScopeResult {
   scope: SkillScope;
   /** Count of bundled skills re-synced into this scope. */
@@ -93,7 +95,9 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     const tracked = listArgentSkillsInLock(spec.lockPath);
     if (tracked.length === 0) continue;
 
-    const orphaned = tracked.filter((name) => !bundled.has(name));
+    // Lockfile names are project data and end up in the skills CLI's argv, so
+    // only names shaped like argent's own skills are pruned.
+    const orphaned = tracked.filter((name) => !bundled.has(name) && ARGENT_SKILL_NAME.test(name));
     const result: SkillScopeResult = {
       scope: spec.scope,
       synced: 0,

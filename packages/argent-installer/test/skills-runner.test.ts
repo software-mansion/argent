@@ -171,9 +171,21 @@ describe("skillsCommand", () => {
     );
   });
 
-  it("quotes cmd.exe metacharacters and doubles embedded quotes on win32", () => {
-    const { file } = skillsCommand(pnpmDlx, ["a&b", 'say "hi"'], "win32");
-    expect(file).toBe('pnpm dlx "a&b" "say ""hi"""');
+  it("quotes cmd.exe metacharacters on win32", () => {
+    const { file } = skillsCommand(pnpmDlx, ["a&b", "c|d"], "win32");
+    expect(file).toBe('pnpm dlx "a&b" "c|d"');
+  });
+
+  it.each(["argent-%PATH%", "argent-!X!", 'say "hi"', "a\nb"])(
+    "refuses %j on win32, which cmd.exe would expand or unquote",
+    (arg) => {
+      expect(() => skillsCommand(pnpmDlx, ["skills", "remove", arg], "win32")).toThrow(/cmd\.exe/);
+    }
+  );
+
+  it("passes the same characters through untouched on POSIX, where no shell is involved", () => {
+    const { args } = skillsCommand(pnpmDlx, ["argent-%PATH%", 'say "hi"'], "linux");
+    expect(args).toEqual(["dlx", "argent-%PATH%", 'say "hi"']);
   });
 });
 

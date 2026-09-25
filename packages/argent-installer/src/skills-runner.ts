@@ -79,11 +79,17 @@ export interface SkillsCommand {
   shell: boolean;
 }
 
-// Whitespace and cmd.exe metacharacters: an argument holding any is quoted.
-const CMD_SPECIAL = /[\s"&|<>^()%!,;=]/;
+// cmd.exe expands %VAR% (and !VAR! when delayed expansion is on) even inside
+// double quotes, and a stray quote ends the quoting, so no argument holding one
+// of these can be passed through it safely.
+const CMD_UNSAFE = /[%!"\r\n]/;
+
+// Whitespace and the remaining cmd.exe metacharacters are literal inside
+// double quotes, so an argument holding any of them is quoted.
+const CMD_SPECIAL = /[\s&|<>^(),;=]/;
 
 function quoteForCmd(arg: string): string {
-  return CMD_SPECIAL.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+  return CMD_SPECIAL.test(arg) ? `"${arg}"` : arg;
 }
 
 // The process to start for a `skills` command. On Windows npx and pnpm are
@@ -97,6 +103,10 @@ export function skillsCommand(
 ): SkillsCommand {
   const args = runner.buildArgs(skillsArgs);
   if (platform !== "win32") return { file: runner.bin, args, shell: false };
+  const unsafe = [runner.bin, ...args].find((arg) => CMD_UNSAFE.test(arg));
+  if (unsafe !== undefined) {
+    throw new Error(`cannot pass ${JSON.stringify(unsafe)} to cmd.exe safely`);
+  }
   return { file: [runner.bin, ...args].map(quoteForCmd).join(" "), args: [], shell: true };
 }
 

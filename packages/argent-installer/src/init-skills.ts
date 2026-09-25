@@ -124,11 +124,7 @@ export async function runSkillsStep(args: {
 
     // `--no-install` is npx-only; isSkillsCliCached() is true only for npx.
     const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
-    // skillsCommand adds whatever the runner needs (npx: --force; pnpm: dlx);
-    // baseArgs stays clean for the displayed and manual-fallback commands.
-    const command = runner ? skillsCommand(runner, baseArgs) : null;
-
-    if (command) p.log.info(`Running: ${pc.dim(label)} ${pc.cyan(baseArgs.join(" "))}`);
+    p.log.info(`Running: ${pc.dim(label)} ${pc.cyan(baseArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -136,7 +132,11 @@ export async function runSkillsStep(args: {
     }
 
     try {
-      if (!command) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
+      if (!runner) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
+      // skillsCommand adds whatever the runner needs (npx: --force; pnpm:
+      // dlx), and throws for an argument cmd.exe cannot take safely; baseArgs
+      // stays clean for the displayed and manual-fallback commands.
+      const command = skillsCommand(runner, baseArgs);
       const skillsCwd = scope === "custom" ? customRoot : undefined;
       await runSkillsCli(command, label, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {

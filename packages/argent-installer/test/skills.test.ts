@@ -165,6 +165,22 @@ describe("refreshArgentSkills", () => {
     expect(args.indexOf("--force")).toBeLessThan(args.indexOf("skills"));
   });
 
+  it("prunes only lockfile names shaped like argent's own skills", () => {
+    listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
+    writeLock(path.join(tmpDir, "skills-lock.json"), {
+      "argent-create-flow": {},
+      "argent-old-skill": {},
+      'argent-x" & calc & "': {},
+      "argent-%PATH%": {},
+    });
+
+    const results = refreshArgentSkills(tmpDir);
+
+    expect(results[0]!.pruned).toEqual(["argent-old-skill"]);
+    const [, removeArgs] = execFileSyncMock.mock.calls[1]! as [string, string[]];
+    expect(removeArgs.filter((arg) => arg.startsWith("argent-"))).toEqual(["argent-old-skill"]);
+  });
+
   it("launches nothing and reports a sync error when no runner is on PATH", () => {
     resolveSkillsRunnerMock.mockReturnValue(null);
     listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
