@@ -23,8 +23,9 @@ import { runVega, __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 // itself blocks on a same-group `sleep <secs>` so the launcher stays alive long
 // enough to be timed out and snapshotted. Once both workers exist the descendant sweep
 // reaps them by itself; the group kill covers the window before they do, which is what the
-// overflow tests hit — their reap trips on the launcher's first write, so under load it can
-// snapshot an empty tree and only killing the group stops the sleep from outliving the call.
+// overflow tests hit — their reap trips on the launcher's flood, so it can snapshot a tree
+// that does not yet hold the sleep the launcher spawns next, and only killing the group
+// stops that sleep from outliving the call.
 // Each test passes its OWN sentinel so one test's strays can't be mistaken for
 // another's, and every sentinel shares a per-run prefix so afterEach can sweep them
 // all with a single tight pattern (see sweep()).
@@ -77,7 +78,21 @@ beforeAll(() => {
     join(dir, "vega"),
     `#!/usr/bin/env node
 const { spawn, spawnSync } = require("node:child_process");
-const [cmd, secs] = process.argv.slice(2);
+const { existsSync } = require("node:fs");
+const [cmd, secs, gate] = process.argv.slice(2);
+// Block until the test creates \`gate\` — it does that once it has SEEN this branch's
+// sentinel worker. Bounded so a test that fails before writing it can't wedge the launcher
+// past the caller's timeoutMs; Atomics.wait sleeps without forking a process the sweep
+// would then have to account for.
+const awaitGate = () => {
+  const deadline = Date.now() + 3000;
+  const idle = new Int32Array(new SharedArrayBuffer(4));
+  while (!existsSync(gate) && Date.now() < deadline) Atomics.wait(idle, 0, 0, 20);
+};
+// The flood is multi-byte on purpose: 60 characters but 180 UTF-8 bytes, so against the
+// overflow tests' \`maxOutputBytes: 100\` it only trips the cap under a byte reading. An
+// ASCII flood trips under a \`chunk.length\` reading just as well, and so pins nothing.
+const FLOOD = "✓".repeat(60);
 if (cmd === "hang") {
   // A worker that ESCAPES the launcher's process group (detached → its own session/
   // pgid, like the real CLI's setsid'd worker), so the group-only SIGKILL can't reach
@@ -98,18 +113,27 @@ if (cmd === "fail") {
   process.exit(3);
 }
 if (cmd === "flood") {
-  // Emit more than the test's maxOutputBytes, then hang on a sentinel sleep so the
+  // The worker comes FIRST and the flood waits on the gate: the cap trips on the first
+  // write, so a worker spawned after it is reaped 20-100ms later, and the test's look at
+  // it would be racing that reap.
+  const worker = spawn("sleep", [secs], { stdio: "ignore" });
+  worker.unref();
+  awaitGate();
+  // Emit more than the test's maxOutputBytes, then hang on a second sentinel sleep so the
   // OVERFLOW reap — not a natural exit — is what settles runVega. The reap must clear
-  // this sleep too. \`secs\` is the per-test sentinel.
-  process.stdout.write("x".repeat(4096));
+  // both. \`secs\` is the per-test sentinel.
+  process.stdout.write(FLOOD);
   spawnSync("sleep", [secs]);
   process.exit(0);
 }
 if (cmd === "flood-err") {
-  // Same as \`flood\` but floods STDERR instead of stdout — the cap applies per stream
-  // (like execFile's maxBuffer), so an stderr flood must also reap+reject rather than
-  // grow unbounded. Hangs on a sentinel sleep so the overflow reap is what settles it.
-  process.stderr.write("x".repeat(4096));
+  // Same as \`flood\` — gated worker, then the flood, then a sentinel sleep to hang on —
+  // but flooding STDERR instead of stdout. The cap applies per stream (like execFile's
+  // maxBuffer), so an stderr flood must also reap+reject rather than grow unbounded.
+  const worker = spawn("sleep", [secs], { stdio: "ignore" });
+  worker.unref();
+  awaitGate();
+  process.stderr.write(FLOOD);
   spawnSync("sleep", [secs]);
   process.exit(0);
 }
@@ -330,9 +354,7 @@ describe("runVega timeout (real subprocess)", () => {
     // escaped, and the descendant sweep rather than the group SIGKILL the only thing that
     // can reap it; left unasserted, the fake's `detached: true` can be dropped and this
     // test stays green with the sweep deleted. The poll gets the whole deadline as its
-    // budget, for the reason the drain observation below spells out. The two output-cap
-    // reaps stay unpinned for want of such a window — theirs fires within ~100ms of the
-    // spawn (#841).
+    // budget, for the reason the drain observation below spells out.
     expect(await waitForWorkerGroups(SENTINEL_REAP, 2, REAP_DEADLINE_MS)).toEqual({
       workers: 2,
       groups: 2,
@@ -436,11 +458,20 @@ describe("runVega timeout (real subprocess)", () => {
     // A runaway child: output past the cap reaps the group and rejects. Like the
     // non-zero exit (and unlike a timeout) it is a misbehaving child, so it must
     // classify as `subprocess` — the killed=true shape would otherwise read as a
-    // wedged-agent "timeout". The sentinel sleep it hangs on must be reaped too.
-    const err = await runVega(["flood", SENTINEL_OVERFLOW], {
+    // wedged-agent "timeout". The sentinel sleeps it leaves behind must be reaped too.
+    const OVERFLOW_DEADLINE_MS = 5_000;
+    const gate = join(dir, "flood-gate");
+    const run = runVega(["flood", SENTINEL_OVERFLOW, gate], {
       maxOutputBytes: 100,
-      timeoutMs: 5_000,
+      timeoutMs: OVERFLOW_DEADLINE_MS,
     }).catch((e: unknown) => e);
+    // See a worker alive BEFORE the reap: `waitForClear` below reads 0 just as readily for
+    // a launcher that never spawned one. The cap trips on the first write, so the window to
+    // see one in exists only because the fake spawns its worker first and holds the flood —
+    // and so the reap — until this gate file lands.
+    expect(await waitForCount(SENTINEL_OVERFLOW, 1, OVERFLOW_DEADLINE_MS)).toBe(1);
+    writeFileSync(gate, "");
+    const err = await run;
     expect(err).toBeInstanceOf(Error);
     // The message prefers the child's captured output (matching execFile's maxBuffer
     // error), so it's the flood, not "output exceeded" — what matters is that it
@@ -454,11 +485,17 @@ describe("runVega timeout (real subprocess)", () => {
     // instead of stdout must trip the same overflow path, not grow stderr unbounded
     // until the timeout — otherwise a misbehaving CLI could exhaust the long-lived
     // tool-server's memory. Classifies `subprocess` (a misbehaving child, not a wedged
-    // agent) and the sentinel sleep it hangs on must be reaped too.
-    const err = await runVega(["flood-err", SENTINEL_OVERFLOW_ERR], {
+    // agent) and the sentinel sleeps it leaves behind must be reaped too.
+    const OVERFLOW_DEADLINE_MS = 5_000;
+    const gate = join(dir, "flood-err-gate");
+    const run = runVega(["flood-err", SENTINEL_OVERFLOW_ERR, gate], {
       maxOutputBytes: 100,
-      timeoutMs: 5_000,
+      timeoutMs: OVERFLOW_DEADLINE_MS,
     }).catch((e: unknown) => e);
+    // Same gated observation as the stdout twin, and for the same reason.
+    expect(await waitForCount(SENTINEL_OVERFLOW_ERR, 1, OVERFLOW_DEADLINE_MS)).toBe(1);
+    writeFileSync(gate, "");
+    const err = await run;
     expect(err).toBeInstanceOf(Error);
     expect(getFailureSignal(err)?.error_kind).toBe("subprocess");
     expect(await waitForClear(SENTINEL_OVERFLOW_ERR)).toBe(0);

@@ -45,6 +45,7 @@ function makeSequencedAXService(responses: AXDescribeResponse[]): AXServiceApi {
     degraded: false,
     describe: async () => responses[Math.min(i++, responses.length - 1)],
     alertCheck: async () => false,
+    livePanel: async () => null,
     ping: async () => true,
   };
 }
@@ -92,6 +93,7 @@ function fastAx(readMs: number): AXServiceApi {
       return content();
     },
     alertCheck: async () => false,
+    livePanel: async () => null,
     ping: async () => true,
   };
 }
@@ -99,7 +101,7 @@ function fastAx(readMs: number): AXServiceApi {
 describe("await-screen-idle tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
-    __primeDepCacheForTests(["xcrun", "adb"]);
+    __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
   });
 
   it("exposes the await-screen-idle id", () => {
@@ -167,6 +169,7 @@ describe("await-screen-idle tool", () => {
         return content();
       },
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitScreenIdleTool(iosRegistry(slowAx));
@@ -198,6 +201,7 @@ describe("await-screen-idle tool", () => {
         return axResponse([{ label: `item-${n++}`, frame: FRAME, traits: ["button"] }]);
       },
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitScreenIdleTool(iosRegistry(churning));
@@ -245,6 +249,7 @@ describe("await-screen-idle tool", () => {
       degraded: false,
       describe: () => new Promise(() => {}),
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitScreenIdleTool(iosRegistry(hangingAx));
@@ -388,6 +393,7 @@ describe("await-screen-idle tool", () => {
         throw new Error("ax service died");
       },
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitScreenIdleTool(iosRegistry(dying));
@@ -416,6 +422,7 @@ describe("await-screen-idle tool", () => {
         return reads < 6 ? axResponse([]) : content();
       },
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitScreenIdleTool(iosRegistry(latePaint));
@@ -749,5 +756,40 @@ describe("await-screen-idle tool", () => {
     expect(result.note).toContain("earlier");
     expect(result.note).toMatch(/reads? failed/);
     expect(result.note).not.toContain("pollIntervalMs (20ms) that leaves no room");
+  });
+
+  // ── ios-remote (a cloud sim reached through sim-remote) ──────────────────
+  // The AX service is the same one the local branch resolves; the blueprint
+  // puts it on a TCP transport across the tunnel. These pin that a remote udid
+  // actually EXECUTES, not merely that the capability gate lets it through.
+
+  it("settles on ios-remote through the same AX path as a local sim", async () => {
+    const tool = createAwaitScreenIdleTool(
+      iosRegistry(makeSequencedAXService([axResponse([]), content()]))
+    );
+
+    const result = await tool.execute(
+      {},
+      { udid: `remote:${IOS_UDID}`, timeoutMs: 2000, pollIntervalMs: 10, minStableMs: 20 }
+    );
+
+    expect(result.settled).toBe(true);
+    expect(result.polls).toBeGreaterThan(1);
+  });
+
+  it("does not settle on ios-remote while the screen keeps changing", async () => {
+    // a different label every poll never holds for minStableMs
+    const changing = Array.from({ length: 30 }, (_, i) =>
+      axResponse([{ label: `item-${i}`, frame: FRAME, traits: ["button"] }])
+    );
+    const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService(changing)));
+
+    const result = await tool.execute(
+      {},
+      { udid: `remote:${IOS_UDID}`, timeoutMs: 80, pollIntervalMs: 5, minStableMs: 40 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(80);
   });
 });

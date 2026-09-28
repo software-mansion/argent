@@ -5,7 +5,6 @@ import { getHierarchyRequestParams } from "../src/blueprints/android-devtools";
 import { describeAndroid } from "../src/tools/describe/platforms/android";
 import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
 import { createAwaitUiElementTool } from "../src/tools/await-ui-element";
-import { fetchTree } from "../src/utils/ui-tree-match";
 import { queryAndroidFullHierarchy } from "../src/tools/flows/flow-android-tree";
 import { resolveDevice } from "../src/utils/device-info";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
@@ -44,7 +43,7 @@ const XML =
  * helper only bypasses its AccessibilityNodeInfo cache when asked to, so the
  * request is the observable behaviour.
  */
-function makeRecordingRegistry(): {
+function makeRecordingRegistry(captures: string[] = [XML]): {
   registry: Registry;
   optionsSeen: () => (GetHierarchyOptions | undefined)[];
 } {
@@ -53,8 +52,9 @@ function makeRecordingRegistry(): {
     isReady: () => true,
     getHierarchy: vi.fn(async (opts?: GetHierarchyOptions) => {
       optionsSeen.push(opts);
+      // Served in order, the last one repeated.
       return {
-        xml: XML,
+        xml: captures.length > 1 ? captures.shift()! : captures[0]!,
         captureMode: "interactive-windows",
         windowCount: 1,
         nodeCount: 2,
@@ -100,6 +100,22 @@ describe("Android describe reads bypass the helper's node cache", () => {
     // could "request coherence" and still hand its caller nothing to act on.
     // This is what makes the XML fixture load-bearing rather than decorative.
     expect(result.source).toBe("android-devtools");
+    expect(nodeLabels(result.tree)).toContain("Sign in");
+  });
+
+  // A WebView that has not published its page yet is re-read until it has, and
+  // that re-read is what the caller ends up with.
+  it("describeAndroid re-reads an unpublished WebView uncached", async () => {
+    const cold =
+      `<?xml version="1.0" encoding="UTF-8"?><hierarchy rotation="0">` +
+      `<node class="android.widget.FrameLayout" content-desc="Web View" bounds="[0,0][1080,2400]"/>` +
+      `</hierarchy>`;
+    const { registry, optionsSeen } = makeRecordingRegistry([cold, XML]);
+
+    const result = await describeAndroid(registry, ANDROID_SERIAL, undefined, false);
+
+    expect(optionsSeen()).toHaveLength(2);
+    optionsSeen().forEach(expectCoherentRequest);
     expect(nodeLabels(result.tree)).toContain("Sign in");
   });
 
@@ -158,20 +174,6 @@ describe("Android describe reads bypass the helper's node cache", () => {
     const seen = optionsSeen();
     expect(seen.length).toBeGreaterThan(1);
     seen.forEach(expectCoherentRequest);
-  });
-
-  // `fetchTree` is the selector-matching entry point shared by the flow
-  // directives and the recorder. Its Android branch delegates to
-  // `describeAndroid`, so this covers the delegation rather than a second
-  // call site — the Lens/preview describe route and `match-element-frame`
-  // reach the helper through `describeAndroid` directly, not through here.
-  it("the shared ui-tree fetchTree reads uncached", async () => {
-    const { registry, optionsSeen } = makeRecordingRegistry();
-
-    await fetchTree(registry, resolveDevice(ANDROID_SERIAL));
-
-    expect(optionsSeen()).toHaveLength(1);
-    expectCoherentRequest(optionsSeen()[0]);
   });
 
   // The one reader that does NOT route through `describeAndroid`: flows resolve

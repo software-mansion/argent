@@ -119,22 +119,6 @@ details .tabs__item--active {
 }
 
 /*
- * The shared theme always mounts a DocSearch bar. Argent has no DocSearch
- * application yet, so keep it hidden until ALGOLIA_* credentials are wired up.
- */
-.navbar [class*="navbarSearchWrapper"] {
-  display: none;
-}
-
-/*
- * The hidden search bar was the flexible element in the left navbar group, so
- * the color mode toggle takes over pushing the trailing items to the right.
- */
-.navbar [class*="colorModeToggle"] {
-  margin-left: auto !important;
-}
-
-/*
  * Shape - every surface that reads as a card, pill or panel shares the 24px
  * radius; small inline chips keep the smaller one so they stay readable.
  */
@@ -237,6 +221,12 @@ td code {
     background-color: var(--swm-sidebar-background);
     background-clip: padding-box;
     padding: 8px 24px;
+    /*
+     * The shared theme reserves a stable scrollbar gutter on the right, which
+     * pushes the menu off centre. The thin scrollbar overlays the right padding
+     * instead, so both sides stay at 24px.
+     */
+    scrollbar-gutter: auto;
   }
 
   .theme-doc-sidebar-container nav.menu > ul.menu__list {
@@ -336,4 +326,154 @@ article [class*="llmDropdownItem"] {
 article [class*="llmDropdownItem"]:hover {
   color: var(--ifm-font-color-base);
   background-color: var(--swm-off-background);
+}
+
+/*
+ * Product switcher - the first sidebar item, a native <details> dropdown that names the
+ * current product (see src/theme/ProductSwitcher). The summary reads as a pill across the
+ * sidebar panel, the open list as a flat panel in the dropdown colours of the theme.
+ *
+ * The shared theme wraps every sidebar item in a flex <div>. That wrapper, not the item,
+ * sticks to the top of the scrolling menu so the pages scroll underneath the switcher.
+ */
+.menu__list > div:first-child:has(> .product-switcher) {
+  position: sticky;
+  top: -8px;
+  z-index: 2;
+  /*
+   * The menu scrolls inside its own 8px top padding (set on nav.menu below), so the
+   * wrapper reaches up over that strip and pads it back, or the items show through it.
+   */
+  margin-top: -8px;
+  padding: 16px 0 12px;
+}
+
+/*
+ * The items scroll under the switcher through a progressive blur: a backdrop layer that
+ * covers the wrapper and the menu padding around it, masked so the blur and the tint
+ * fade out below the pill instead of ending on a hard edge.
+ */
+.menu__list > div:first-child:has(> .product-switcher)::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 -24px -20px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    var(--swm-sidebar-background) 0%,
+    color-mix(in srgb, var(--swm-sidebar-background) 70%, transparent) 55%,
+    transparent 100%
+  );
+  -webkit-backdrop-filter: blur(60px);
+  backdrop-filter: blur(60px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
+}
+
+.product-switcher {
+  flex: 1;
+  max-width: 100%;
+}
+
+.product-switcher__menu {
+  position: relative;
+}
+
+.product-switcher__menu > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  font-family: var(--swm-body-font);
+  font-weight: 600;
+  color: var(--ifm-font-color-base);
+  background-color: var(--swm-background);
+  border: 1px solid var(--swm-border);
+  border-radius: var(--swm-radius-small);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.product-switcher__menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.product-switcher__menu > summary:hover,
+.product-switcher__menu[open] > summary {
+  background-color: var(--swm-off-background);
+}
+
+.product-switcher__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-switcher__chevron {
+  flex-shrink: 0;
+  color: var(--swm-sidebar-icon-color);
+  transition: transform 0.15s;
+}
+
+.product-switcher__menu[open] > summary .product-switcher__chevron {
+  transform: rotate(180deg);
+}
+
+/*
+ * The list sits inside the sidebar menu, whose theme rules zero the padding of nested
+ * lists and links. The extra `.product-switcher` ancestor outweighs them.
+ */
+.product-switcher .product-switcher__menu > ul {
+  position: absolute;
+  z-index: var(--ifm-z-index-dropdown);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 8px;
+  list-style: none;
+  background-color: var(--swm-background);
+  border: 1px solid var(--swm-border);
+  border-radius: var(--swm-radius-small);
+}
+
+.product-switcher .product-switcher__menu > ul > li {
+  margin: 0;
+  padding: 0;
+}
+
+.product-switcher .product-switcher__menu > ul a {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--swm-dropdown-versions-item);
+  border: 1px solid transparent;
+  border-radius: var(--swm-radius-small);
+  text-decoration: none;
+}
+
+.product-switcher .product-switcher__menu > ul a:hover {
+  color: var(--swm-dropdown-versions-item-hover);
+  background-color: var(--swm-off-background);
+}
+
+.product-switcher .product-switcher__menu > ul a[aria-current] {
+  color: var(--swm-dropdown-versions-item-active);
+  background-color: var(--swm-dropdown-versions-item-background-active);
+}
+
+.product-switcher .product-switcher__menu > ul a[aria-current]:hover {
+  color: var(--swm-dropdown-versions-item-active);
 }
