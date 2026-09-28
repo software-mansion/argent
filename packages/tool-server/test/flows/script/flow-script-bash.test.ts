@@ -814,6 +814,129 @@ describe("what a failing bash step says", () => {
     expect(result.failure?.message).not.toContain("never reached");
   }, 30_000);
 
+  it("takes an uncaught Node error, not the version line Node ends on", async () => {
+    const ws = workspace();
+    const node = JSON.stringify(process.execPath.replace(/\\/g, "/"));
+    const plain = await runBash(
+      ws,
+      "node-throws",
+      `set -euo pipefail
+       ${node} -e 'throw new Error("seed API returned 401")'`
+    );
+    expect(plain.failure?.message).toMatch(/\)\. Error: seed API returned 401$/);
+    expect(plain.log).toMatch(/Node\.js v\d+/);
+
+    const caused = await runBash(
+      ws,
+      "node-cause",
+      `${node} -e 'throw new Error("fetch failed", { cause: new Error("connect ECONNREFUSED 127.0.0.1:1") })'`
+    );
+    expect(caused.failure?.message).toMatch(
+      /\)\. \[cause\]: Error: connect ECONNREFUSED 127\.0\.0\.1:1$/
+    );
+
+    const value = await runBash(ws, "node-value", `${node} -e 'throw "seed failed"'`);
+    expect(value.failure?.message).toMatch(/\)\. seed failed$/);
+
+    const shapes: [string, string, RegExp][] = [
+      [
+        "node-exec",
+        `${node} -e 'require("child_process").execSync("echo seed-cli: 401 >&2; exit 3", { stdio: ["ignore", "pipe", "pipe"] })'`,
+        /\)\. seed-cli: 401$/,
+      ],
+      ["node-assert", `${node} -e 'require("assert").strictEqual(1, 2)'`, /\)\. 1 !== 2$/],
+      [
+        "node-deep",
+        `${node} -e 'require("assert").deepStrictEqual({ a: 1, b: [1, 2] }, { a: 2, b: [1, 2] })'`,
+        /\)\. AssertionError \[ERR_ASSERTION\]: Expected values to be strictly deep-equal:$/,
+      ],
+      [
+        "node-dump",
+        `${node} -e 'const e = new Error("[\\n  { \\"path\\": [\\"PORT\\"] }\\n]"); e.name = "ZodError"; throw e'`,
+        /\)\. ZodError: \[$/,
+      ],
+      [
+        "node-event",
+        `${node} -e 'require("child_process").spawn("no-such-cmd-xyz")'`,
+        /\)\. Error: spawn no-such-cmd-xyz ENOENT$/,
+      ],
+      [
+        "node-pointer",
+        `${node} -e 'throw new Error("bad indent at line 4:\\n\\n d: 3\\n^")'`,
+        /\)\. Error: bad indent at line 4:$/,
+      ],
+      [
+        "node-props",
+        `${node} -e 'const e = new Error("seed API returned 401"); for (let i = 0; i < 200; i++) e["p" + i] = i; throw e'`,
+        /\)\. Error: seed API returned 401$/,
+      ],
+      [
+        "node-color",
+        `FORCE_COLOR=1 ${node} -e 'throw new Error("seed API returned 401")'`,
+        /\)\. Error: seed API returned 401$/,
+      ],
+    ];
+    for (const [name, source, reason] of shapes) {
+      const result = await runBash(ws, name, source);
+      expect(result.failure?.message).toMatch(reason);
+    }
+  }, 60_000);
+
+  it("takes Bun's error, not the version line Bun ends on", async () => {
+    const ws = workspace();
+    const framed = await runBash(
+      ws,
+      "bun-framed",
+      `printf '1 | throw new Error("x")\\n    ^\\nerror: seed API returned 401\\n      at /p/seed.mjs:1:7\\n\\nBun v1.3.14 (macOS arm64)\\n' >&2
+       exit 1`
+    );
+    expect(framed.failure?.message).toMatch(/\)\. error: seed API returned 401$/);
+
+    const bare = await runBash(
+      ws,
+      "bun-bare",
+      `printf 'seeding\\nerror: Unable to connect\\n  code: "ConnectionRefused"\\n\\n\\nBun v1.3.14 (Linux x64 baseline)\\n' >&2
+       exit 1`
+    );
+    expect(bare.failure?.message).toMatch(/\)\. error: Unable to connect$/);
+  }, 30_000);
+
+  it("takes npm's error, not the line naming its debug log", async () => {
+    const ws = workspace();
+    const cases: [string, string][] = [
+      [
+        'npm error code EUSAGE\\nnpm error\\nnpm error The npm ci command needs a package-lock.json\\nnpm error Run "npm help ci" for more info\\nnpm error A complete log of this run can be found in: /h/.npm/_logs/1-debug-0.log\\n',
+        "npm error The npm ci command needs a package-lock.json",
+      ],
+      [
+        "npm ERR! code E404\\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/nope\\nnpm ERR! 404\\n\\nnpm ERR! A complete log of this run can be found in: /h/.npm/_logs/1-debug-0.log\\n",
+        "npm ERR! 404 Not Found - GET https://registry.npmjs.org/nope",
+      ],
+      [
+        "npm ERR! code ENOENT\\nnpm ERR! syscall open\\nnpm ERR! path /p/package.json\\nnpm ERR! enoent Could not read package.json\\nnpm ERR! A complete log of this run can be found in:\\nnpm ERR!     /h/.npm/_logs/1-debug.log\\n",
+        "npm ERR! enoent Could not read package.json",
+      ],
+    ];
+    const long = await runBash(
+      ws,
+      "npm-usage",
+      `for i in $(seq 1 40); do echo "progress $i" >&2; done
+       printf 'npm error code EUSAGE\\nnpm error\\nnpm error The npm ci command needs a package-lock.json\\n' >&2
+       for i in $(seq 1 95); do echo "npm error   --option-$i" >&2; done
+       echo "npm error A complete log of this run can be found in: /h/1-debug-0.log" >&2
+       exit 1`
+    );
+    expect(long.failure?.message).toMatch(
+      /\)\. npm error The npm ci command needs a package-lock\.json$/
+    );
+    for (const [i, [stderr, line]] of cases.entries()) {
+      const result = await runBash(ws, `npm-${i}`, `printf '${stderr}' >&2\nexit 1`);
+      expect(result.failure?.message).toMatch(
+        new RegExp(`\\)\\. ${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
+      );
+    }
+  }, 30_000);
+
   it("joins a stderr line that arrived in two pieces", async () => {
     const ws = workspace();
     const result = await runBash(
