@@ -3469,15 +3469,15 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       {
         transport: "an XHR",
         options: {},
-        send: `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/other'); x.send();`,
+        send: `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/URL'); x.send();`,
       },
       {
         transport: "an Expo request",
         options: { expo: { sdk: 57 } },
-        send: `expoFetch('https://api.test/other');`,
+        send: `expoFetch('https://api.test/URL');`,
       },
     ])(
-      "records no call during which $transport was sent, as the call may have run over it",
+      "records only $transport sent during a call to the same URL, as it may be the request of the call",
       async ({ options, send }) => {
         const { rt, LibResponse } = libRuntime(options);
         let resolve: () => void = () => {};
@@ -3485,13 +3485,101 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
           new Promise((r) => (resolve = () => r(new LibResponse(url))));
         rt.install();
         const pending = rt.run(`fetch('https://api.test/native')`) as Promise<unknown>;
-        rt.run(send);
+        rt.run(send.replace("URL", "native"));
         await untilSent(rt, 1);
         resolve();
         await pending;
         await settle();
 
-        expect(rt.records().map((r) => r.request.url)).toEqual(["https://api.test/other"]);
+        expect(rt.records().map((r) => `${r.resourceType} ${r.request.url}`)).toEqual([
+          `${options.expo ? "Fetch" : "XHR"} https://api.test/native`,
+        ]);
+      }
+    );
+
+    it.each<{ transport: string; options: RuntimeOptions; send: string }>([
+      {
+        transport: "an XHR",
+        options: {},
+        send: `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/other'); x.send();`,
+      },
+      {
+        transport: "an Expo request",
+        options: { expo: { sdk: 57 } },
+        send: `expoFetch('https://api.test/other');`,
+      },
+      {
+        transport: "an XHR to the same URL with another method",
+        options: {},
+        send: `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/native'); x.send('{}');`,
+      },
+    ])("records a call during which the app sent $transport", async ({ options, send }) => {
+      const { rt, LibResponse } = libRuntime(options);
+      let resolve: () => void = () => {};
+      rt.context.fetch = (url: string) =>
+        new Promise((r) => (resolve = () => r(new LibResponse(url))));
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/native')`) as Promise<unknown>;
+      rt.run(send);
+      await untilSent(rt, 1);
+      resolve();
+      await pending;
+      await settle();
+
+      expect(rt.records()).toHaveLength(2);
+      expect(rt.records()[1]).toMatchObject({
+        resourceType: "Fetch",
+        request: { method: "GET", url: "https://api.test/native" },
+      });
+    });
+
+    it("records a call during which the app sent an XHR to the same URL with another text body", async () => {
+      const { rt, LibResponse } = libRuntime();
+      let resolve: () => void = () => {};
+      rt.context.fetch = (url: string) =>
+        new Promise((r) => (resolve = () => r(new LibResponse(url))));
+      rt.install();
+      // A GraphQL client on the library and axios on XHR, both on one endpoint.
+      const pending = rt.run(
+        `fetch('https://api.test/graphql', { method: 'POST', body: '{"query":"lib"}' })`
+      ) as Promise<unknown>;
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/graphql'); x.send('{"query":"axios"}');`
+      );
+      await untilSent(rt, 1);
+      resolve();
+      await pending;
+      await settle();
+
+      expect(rt.records().map((r) => `${r.resourceType} ${r.request.postData}`)).toEqual([
+        'XHR {"query":"axios"}',
+        'Fetch {"query":"lib"}',
+      ]);
+    });
+
+    it.each([
+      { others: 0, when: "alone" },
+      { others: 60, when: "while the app sends 60 other XHRs" },
+    ])(
+      "records only the XHR of a wrapper that builds the library's Response from React Native's fetch, $when",
+      async ({ others }) => {
+        const { rt } = libRuntime({ polyfillFetch: true });
+        // React Native's fetch sends its XHR at once, inside the call.
+        rt.run(`fetch = function(u, init) {
+          return rnFetch(u, init).then(function(r) { return r.text(); }).then(function() { return new LibResponse(u); });
+        };`);
+        rt.install();
+        const pending = rt.run(`fetch('https://api.test/me')`) as Promise<unknown>;
+        rt.run(
+          `for (var i = 0; i < ${others}; i++) { var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/other' + i); x.send(); }`
+        );
+        rt.sends[0]!.respond(200, {}, "me");
+        await pending;
+        await settle();
+
+        expect(rt.sends).toHaveLength(1 + others);
+        expect(rt.records()).toHaveLength(1 + others);
+        expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "me" });
       }
     );
 

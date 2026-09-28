@@ -34,8 +34,18 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   g.__argent_network_by_id = byId;
   var nextId = 1;
   var bufferedChars = 0;
-  // XHRs and Expo requests sent so far.
+  // XHRs and Expo requests sent so far. While calls of a fetch library (below) are in flight, the
+  // method, URL and text body of each send are noted too.
   var transportSends = 0;
+  var lastSends = [];
+  var inFlight = [];
+
+  function noteSend(method, url, body) {
+    transportSends++;
+    if (!inFlight.length) return;
+    lastSends.push({ n: transportSends, method: method, url: url, body: typeof body === 'string' ? bodyKey(body) : undefined });
+    if (lastSends.length > 500) lastSends.shift();
+  }
 
   // Tells request bodies apart without keeping them: a text up to 4096 characters as it is, a longer
   // one by its length, its start and end and 128 short pieces spread over it, and an object by a
@@ -391,7 +401,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var result = origSend.apply(this, arguments);
       if (!slot || !slot.headers) return result;
       var rec = createRecord(isFetchXhr(this) ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
-      transportSends++;
+      noteSend(slot.method, slot.url, body);
       slot.headers = null;
       listen(this, rec);
       return result;
@@ -608,7 +618,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         try {
           var rec = createRecord('Fetch', String((init && init.method) || 'GET').toUpperCase(), String(url),
             headersObject(init && init.headers), body, startedAt);
-          transportSends++;
+          noteSend(rec.entry.request.method, rec.entry.request.url, body);
           nativeRecords.set(this, rec);
           observeExpoResponse(rec, response, promise);
         } catch (e) {}
@@ -692,7 +702,6 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     // starts after that response, in the same millisecond. A recorded call leaves that list once no
     // call in flight started before it ended.
     var libCalls = [];
-    var inFlight = [];
     var recorded = new WeakSet();
     var libSteps = 0;
     var sourceOf = function(response) {
@@ -704,9 +713,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       if (at !== -1) inFlight.splice(at, 1);
       var first = inFlight.length ? inFlight[0].start : libSteps + 1;
       while (libCalls.length && libCalls[0].end < first) libCalls.shift();
+      var firstSent = inFlight.length ? inFlight[0].sentBefore : transportSends;
+      while (lastSends.length && lastSends[0].n <= firstSent) lastSends.shift();
     };
     g.fetch = function fetch(input, init) {
       var call = { startedAt: Date.now(), start: ++libSteps, sentBefore: transportSends };
+      // In flight before the library runs: a wrapper over React Native's fetch sends its XHR at once,
+      // inside the call.
       inFlight.push(call);
       var promise;
       try {
@@ -731,9 +744,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       });
     };
     var recordLibFetch = function(call, input, init, response) {
-      // A call during which an XHR or Expo request was sent may have run over it (an app wrapper that
-      // builds this Response from React Native's fetch), and that request has its record.
-      if (call.sentBefore !== transportSends || !(response instanceof LibResponse) || recorded.has(response)) return;
+      if (!(response instanceof LibResponse) || recorded.has(response)) return;
       var source = sourceOf(response);
       if (source && recorded.has(source)) return;
       recorded.add(response);
@@ -742,12 +753,22 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
       // A Request the app passes holds its own body.
       var body = init && init.body !== undefined ? init.body : input && typeof input === 'object' && input._body ? input._body._bodyInit : undefined;
+      // An XHR or Expo request with the same method and URL, sent during the call, may be the request
+      // of the call (an app wrapper that builds this Response from React Native's fetch), and that
+      // request has its record. Text bodies that differ tell two requests apart. Other requests the
+      // app sends meanwhile do not matter.
+      var key = bodyKey(body);
+      for (var j = lastSends.length - 1; j >= 0 && lastSends[j].n > call.sentBefore; j--) {
+        var send = lastSends[j];
+        if (send.method === method && send.url === url &&
+          !(typeof send.body === 'string' && typeof key === 'string' && send.body !== key)) return;
+      }
       call.endedAt = Date.now();
       call.end = ++libSteps;
       if (!source) {
         call.method = method;
         call.url = url;
-        call.body = bodyKey(body);
+        call.body = key;
         for (var i = libCalls.length - 1; i >= 0; i--) {
           var other = libCalls[i];
           if (other.method === method && other.url === url && other.body === call.body && other.start < call.end && call.start < other.end) return;
