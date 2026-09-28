@@ -75,6 +75,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - Chrome DevTools Protocol layer: Argent attaches to the Chromium app.
   - Native `NSURLProtocol` layer: you activate the native inspection.
 - A reload or a restart of the app clears the network log of the JS runtime layer. Argent starts the capture again when the agent reads the network log.
+- Expo `fetch()` does not always report a connection that breaks in the middle of the response body. The app then gets a part of the body, or its read of the body does not end. The record shows the same: that part of the body, or a pending request. If the app does not read the body, the record shows a finished request.
 - A `fetch()` call that fails before it sends the request has no record. An example is a call with a signal that is already aborted.
 - If the app does not read the body of an Expo `fetch()` response, the record has no body and no size.
 - If a library sets its own `fetch()` and `Response` as the global ones, Argent records its requests with less data:

@@ -57,7 +57,8 @@ function formatEntry(entry: LogEntry): string {
   if (entry.state === "failed") {
     status = entry.errorText ?? "failed";
   } else if (entry.response) {
-    status = `${entry.response.status} ${entry.response.statusText}`;
+    // A response whose body has not completed.
+    status = `${entry.response.status} ${entry.response.statusText}${entry.state === "pending" ? " (pending)" : ""}`;
   } else {
     status = "pending";
   }

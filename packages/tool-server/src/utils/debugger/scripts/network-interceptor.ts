@@ -366,17 +366,23 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var expoFetch;
   try { expoFetch = g.expo && g.expo.modules && g.expo.modules.ExpoFetchModule; } catch (e) {}
 
-  // Hands each result of an object's method to tap as well. The caller gets a promise that settles
-  // like the original, so a rejection it never handles is still reported as unhandled.
-  function tapMethod(target, name, tap) {
+  // Hands each result of an object's method to tap as well. track(1) runs when a call starts and
+  // track(-1) once its promise settles. The caller gets a promise that settles like the original, so
+  // a rejection it never handles is still reported as unhandled.
+  function tapMethod(target, name, tap, track) {
     var method = target[name];
     if (typeof method !== 'function') return;
     target[name] = function() {
       var result = method.apply(this, arguments);
       if (!result || typeof result.then !== 'function') return result;
+      track(1);
       return result.then(function(value) {
         try { tap(value); } catch (e) {}
+        track(-1);
         return value;
+      }, function(error) {
+        track(-1);
+        throw error;
       });
     };
   }
@@ -388,13 +394,20 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   // readyForJSFinalization, a failed one too, and that event can come before start rejects: the
   // record ends only once start resolved. The body can be complete before JS gets that event: a
   // whole body the app reads, or didComplete after the chunks it streams, ends the record too. So an
-  // app that aborts once it has the body (urql, graphql-sse) does not make the request fail.
+  // app that aborts once it has the body (urql, graphql-sse) does not make the request fail. A read
+  // of the app still in flight holds the record: on iOS, when the connection drops in the middle of
+  // the body, the event can say nothing of the drop, and the read then never settles. The record
+  // stays pending, as the app's read does.
   function observeExpoResponse(rec, response, started) {
     var chunks = [];
     var kept = 0;
     var streamed = 0;
     var endedAt = 0;
     var responded = false;
+    var reading = 0;
+    var finalized = false;
+    var stalled = false;
+    var completed = false;
     // 3 bytes past the cap let utf8Text step back to a character boundary.
     var take = function(data) {
       if (!data || typeof data.byteLength !== 'number') return;
@@ -413,41 +426,60 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var onData = function(data) { take(data); };
     var onFail = function(error) { if (rec.entry.state === 'pending') fail(rec, String(error)); };
     var finish = function() {
-      if (!endedAt || !responded || rec.entry.state !== 'pending') return;
+      if (!endedAt || !responded || reading || stalled || rec.entry.state !== 'pending') return;
       rec.entry.durationMs = endedAt - rec.startedAt;
       if (!streamed) return complete(rec, undefined, undefined, false);
       var bytes = new Uint8Array(kept);
       for (var i = 0, at = 0; i < chunks.length; at += chunks[i].byteLength, i++) bytes.set(chunks[i], at);
       complete(rec, utf8Text(bytes), streamed, streamed > BODY_CAP);
     };
-    var ended = function() {
+    var bodyEnded = function() {
       if (!endedAt) endedAt = Date.now();
+    };
+    var ended = function() {
+      bodyEnded();
+      finish();
+    };
+    var track = function(step) {
+      // A read that starts once the record ended without a body can hang too, and holds it again.
+      if (step > 0 && rec.entry.state === 'finished' && rec.entry.encodedDataLength === undefined) rec.entry.state = 'pending';
+      reading += step;
       finish();
     };
     var onEnd = function() {
       try { response.removeListener('readyForJSFinalization', onEnd); } catch (e) {}
+      finalized = true;
       ended();
     };
     // Expo drops the stream listeners itself when the request ends.
     response.addListener('didReceiveResponseData', onData);
-    response.addListener('didComplete', ended);
+    response.addListener('didComplete', function() {
+      completed = true;
+      ended();
+    });
     response.addListener('didFailWithError', onFail);
     response.addListener('readyForJSFinalization', onEnd);
     // startStreaming returns the whole body when it completed before the app opened its stream (on
     // iOS, SDK 55 resolves fetch only then), else null and the chunks follow as events.
     tapMethod(response, 'startStreaming', function(data) {
-      if (data == null) return;
+      // Once the request ended, native answers null only when the body did not complete: the app's
+      // stream then never ends, and the record stays pending. On Android, SDK 55 can deliver the null
+      // of a stream it started after the stream's didComplete and the end: that stream is whole.
+      if (data == null) {
+        if (finalized && !completed) stalled = true;
+        return;
+      }
       takeWhole(data);
-      ended();
-    });
+      bodyEnded();
+    }, track);
     tapMethod(response, 'arrayBuffer', function(data) {
       takeWhole(data);
-      ended();
-    });
+      bodyEnded();
+    }, track);
     tapMethod(response, 'text', function(text) {
       if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, utf8Length(text), false);
-      ended();
-    });
+      bodyEnded();
+    }, track);
     started.then(function() {
       if (rec.entry.state === 'failed') return;
       setResponse(rec, response.url, response.status, response.statusText, headersObject(response.headers));

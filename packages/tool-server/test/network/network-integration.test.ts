@@ -579,6 +579,38 @@ describe("NetworkInspector integration (mock server)", () => {
     }
   });
 
+  it("view-network-logs marks a request whose response came but whose body did not complete as pending", async () => {
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-dropped",
+      state: "pending",
+      request: { url: "https://api.example.com/dropped", method: "GET", headers: {} },
+      response: {
+        url: "https://api.example.com/dropped",
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "application/json",
+      },
+      resourceType: "Fetch",
+      timestamp: Date.now() / 1000,
+    });
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+
+      expect(result).toContain('{id: rn-net-dropped} "GET /dropped" 200 OK (pending) Fetch');
+      expect(result).toMatch(/\{id: rn-net-1\} "GET \/users" 200 OK Fetch/);
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "rn-net-dropped"),
+        1
+      );
+    }
+  });
+
   it("view-network-logs returns page index out-of-range error", async () => {
     const result = (await registry.invokeTool("view-network-logs", {
       port: mockPort,

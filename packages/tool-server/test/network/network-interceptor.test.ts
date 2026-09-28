@@ -2173,6 +2173,117 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
     });
 
+    it("keeps a request pending when the connection drops while the app reads the body with text(), as iOS never settles that read", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      rt.run(
+        `var got = 'nothing'; expoFetch('https://api.test/big').then(function(r) {
+          return r.text().then(function(text) { got = text; }, function(error) { got = error; });
+        })`
+      );
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "application/json" });
+      await settle();
+      request.chunk('{"partial":');
+      // Not streaming: no didFailWithError, only the end of the request.
+      request.fail("The network connection was lost.");
+      await settle();
+      await settle();
+
+      expect(rt.expoLog()).toEqual(["start resolved", "readyForJSFinalization"]);
+      expect(rt.run("got")).toBe("nothing");
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({ state: "pending", response: { status: 200 } });
+      expect(rt.records()[0]!.errorText).toBeUndefined();
+      expect(rt.records()[0]!.durationMs).toBeUndefined();
+    });
+
+    it.each([
+      { read: "text()", code: "response.text()" },
+      { read: "its body stream", code: "readStream(response)" },
+    ])(
+      "puts a record back to pending when the app starts to read the body with $read after the connection dropped",
+      async ({ code }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.install();
+        rt.run(
+          `var response; expoFetch('https://api.test/big').then(function(r) { response = r; })`
+        );
+        await untilSent(rt, 1);
+        const request = rt.native[0]!;
+        request.head(200, { "Content-Type": "application/json" });
+        await settle();
+        request.chunk('{"partial":');
+        request.fail("The network connection was lost.");
+        await settle();
+        expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 200 } });
+
+        // The app reads the body only now, after other work: the read never settles.
+        rt.run(
+          `var got = 'nothing'; ${code}.then(function(v) { got = v; }, function(e) { got = e; })`
+        );
+        await settle();
+        await settle();
+        expect(rt.run("got")).toBe("nothing");
+        expect(rt.records()[0]).toMatchObject({ state: "pending", response: { status: 200 } });
+      }
+    );
+
+    it("finishes a streamed body whose startStreaming() result reaches JS after the end of the request, as SDK 55 can on Android", async () => {
+      const rt = createRuntime({ polyfillFetch: true, expo: { sdk: 55 } });
+      // Native answers the call on one thread while another ends the body: the answer comes last.
+      rt.run(`var proto = expo.modules.ExpoFetchModule.NativeResponse.prototype, start = proto.startStreaming;
+        proto.startStreaming = function() {
+          return start.apply(this, arguments).then(function(data) {
+            return new Promise(function(resolve) { setTimeout(function() { resolve(data); }, 20); });
+          });
+        };`);
+      rt.install();
+      const text = rt.run(
+        `expoFetch('https://api.test/items').then(function(r) { return readStream(r); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, {});
+      await untilNativeState(request, "bodyStreamingStarted");
+      request.chunk('{"items":[1,2,3]}');
+      request.done();
+
+      expect(await text).toBe('{"items":[1,2,3]}');
+      await new Promise((r) => setTimeout(r, 40));
+      await settle();
+      expect(rt.expoLog()).toEqual(["start resolved", "didComplete", "readyForJSFinalization"]);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: '{"items":[1,2,3]}',
+      });
+    });
+
+    it("finishes a record once a text() read that was in flight at the end of the request settles", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const text = rt.run(
+        `expoFetch('https://api.test/me').then(function(r) { return r.text(); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, {});
+      await settle();
+      request.chunk("late");
+      request.done();
+
+      expect(await text).toBe("late");
+      await settle();
+      // JS got the end of the request first, then the result of the read.
+      expect(rt.expoLog()).toEqual(["start resolved", "readyForJSFinalization"]);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "late",
+        encodedDataLength: 4,
+      });
+    });
+
     it.each([
       {
         order: "the end of the request before start rejects, as a device does",
