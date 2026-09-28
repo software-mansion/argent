@@ -2342,6 +2342,28 @@ describe("argent flow run <dir>", () => {
     expect(parseRunArgs([shown]).flowRef).toBe(shown);
   });
 
+  it("quotes a path that starts with =, which zsh would expand to a command's path", async () => {
+    const suiteDir = path.join(tempRoot, "=nightly");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "a-login.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ flow: "a-login", ok: false, steps: [] }),
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "=nightly", "--output", "=out"], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n").split("\n")).toContain(
+      `    re-run: argent flow run '${path.join("=nightly", "a-login.yaml")}' --output '=out'`
+    );
+  });
+
   it("re-runs with the batch's --update-baselines, exporting where the batch exported", async () => {
     toolsClientMock.callTool
       .mockResolvedValueOnce({ data: report({ flow: "a-login", ok: false, steps: [] }) })

@@ -1,11 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+type ListedSimulator = { udid: string; name: string; state: string; runtimeKind: string };
 const simulators = vi.hoisted(() => ({
-  list: [] as { udid: string; name: string; state: string; runtimeKind: string }[],
+  list: [] as ListedSimulator[],
+  remote: [] as { udid: string; name: string; state: string }[],
 }));
 vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/ios-devices")>()),
   listIosSimulators: async () => simulators.list,
+  findIosSimulator: async (udid: string) => simulators.list.find((s) => s.udid === udid),
+}));
+const remoteListing = vi.hoisted(() =>
+  vi.fn(async (_options?: { timeoutMs?: number }) => ({
+    devices: { "com.apple.CoreSimulator.SimRuntime.iOS-27-0": simulators.remote },
+  }))
+);
+vi.mock("../../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/sim-remote")>()),
+  simctlListDevices: remoteListing,
 }));
 import {
   buildTextTree,
@@ -13,6 +25,7 @@ import {
   type RawResult,
 } from "../../src/tools/debugger/debugger-component-tree";
 import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import { rememberDeviceAlias, resetDeviceAliases } from "../../src/utils/debugger/device-alias";
 
 // A landscape window, as React Native measures an unfolded iPhone Duo's UI.
 const LANDSCAPE = { screenW: 951, screenH: 669 };
@@ -108,6 +121,18 @@ describe("buildTextTree — tap points on the axes the gesture tools take", () =
     expect(tapOf(text)).toBe("0.80,0.25");
     expect(text).not.toContain("Note:");
   });
+
+  it.each([
+    ["landscape", LANDSCAPE],
+    ["portrait", PORTRAIT],
+  ])("says a udid that is not the app's simulator was not used, on a %s UI", (_shape, screen) => {
+    const text = buildTextTree(tree(screen, 0.8, 0.25), { ...base, uiOrientation: "mismatched" });
+    expect(tapOf(text)).toBe("0.80,0.25");
+    expect(text).toContain(
+      "Note: The udid is not the UDID of the simulator that shows this app. Thus, the tool did not use the udid."
+    );
+    expect(text).not.toContain("The UI is");
+  });
 });
 
 const SIM_UDID = "B6C52FD4-5408-402B-9369-EF7C66B98E6F";
@@ -151,6 +176,8 @@ describe("readTapAxes", () => {
   afterEach(() => {
     vi.useRealTimers();
     simulators.list = [];
+    simulators.remote = [];
+    remoteListing.mockClear();
   });
 
   it("reads nothing for an Android device, whose touches use the window's axes", async () => {
@@ -271,7 +298,7 @@ describe("readTapAxes", () => {
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
-    it("reads the simulator the udid names, whatever the names", async () => {
+    it("reads the simulator the udid names among two of the app's device name", async () => {
       simulators.list = [
         { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
         {
@@ -299,6 +326,9 @@ describe("readTapAxes", () => {
     });
 
     it("is unknown when the udid names a simulator that does not run the debugged app", async () => {
+      simulators.list = [
+        { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+      ];
       const { api, registry } = fakeNative({
         connected: ["com.example.other"],
         active: "com.example.other",
@@ -311,6 +341,141 @@ describe("readTapAxes", () => {
         )
       ).toBe("unknown");
       expect(api.queryViewHierarchy).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["another device's name", "iPhone Duo", "Booted"],
+      ["the app's device name, but is shut down", "iPhone 18 Pro", "Shutdown"],
+    ])("does not read a udid whose simulator has %s", async (_case, name, state) => {
+      simulators.list = [
+        { udid: SIM_UDID, name, state, runtimeKind: "mobile" },
+        {
+          udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+          name: "iPhone 18 Pro",
+          state: "Booted",
+          runtimeKind: "mobile",
+        },
+      ];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, SIM_UDID)
+        )
+      ).toBe("mismatched");
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it("does not read a udid that no listing knows", async () => {
+      simulators.list = [
+        { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+      ];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(
+            LOGICAL_ID,
+            "com.example.app (iPhone 18 Pro)",
+            LOGICAL_ID,
+            "00000000-0000-0000-0000-000000000000"
+          )
+        )
+      ).toBe("mismatched");
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it("reads a remote simulator the udid names when sim-remote lists it by the app's name", async () => {
+      simulators.remote = [{ udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted" }];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, `remote:${SIM_UDID}`)
+        )
+      ).toBe("landscapeRight");
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(`remote:${SIM_UDID}`);
+      expect(remoteListing).toHaveBeenCalledWith({ timeoutMs: 3_000 });
+    });
+
+    it("does not read a remote simulator of another name", async () => {
+      simulators.list = [
+        {
+          udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+          name: "iPhone 18 Pro",
+          state: "Booted",
+          runtimeKind: "mobile",
+        },
+      ];
+      simulators.remote = [{ udid: SIM_UDID, name: "iPhone Duo", state: "Booted" }];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, `remote:${SIM_UDID}`)
+        )
+      ).toBe("mismatched");
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it("ignores a remote udid for an app on Android when sim-remote cannot list", async () => {
+      remoteListing.mockRejectedValueOnce(new Error("sim-remote: command not found"));
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (sdk_gphone64_arm64)", LOGICAL_ID, `remote:${SIM_UDID}`)
+        )
+      ).toBeUndefined();
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it("does not read a simulator named like the Android device a serial session runs on", async () => {
+      simulators.list = [
+        { udid: SIM_UDID, name: "Pixel 9", state: "Booted", runtimeKind: "mobile" },
+      ];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app("emulator-5554", "com.example.app (Pixel 9)", undefined, SIM_UDID)
+        )
+      ).toBeUndefined();
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a session connected with its serial", "emulator-5554", undefined],
+      ["a session keyed by its logicalDeviceId", LOGICAL_ID, LOGICAL_ID],
+    ])(
+      "ignores a simulator's udid for an app on Android, %s, with no note",
+      async (_case, deviceId, logicalDeviceId) => {
+        simulators.list = [
+          { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+        ];
+        const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+        expect(
+          await readTapAxes(
+            registry as never,
+            app(deviceId, "com.example.app (sdk_gphone64_arm64)", logicalDeviceId, SIM_UDID)
+          )
+        ).toBeUndefined();
+        expect(registry.resolveService).not.toHaveBeenCalled();
+      }
+    );
+
+    it("does not take a udid that is no simulator for an app that runs on one", async () => {
+      simulators.list = [
+        { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+      ];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, "emulator-5554")
+        )
+      ).toBe("mismatched");
+      expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
     it("reads nothing when the udid names an Android device", async () => {
@@ -336,6 +501,73 @@ describe("readTapAxes", () => {
         )
       ).toBeUndefined();
       expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a session connected with a simulator's UDID", () => {
+    const landscape = async () => ({ screen: { interfaceOrientation: "landscapeRight" } });
+
+    it("does not read another simulator of the same name when device_id is a simulator's", async () => {
+      simulators.list = [
+        { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+        {
+          udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+          name: "iPhone 18 Pro",
+          state: "Booted",
+          runtimeKind: "mobile",
+        },
+      ];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(
+            SIM_UDID,
+            "com.example.app (iPhone 18 Pro)",
+            undefined,
+            "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+          )
+        )
+      ).toBe("mismatched");
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it("takes a forwarded logicalDeviceId for the simulator UDID it was connected with", async () => {
+      rememberDeviceAlias(LOGICAL_ID, SIM_UDID);
+      try {
+        simulators.list = [
+          { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+          {
+            udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+            name: "iPhone 18 Pro",
+            state: "Booted",
+            runtimeKind: "mobile",
+          },
+        ];
+        const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+        const session = (udid: string) =>
+          readTapAxes(
+            registry as never,
+            app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, udid)
+          );
+        expect(await session("8BDBFD47-E557-41BA-926B-2DD39A17A53E")).toBe("mismatched");
+        expect(registry.resolveService).not.toHaveBeenCalled();
+        expect(await session(SIM_UDID)).toBe("landscapeRight");
+        expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
+      } finally {
+        resetDeviceAliases();
+      }
+    });
+
+    it("reads the simulator device_id names when the udid is the same one", async () => {
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(SIM_UDID, "com.example.app (iPhone 18 Pro)", undefined, SIM_UDID)
+        )
+      ).toBe("landscapeRight");
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
     });
   });
 });

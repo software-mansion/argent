@@ -1588,4 +1588,27 @@ describe("swipe: pre-dispatch settle", () => {
     expect(result.steps[1].warning!.startsWith(result.steps[0].warning!)).toBe(true);
     expect(result.steps[1].warning).toContain("No read reported the UI's orientation");
   }, 15000);
+
+  it.each(["emulator-5554", "chromium-cdp-9222"])(
+    "says nothing about the UI's orientation on %s, whose touches are on the UI's axes",
+    async (device) => {
+      currentTree = () => {
+        throw new Error("tree source down");
+      };
+      await writeFlow("blind-unturned", {
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tap", x: 0.5, y: 0.5 },
+          { kind: "swipe", direction: "left" },
+        ],
+      });
+
+      const result = await run("blind-unturned", device);
+
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:pass", "swipe:pass"]);
+      expect(result.steps[1].warning).toBe(result.steps[0].warning);
+      expect(result.steps[1].warning).not.toContain("orientation");
+    },
+    15000
+  );
 });

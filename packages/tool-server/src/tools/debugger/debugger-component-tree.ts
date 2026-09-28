@@ -7,8 +7,9 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
-import { resolveDevice } from "../../utils/device-info";
-import { listIosSimulators } from "../../utils/ios-devices";
+import { isIosSimulator, resolveDevice, stripRemotePrefix } from "../../utils/device-info";
+import { findIosSimulator, listIosSimulators } from "../../utils/ios-devices";
+import { simctlListDevices } from "../../utils/sim-remote";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
 import { asUiOrientation, type UiOrientation } from "../describe/contract";
 import { uiPointToNative } from "../flows/flow-orientation";
@@ -53,7 +54,7 @@ function rectsOverlap(
  * name could run, with no `udid` to tell them apart; absent is a device whose
  * touches use the window's axes.
  */
-type TapAxes = UiOrientation | "unknown" | "ambiguous";
+type TapAxes = UiOrientation | "unknown" | "ambiguous" | "mismatched";
 
 export function buildTextTree(
   data: RawResult,
@@ -355,13 +356,20 @@ export function buildTextTree(
   const lines: string[] = [];
 
   const turn =
-    opts.uiOrientation && opts.uiOrientation !== "unknown" && opts.uiOrientation !== "ambiguous"
+    opts.uiOrientation &&
+    opts.uiOrientation !== "unknown" &&
+    opts.uiOrientation !== "ambiguous" &&
+    opts.uiOrientation !== "mismatched"
       ? opts.uiOrientation
       : undefined;
 
   if (canNormalize) {
     lines.push(`Screen: ${screenW}x${screenH}`);
-    if (turn && turn !== "portrait") {
+    if (opts.uiOrientation === "mismatched") {
+      lines.push(
+        "Note: The udid is not the UDID of the simulator that shows this app. Thus, the tool did not use the udid. If the UI is landscape, the tap points are not correct. The describe tool gives correct tap points. This tool also gives correct tap points with the UDID of the simulator that shows this app."
+      );
+    } else if (turn && turn !== "portrait") {
       lines.push(
         `The UI is ${turn} on the screen. The tap points are on the screen's axes, which the gesture tools use.`
       );
@@ -540,31 +548,56 @@ interface DebuggedApp {
 }
 
 const AMBIGUOUS_SIMULATOR = "ambiguous-simulator";
-
-function isIosSimulator(device: DeviceInfo): boolean {
-  return (
-    (device.platform === "ios" && device.kind === "simulator") || device.platform === "ios-remote"
-  );
-}
+const MISMATCHED_UDID = "mismatched-udid";
 
 /**
  * The iOS simulator the session runs on; undefined for any other device. The
- * caller's `udid` decides when given. Otherwise a session keyed by a Metro
- * logicalDeviceId (two devices share one Metro) names no device, so it is found
- * by name among the booted simulators; a name two of them share leaves it
- * ambiguous.
+ * caller's `udid` decides when given.
  */
 async function iosSimulatorOf(
   app: DebuggedApp
-): Promise<DeviceInfo | typeof AMBIGUOUS_SIMULATOR | undefined> {
-  if (app.udid) {
-    const named = resolveDevice(app.udid);
-    return isIosSimulator(named) ? named : undefined;
+): Promise<DeviceInfo | typeof AMBIGUOUS_SIMULATOR | typeof MISMATCHED_UDID | undefined> {
+  if (!app.udid) return iosSimulatorOfSession(app);
+  const named = resolveDevice(app.udid);
+  if (isIosSimulator(named)) {
+    const own = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
+    if (isIosSimulator(own)) return own.id === named.id ? named : MISMATCHED_UDID;
+    if (isLogicalKeyed(app) && (await isBootedAs(named, app.deviceName))) return named;
   }
+  return (await iosSimulatorOfSession(app)) === undefined ? undefined : MISMATCHED_UDID;
+}
+
+async function isBootedAs(device: DeviceInfo, name: string): Promise<boolean> {
+  const sim =
+    device.platform === "ios-remote"
+      ? Object.values(
+          (
+            await simctlListDevices({ timeoutMs: ORIENTATION_READ_TIMEOUT_MS }).catch(() => ({
+              devices: {},
+            }))
+          ).devices
+        )
+          .flat()
+          .find((d) => d.udid === stripRemotePrefix(device.id))
+      : await findIosSimulator(device.id);
+  return sim?.state === "Booted" && sim.name === name;
+}
+
+function isLogicalKeyed(app: DebuggedApp): boolean {
+  return app.deviceId === app.logicalDeviceId || isLogicalKeyedDevice(app.deviceId);
+}
+
+/**
+ * A session keyed by a Metro logicalDeviceId (two devices share one Metro)
+ * names no device, so it is found by name among the booted simulators; a name
+ * two of them share leaves it ambiguous.
+ */
+async function iosSimulatorOfSession(
+  app: DebuggedApp
+): Promise<DeviceInfo | typeof AMBIGUOUS_SIMULATOR | undefined> {
   const device = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
   if (isIosSimulator(device)) return device;
-  const logicalKeyed = app.deviceId === app.logicalDeviceId || isLogicalKeyedDevice(app.deviceId);
-  if (!logicalKeyed) return undefined;
+  if (!isLogicalKeyed(app)) return undefined;
   const named = (await listIosSimulators()).filter(
     (sim) => sim.state === "Booted" && sim.runtimeKind === "mobile" && sim.name === app.deviceName
   );
@@ -587,6 +620,7 @@ export async function readTapAxes(
     const device = await iosSimulatorOf(app);
     if (device === undefined) return undefined;
     if (device === AMBIGUOUS_SIMULATOR) return "ambiguous";
+    if (device === MISMATCHED_UDID) return "mismatched";
     const ref = nativeDevtoolsRef(device);
     const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
     const bundleId = await debuggedBundleId(api, app.appName);
@@ -620,7 +654,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS simulator UDID from list-devices. Pass it when device_id is a logicalDeviceId (two or more devices share one Metro), so that the tap coordinates of a landscape UI are on the screen's axes."
+      "iOS simulator UDID from list-devices. Pass it when device_id is a logicalDeviceId (two or more devices share one Metro), so that the tap coordinates of a landscape UI are on the screen's axes. Give the UDID of the simulator that shows the app. The tool uses the UDID only for a booted simulator that has the device name of the app. For an app on an iOS simulator, the result shows a note when the tool does not use the UDID."
     ),
   onScreenOnly: z
     .boolean()
