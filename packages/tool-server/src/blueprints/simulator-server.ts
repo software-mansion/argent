@@ -12,20 +12,25 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
+import { getAndroidSdkRoot } from "@argent/configuration-core";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
-import { isTvOsSimulator } from "../utils/ios-devices";
+import { isFoldableSimulator, isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
-import { createMoqTransport, sendCommand } from "../utils/simulator-client";
+import {
+  createMoqTransport,
+  fetchDisplayState,
+  sendCommand,
+  type SimulatorDisplayState,
+} from "../utils/simulator-client";
 import {
   assertExternalCapability,
   externalClaimForAnyId,
   type ExternalDevice,
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
-import { encodeKey } from "../utils/datachannel-proto";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -56,10 +61,30 @@ const getPaths = () => {
 
 const READY_TIMEOUT_MS = 30_000;
 
-// Bounds on the stderr kept from a spawn that never became ready. Mirrors the
-// android-devtools blueprint, which reports the same exited-before-ready shape.
-const STDERR_KEEP_BYTES = 4 * 1024;
-const STDERR_REPORT_CHARS = 400;
+// `exit` can fire before the child's stderr is drained, and the last stderr
+// line is usually the reason it exited. Wait this long for the stream to end.
+const STDERR_DRAIN_MS = 250;
+const STDERR_TAIL_LINES = 10;
+const STDERR_MAX_LINE_CHARS = 500;
+
+// env_logger's routine lines ("[<ts> INFO  simulator_server::…] …") say nothing
+// about why the binary stopped; its errors are printed without that prefix.
+const ROUTINE_LOG_LINE = /^\[\S+\s+(?:INFO|DEBUG|TRACE)\s/;
+
+function exitedBeforeReadyMessage(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderrTail: readonly string[]
+): string {
+  const how =
+    typeof code === "number"
+      ? `exited with code ${code}`
+      : signal
+        ? `was killed by ${signal}`
+        : "exited";
+  const reason = stderrTail.join("\n");
+  return `simulator-server ${how} before becoming ready${reason ? `:\n${reason}` : ""}`;
+}
 
 export interface SimulatorServerApi {
   apiUrl: string;
@@ -69,10 +94,10 @@ export interface SimulatorServerApi {
    *
    * Awaitable because the transports differ in what they can promise. On a
    * provider's server the key rides the WebSocket, which acknowledges it, so
-   * the returned promise rejects on a lost or refused press. The spawned and
-   * MoQ paths have no ack to wait for and resolve as soon as the write is
-   * handed off. The callers await uniformly and each transport reports what it
-   * actually knows.
+   * the returned promise rejects on a lost or refused press. MoQ has no ack,
+   * but a write the session refuses still rejects. The spawned path has
+   * neither and resolves as soon as the write is handed off. The callers await
+   * uniformly and each transport reports what it actually knows.
    */
   pressKey(direction: "Down" | "Up", keyCode: number): Promise<void>;
   /**
@@ -88,6 +113,53 @@ export interface SimulatorServerApi {
    * build serves, so attaching never becomes consuming a provider's extras.
    */
   external?: boolean;
+  /**
+   * The device this server drives, as the tools name it. Read by
+   * `simulator-client.ts` to look up per-device state that lives outside the
+   * server — the active panel of a foldable.
+   */
+  deviceId?: string;
+  /**
+   * Set for a foldable simulator whose server reported its panels: the server
+   * captures every panel and follows none, so every touch, wheel, screenshot
+   * and stream then names the panel the guest renders to, resolved at that
+   * moment (`utils/foldable.ts`). Undefined for every other device, and for a
+   * foldable driven by a server build that predates panels, which stays on
+   * screen 1 as before.
+   */
+  display?: SimulatorDisplayState;
+}
+
+/** Bound on the `GET /api/display` probe a foldable's server gets at attach time. */
+const DISPLAY_PROBE_TIMEOUT_MS = 3_000;
+
+/**
+ * Give a foldable simulator's server its panel list, so the commands that
+ * follow name a panel. Which panel is live is not read here: every command
+ * resolves it when it runs.
+ *
+ * Only a device whose profile is foldable is probed at all, so the common case
+ * pays nothing. A foldable whose server answers with no panels — a build that
+ * predates them, or a provider's — is left without `display`: nothing names a
+ * screen and the device is driven on its cover panel, exactly as before.
+ */
+async function attachFoldableDisplay(api: SimulatorServerApi, device: DeviceInfo): Promise<void> {
+  if (device.platform !== "ios" || api.transport) return;
+  if (!(await isFoldableSimulator(device.id))) return;
+  const tag = `[sim ${device.id.slice(0, 8)}]`;
+  const display = await fetchDisplayState(api, AbortSignal.timeout(DISPLAY_PROBE_TIMEOUT_MS));
+  if (!display?.foldable) {
+    process.stderr.write(
+      `${tag} this simulator is foldable, but its simulator-server reports no panels; ` +
+        `it will be driven on screen 1 (the cover panel) only.\n`
+    );
+    return;
+  }
+  api.display = display;
+  const panels = display.panels.map((p) => `${p.screenId} (${p.width}x${p.height})`).join(", ");
+  process.stderr.write(
+    `${tag} foldable simulator with screens ${panels}; every command names the live panel\n`
+  );
 }
 
 /**
@@ -105,13 +177,14 @@ async function buildRemoteInstance(
     pasteText: async (text: string) => {
       await simctlPbcopy(device.id, text);
       // USB HID usage ids: 0xE3 = Left GUI (Cmd), 0x19 = V. Cmd+V on the
-      // remote sim is what actually fires the paste.
+      // remote sim is what actually fires the paste. Pressed through
+      // `api.pressKey`, so a refused key fails like any other refused input.
       const CMD = 0xe3;
       const V = 0x19;
-      await moq.sendControl(encodeKey({ action: "Down", code: CMD }));
-      await moq.sendControl(encodeKey({ action: "Down", code: V }));
-      await moq.sendControl(encodeKey({ action: "Up", code: V }));
-      await moq.sendControl(encodeKey({ action: "Up", code: CMD }));
+      await api.pressKey("Down", CMD);
+      await api.pressKey("Down", V);
+      await api.pressKey("Up", V);
+      await api.pressKey("Up", CMD);
     },
   });
 
@@ -123,8 +196,12 @@ async function buildRemoteInstance(
   const api: SimulatorServerApi = {
     apiUrl: stubUrl,
     streamUrl: stubUrl,
-    pressKey: (direction, keyCode) =>
-      moq.sendControl(encodeKey({ action: direction, code: keyCode })),
+    // Through `sendCommand`, as the attached instance below does, so a key the
+    // session refuses reports the same failure as a refused touch instead of a
+    // bare SDK error the caller cannot classify.
+    pressKey: async (direction, keyCode) => {
+      await sendCommand(api, { cmd: "key", code: keyCode, direction });
+    },
     transport,
   };
 
@@ -173,11 +250,18 @@ async function buildAttachedInstance(
 
   const api: SimulatorServerApi = {
     apiUrl: externalDevice.simulatorServer.apiUrl,
+    deviceId: device.id,
     external: true,
-    pressKey: (direction, code) => sendCommand(api, { cmd: "key", code, direction }),
+    pressKey: async (direction, code) => {
+      await sendCommand(api, { cmd: "key", code, direction });
+    },
     streamUrl: externalDevice.simulatorServer.streamUrl,
     /** `transport: undefined`, so the WS + HTTP path is reused unchanged. */
   };
+
+  // A provider's build without the display route answers 404 and the device
+  // stays single-panel; the route itself is on the parity allow-list.
+  await attachFoldableDisplay(api, device);
 
   return {
     api,
@@ -234,9 +318,15 @@ async function spawnSimulatorServerProcess(
     const args = [subcommand, "--id", udid];
     if (deviceSet) args.push("--device-set", deviceSet);
 
+    // The binary finds adb through ANDROID_HOME, so a configured SDK root
+    // reaches it as that variable.
+    const sdkRoot = subcommand === "ios" ? null : getAndroidSdkRoot();
+    if (sdkRoot)
+      process.stderr.write(`[sim ${udid.slice(0, 8)}] android.sdkRoot → ANDROID_HOME=${sdkRoot}\n`);
     const proc = spawn(BINARY_PATH, args, {
       cwd: RUN_DIR,
       stdio: ["pipe", "pipe", "pipe"],
+      ...(sdkRoot ? { env: { ...process.env, ANDROID_HOME: sdkRoot } } : {}),
     });
 
     let apiUrl: string | null = null;
@@ -259,8 +349,12 @@ async function spawnSimulatorServerProcess(
       fn();
     };
 
+    // Set on `exit`, before the rejection waits for stderr: stdout can still
+    // deliver buffered readiness lines, and an exited process is never ready.
+    let exited = false;
+
     const resolveWhenReady = () => {
-      if (apiUrl == null) return;
+      if (apiUrl == null || exited) return;
       settle(() => resolve({ proc, apiUrl: apiUrl!, streamUrl }));
     };
 
@@ -285,31 +379,36 @@ async function spawnSimulatorServerProcess(
     });
 
     const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
-    // The binary names the cause of an early exit only on stderr — "emulator
-    // <serial> not found among running emulators", a missing resource, a
-    // permission refusal — and the exit code is 1 for every one of them. Keep a
-    // bounded tail so the failure below can carry the one thing that separates
-    // them.
-    let stderrBuf = "";
+    // The binary explains a failed start on stderr (e.g. "Error: Failed to find
+    // any running emulator"), so keep the last lines for the rejections below.
+    const stderrTail: string[] = [];
+    let partialLine = "";
+    // Routine lines are dropped here, not when the message is built, so a burst
+    // of shutdown logging cannot push the error out of the tail.
+    const keepLine = (line: string) => {
+      if (!line.trim() || ROUTINE_LOG_LINE.test(line)) return;
+      stderrTail.push(line.trimEnd().slice(0, STDERR_MAX_LINE_CHARS));
+      stderrTail.splice(0, Math.max(0, stderrTail.length - STDERR_TAIL_LINES));
+    };
     proc.stderr?.on("data", (data: Buffer) => {
       process.stderr.write(`[sim ${udidTag}] ${data}`);
-      stderrBuf += data.toString("utf-8");
-      if (stderrBuf.length > STDERR_KEEP_BYTES) stderrBuf = stderrBuf.slice(-STDERR_KEEP_BYTES);
+      if (settled) return;
+      const lines = (partialLine + data.toString()).split("\n");
+      partialLine = (lines.pop() ?? "").slice(-STDERR_MAX_LINE_CHARS);
+      lines.forEach(keepLine);
     });
-    // The LAST characters, unlike the android-devtools twin's first: this binary
-    // prints ~500ms of media-stack chatter before it reports why it is quitting,
-    // so the head of the buffer is noise and the fatal line is at the end.
-    const stderrDetail = (): string => {
-      const tail = stderrBuf.trim();
-      return tail ? ` stderr=${tail.slice(-STDERR_REPORT_CHARS)}` : "";
-    };
 
     proc.on("exit", (code, signal) => {
-      settle(() =>
-        reject(
-          new FailureError(
-            `simulator-server exited with code before becoming ready (code=${code} signal=${signal}).${stderrDetail()}`,
-            {
+      exited = true;
+      // The ready deadline must not fire during the stderr wait and replace the
+      // exit code and reason with a timeout.
+      clearTimeout(timer);
+      const fail = () => {
+        keepLine(partialLine);
+        partialLine = "";
+        settle(() =>
+          reject(
+            new FailureError(exitedBeforeReadyMessage(code, signal, stderrTail), {
               error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_EXITED,
               failure_stage: "simulator_server_spawn_ready",
               failure_area: "tool_server",
@@ -324,10 +423,17 @@ async function spawnSimulatorServerProcess(
               signal === "SIGTERM"
                 ? { failure_signal: signal }
                 : {}),
-            }
+            })
           )
-        )
-      );
+        );
+      };
+      const stderr = proc.stderr;
+      if (settled || !stderr || stderr.readableEnded) return fail();
+      const drainTimer = setTimeout(fail, STDERR_DRAIN_MS);
+      stderr.once("end", () => {
+        clearTimeout(drainTimer);
+        fail();
+      });
     });
 
     proc.on("error", (err) => {
@@ -349,11 +455,14 @@ async function spawnSimulatorServerProcess(
     });
 
     const timer = setTimeout(() => {
+      keepLine(partialLine);
+      partialLine = "";
+      const reason = stderrTail.join("\n");
       settle(
         () =>
           reject(
             new FailureError(
-              `Timed out waiting for simulator-server to become ready.${stderrDetail()}`,
+              `Timed out waiting for simulator-server to become ready${reason ? `:\n${reason}` : ""}`,
               {
                 error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_TIMEOUT,
                 failure_stage: "simulator_server_spawn_ready",
@@ -490,6 +599,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       api: {
         apiUrl,
         streamUrl,
+        deviceId: device.id,
         pressKey: (direction: "Down" | "Up", keyCode: number) => {
           /**
            * simulator-server never replies on stdin, so there is nothing to
@@ -504,6 +614,10 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       },
       events,
     };
+
+    // The first command a foldable gets must already name its live panel, so
+    // the probe runs before the instance is handed out.
+    await attachFoldableDisplay(instance.api, device);
 
     return instance;
   },
