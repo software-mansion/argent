@@ -5,8 +5,15 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     globals: true,
-    // Suite-wide guards; each setup file documents why it exists.
-    setupFiles: ["test/setup/clear-argent-env.ts", "test/setup/stub-status-bar.ts"],
+    // Suite-wide guards; each setup file documents why it exists. The device
+    // provider guard sets an ARGENT_* variable of its own, so it has to follow
+    // the sweep that clears them.
+    setupFiles: [
+      "test/setup/clear-argent-env.ts",
+      "test/setup/stub-status-bar.ts",
+      "test/setup/ignore-device-providers.ts",
+      "test/setup/assert-env-restored.ts",
+    ],
   },
   resolve: {
     alias: {

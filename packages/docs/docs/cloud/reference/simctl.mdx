@@ -1,0 +1,49 @@
+---
+sidebar_position: 2
+sidebar_label: simctl passthrough
+title: simctl passthrough reference
+sidebar_custom_props:
+  icon: square-terminal
+---
+
+```
+sim-remote simctl <SUBCOMMAND> [ARGS...]
+```
+
+`sim-remote simctl` runs `xcrun simctl` on the machine. For a subcommand that `sim-remote` forwards without changes, the subcommand name, the arguments, the options, the output and the exit codes are the ones of `simctl`. The subcommands in the table below are different. `sim-remote` runs them on its own, accepts only the forms in the table, and can print an error of its own. `sim-remote simctl help [SUBCOMMAND]` shows the usage of `simctl`.
+
+## Subcommands with local files
+
+Most arguments go to the machine without changes. A subcommand that names a file is different, because a path from your computer means nothing on the machine. `sim-remote` runs these subcommands on its own and moves the file for you.
+
+| Subcommand                                                                                            | Direction | Description                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `install <DEVICE> <PATH>`                                                                             | Upload    | Upload the `.app` bundle and install it                                                                                                                                                           |
+| `install_app_data <DEVICE> <PATH>`                                                                    | Upload    | Upload the `.xcappdata` bundle                                                                                                                                                                    |
+| `addmedia <DEVICE> <PATH>...`                                                                         | Upload    | Upload every file after the device                                                                                                                                                                |
+| `push <DEVICE> [<BUNDLE_ID>] <FILE>\|-`                                                               | Upload    | Read the payload from the file or from stdin (`-`). `sim-remote` rejects a malformed payload with the message of `simctl`                                                                         |
+| `keychain <DEVICE> add-cert <PATH>` and `keychain <DEVICE> add-root-cert <PATH>`                      | Upload    | Upload the certificate. `keychain <DEVICE> reset` goes to the machine without changes                                                                                                             |
+| `io <DEVICE> screenshot [--type=<TYPE>] [--display=<DISPLAY>] [--mask=<MASK>] <FILE>`                 | Download  | Save the screenshot to the file on your computer. Without `--type`, the extension of the file selects the type: `png`, `tif`, `tiff`, `jpg`, `jpeg`, `bmp` or `gif`. Other extensions produce PNG |
+| `io <DEVICE> recordVideo [--codec=h264\|hevc] [--display=<DISPLAY>] [--mask=<MASK>] [--force] <FILE>` | Download  | Record until you press Ctrl-C, then save the video to the file on your computer. `record-video` is also accepted                                                                                  |
+| `get_app_container <DEVICE> <BUNDLE_ID> [<CONTAINER>]`                                                | Download  | Download a copy of the container to your computer                                                                                                                                                 |
+| `pbcopy <DEVICE>`                                                                                     | Clipboard | Copy stdin from your computer to the clipboard of the simulator                                                                                                                                   |
+| `pbsync <SOURCE> <DESTINATION>`                                                                       | Clipboard | Sync the clipboards when one side is `host`. `host` is your computer                                                                                                                              |
+| `boot <DEVICE>` and `shutdown <DEVICE>\|all`                                                          | None      | `sim-remote` runs these on its own for a faster response. The arguments are the ones of `simctl`                                                                                                  |
+
+`sim-remote` accepts these subcommands in the forms above only. For another form, `sim-remote` prints an error that names the accepted usage:
+
+```
+sim-remote runs `simctl install` itself rather than forwarding it, and so far only accepts: simctl install <device> <path>
+```
+
+## Subcommands without changes
+
+All other subcommands go to the machine as they are. This includes `list`, `launch`, `terminate`, `listapps`, `uninstall`, `create`, `delete`, `erase`, `clone`, `rename`, `upgrade`, `bootstatus`, `openurl`, `getenv`, `status_bar`, `ui`, `privacy`, `logverbose`, `icloud_sync`, `pbpaste` and `io enumerate`.
+
+`launch --console` streams the output of the app to your terminal for as long as the app runs.
+
+## Limits
+
+- One upload is at most 1 GiB. A larger upload fails with `upload exceeds the 1 GiB limit`.
+- `sim-remote` streams the output. When the consumer closes the pipe, for example `| head`, the remote command stops.
+- The paths of `--display` and `--mask` are options, and `sim-remote` passes them to `simctl` without changes.

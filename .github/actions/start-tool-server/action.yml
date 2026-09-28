@@ -35,7 +35,7 @@ runs:
           Linux) npm install @rollup/rollup-linux-x64-gnu --no-save ;;
           *) echo "::error::start-tool-server: unsupported runner OS '$RUNNER_OS'"; exit 1 ;;
         esac
-        npx tsc --build
+        npm run build
 
     - name: Start tool-server
       shell: bash

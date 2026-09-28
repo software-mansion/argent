@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
+import { isExternalId } from "../../utils/external-devices";
 import { deviceIdOwningUrn, transportNamespacesForPlatform } from "./device-services";
 
 const zodSchema = z.object({
@@ -36,6 +37,14 @@ export function createStopSimulatorServerTool(
       const platform = resolveDevice(udid).platform;
       const namespaces = transportNamespacesForPlatform(platform);
 
+      /**
+       * An external device has no server of ours to stop. Its `dispose()` is
+       * a no-op by design. Still drop the cached handles so the next call
+       * re-resolves against the provider's state, but report `stopped: false`.
+       * A clean no-op beats an error for an agent that calls this on every device.
+       */
+      const external = isExternalId(udid);
+
       const snapshot = registry.getSnapshot();
       let stopped = false;
       // Scanned rather than fetched by exact URN, so ids resolve through the
@@ -47,6 +56,12 @@ export function createStopSimulatorServerTool(
       for (const urn of urns) {
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
+
+        if (external) {
+          await registry.disposeService(urn);
+          continue;
+        }
+
         // ERROR / TERMINATING nodes hold no process — e.g. a tvOS UDID, which
         // the SimulatorServer factory rejects on start. Clean it up, but don't
         // report it as stopped.

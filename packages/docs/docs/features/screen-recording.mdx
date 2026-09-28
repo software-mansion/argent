@@ -26,6 +26,8 @@ Argent draws each interaction of the agent into the video. A pulse marks each ta
 
 Argent removes the still parts of the recording. When the screen does not change, Argent keeps the first second and removes the rest. Thus a long session with a short activity gives a short video without dead air. The agent can also keep the full real-time recording, for example to measure how long an operation takes on the screen.
 
+The video keeps the size of the screen at the start of the recording. If the screen changes size, Argent keeps the proportions of the new screen and adds black bars. On a foldable simulator, the screen changes size when the other panel shows the UI. To get a panel at full size, tell the agent to start the recording on that panel.
+
 Argent stamps a small Argent watermark into the corner of the video. You can turn the watermark off.
 
 ## Where the video lands
@@ -45,7 +47,7 @@ The files stay in the working tree. Add the directory to `.gitignore` when you d
 
 - Argent records iOS simulators, Android emulators, and physical Android devices. Argent does not record tvOS simulators, physical iPhones, Chromium apps, Vega devices, or remote simulators.
 - One recording per device at a time. Different devices can record at the same time.
-- Some simulator-server builds record video without an extra tool. Every other build encodes with `ffmpeg` instead, and a failed recording names it. Install `ffmpeg` only when a recording asks for it, not up front. The build, not the platform, decides which applies.
+- Some simulator-server builds record video without an extra tool. Every other build encodes with `ffmpeg` instead, and a failed recording names it. Install `ffmpeg` only when a recording asks for it, not up front. The build, not the platform, decides which applies. A recording of a foldable simulator always uses `ffmpeg`.
 - On Android, a secure screen such as a password field or a DRM video comes out black.
 - A recording needs a stop call before the agent can give you the file. This is also the case when the time limit stopped the recording.
 
