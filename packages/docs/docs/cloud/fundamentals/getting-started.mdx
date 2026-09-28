@@ -1,0 +1,123 @@
+---
+sidebar_position: 1
+sidebar_label: Getting started
+title: Getting started with Argent Cloud
+sidebar_custom_props:
+  icon: rocket
+---
+
+Argent Cloud is a cloud-hosted iOS simulator infrastructure platform developed by Software Mansion. It provides network-accessible, isolated iOS simulators that run on dedicated Apple hardware. AI coding agents, such as Claude Code or Cursor Cloud Agents, use it to run iOS and React Native applications remotely. CI/CD pipelines on Linux or cloud hosts use it in the same way. Both can execute, inspect, debug and test the applications.
+
+<Prompt>
+{`
+Set up Argent Cloud on this computer and boot a hosted iOS simulator.
+
+Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundamentals/installation.
+
+1. Download the latest sim-remote binary for this platform from
+   https://github.com/software-mansion/sim-remote-releases/releases/latest,
+   make it executable and put it in ~/.local/bin. Add ~/.local/bin to PATH if it is missing.
+2. Confirm the installation with sim-remote --help.
+3. Run export SIM_ROUTER_API_KEY=<my api key>, then run sim-remote login and wait until
+   it prints the acquired machine. Do not write the key to any file.
+4. Run sim-remote simctl list devices available and pick an iPhone.
+5. Boot it and wait until the boot completes with sim-remote simctl bootstatus <UDID> -b.
+6. Report the machine name, the UDID and the state of the simulator.
+
+Do not run sim-remote logout. I want to keep the machine.
+`}
+
+</Prompt>
+
+## Quick start
+
+### Step 1: Install the `sim-remote` CLI
+
+<InstallCommand />
+
+If `~/.local/bin` is not on your `PATH`, add this line to your shell profile. Run the same line in the current shell, so the next command finds the binary:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Confirm the installation:
+
+```bash
+sim-remote --help
+```
+
+See [Installation](/docs/cloud/fundamentals/installation) for the prerequisites and the list of release assets.
+
+### Step 2: Acquire an API key
+
+We issue one API key per user and send it to you directly. If you do not have a key yet, [contact us](https://argent.swmansion.com/cloud#contact) and we will send you one. Treat the key like a password and do not commit it to a repository. See [Security and data](/docs/cloud/reference/security-and-data).
+
+### Step 3: Authenticate
+
+Put your API key in the `SIM_ROUTER_API_KEY` environment variable and log in. The command reserves a machine for you and prints its name.
+
+```bash
+export SIM_ROUTER_API_KEY=<API_KEY>
+sim-remote login
+```
+
+We recommend the environment variable. Set it once in your shell profile, and `sim-remote login` needs no arguments. In CI, supply the same variable as a secret.
+
+You can also give the key with the `--api-key` option:
+
+```bash
+sim-remote login --api-key <API_KEY>
+```
+
+`sim-remote` keeps the session in memory only and does not write the key to disk.
+
+### Step 4: Boot a simulator
+
+List the simulators on your machine and copy the UDID of one of them.
+
+```bash
+sim-remote simctl list devices available
+```
+
+Boot the simulator and wait until the boot completes. The `-b` option boots the simulator if it is not booted yet.
+
+```bash
+sim-remote simctl bootstatus <UDID> -b
+```
+
+### Step 5: Install and launch your app
+
+Install your app. The path is a path on your computer. `sim-remote` uploads the bundle for you.
+
+```bash
+sim-remote simctl install <UDID> ./build/MyApp.app
+```
+
+Launch your app.
+
+```bash
+sim-remote simctl launch <UDID> com.example.MyApp
+```
+
+### Step 6: Log out
+
+Log out when you are done. The makes the machine available to other users on your team again.
+
+```bash
+sim-remote logout
+```
+
+## Next steps
+
+<Cards>
+  <Card href="/docs/cloud/fundamentals/how-it-works" title="How it works" icon="network">
+    Learn how sessions, machines, simulators and tunnels fit together.
+  </Card>
+  <Card href="/docs/cloud/integrations/argent" title="Integrations" icon="plug">
+    Connect Argent, Maestro, Appium and GitHub Actions to the hosted simulators.
+  </Card>
+  <Card href="/docs/cloud/reference/cli" title="CLI reference" icon="terminal">
+    Look up every <code>sim-remote</code> command.
+  </Card>
+</Cards>
