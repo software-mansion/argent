@@ -365,6 +365,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   // once start resolves.
   var expoFetch;
   try { expoFetch = g.expo && g.expo.modules && g.expo.modules.ExpoFetchModule; } catch (e) {}
+  // Takes the whole body of a response from native, for the app to get at its first read. It stays
+  // null when Expo's module cannot hand a body back (see below).
+  var takeBody = null;
 
   // Hands each result of an object's method to tap as well. track(1) runs when a call starts and
   // track(-1) once its promise settles. The caller gets a promise that settles like the original, so
@@ -387,10 +390,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     };
   }
 
-  // Native Expo hands a body out once, so reading it here, or through a clone, would take it from the
-  // app or make it wait. The body is taken as the app reads it: its text() or arrayBuffer() (json(),
-  // blob() and bytes() go through them), or the chunks of its body stream. A body the app never
-  // reads is not recorded. The native side announces the end of every request with
+  // Native Expo hands a body out once, so reading it here while the request runs, or through a clone,
+  // would take it from the app or make it wait. The body is taken as the app reads it: its text() or
+  // arrayBuffer() (json(), blob() and bytes() go through them), or the chunks of its body stream. A
+  // 2xx body the app never reads is not recorded. The native side announces the end of every request with
   // readyForJSFinalization, a failed one too, and that event can come before start rejects: the
   // record ends only once start resolved. The body can be complete before JS gets that event: a
   // whole body the app reads, or didComplete after the chunks it streams, ends the record too. So an
@@ -398,6 +401,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   // of the app still in flight holds the record: on iOS, when the connection drops in the middle of
   // the body, the event can say nothing of the drop, and the read then never settles. The record
   // stays pending, as the app's read does.
+  // Apps often do not read the body of an error response (if (!response.ok) throw ...), and that
+  // body is what the agent needs. Once the request has ended, and the app has not started to read
+  // the body in the turn after, such a body is taken from native. The app gets it at its first read.
   function observeExpoResponse(rec, response, started) {
     var chunks = [];
     var kept = 0;
@@ -405,6 +411,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var endedAt = 0;
     var responded = false;
     var reading = 0;
+    var read = false;
     var finalized = false;
     var stalled = false;
     var completed = false;
@@ -425,8 +432,38 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     };
     var onData = function(data) { take(data); };
     var onFail = function(error) { if (rec.entry.state === 'pending') fail(rec, String(error)); };
+    // Returns whether it holds the record for a take of the body.
+    var tried = false;
+    var takeUnread = function() {
+      if (tried) return false;
+      tried = true;
+      var status = rec.entry.response.status;
+      if (rec.entry.request.method === 'HEAD' || status === 204 || status === 205 || status === 304 ||
+        rec.entry.response.headers['content-length'] === '0') {
+        storeBody(rec, '', 0, false);
+        return false;
+      }
+      if ((status >= 200 && status < 300) || !takeBody) return false;
+      var release = function() {
+        reading--;
+        finish();
+      };
+      // The app gets a turn to start its own read: on iOS, SDK 55 resolves fetch only once the request
+      // ended.
+      reading++;
+      setTimeout(function() {
+        var body = read ? undefined : takeBody(response);
+        if (!body) return release();
+        body.then(function(data) {
+          if (data != null) takeWhole(data);
+          release();
+        }, release);
+      }, 0);
+      return true;
+    };
     var finish = function() {
       if (!endedAt || !responded || reading || stalled || rec.entry.state !== 'pending') return;
+      if (!read && !streamed && takeUnread()) return;
       rec.entry.durationMs = endedAt - rec.startedAt;
       if (!streamed) return complete(rec, undefined, undefined, false);
       var bytes = new Uint8Array(kept);
@@ -441,6 +478,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       finish();
     };
     var track = function(step) {
+      read = true;
       // A read that starts once the record ended without a body can hang too, and holds it again.
       if (step > 0 && rec.entry.state === 'finished' && rec.entry.encodedDataLength === undefined) rec.entry.state = 'pending';
       reading += step;
@@ -530,6 +568,49 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
           if (rec && rec.entry.state === 'pending') fail(rec, 'aborted');
           return origCancel.apply(this, arguments);
         };
+      }
+      // Native hands a body out once. A body taken for the record goes to the first read of the app
+      // instead, through the native methods that expo/fetch reads with. Expo's own response, its
+      // listeners and its body stream stay as they are.
+      var responseProto = expoFetch.NativeResponse && expoFetch.NativeResponse.prototype;
+      if (responseProto && typeof responseProto.arrayBuffer === 'function' && typeof responseProto.text === 'function' &&
+        typeof responseProto.startStreaming === 'function' && typeof TextDecoder === 'function') {
+        var takenBodies = new WeakMap();
+        var origStartStreaming = responseProto.startStreaming;
+        var handBack = function(name, convert) {
+          var original = responseProto[name];
+          var patched = function() {
+            var body = takenBodies.get(this);
+            if (!body) return original.apply(this, arguments);
+            takenBodies.delete(this);
+            var self = this, args = arguments;
+            // Nothing taken (the body did not complete): native answers as it would have.
+            return body.then(function(data) { return data == null ? original.apply(self, args) : convert(data); });
+          };
+          try { responseProto[name] = patched; } catch (e) {}
+          return responseProto[name] === patched;
+        };
+        var handed = [
+          handBack('arrayBuffer', function(data) {
+            return data.byteOffset === 0 && data.byteLength === data.buffer.byteLength ? data.buffer :
+              data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+          }),
+          handBack('startStreaming', function(data) { return data; }),
+          // As native text(): a byte order mark stays, and bytes that are not UTF-8 become U+FFFD. This
+          // decode runs on the app's JS thread, only for an error body the app reads a turn or more
+          // after the request ended.
+          handBack('text', function(data) { return new TextDecoder('utf-8', { ignoreBOM: true }).decode(data); })
+        ];
+        if (handed[0] && handed[1] && handed[2]) {
+          // Once the request ended, native startStreaming returns the whole body, or null when the body
+          // did not complete, and does not wait.
+          takeBody = function(response) {
+            var body = origStartStreaming.call(response);
+            if (!body || typeof body.then !== 'function') return undefined;
+            takenBodies.set(response, body);
+            return body;
+          };
+        }
       }
     }
   }

@@ -475,8 +475,9 @@ const EXPO_FETCH_JS = `(function() {
       throw new Error('Not implemented');
     }
   }
-  FetchResponse55.prototype.text = NativeResponse.prototype.text;
-  FetchResponse55.prototype.arrayBuffer = NativeResponse.prototype.arrayBuffer;
+  // SDK 55 inherits text() and arrayBuffer() from the native class.
+  FetchResponse55.prototype.text = function() { return NativeResponse.prototype.text.apply(this, arguments); };
+  FetchResponse55.prototype.arrayBuffer = function() { return NativeResponse.prototype.arrayBuffer.apply(this, arguments); };
   var Response = native.sdk === 55 ? FetchResponse55 : FetchResponse;
   native.FetchResponse = Response;
 
@@ -718,7 +719,8 @@ function createRuntime({
     } satisfies ExpoCalls,
     log: [] as string[],
     encode: (text: string) => new TextEncoder().encode(text),
-    decode: (bytes: Uint8Array) => new TextDecoder().decode(bytes),
+    // Native text() keeps a byte order mark.
+    decode: (bytes: Uint8Array) => new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes),
   };
 
   /** Models React Native's XMLHttpRequest: event order, responseURL timing and incremental-events flag. */
@@ -1938,6 +1940,224 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
     });
 
+    /**
+     * The app gets a response with `status` and does not read its body, until the test runs `read`
+     * (`response` is the response) once the request ended. Runs with the interceptor or without it.
+     */
+    async function readsLater(
+      status: number,
+      body: string,
+      read: string,
+      { install = true, options = EXPO_57 }: { install?: boolean; options?: RuntimeOptions } = {}
+    ) {
+      const rt = createRuntime(options);
+      if (install) rt.install();
+      rt.run(
+        `var response; expoFetch('https://api.test/signup', { method: 'POST', body: '{}' }).then(function(r) { response = r; })`
+      );
+      for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+      rt.native[0]!.respond(status, { "Content-Type": "application/json" }, body);
+      await settle();
+      const usedBefore = rt.run("response.bodyUsed");
+      // The record before the app reads the body.
+      const recorded = install ? rt.records()[0] : undefined;
+      // Expo's response keeps no stream listeners once the request ended.
+      const listeners = rt.run(
+        `['didReceiveResponseData', 'didComplete', 'didFailWithError'].map(function(e) { return (response._listeners[e] || []).length; })`
+      );
+      const value = await (rt.run(read) as Promise<unknown>);
+      await settle();
+      return {
+        rt,
+        value,
+        recorded,
+        usedBefore,
+        usedAfter: rt.run("response.bodyUsed"),
+        listeners,
+        calls: rt.expoCalls(),
+      };
+    }
+
+    it.each([
+      { status: 422, read: "json()", code: "response.json()", value: { error: "email taken" } },
+      { status: 500, read: "text()", code: "response.text()", value: '{"error":"email taken"}' },
+      {
+        status: 404,
+        read: "arrayBuffer()",
+        code: "response.arrayBuffer().then(function(b) { return b.byteLength; })",
+        value: 23,
+      },
+      {
+        status: 503,
+        read: "its body stream",
+        code: "readStream(response)",
+        value: '{"error":"email taken"}',
+      },
+      {
+        status: 400,
+        read: "a clone",
+        code: "response.clone().text()",
+        value: '{"error":"email taken"}',
+      },
+    ])(
+      "records the body of a $status response the app does not read, and the app still reads it with $read",
+      async ({ status, code, value }) => {
+        const without = await readsLater(status, '{"error":"email taken"}', code, {
+          install: false,
+        });
+        const { rt, ...observed } = await readsLater(status, '{"error":"email taken"}', code);
+
+        expect(without.value).toEqual(value);
+        expect(observed.value).toEqual(value);
+        expect(observed.usedBefore).toBe(without.usedBefore);
+        expect(observed.usedAfter).toBe(without.usedAfter);
+        expect(observed.listeners).toEqual(without.listeners);
+        expect(observed.calls.clone).toBe(without.calls.clone);
+        expectRecordPerRequest(rt, 1);
+        expect(observed.recorded).toMatchObject({
+          state: "finished",
+          response: { status },
+          responseBody: '{"error":"email taken"}',
+          encodedDataLength: 23,
+        });
+      }
+    );
+
+    it.each([
+      {
+        read: "text()",
+        code: "response.text().then(function(t) { return Array.from(t).map(function(c) { return c.charCodeAt(0); }); })",
+      },
+      {
+        read: "json()",
+        code: "response.json().then(function(j) { return j; }, function(e) { return e.name; })",
+      },
+    ])(
+      "hands the app an unread error body with its byte order mark, as native $read does",
+      async ({ code }) => {
+        const body = "\ufeff{}";
+        const without = await readsLater(400, body, code, { install: false });
+        const { rt, value } = await readsLater(400, body, code);
+
+        expect(value).toEqual(without.value);
+        expect(rt.records()[0]!.encodedDataLength).toBe(5);
+      }
+    );
+
+    it("leaves the app a body stream it took before the end of an error response", async () => {
+      const read = `response.body.getReader().read().then(function(c) { return new TextDecoder().decode(c.value); })`;
+      const takeStream = async (install: boolean) => {
+        const rt = createRuntime(EXPO_57);
+        if (install) rt.install();
+        rt.run(
+          `var response, stream; expoFetch('https://api.test/down').then(function(r) { response = r; stream = r.body; })`
+        );
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(503, {}, "down");
+        await settle();
+        return {
+          rt,
+          value: await (rt.run(read.replace("response.body", "stream")) as Promise<string>),
+        };
+      };
+      const without = await takeStream(false);
+      const { rt, value } = await takeStream(true);
+
+      expect(without.value).toBe("down");
+      expect(value).toBe("down");
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "down" });
+    });
+
+    it("finishes an unread error response whose body did not complete, and holds it while the app reads it later", async () => {
+      // An iOS file:// URL that is missing gets a 404, then the error state; a drop gets the error
+      // state after a part of the body.
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      rt.run(`var response; expoFetch('file:///missing.json').then(function(r) { response = r; })`);
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(404, {});
+      await settle();
+      request.fail("The file does not exist.");
+      await settle();
+      await settle();
+      expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 404 } });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+
+      // Native text() waits for a body that never completes, with or without the interceptor.
+      rt.run(`var got = 'nothing'; response.text().then(function(t) { got = t; })`);
+      await settle();
+      expect(rt.run("got")).toBe("nothing");
+      expect(rt.records()[0]!.state).toBe("pending");
+    });
+
+    it("records a size of 0 for an error response with Content-Length 0 the app does not read, and reads nothing", async () => {
+      // On SDK 55 bodyUsed is native: a read of an empty body would turn it true.
+      const bodyUsed = async (install: boolean) => {
+        const rt = createRuntime({ polyfillFetch: true, expo: { sdk: 55 } });
+        if (install) rt.install();
+        rt.run(
+          `var response; expoFetch('https://api.test/me').then(function(r) { response = r; })`
+        );
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(401, { "Content-Length": "0" });
+        await settle();
+        return { rt, bodyUsed: rt.run("response.bodyUsed"), calls: rt.expoCalls() };
+      };
+      const without = await bodyUsed(false);
+      const { rt, ...observed } = await bodyUsed(true);
+
+      expect(observed).toEqual({ bodyUsed: without.bodyUsed, calls: NO_CALLS });
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "",
+        encodedDataLength: 0,
+      });
+    });
+
+    it("leaves an error body the app reads as soon as fetch resolves to native, when the request ended first", async () => {
+      // SDK 55 on iOS resolves fetch only once the request ended.
+      const options: RuntimeOptions = {
+        polyfillFetch: true,
+        expo: { sdk: 55, startsAtBodyEnd: true },
+      };
+      const reads = async (install: boolean) => {
+        const rt = createRuntime(options);
+        if (install) rt.install();
+        const text = rt.run(
+          `expoFetch('https://api.test/signup').then(function(r) { return r.text(); })`
+        ) as Promise<string>;
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(422, {}, "taken");
+        const value = await text;
+        await settle();
+        return { rt, value, calls: rt.expoCalls() };
+      };
+      const without = await reads(false);
+      const { rt, ...observed } = await reads(true);
+
+      expect(observed).toEqual({ value: "taken", calls: without.calls });
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "taken" });
+    });
+
+    it("records the body of an error response an SDK 55 app does not read, and the app still reads it", async () => {
+      const options: RuntimeOptions = { polyfillFetch: true, expo: { sdk: 55 } };
+      const without = await readsLater(422, "taken", "response.text()", {
+        install: false,
+        options,
+      });
+      const { value, recorded } = await readsLater(422, "taken", "response.text()", { options });
+
+      expect(without.value).toBe("taken");
+      expect(value).toBe("taken");
+      expect(recorded).toMatchObject({
+        state: "finished",
+        response: { status: 422 },
+        responseBody: "taken",
+        encodedDataLength: 5,
+      });
+    });
+
     it("attaches a body the app reads after the request ended to its finished record", async () => {
       const rt = createRuntime(EXPO_57);
       rt.install();
@@ -2553,9 +2773,6 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
 
         expect(without.value).toEqual(value);
         expect(observed).toEqual({ value, calls: without.calls });
-        expect(rt.run("expo.modules.ExpoFetchModule.NativeResponse.prototype.text")).toBe(
-          rt.run("__expoNative.FetchResponse.prototype.text")
-        );
         expectRecordPerRequest(rt, 1);
         expect(rt.records()[0]).toMatchObject({
           state: "finished",

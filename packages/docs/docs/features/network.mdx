@@ -35,7 +35,7 @@ In React Native, the JS runtime layer records each request where the request lea
 
 For `XMLHttpRequest` and the `fetch()` functions of React Native and Expo, Argent records each request one time. A function of the app that wraps `fetch()` does not change the number of records. An app can keep a reference to `fetch()` from before the capture started. Argent also records the requests through this reference.
 
-For the `fetch()` function of Expo, Argent records the body of a response when the app reads the body. Argent does not read the body itself, because Expo gives the body to one reader only.
+For the `fetch()` function of Expo, Argent records the body of a response when the app reads the body. Expo gives the body to one reader only. Thus Argent does not read a body while the request runs. After the request ends, Argent takes the body of an error response that the app did not read. Argent gives this body to the app when the app reads it.
 
 Native code does not use these functions. For native code, use the iOS native layer.
 
@@ -77,7 +77,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - A reload or a restart of the app clears the network log of the JS runtime layer. Argent starts the capture again when the agent reads the network log.
 - Expo `fetch()` does not always report a connection that breaks in the middle of the response body. The app then gets a part of the body, or its read of the body does not end. The record shows the same: that part of the body, or a pending request. If the app does not read the body, the record shows a finished request.
 - A `fetch()` call that fails before it sends the request has no record. An example is a call with a signal that is already aborted.
-- If the app does not read the body of an Expo `fetch()` response, the record has no body and no size.
+- If the app does not read the body of a successful Expo `fetch()` response, the record has no body and no size. A response that cannot have a body, for example the response to a `HEAD` request, has the size 0.
 - If a library sets its own `fetch()` and `Response` as the global ones, Argent records its requests with less data:
   - Argent makes the record when the response arrives. A pending request and a failed request have no record.
   - The record contains the status and the headers, but not the body. Such a library can share one body stream with the app.
