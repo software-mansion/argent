@@ -91,7 +91,7 @@ beforeAll(async () => {
     });
     wss = new WebSocketServer({ server: mockServer });
     wss.on("connection", (ws) => ws.on("message", (raw) => handle(ws, raw.toString())));
-    mockServer.listen(0, () => {
+    mockServer.listen(0, "127.0.0.1", () => {
       mockPort = (mockServer.address() as { port: number }).port;
       resolve();
     });
