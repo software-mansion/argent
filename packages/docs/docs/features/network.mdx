@@ -81,7 +81,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - If a library sets its own `fetch()` and `Response` as the global ones, Argent records its requests with less data:
   - Argent makes the record when the response arrives. A pending request and a failed request have no record.
   - The record contains the status and the headers, but not the body. Such a library can share one body stream with the app.
-  - When Argent cannot tell two requests apart, Argent makes one record. Thus a request of such a library can have no record, but never two records.
+  - Callers that get one response, or copies of one response, have one record. Examples are a cache and a function of the app that shares one request between callers. Thus a request of such a library can have no record, but never two records.
 - The network log keeps the most recent records only. The limits are 2000 records for the JS runtime layer and 1000 records for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native log holds fewer than 1000 requests.
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.

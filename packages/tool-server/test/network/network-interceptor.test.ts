@@ -3305,6 +3305,166 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       ]);
     });
 
+    it("records each call the app sends from the response of the one before, in the same millisecond", async () => {
+      const { rt, LibResponse } = libRuntime();
+      rt.run("Date.now = function() { return 1000; };");
+      let requests = 0;
+      rt.context.fetch = (url: string) => {
+        requests++;
+        return Promise.resolve(new LibResponse(url, 503));
+      };
+      rt.install();
+      // A retry or a poll: each call starts once the one before has its response.
+      await (rt.run(`(function loop(n) {
+        return fetch('https://api.test/status').then(function() { return n > 1 ? loop(n - 1) : null; });
+      })(5)`) as Promise<unknown>);
+      await settle();
+
+      expect(requests).toBe(5);
+      expect(rt.records()).toHaveLength(5);
+    });
+
+    it.each([
+      { passes: "init", call: "fetch(url, { method: 'POST', body: body })" },
+      // ky passes a Request, which holds the body, and options without one.
+      {
+        passes: "a Request",
+        call: "fetch(new LibRequest(url, { method: 'POST', body: body }), {})",
+      },
+    ])(
+      "records each of several calls in flight to one URL that send different bodies in $passes",
+      async ({ call }) => {
+        const { rt, LibResponse } = libRuntime();
+        const resolves: Array<() => void> = [];
+        let requests = 0;
+        rt.context.fetch = (input: string | { url: string }) => {
+          requests++;
+          const url = typeof input === "string" ? input : input.url;
+          return new Promise((r) => resolves.push(() => r(new LibResponse(url))));
+        };
+        // react-native-fetch-api's Request keeps its body in _body._bodyInit.
+        rt.run(`function LibRequest(url, init) {
+          this.url = url;
+          this.method = String(init.method || 'GET').toUpperCase();
+          this._body = { _bodyInit: init.body };
+        }`);
+        rt.install();
+        // GraphQL sends every query to one URL.
+        const all = rt.run(
+          `Promise.all([1, 2, 3].map(function(i) {
+            var url = 'https://api.test/graphql', body = JSON.stringify({ query: 'q' + i });
+            return ${call};
+          }))`
+        ) as Promise<unknown>;
+        for (const resolve of resolves) resolve();
+        await all;
+        await settle();
+
+        expect(requests).toBe(3);
+        expect(rt.records().map((r) => r.request.postData)).toEqual([
+          '{"query":"q1"}',
+          '{"query":"q2"}',
+          '{"query":"q3"}',
+        ]);
+      }
+    );
+
+    it("records each of two calls in flight to one URL whose long bodies differ only in the middle", async () => {
+      const { rt, LibResponse } = libRuntime();
+      const resolves: Array<() => void> = [];
+      rt.context.fetch = (url: string) =>
+        new Promise((r) => resolves.push(() => r(new LibResponse(url))));
+      rt.install();
+      const all = rt.run(
+        `Promise.all(['1', '2'].map(function(id) {
+          var body = JSON.stringify({ a: 'x'.repeat(3000), id: id + 'b1c2d3e4', b: 'y'.repeat(3000) });
+          return fetch('https://api.test/graphql', { method: 'POST', body: body });
+        }))`
+      ) as Promise<unknown>;
+      for (const resolve of resolves) resolve();
+      await all;
+      await settle();
+
+      expect(rt.records()).toHaveLength(2);
+    });
+
+    describe("with the library's default Response, whose copies share its native blob", () => {
+      function blobRuntime() {
+        const lib = libRuntime();
+        let blobs = 0;
+        // React Native hands each response its own native blob, by id.
+        class BlobResponse extends lib.LibResponse {
+          constructor(
+            url: string,
+            status = 200,
+            readonly _blobData: { blobId: string } = { blobId: `blob-${++blobs}` }
+          ) {
+            super(url, status);
+          }
+          clone(): BlobResponse {
+            return new BlobResponse(this.url, this.status, this._blobData);
+          }
+        }
+        return { ...lib, BlobResponse };
+      }
+
+      it("records both requests two components send to one URL at the same time", async () => {
+        const { rt, BlobResponse } = blobRuntime();
+        const resolves: Array<(status: number) => void> = [];
+        rt.context.fetch = (url: string) =>
+          new Promise((r) => resolves.push((status) => r(new BlobResponse(url, status))));
+        rt.install();
+        const all = rt.run(
+          `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me')])`
+        ) as Promise<unknown>;
+        resolves[0]!(200);
+        await settle();
+        resolves[1]!(500);
+        await all;
+        await settle();
+
+        expect(rt.records().map((r) => r.response?.status)).toEqual([200, 500]);
+      });
+
+      it.each([
+        {
+          hands: "a wrapper that shares one request between callers",
+          wrapper: `var inflight = {};
+            fetch = function(u) {
+              if (!inflight[u]) inflight[u] = libFetch(u).finally(function() { delete inflight[u]; });
+              return inflight[u].then(function(r) { return r.clone(); });
+            };`,
+          calls: `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me'), fetch('https://api.test/me')])`,
+        },
+        {
+          hands: "a cache",
+          wrapper: `var cache = {};
+            fetch = function(u) {
+              if (cache[u]) return Promise.resolve(cache[u].clone());
+              return libFetch(u).then(function(r) { cache[u] = r; return r.clone(); });
+            };`,
+          calls: `fetch('https://api.test/me').then(function() { return fetch('https://api.test/me'); })`,
+        },
+      ])(
+        "records one request when $hands hands out copies of its Response",
+        async ({ wrapper, calls }) => {
+          const { rt, BlobResponse } = blobRuntime();
+          let requests = 0;
+          rt.context.libFetch = (url: string) => {
+            requests++;
+            return Promise.resolve(new BlobResponse(url));
+          };
+          rt.run(wrapper);
+          rt.install();
+          await (rt.run(calls) as Promise<unknown>);
+          await settle();
+
+          expect(requests).toBe(1);
+          expect(rt.records()).toHaveLength(1);
+        }
+      );
+    });
+
     it.each<{ transport: string; options: RuntimeOptions; send: string }>([
       {
         transport: "an XHR",

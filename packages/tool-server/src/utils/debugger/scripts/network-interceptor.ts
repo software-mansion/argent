@@ -37,6 +37,26 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   // XHRs and Expo requests sent so far.
   var transportSends = 0;
 
+  // Tells request bodies apart without keeping them: a text up to 4096 characters as it is, a longer
+  // one by its length, its start and end and 128 short pieces spread over it, and an object by a
+  // number of its own.
+  var bodyIds = new WeakMap();
+  var nextBodyId = 1;
+  function bodyKey(body) {
+    if (body == null) return undefined;
+    if (typeof body === 'object' || typeof body === 'function') {
+      var id = bodyIds.get(body);
+      if (!id) { id = nextBodyId++; bodyIds.set(body, id); }
+      return id;
+    }
+    var text = String(body);
+    if (text.length <= 4096) return text;
+    var key = text.length + ':' + text.slice(0, 512) + text.slice(-512);
+    var step = Math.floor((text.length - 1024) / 128);
+    for (var i = 0, at = 512; i < 128; i++, at += step) key += text.substr(at, 8);
+    return key;
+  }
+
   function bodyChars(entry) {
     return (entry.responseBody ? entry.responseBody.length : 0) +
       (entry.request.postData ? entry.request.postData.length : 0) +
@@ -662,39 +682,81 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       !('_initBody' in LibResponse.prototype);
   } catch (e) {}
   if (libFetch) {
-    // The last calls recorded: a call with the same method and URL that overlaps one of them may be a
-    // caller the app's wrapper handed a copy of that request's Response, so it gets no record of its own.
+    // A Response copied from another shares its body source with it: the blob data of the library's
+    // default Response, or the stream or bytes of its body. A call that resolves with the source of a
+    // recorded call got a copy of that call's Response from the app's wrapper or cache, and gets no
+    // record of its own. Separate requests have sources of their own, so each keeps its record.
+    // A Response without such a source falls back on the calls recorded: a call with the same method,
+    // URL and body that was in flight with one of them is taken as such a copy. Calls are ordered by a
+    // counter, not the clock: a call the app sends from the handler of a response (a retry, a poll)
+    // starts after that response, in the same millisecond. A recorded call leaves that list once no
+    // call in flight started before it ended.
     var libCalls = [];
+    var inFlight = [];
     var recorded = new WeakSet();
+    var libSteps = 0;
+    var sourceOf = function(response) {
+      var source = response._blobData || (response._body && response._body._bodyInit);
+      return source && typeof source === 'object' ? source : null;
+    };
+    var settled = function(call) {
+      var at = inFlight.indexOf(call);
+      if (at !== -1) inFlight.splice(at, 1);
+      var first = inFlight.length ? inFlight[0].start : libSteps + 1;
+      while (libCalls.length && libCalls[0].end < first) libCalls.shift();
+    };
     g.fetch = function fetch(input, init) {
-      var call = { startedAt: Date.now(), sentBefore: transportSends };
-      var promise = origFetch.apply(g, arguments);
-      if (!promise || typeof promise.then !== 'function') return promise;
+      var call = { startedAt: Date.now(), start: ++libSteps, sentBefore: transportSends };
+      inFlight.push(call);
+      var promise;
+      try {
+        promise = origFetch.apply(g, arguments);
+      } catch (e) {
+        settled(call);
+        throw e;
+      }
+      if (!promise || typeof promise.then !== 'function') {
+        settled(call);
+        return promise;
+      }
       // The app gets a promise that settles like the original, so a rejection it never handles is
       // still reported as unhandled.
       return promise.then(function(response) {
         try { recordLibFetch(call, input, init, response); } catch (e) {}
+        settled(call);
         return response;
+      }, function(error) {
+        settled(call);
+        throw error;
       });
     };
     var recordLibFetch = function(call, input, init, response) {
       // A call during which an XHR or Expo request was sent may have run over it (an app wrapper that
       // builds this Response from React Native's fetch), and that request has its record.
       if (call.sentBefore !== transportSends || !(response instanceof LibResponse) || recorded.has(response)) return;
+      var source = sourceOf(response);
+      if (source && recorded.has(source)) return;
       recorded.add(response);
+      if (source) recorded.add(source);
       var method = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase();
       var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
+      // A Request the app passes holds its own body.
+      var body = init && init.body !== undefined ? init.body : input && typeof input === 'object' && input._body ? input._body._bodyInit : undefined;
       call.endedAt = Date.now();
-      for (var i = libCalls.length - 1; i >= 0; i--) {
-        var other = libCalls[i];
-        if (other.method === method && other.url === url && other.startedAt <= call.endedAt && call.startedAt <= other.endedAt) return;
+      call.end = ++libSteps;
+      if (!source) {
+        call.method = method;
+        call.url = url;
+        call.body = bodyKey(body);
+        for (var i = libCalls.length - 1; i >= 0; i--) {
+          var other = libCalls[i];
+          if (other.method === method && other.url === url && other.body === call.body && other.start < call.end && call.start < other.end) return;
+        }
+        libCalls.push(call);
+        if (libCalls.length > 50) libCalls.shift();
       }
-      call.method = method;
-      call.url = url;
-      libCalls.push(call);
-      if (libCalls.length > 50) libCalls.shift();
       var headers = headersObject(init && init.headers !== undefined ? init.headers : input && input.headers);
-      var rec = createRecord('Fetch', method, url, headers, init && init.body, call.startedAt);
+      var rec = createRecord('Fetch', method, url, headers, body, call.startedAt);
       setResponse(rec, response.url, response.status, response.statusText, headersObject(response.headers));
       // The library shares its body stream with every clone when it streams text, so reading a clone
       // would take the body from the app: the body is never read.
