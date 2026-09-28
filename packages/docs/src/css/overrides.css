@@ -383,6 +383,15 @@ article [class*="llmDropdownItem"]:hover {
 }
 
 /*
+ * The search box above has a 20px margin on each side. The menu starts at 1rem of panel
+ * padding plus the 0.5rem item padding of Infima, so the switcher moves left by the
+ * difference to line up with the search box.
+ */
+.navbar-sidebar .menu__list > div:first-child:has(> .product-switcher) {
+  margin-left: calc(20px - 1.5rem);
+}
+
+/*
  * The site is unversioned, so the version links in the mobile sidebar footer only ever
  * show "Next". The footer holds nothing else, so it goes, and the items panel takes back
  * the 4em the theme reserves for it.
