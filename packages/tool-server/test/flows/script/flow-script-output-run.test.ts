@@ -655,7 +655,39 @@ describe("output references in steps", () => {
     expect(report.reason).toContain(
       '`args.text` is "{{output:code}}" alone, so it received a number'
     );
-    expect(report.reason).toContain("enter it with a `type:` step");
+    expect(report.reason).toContain("for text entry, use a `type:` step");
+  });
+
+  it("does not tell the author to write a string when a tool wants another type", async () => {
+    await write("scripts/count.mjs", `output.count = 3;\n`);
+    await flow(
+      "typed-reject-boolean",
+      "steps:",
+      `  - script: { path: ${script("count.mjs")} }`,
+      "  - tool: flow-execute",
+      `    args: { name: child, updateBaselines: "{{output:count}}" }`
+    );
+
+    const { result } = await runFlow("typed-reject-boolean", {
+      booted: true,
+      invoke: (id, params) => {
+        if (
+          id === "flow-execute" &&
+          typeof (params as { updateBaselines?: unknown }).updateBaselines !== "boolean"
+        ) {
+          throw new InvalidToolInputError("flow-execute needs `updateBaselines` to be a boolean");
+        }
+        return { ok: true };
+      },
+    });
+
+    const report = result.steps[1];
+    expect(report.status).toBe("error");
+    expect(report.reason).toContain(
+      '`args.updateBaselines` is "{{output:count}}" alone, so it received a number'
+    );
+    expect(report.reason).toContain("with the type the tool expects");
+    expect(report.reason).not.toContain("as a string");
   });
 
   it("names the whole-field reference and its type when a run-sequence step fails, and not for a string value", async () => {

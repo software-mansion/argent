@@ -1938,8 +1938,8 @@ function wholeFieldTypeNote(err: unknown, wholeFields: readonly WholeFieldRefere
   if (getFailureSignal(err)?.error_code !== FAILURE_CODES.TOOL_INPUT_INVALID) return "";
   return (
     ` — ${describeWholeFields(wholeFields)}. A reference that is the whole argument keeps the ` +
-    "JSON type the script wrote: write the value as a string in the script, or enter it with a " +
-    "`type:` step"
+    "JSON type the script wrote: write the value in the script with the type the tool expects, " +
+    "or, for text entry, use a `type:` step"
   );
 }
 
@@ -1954,8 +1954,8 @@ function nestedWholeFieldNote(
 ): string {
   if (wholeFields.length === 0 || (status !== "fail" && status !== "error")) return "";
   return (
-    ` — ${describeWholeFields(wholeFields)}. If a tool refused that type, write the value as a ` +
-    "string in the script, or enter it with a `type:` step"
+    ` — ${describeWholeFields(wholeFields)}. If a tool refused that type, write the value in ` +
+    "the script with the type the tool expects, or, for text entry, use a `type:` step"
   );
 }
 
