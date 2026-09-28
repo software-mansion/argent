@@ -1,9 +1,21 @@
 import { z } from "zod";
-import type { DescribeFrame, DescribeNode } from "../tools/describe/contract";
+import type { DescribeFrame, DescribeNode, UiOrientation } from "../tools/describe/contract";
+import { nativeFrameToUi } from "../tools/flows/flow-orientation";
 
 /**
  * Shared tree matching: `await-ui-element`, the flow directives (`tap`, `type`,
  * `assert`) and the recorder's reverse lookup all resolve selectors through it.
+ *
+ * Reading order — what `after` and `next` mean by "follows", the match a
+ * `text` condition reads first, the pick of an `any: true` selector — is the
+ * user's. A tree's frames are in the space touches are sent in, and on an iOS
+ * simulator whose UI is landscape (a rotated device, an unfolded foldable) that
+ * is the screen's portrait-native space, on which the UI lies turned: a frame
+ * "below" another there is beside it to the user. So the callers that know how
+ * the UI lies on the frame space (`DescribeTreeData.uiOrientation`) pass it,
+ * and every comparison that goes by reading order reads the frames through
+ * {@link nativeFrameToUi}. Containment (`within`), area, and the frame handed
+ * back to act on are not turned: a rotation keeps them.
  */
 
 /**
@@ -336,6 +348,27 @@ function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
 }
 
 /**
+ * A node's frame as reading order sees it: the frame itself, or, on a UI that
+ * lies turned on the frame space, its image in the UI's own space (see the
+ * module comment). Built once per resolution and memoized per node, since the
+ * relations compare every candidate with every anchor.
+ */
+type ReadingFrame = (node: DescribeNode) => DescribeFrame;
+
+function readingFrames(orientation: UiOrientation | undefined): ReadingFrame {
+  if (orientation === undefined || orientation === "portrait") return (node) => node.frame;
+  const turned = new Map<DescribeNode, DescribeFrame>();
+  return (node) => {
+    let frame = turned.get(node);
+    if (frame === undefined) {
+      frame = nativeFrameToUi(node.frame, orientation);
+      turned.set(node, frame);
+    }
+    return frame;
+  };
+}
+
+/**
  * Build a predicate `follows(node)` — true when the node follows a DISTINCT
  * anchor in reading order (the CSS `~` an `after` scope needs).
  *
@@ -343,8 +376,11 @@ function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
  * index buys nothing here — the pruning it could offer is already subsumed by
  * the `some` short-circuit on the first matching anchor.
  */
-function afterTester(anchors: DescribeNode[]): (node: DescribeNode) => boolean {
-  return (node) => anchors.some((a) => a !== node && frameAfter(node.frame, a.frame));
+function afterTester(
+  anchors: DescribeNode[],
+  reading: ReadingFrame
+): (node: DescribeNode) => boolean {
+  return (node) => anchors.some((a) => a !== node && frameAfter(reading(node), reading(a)));
 }
 
 // Ranking among an anchor's followers. Position first, then frame AREA so that
@@ -386,21 +422,25 @@ function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
  * wins the pick and a `visible` check on it fails — scope by
  * {@link Selector.after} or {@link Selector.within} there instead.
  */
-function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): DescribeNode[] {
+function nearestAfter(
+  candidates: DescribeNode[],
+  anchors: DescribeNode[],
+  reading: ReadingFrame
+): DescribeNode[] {
   if (candidates.length === 0 || anchors.length === 0) return [];
   const picked = new Set<DescribeNode>();
   for (const anchor of anchors) {
-    const af = anchor.frame;
+    const af = reading(anchor);
     let band: DescribeNode | undefined;
     let below: DescribeNode | undefined;
     for (const c of candidates) {
       if (c === anchor) continue;
-      const f = c.frame;
+      const f = reading(c);
       const kind = followKind(f, af);
       if (kind === "band") {
-        if (band === undefined || compareBandPick(f, band.frame) < 0) band = c;
+        if (band === undefined || compareBandPick(f, reading(band)) < 0) band = c;
       } else if (kind === "below") {
-        if (below === undefined || compareBelowPick(f, below.frame) < 0) below = c;
+        if (below === undefined || compareBelowPick(f, reading(below)) < 0) below = c;
       }
     }
     const best = band ?? below;
@@ -417,14 +457,22 @@ function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): Desc
 // Every relation requires a DISTINCT node (`a within a` needs two nested
 // elements), and each nests: `within: { id: b, within: c }` resolves c's
 // containers first, then keeps only the b's sitting inside one of them.
-export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
+//
+// `orientation` is how the UI lies on the frame space, for the relations that
+// go by reading order (see the module comment); the tree's own space when
+// absent.
+export function findAll(
+  root: DescribeNode,
+  selector: Selector,
+  orientation?: UiOrientation
+): DescribeNode[] {
   const all: DescribeNode[] = [];
   const collect = (node: DescribeNode): void => {
     all.push(node);
     for (const child of node.children) collect(child);
   };
   for (const child of root.children) collect(child);
-  return resolveSelector(all, selector);
+  return resolveSelector(all, selector, readingFrames(orientation));
 }
 
 /**
@@ -448,21 +496,25 @@ export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
  */
 const RELATION_RESOLVERS: Record<
   SelectorRelation,
-  (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
+  (matches: DescribeNode[], scope: DescribeNode[], reading: ReadingFrame) => DescribeNode[]
 > = {
   within: (matches, scope) => matches.filter(containmentTester(scope)),
-  after: (matches, scope) => matches.filter(afterTester(scope)),
-  next: (matches, scope) => nearestAfter(matches, scope),
+  after: (matches, scope, reading) => matches.filter(afterTester(scope, reading)),
+  next: (matches, scope, reading) => nearestAfter(matches, scope, reading),
 };
 
 /** Own-field matches from `all`, narrowed by every scope the selector carries. */
-function resolveSelector(all: DescribeNode[], selector: Selector): DescribeNode[] {
+function resolveSelector(
+  all: DescribeNode[],
+  selector: Selector,
+  reading: ReadingFrame
+): DescribeNode[] {
   const regex = selectorTextRegex(selector);
   let matches = all.filter((n) => matchNodeWithRegex(n, selector, regex));
   for (const relation of SELECTOR_RELATIONS) {
     const scope = selector[relation];
     if (scope === undefined) continue;
-    matches = RELATION_RESOLVERS[relation](matches, resolveSelector(all, scope));
+    matches = RELATION_RESOLVERS[relation](matches, resolveSelector(all, scope, reading), reading);
   }
   return matches;
 }
@@ -474,16 +526,24 @@ export function isVisible(node: DescribeNode): boolean {
 }
 
 // The element a reader "sees first": smallest (y, then x), matching the order
-// format-tree renders flat iOS leaves in.
-export function firstInReadingOrder(matches: DescribeNode[]): DescribeNode | undefined {
+// format-tree renders flat iOS leaves in — in the UI's space when the caller
+// says how the UI lies on the frame space (see the module comment).
+export function firstInReadingOrder(
+  matches: DescribeNode[],
+  orientation?: UiOrientation
+): DescribeNode | undefined {
+  const reading = readingFrames(orientation);
   let best: DescribeNode | undefined;
+  let bestFrame: DescribeFrame | undefined;
   for (const n of matches) {
+    const f = reading(n);
     if (
-      best === undefined ||
-      n.frame.y < best.frame.y ||
-      (n.frame.y === best.frame.y && n.frame.x < best.frame.x)
+      bestFrame === undefined ||
+      f.y < bestFrame.y ||
+      (f.y === bestFrame.y && f.x < bestFrame.x)
     ) {
       best = n;
+      bestFrame = f;
     }
   }
   return best;
@@ -499,7 +559,8 @@ export function evaluateCondition(
   condition: WaitCondition,
   expectedText: string | undefined,
   matches: DescribeNode[],
-  textMatch: TextMatchMode = "contains"
+  textMatch: TextMatchMode = "contains",
+  orientation?: UiOrientation
 ): boolean {
   switch (condition) {
     case "exists":
@@ -509,7 +570,9 @@ export function evaluateCondition(
     case "hidden":
       return !matches.some(isVisible);
     case "text": {
-      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      const first =
+        firstInReadingOrder(matches.filter(isVisible), orientation) ??
+        firstInReadingOrder(matches, orientation);
       if (first === undefined || expectedText === undefined) return false;
       // Hoisted subtree text is ADDITIVE: a check the element's own
       // label/value satisfies on a plain describe tree must not start failing
@@ -640,14 +703,24 @@ function exactFieldCount(
  * by (y, x), but a bare reading order leaves an exact positional tie to adapter
  * emission order, and two frames with different extents are two different tap
  * centres, so the tie continues into "most specific" instead.
+ *
+ * Reading order, here and in the relations `findAll` resolves, is the UI's
+ * when `orientation` says how the UI lies on the frame space (see the module
+ * comment). The frame returned is the node's own, in the frame space: the one
+ * to act on.
  */
-export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
-  const visible = findAll(root, selector).filter(isVisible);
+export function selectorToFrame(
+  root: DescribeNode,
+  selector: Selector,
+  orientation?: UiOrientation
+): DescribeFrame | undefined {
+  const visible = findAll(root, selector, orientation).filter(isVisible);
   if (visible.length === 0) return undefined;
+  const reading = readingFrames(orientation);
   if (!hasOwnConstraint(selector)) {
     let first: DescribeNode | undefined;
     for (const n of visible) {
-      if (first === undefined || compareBelowPick(n.frame, first.frame) < 0) first = n;
+      if (first === undefined || compareBelowPick(reading(n), reading(first)) < 0) first = n;
     }
     return first?.frame;
   }
@@ -664,11 +737,9 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
       continue;
     }
     const areaDelta = frameArea(n.frame) - frameArea(best.frame);
-    if (
-      areaDelta < 0 ||
-      (areaDelta === 0 &&
-        (n.frame.y < best.frame.y || (n.frame.y === best.frame.y && n.frame.x < best.frame.x)))
-    ) {
+    const nf = reading(n);
+    const bf = reading(best);
+    if (areaDelta < 0 || (areaDelta === 0 && (nf.y < bf.y || (nf.y === bf.y && nf.x < bf.x)))) {
       best = n;
     }
   }

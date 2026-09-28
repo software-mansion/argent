@@ -13,6 +13,7 @@ import {
 } from "./flow-actions";
 import { authoringPlatform, describeSelector, type FlowSelector } from "./flow-utils";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
+import { foldablePostureHint } from "../../utils/foldable";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 /** Default visual tolerance (percent of pixels) when a step sets none. */
@@ -34,6 +35,12 @@ export interface SnapshotArtifacts {
 interface VisualOutcome {
   status: "pass" | "fail" | "skip";
   reason?: string;
+  /**
+   * What the capture had to say: on a foldable whose panel could not be
+   * resolved, that the capture is of the cover panel (the screenshot tool's
+   * own warning).
+   */
+  warning?: string;
   /**
    * Baseline key stem (`<name>__<platform>-WxH`, plus `-crop-<hash>` for
    * cropOn) — present whenever `artifacts` is, so a consumer exporting the
@@ -203,7 +210,10 @@ export async function runSnapshot(
   const shot = (await invokeOnDevice(env, "screenshot", {
     scale: 1.0,
     includeImageInContext: false,
-  })) as { image: ArtifactHandle };
+  })) as { image: ArtifactHandle; warning?: string };
+  // The screenshot tool's warning (a foldable whose panel could not be
+  // resolved) rides every outcome built on this capture.
+  const captureWarned = shot.warning !== undefined ? { warning: shot.warning } : {};
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
@@ -232,6 +242,7 @@ export async function runSnapshot(
   const priorApp = opts.seenKeys.get(snapshotKey);
   if (priorApp !== undefined && priorApp !== opts.appIdentity) {
     return {
+      ...captureWarned,
       status: "fail",
       reason:
         `snapshot "${opts.name}" was already captured in this run from a different app ` +
@@ -272,6 +283,7 @@ export async function runSnapshot(
       const cropped = await cropPngFile(shot.image.hostPath, croppedPath, cropFrame);
       if (cropped === null) {
         return {
+          ...captureWarned,
           status: "fail",
           reason:
             `cropOn matched ${describeSelector(opts.cropOn!)} but its on-screen region is ` +
@@ -302,6 +314,7 @@ export async function runSnapshot(
       // committed baseline reads exactly like a local one.
       const source = env.device.platform === "ios-remote" ? " from a remote simulator" : "";
       return {
+        ...captureWarned,
         status: "pass",
         reason: exists
           ? `baseline updated${source} (${key})`
@@ -316,6 +329,7 @@ export async function runSnapshot(
       // the truth a re-run silently passes against, and a workspace that never
       // persists baselines (ephemeral CI) would gate nothing forever.
       return {
+        ...captureWarned,
         status: "fail",
         reason:
           `no baseline for "${opts.name}" on this device class — expected ${baselinePath}, ` +
@@ -356,7 +370,13 @@ export async function runSnapshot(
       // snapshots keep normalization and only reach this on an aspect change.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
+        // A full-screen mismatch on a foldable is usually a posture mismatch:
+        // the panels differ in size. Wording only; the step fails either way.
+        const posture = opts.cropOn
+          ? undefined
+          : await foldablePostureHint(env.device.id, expected, actual);
         return {
+          ...captureWarned,
           status: "fail",
           reason:
             `baseline is ${expected.width}x${expected.height} but the ` +
@@ -365,7 +385,8 @@ export async function runSnapshot(
             (opts.cropOn
               ? `. The element's size drifted — crop a fixed-size container, or re-adopt ` +
                 `with updateBaselines`
-              : ""),
+              : "") +
+            (posture ? `. ${posture}` : ""),
           snapshotKey,
           artifacts: {
             baseline: await store.register({
@@ -381,7 +402,7 @@ export async function runSnapshot(
       const within = result.mismatchPercentage <= opts.maxMismatch;
       const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
-        return { status: "pass", reason };
+        return { status: "pass", reason, ...captureWarned };
       }
 
       const artifacts: SnapshotArtifacts = {

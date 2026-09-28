@@ -26,6 +26,7 @@ import {
   describeSelector,
   flowsDirFor,
   flowEnvOnDisk,
+  foldStepFromArgs,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -661,7 +662,7 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(
+    const { tree, source, uiOrientation } = await fetchFlowTree(
       registry,
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
@@ -675,8 +676,9 @@ async function captureTapSelector(
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer.
-    const resolved = selectorToFrame(tree, selector);
+    // silently retarget and coordinates are safer. Ranked in the reading order
+    // replay will rank in: the UI's, on a landscape UI.
+    const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (!resolved) {
       // Defensive: a selector derived from a visible node matches that node
       // under matchNode's semantics, so this should be unreachable. Kept in
@@ -804,6 +806,8 @@ function isToolNotFound(err: unknown, command: string): boolean {
 export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
   // A real `rotate` tool is registered, so the not-found path never fires.
   "rotate",
+  // Likewise `fold`: the tool runs, and the recorder rewrites it into `fold:`.
+  "fold",
   // `command` already is the tool name a `tool:` step wants.
   "tool",
 ];
@@ -1445,6 +1449,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof strippedArgs.bundleId === "string" &&
         Object.keys(strippedArgs).length === 1;
 
+      // A recorded `fold` becomes the `fold:` directive, the same posture change
+      // the tool made; args the directive does not take keep the raw tool step.
+      const foldStep =
+        params.command === "fold" && params.delayMs === undefined
+          ? foldStepFromArgs(strippedArgs)
+          : undefined;
+
       // A multi-tap (`clickCount: 2` = double-tap) must survive the rewrite as
       // `times`, or replay would fire a single tap for a recorded double.
       // Bounds match the tool's clickCount; 1 is the default (absent).
@@ -1466,6 +1477,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         warning = captured?.warning;
       } else if (isLaunch) {
         step = { kind: "launch", app: strippedArgs.bundleId as string };
+      } else if (foldStep) {
+        step = foldStep;
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
         warning = runTarget.warning;
