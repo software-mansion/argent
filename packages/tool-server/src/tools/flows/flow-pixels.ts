@@ -1,13 +1,22 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { PNG } from "pngjs";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { isAndroidTv } from "../../utils/adb";
+import { isIosPhysicalDevice } from "../../utils/device-info";
+import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
-import { FIRST_FRAME_WAIT_MS, httpScreenshot } from "../../utils/simulator-client";
+import {
+  FIRST_FRAME_WAIT_MS,
+  httpScreenshot,
+  resolveCapturePanel,
+} from "../../utils/simulator-client";
 import { settleWithin } from "../../utils/timing";
-import { tvScreenshot } from "../screenshot";
+import { downscalePngInPlace, tvScreenshot } from "../screenshot";
 import type { ActionEnv } from "./flow-actions";
 
 /**
@@ -18,10 +27,16 @@ export interface PixelFrame {
   width: number;
   height: number;
   data: Buffer;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so this capture is of the cover panel. The idle wait reports
+   * it with its outcome.
+   */
+  warning?: string;
 }
 
 /** What {@link comparePixels} saw between two captures. */
-export type PixelChange = "still" | "localized" | "moving";
+type PixelChange = "still" | "localized" | "moving";
 
 // Motion detection only needs to see a region of the screen change, and a
 // quarter-scale frame decodes ~16x faster. Chromium rasterizes at this scale in
@@ -150,6 +165,8 @@ export async function statusBarMaskFraction(device: ActionEnv["device"]): Promis
   }
   if (device.platform === "ios-remote") return STATUS_BAR_MASK_FRACTION;
   if (device.platform !== "ios") return 0;
+  // Physical devices always have a status bar. Do not ask simctl. The UDID is not a simulator UUID.
+  if (device.kind === "device") return STATUS_BAR_MASK_FRACTION;
   return (await isTvOsSimulator(device.id)) ? 0 : STATUS_BAR_MASK_FRACTION;
 }
 
@@ -162,6 +179,17 @@ export const FIRST_PIXEL_CAPTURE_TIMEOUT_MS =
 export const PIXEL_CAPTURE_TIMEOUT_MS = 2_000;
 
 /**
+ * Ceiling for a physical-iOS settle capture. The runner PNG path is slower than the other routes.
+ */
+const IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS = 4_000;
+
+/**
+ * Ceiling for a warm capture on a remote simulator. Every capture is a MoQ
+ * round trip to another machine, where a local one reads a stream on this one.
+ */
+const REMOTE_PIXEL_CAPTURE_TIMEOUT_MS = 4_000;
+
+/**
  * Per-capture bound — a ceiling, not a wait, so granting more than a route needs
  * costs nothing until it is actually spent.
  *
@@ -172,6 +200,18 @@ export const PIXEL_CAPTURE_TIMEOUT_MS = 2_000;
  * an async runtime probe, so it keeps the wider ceiling it will not use.
  */
 export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture: boolean): number {
+  if (isIosPhysicalDevice(device)) {
+    return IOS_DEVICE_PIXEL_CAPTURE_TIMEOUT_MS;
+  }
+  // Every remote capture is a MoQ round trip to another machine, which the
+  // localhost warm bound does not allow for. `waitForIdle` needs two
+  // comparable captures per interval, so one timed-out read costs a whole
+  // settle round. The first capture keeps the wider first-capture ceiling as
+  // unused headroom, like a tvOS simulator: the MoQ request never enters the
+  // first-frame poll that ceiling is sized for.
+  if (device.platform === "ios-remote" && !firstCapture) {
+    return REMOTE_PIXEL_CAPTURE_TIMEOUT_MS;
+  }
   const warmFromTheStart = device.platform === "chromium" || device.platform === "vega";
   return firstCapture && !warmFromTheStart
     ? FIRST_PIXEL_CAPTURE_TIMEOUT_MS
@@ -266,9 +306,15 @@ async function chromiumScrollOffset(api: ChromiumCdpApi): Promise<{ x: number; y
  * The `screenshot` tool itself is deliberately not reused: it registers every
  * capture as an artifact, and a settle takes tens of them per step.
  */
-async function captureFile(env: ActionEnv, budgetMs: number): Promise<string> {
+async function captureFile(
+  env: ActionEnv,
+  budgetMs: number
+): Promise<{ path: string; warning?: string }> {
   if (env.device.platform === "vega") {
-    return captureVegaScreenshotPng({ scale: CAPTURE_SCALE });
+    return { path: await captureVegaScreenshotPng({ scale: CAPTURE_SCALE }) };
+  }
+  if (isIosPhysicalDevice(env.device)) {
+    return { path: await captureIosDeviceFile(env, budgetMs) };
   }
   // Shape alone cannot tell tvOS from iOS — both are 8-4-4-4-12 UUIDs tagged
   // `platform: "ios"` — so ask the runtime, which is memoized per UDID.
@@ -279,10 +325,15 @@ async function captureFile(env: ActionEnv, budgetMs: number): Promise<string> {
     // promise and the next poll 200ms later spawns another, so a stuck
     // subprocess becomes a growing pile of them. The cost is a temp file left
     // behind when a severed capture never returns its path.
-    return tvScreenshot(env.device.id, CAPTURE_SCALE, captureAbortSignal(env, budgetMs));
+    return {
+      path: await tvScreenshot(env.device.id, CAPTURE_SCALE, captureAbortSignal(env, budgetMs)),
+    };
   }
   const ref = simulatorServerRef(env.device);
   const api = (await env.registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
+  // On a foldable the capture is of the panel resolved now, and says so when
+  // nothing resolved it (see `resolveCapturePanel`).
+  const panel = await resolveCapturePanel(api);
   // Deliberately NOT threading env.signal into this capture: the
   // simulator-server writes its temp PNG to disk before replying, and the reply
   // is the only place the path is learned — severing the fetch on abort would
@@ -290,8 +341,26 @@ async function captureFile(env: ActionEnv, budgetMs: number): Promise<string> {
   // abandon this promise via settleWithin; the capture runs to completion on its
   // own bounds, learns the path, and the `finally` in capturePixels removes the
   // file.
-  const { path } = await httpScreenshot(api, undefined, undefined, CAPTURE_SCALE);
-  return path;
+  const { path } = await httpScreenshot(api, undefined, undefined, CAPTURE_SCALE, panel?.screen);
+  return { path, ...(panel?.warning !== undefined ? { warning: panel.warning } : {}) };
+}
+
+/**
+ * Physical-iOS settle capture through the on-device runner.
+ */
+async function captureIosDeviceFile(env: ActionEnv, budgetMs: number): Promise<string> {
+  // The runner is already up mid-flow.
+  const ref = iosDeviceRunnerRef(env.device);
+  const runner = (await env.registry.resolveService(ref.urn, ref.options)) as IosDeviceRunnerApi;
+  const png = await captureRunnerScreenshotPng(runner, budgetMs);
+  const file = path.join(
+    os.tmpdir(),
+    `argent-ios-device-settle-${env.device.id.slice(0, 8)}-${process.hrtime.bigint()}.png`
+  );
+  await fs.writeFile(file, png);
+  // Same best-effort sips path as the screenshot tool.
+  await downscalePngInPlace(file, CAPTURE_SCALE, captureAbortSignal(env, budgetMs));
+  return file;
 }
 
 /**
@@ -299,11 +368,14 @@ async function captureFile(env: ActionEnv, budgetMs: number): Promise<string> {
  * is scratch and never an artifact — it is removed as soon as it has been read,
  * whether or not the read worked.
  */
-async function capturePng(env: ActionEnv, budgetMs: number): Promise<Buffer> {
-  if (env.device.platform === "chromium") return captureChromiumPng(env);
-  const file = await captureFile(env, budgetMs);
+async function capturePng(
+  env: ActionEnv,
+  budgetMs: number
+): Promise<{ png: Buffer; warning?: string }> {
+  if (env.device.platform === "chromium") return { png: await captureChromiumPng(env) };
+  const { path: file, warning } = await captureFile(env, budgetMs);
   try {
-    return await fs.readFile(file);
+    return { png: await fs.readFile(file), ...(warning !== undefined ? { warning } : {}) };
   } finally {
     await fs.rm(file, { force: true }).catch(() => {});
   }
@@ -316,8 +388,14 @@ async function capturePng(env: ActionEnv, budgetMs: number): Promise<Buffer> {
  */
 async function capturePixels(env: ActionEnv, budgetMs: number): Promise<PixelFrame | undefined> {
   try {
-    const png = PNG.sync.read(await capturePng(env, budgetMs));
-    return { width: png.width, height: png.height, data: png.data };
+    const captured = await capturePng(env, budgetMs);
+    const png = PNG.sync.read(captured.png);
+    return {
+      width: png.width,
+      height: png.height,
+      data: png.data,
+      ...(captured.warning !== undefined ? { warning: captured.warning } : {}),
+    };
   } catch {
     return undefined;
   }

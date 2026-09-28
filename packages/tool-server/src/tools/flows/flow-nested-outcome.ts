@@ -20,10 +20,10 @@ import type { StepStatus } from "./flow-run";
  * verdict.
  */
 
-export const FLOW_EXECUTE_TOOL_ID = "flow-execute";
-export const RUN_SEQUENCE_TOOL_ID = "run-sequence";
+const FLOW_EXECUTE_TOOL_ID = "flow-execute";
+const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 
-export interface NestedOutcome {
+interface NestedOutcome {
   status: StepStatus;
   reason: string;
 }

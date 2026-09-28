@@ -133,7 +133,7 @@ export interface PtyProxy {
   dispose(): void;
 }
 
-export interface InjectBeat {
+interface InjectBeat {
   delayBeforeMs: number;
   data: string;
 }
@@ -172,7 +172,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export interface StartPtyProxyOptions {
+interface StartPtyProxyOptions {
   /** From `loadNodePty()`. */
   pty: NodePty;
   /** The agent launch line, run via `/bin/sh -c` inside the PTY. */

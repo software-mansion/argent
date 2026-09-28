@@ -7,7 +7,10 @@ import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
-const ALLOWED_TOOLS = new Set([
+// No tool here returns an image or an artifact handle — that is what keeps a
+// sequence to the single capture the MCP layer appends after the last step.
+// Gated by test/run-sequence-observation-gate.test.ts.
+export const ALLOWED_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
   "gesture-scroll",
@@ -24,6 +27,10 @@ const ALLOWED_TOOLS = new Set([
   // Shake's interesting cases are races (shake while a sheet is dismissing,
   // shake right after typing), which need back-to-back dispatch.
   "shake",
+  // A fold between two interactions (tap, unfold, tap the same control on the
+  // other panel) is the sequence a foldable app is tested with. Like `rotate`,
+  // it returns state only; the capture comes once, after the last step.
+  "fold",
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
@@ -40,7 +47,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, fold, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -70,6 +77,7 @@ type RunSequenceResult = {
 // Gates only the *outer* invocation: every step resolves its own platform from
 // `params.udid` and is gated separately in `execute`.
 const capability: ToolCapability = {
+  // Physical iOS is a valid outer target. Unsupported steps fail at their own gate, not the whole sequence.
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
@@ -91,7 +99,8 @@ export function createRunSequenceTool(
       failedMsg: ({ failureSignal }) =>
         `Failed to run interaction sequence: ${failureSignal.error_code}`,
     },
-    description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, Apple TV / Android TV, or Chromium app).
+    description: `Execute multiple device interaction steps in a single call (iOS simulator or physical device, Android emulator, Apple TV / Android TV, or Chromium app).
+On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, button, keyboard, and await-ui-element steps run; others fail at their own gate.
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
@@ -105,9 +114,9 @@ a prior tap), use individual tool calls instead.
 Allowed tools and their args (udid is auto-injected, do NOT include it in args):
 
   gesture-tap:    { x: number, y: number, clickCount?: number }                                                        [ios/android/chromium]
-  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [ios/android]
+  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [ios/android]
   gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium only]
-  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [chromium only]
+  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [chromium only]
   gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android]
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
@@ -117,6 +126,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP — keyboard otherwise)   [ios sim/android emu]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
+  fold:           { posture?: "closed"|"half-open"|"open", angle?: 0-180 }  (one of posture/angle; the next step lands on the new panel, whose coordinates are different)  [foldable ios sim]
   tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
                   buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute — work on Android TV and Vega; rejected on the Apple TV simulator)
   await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium]

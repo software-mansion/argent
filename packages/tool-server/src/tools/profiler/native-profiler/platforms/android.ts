@@ -19,7 +19,7 @@ import {
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 import { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
 
-export interface AndroidStartParams {
+interface AndroidStartParams {
   device_id: string;
   app_process?: string;
 }

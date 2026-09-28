@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import { traceProcessorQueriesDir, queryWarm } from "@argent/native-devtools-android";
 
-export interface RunTpQueryOptions {
+interface RunTpQueryOptions {
   /** Path to the on-host .pftrace. */
   tracePath: string;
   /** Filename in queries/ (e.g. "cpu-hotspots.sql"). */
@@ -14,7 +14,7 @@ export interface RunTpQueryOptions {
   substitutions: Record<string, string>;
 }
 
-export interface RunTpInlineOptions {
+interface RunTpInlineOptions {
   /** Path to the on-host .pftrace. */
   tracePath: string;
   /** Fully-rendered SQL — no token substitution performed. */

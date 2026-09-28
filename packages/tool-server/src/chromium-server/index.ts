@@ -1,9 +1,8 @@
 import { TypedEventEmitter } from "@argent/registry";
-import type { CDPClient } from "../utils/debugger/cdp-client";
 import { connectCdp, primePageSession } from "./cdp-session";
 import { ClipboardSyncState, setClipboardText } from "./clipboard";
 import { FpsTracker } from "./fps";
-import { sendButton, sendKey, sendRotate, sendTouch, sendWheel, sendCharInsert } from "./input";
+import { sendButton, sendKey, sendRotate, sendTouch, sendWheel } from "./input";
 import { goBack, goForward, navigate, reload } from "./navigation";
 import { ScreencastManager } from "./screencast";
 import { captureScreenshot, copyScreenshotToClipboard } from "./screenshot";
@@ -43,9 +42,7 @@ export type {
   ViewportSize,
 } from "./types";
 
-export { sendCharInsert } from "./input";
-
-export interface CreateChromiumServerOpts {
+interface CreateChromiumServerOpts {
   /** Argent device id; screenshot filename prefix. */
   deviceId: string;
   /** CDP port from the Chromium process's --remote-debugging-port. */
@@ -109,7 +106,10 @@ export async function createChromiumServer(
     sendRotate: (direction: Rotation) => sendRotate(cdp, viewport, direction),
     sendWheel: (point: Point, dx: number, dy: number) => sendWheel(cdp, viewport, point, dx, dy),
     setClipboardSync: async (enabled: boolean) => {
-      // No native bridge yet; the intent is only recorded.
+      // No native bridge yet, and nothing records the flag either — `set` is
+      // empty, by the reasoning in `ClipboardSyncState`'s own docstring. What
+      // this buys is that the call resolves, so the WS `clipboardSync` route
+      // needs no not-yet-implemented branch.
       clipboardSync.set(enabled);
     },
     setClipboardText: (text: string) => setClipboardText(cdp, text),
@@ -171,9 +171,5 @@ export async function createChromiumServer(
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 export type { TabInfo, TabsManager } from "./tabs";
 export type { NetworkManager, NetworkRequestRecord } from "./network";
-export type { Cookie, SetCookieParams, DeleteCookieParams, StorageType } from "./storage";
 
 export { setClipboardText } from "./clipboard";
-
-export type { CDPClient };
-export { sendCharInsert as __sendCharInsert };

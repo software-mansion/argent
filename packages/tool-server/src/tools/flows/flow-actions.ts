@@ -5,7 +5,10 @@ import {
   type DescribeNode,
   type DescribeSource,
   type DescribeTreeData,
+  type UiOrientation,
 } from "../describe/contract";
+import { isBlindRead } from "../describe/blind-read";
+import { nativeDirection, uiPointToNative, uiVectorToNative } from "./flow-orientation";
 import {
   selectorToFrame,
   findAll,
@@ -22,8 +25,9 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { isIosPhysicalDevice } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { fetchFlowTree } from "./flow-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -52,10 +56,45 @@ import {
   IDLE_MIN_STILL_INTERVALS,
   IDLE_POLL_MS,
   SELECTOR_RELATIONS,
+  SWIPE_MIN_TRAVEL,
   type FlowSelector,
   type FlowStep,
+  type GestureTarget,
   type ScrollDirection,
+  type SwipeDirection,
 } from "./flow-utils";
+
+/**
+ * The app an iOS tree read should describe, and how far the runner will vouch
+ * for it (see `queryFullHierarchyTree` for what each level buys).
+ */
+export interface FlowTreeTarget {
+  /**
+   * App id of the run's most recent successful `launch` step - or, after a
+   * `tool:` `launch-app`/`restart-app` step, of the app that step started.
+   */
+  bundleId: string;
+  /**
+   * Whether the runner still vouches that `bundleId` is what is on screen. A
+   * pinned read targets it directly, skipping the auto-resolve fan-out that
+   * probes every connected app. Unpinned, it is only a hint: auto-resolve
+   * decides the target, and `bundleId` breaks the tie solely when that
+   * resolution times out.
+   */
+  pinned: boolean;
+  /**
+   * Whether a pinned read's `Application.getState` probe has ever answered for
+   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
+   * after construction) so every read of the same pin sees it — `deviceEnv`
+   * shallow-spreads the run state, so they all reach the same object.
+   *
+   * It is the only evidence the runner has that the app's main queue was ever
+   * serviced, which tells the two causes of a timed-out probe apart. A later
+   * `launch` builds a fresh target, since a re-pinned app cold-starts again;
+   * an unpinned target neither consults nor arms it.
+   */
+  probeAnswered: boolean;
+}
 
 /** Everything a directive needs to act on the run's device. */
 export interface ActionEnv {
@@ -64,30 +103,30 @@ export interface ActionEnv {
   device: DeviceInfo;
   signal?: AbortSignal;
   /**
-   * Bundle id of the last successful native `launch:` in this RUN, shared with
-   * nested `run:` flows (ExecState is per-run). Undefined until a launch runs;
-   * cleared by `tool:` steps that can change the foreground app (launch-app,
-   * restart-app, open-url, button, reinstall-app).
-   *
-   * iOS tree reads use it only where auto-targeting cannot answer, both
-   * following from it resolving out of the connected list rather than into it:
-   * as an arbiter when auto-resolution times out, and to name the app whose
-   * disconnection needs explaining when that list is empty (see
-   * `queryFullHierarchyTree`). Never to override a resolution that answered.
+   * The app the run's most recent successful `launch` step started - or, after
+   * a `tool:` `launch-app`/`restart-app` step, the app that step's own args
+   * named - and whether the runner still vouches for it being on screen.
+   * Demoted to an unpinned hint by a raw `tool:` step (its effect on the
+   * foreground is opaque to the runner), dropped outright by a `tool:` step
+   * that can change the foreground app and by a launch attempt until it
+   * succeeds (see `FOREGROUND_CHANGING_TOOLS` in flow-run). Shared with nested
+   * `run:` flows, since ExecState is per-run. Only iOS tree reads consume it
+   * (see `fetchFlowTree`).
    */
-  launchedNativeApp?: string;
+  treeTarget?: FlowTreeTarget;
   /**
    * Run-scoped memo of a tree source that answered nothing: written by a
    * {@link settleTree} that failed every read attempt, cleared by any directive
    * read that comes back — they all go through {@link readFlowTree} — by a
-   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), and
-   * by a nested orchestrator step, which can do either out of this holder's
-   * sight. One holder per run, built in flow-run's ExecState and shared by
-   * every `deviceEnv`. A `tool:` step's read clears nothing: it goes through
+   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), by a
+   * raw `tool:` step that demotes a pinned {@link ActionEnv.treeTarget}, and by
+   * a nested orchestrator step, which can do either out of this holder's sight.
+   * One holder per run, built in flow-run's ExecState and shared by every
+   * `deviceEnv`. A `tool:` step's own read clears nothing: it goes through
    * `invokeSubTool` and never reaches {@link readFlowTree}. Nor is the clear
-   * ordered against the step running — `idle` stops waiting on its read at the
-   * round budget, so that read can land later and retire a verdict minted after
-   * it was issued.
+   * ordered against the step running —
+   * `idle` stops waiting on its read at the round budget, so that read can land
+   * later and retire a verdict minted after it was issued.
    *
    * Only {@link settleForGesture} READS it, and only to skip a settle already
    * shown to be unaffordable; the gesture then warns its step report that it
@@ -104,6 +143,21 @@ export interface ActionEnv {
    * `ActionEnv` by hand, which leaves every settle on its own budget.
    */
   treeOutage?: { proven?: { deviceId: string; error: Error } };
+  /**
+   * What the run's most recent tree read said about how the UI lies on the
+   * frame space, for the directives that turn a UI-space direction into it
+   * (`swipe: down`, `scroll-to`; see `flow-orientation.ts`) and for the
+   * selector relations and picks that go by reading order (`after`, `next`,
+   * `any: true`, a `text` condition; see `ui-tree-match.ts`). Written by every
+   * read that goes through {@link readFlowTree} — the settle a swipe or a
+   * scroll round makes before it dispatches is the read that fills it, and
+   * every selector resolves against the tree of the read that just filled it
+   * — and one holder per run, shared with nested `run:` flows like
+   * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
+   * `ActionEnv` by hand, which leaves every direction, and reading order, in
+   * the frame space.
+   */
+  lastRead?: { uiOrientation?: UiOrientation };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -143,12 +197,13 @@ export const ABORTED_OUTCOME: DirectiveOutcome = {
 };
 
 /** The condition/action steps {@link runDirective} handles. */
-export type DirectiveStep = Extract<
+type DirectiveStep = Extract<
   FlowStep,
   {
     kind:
       | "tap"
       | "long-press"
+      | "swipe"
       | "type"
       | "await"
       | "assert"
@@ -185,9 +240,13 @@ const POLL_INTERVAL_MS = 300;
 const TYPE_FOCUS_SETTLE_MS = 500;
 const TYPE_FOCUS_TIMEOUT_MS = 3000;
 
-// Tree sources that surface `focused`. A source outside this set (Vega's
-// toolkit page source) never reports it, so polling would burn the whole
-// timeout on every type step — skip the focus wait there instead.
+// Tree sources whose `focused` flag the focus wait may poll. A source outside
+// the set gets one look and then bails, leaving typing only the fixed
+// TYPE_FOCUS_SETTLE_MS head start. Both exclusions are deliberate:
+//
+// - Vega's toolkit page source never reports `focused`; polling would burn
+//   the whole timeout on every type step.
+// - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
   "native-devtools",
   "android-devtools",
@@ -354,10 +413,14 @@ function selectorAlternatives(sel: FlowSelector): Selector[] {
  * is kept only as a last resort, so `exists` still sees those nodes without
  * blocking the text pass from finding the visible element.
  */
-function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
+function flowFindAll(
+  tree: DescribeNode,
+  sel: FlowSelector,
+  orientation: UiOrientation | undefined
+): DescribeNode[] {
   let fallback: DescribeNode[] = [];
   for (const s of selectorAlternatives(sel)) {
-    const matches = findAll(tree, s);
+    const matches = findAll(tree, s, orientation);
     if (matches.some(isVisible)) return matches;
     if (fallback.length === 0) fallback = matches;
   }
@@ -365,12 +428,27 @@ function flowFindAll(tree: DescribeNode, sel: FlowSelector): DescribeNode[] {
 }
 
 /** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
-function flowSelectorToFrame(tree: DescribeNode, sel: FlowSelector): DescribeFrame | undefined {
+function flowSelectorToFrame(
+  tree: DescribeNode,
+  sel: FlowSelector,
+  orientation: UiOrientation | undefined
+): DescribeFrame | undefined {
   for (const s of selectorAlternatives(sel)) {
-    const frame = selectorToFrame(tree, s);
+    const frame = selectorToFrame(tree, s, orientation);
     if (frame) return frame;
   }
   return undefined;
+}
+
+/**
+ * How the UI lies on the frame space of the tree a selector is about to
+ * resolve against, for the relations and picks that go by reading order: the
+ * orientation the run's last read reported ({@link ActionEnv.lastRead}). Every
+ * selector resolves against the tree of the read that just filled it — the
+ * settle, the poll, the focus wait — so the last read's answer is that tree's.
+ */
+function readingOrientation(env: ActionEnv): UiOrientation | undefined {
+  return env.lastRead?.uiOrientation;
 }
 
 /**
@@ -395,8 +473,9 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * frame, and the settle that took already cleared it.
  */
 function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.launchedNativeApp).then((data) => {
+  return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
     if (env.treeOutage) env.treeOutage.proven = undefined;
+    if (env.lastRead) env.lastRead.uiOrientation = data.uiOrientation;
     return data;
   });
 }
@@ -484,6 +563,44 @@ export async function settleTree(
 }
 
 /**
+ * Poll until EVERY given selector matches on ONE settled tree, returning the
+ * frames positionally (an undefined slot stays undefined, and a set holding no
+ * selector reads no tree at all). Two sequential waits would instead read
+ * whichever end goes first from a tree older than the other end's wait. One
+ * deadline covers the whole set. Returns "aborted" when the run was cancelled,
+ * or the first still-unresolved selector in argument order once the deadline
+ * passes — the two must stay distinguishable, or a cancelled step reads as a
+ * genuine "element not found".
+ */
+async function waitForFrames(
+  env: ActionEnv,
+  selectors: readonly (FlowSelector | undefined)[]
+): Promise<(DescribeFrame | undefined)[] | "aborted" | { unresolved: FlowSelector }> {
+  const pending = selectors.flatMap((selector, i) => (selector ? [{ i, selector }] : []));
+  if (pending.length === 0) return selectors.map(() => undefined);
+  const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
+  let unresolved = pending[0].selector;
+  for (;;) {
+    if (env.signal?.aborted) return "aborted";
+    const tree = await settleTree(env);
+    if (tree) {
+      const orientation = readingOrientation(env);
+      const frames = selectors.map((s) =>
+        s ? flowSelectorToFrame(tree, s, orientation) : undefined
+      );
+      const missing = pending.find(({ i }) => frames[i] === undefined);
+      if (!missing) return frames;
+      unresolved = missing.selector;
+    } else if (env.signal?.aborted) {
+      return "aborted"; // settleTree bailed on the abort, not on a blank read
+    }
+    if (Date.now() >= deadline) return { unresolved };
+    const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+    if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
+  }
+}
+
+/**
  * Poll until a visible element matches the selector, resolving against a
  * *settled* tree each round so the returned frame is stable. Returns the frame,
  * undefined once the deadline passes, or "aborted" when the run was cancelled —
@@ -497,20 +614,9 @@ export async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector
 ): Promise<DescribeFrame | "aborted" | undefined> {
-  const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
-  for (;;) {
-    if (env.signal?.aborted) return "aborted";
-    const tree = await settleTree(env);
-    if (tree) {
-      const frame = flowSelectorToFrame(tree, selector);
-      if (frame) return frame;
-    } else if (env.signal?.aborted) {
-      return "aborted"; // settleTree bailed on the abort, not on a blank read
-    }
-    if (Date.now() >= deadline) return undefined;
-    const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
-    if (!(await sleepOrAbort(sleepMs, env.signal))) return "aborted";
-  }
+  const frames = await waitForFrames(env, [selector]);
+  if (frames === "aborted") return "aborted";
+  return Array.isArray(frames) ? frames[0] : undefined;
 }
 
 function framesOverlap(a: DescribeFrame, b: DescribeFrame): boolean {
@@ -582,9 +688,9 @@ async function waitForFocus(
   for (;;) {
     if (env.signal?.aborted) return;
     try {
-      const { tree, source } = await readFlowTree(env);
+      const { tree, source, uiOrientation } = await readFlowTree(env);
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
-      const target = flowSelectorToFrame(tree, into) ?? tappedFrame;
+      const target = flowSelectorToFrame(tree, into, uiOrientation) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
     } catch {
       // transient describe failure — retry until the deadline
@@ -602,6 +708,8 @@ interface ScrollResolve {
   reason?: string;
   /** The run was cancelled mid-scroll. */
   aborted?: boolean;
+  /** What the scroll gestures had to say (see {@link toolWarning}). */
+  warning?: string;
 }
 
 /**
@@ -613,13 +721,14 @@ interface ScrollResolve {
  * point is clamped, so the down stays at the anchor and keeps latching to the
  * right container), sized to the clip window rather than the screen so
  * consecutive views of a small container's content still overlap. Touch
- * platforms use a `settle` swipe (no fling); Chromium uses wheel events.
+ * platforms use a `momentum: false` swipe (no fling); Chromium uses wheel
+ * events.
  */
 async function scrollIncrement(
   env: ActionEnv,
   direction: ScrollDirection,
   region: DescribeFrame
-): Promise<void> {
+): Promise<string | undefined> {
   const cx = clamp01(region.x + region.width / 2);
   const cy = clamp01(region.y + region.height / 2);
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
@@ -635,8 +744,7 @@ async function scrollIncrement(
           : direction === "right"
             ? { deltaX: dist }
             : { deltaX: -dist };
-    await invokeOnDevice(env, "gesture-scroll", { x: cx, y: cy, ...delta });
-    return;
+    return toolWarning(await invokeOnDevice(env, "gesture-scroll", { x: cx, y: cy, ...delta }));
   }
 
   // To reveal content below the fold the finger travels UP (toY < fromY), etc.
@@ -655,14 +763,23 @@ async function scrollIncrement(
       to = { x: clamp01(cx + dist), y: cy };
       break;
   }
-  await invokeOnDevice(env, "gesture-swipe", {
-    fromX: cx,
-    fromY: cy,
-    toX: to.x,
-    toY: to.y,
-    settle: true,
-    durationMs: 600,
-  });
+  try {
+    return toolWarning(
+      await invokeOnDevice(env, "gesture-swipe", {
+        fromX: cx,
+        fromY: cy,
+        toX: to.x,
+        toY: to.y,
+        momentum: false,
+        durationMs: 600,
+      })
+    );
+  } catch (err) {
+    // The tool rejects when cancelled mid-gesture. Let scrollToVisible's next
+    // abort check produce the uniform aborted skip instead of surfacing that.
+    if (env.signal?.aborted) return undefined;
+    throw err;
+  }
 }
 
 /**
@@ -686,22 +803,33 @@ async function scrollToVisible(
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
+  let warning: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
     const tree = await settleTree(env);
     if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
 
+    // The direction is the UI's, and so is the reading order the selectors go
+    // by; the frames, the clip and the gesture are in the frame space, so the
+    // direction is turned into it (flow-orientation.ts) as the settle above
+    // read it. Re-read every round: a fold or a rotation mid-scroll is a settle
+    // away.
+    const orientation = readingOrientation(env);
+    const axisDirection = nativeDirection(direction, orientation);
+
     // Anchor the gesture inside the container (so the right nested scroller
     // moves), or over the whole screen when none is named. Its frame is also the
     // clip window the axis check measures the target against.
-    const region = within ? flowSelectorToFrame(tree, within) : FULL_SCREEN;
+    const region = within ? flowSelectorToFrame(tree, within, orientation) : FULL_SCREEN;
     if (!region) {
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
-    const frame = flowSelectorToFrame(tree, target);
-    if (frame && axisFullyInside(frame, direction, region)) return { frame };
+    const frame = flowSelectorToFrame(tree, target, orientation);
+    if (frame && axisFullyInside(frame, axisDirection, region)) {
+      return { frame, ...warnedBy(warning) };
+    }
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
@@ -721,17 +849,19 @@ async function scrollToVisible(
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
-      if (frame) return { frame };
+      if (frame) return { frame, ...warnedBy(warning) };
       return {
         reason: `reached the end of the scroll without finding ${describeSelector(target)}`,
+        ...warnedBy(warning),
       };
     }
     prevFp = fp;
 
-    await scrollIncrement(env, direction, region);
+    warning ??= await scrollIncrement(env, axisDirection, region);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
+    ...warnedBy(warning),
   };
 }
 
@@ -755,6 +885,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     env.device.platform === "vega" &&
     (step.kind === "tap" ||
       step.kind === "long-press" ||
+      step.kind === "swipe" ||
       step.kind === "type" ||
       step.kind === "scroll-to" ||
       step.kind === "pinch" ||
@@ -777,11 +908,23 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
           : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
     };
   }
+  // Physical iOS: XCTest has no two-finger coordinate API. Fail here before the auto-wait.
+  if ((step.kind === "pinch" || step.kind === "rotate") && isIosPhysicalDevice(env.device)) {
+    return {
+      ok: false,
+      reason:
+        step.kind === "pinch"
+          ? "pinch is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's zoom UI with tap steps instead"
+          : "rotate is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's rotate controls with tap steps instead",
+    };
+  }
   switch (step.kind) {
     case "tap":
       return runTap(env, step);
     case "long-press":
       return runLongPress(env, step);
+    case "swipe":
+      return runSwipe(env, step);
     case "type":
       return runType(env, step);
     case "await":
@@ -793,7 +936,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "scroll-to": {
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       if (r.aborted) return ABORTED_OUTCOME;
-      return { ok: Boolean(r.frame), reason: r.reason };
+      return { ok: Boolean(r.frame), reason: r.reason, ...warnedBy(r.warning) };
     }
     case "pinch":
       return runPinch(env, step);
@@ -823,15 +966,10 @@ type GestureSettle = { aborted?: true; warning?: string };
  * outage. Only the outage path warns; a window that expired without converging
  * did settle.
  *
- * It is also the caller `skipProvenOutage` exists for: an app that cannot load
- * the instrumentation fails every read (an Apple system app, which flows drive
- * by coordinates for exactly that reason), so every step of such a flow arrives
+ * It is also the caller `skipProvenOutage` exists for: an app the tree source
+ * refuses fails every read (an Apple system app, which flows drive by
+ * coordinates for exactly that reason), so every step of such a flow arrives
  * here and would otherwise be charged a window for the same verdict.
- *
- * A platform with no tree source at all is the one case that settles nothing and
- * reports nothing. `ios-remote` is coordinate-driven by necessity —
- * `fetchFlowTree` serves it no tree — so there is no source to be down and no
- * degradation to warn about, and neither remedy a warning could name exists.
  *
  * The other cost is a screen that never holds still: nothing converges, so every
  * selector-less gesture pays the whole window, and the memo buys no relief
@@ -842,18 +980,14 @@ type GestureSettle = { aborted?: true; warning?: string };
  */
 async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
   let warning: string | undefined;
-  // A platform with no tree source settles nothing and is warned about nothing;
-  // the abort checkpoint below is owed to the gesture either way.
-  if (supportsFlowTree(env.device.platform)) {
-    try {
-      await settleTree(env, { skipProvenOutage: true });
-    } catch (err) {
-      // tree-source outage — this gesture needs no frame from it, so dispatch
-      // anyway. Untyped because a settle has nothing else to throw: every read
-      // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
-      // so the walk's own unguarded recursion is unreachable on every adapter.
-      warning = unsettledGestureWarning(err);
-    }
+  try {
+    await settleTree(env, { skipProvenOutage: true });
+  } catch (err) {
+    // tree-source outage — this gesture needs no frame from it, so dispatch
+    // anyway. Untyped because a settle has nothing else to throw: every read
+    // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
+    // so the walk's own unguarded recursion is unreachable on every adapter.
+    warning = unsettledGestureWarning(err);
   }
   if (env.signal?.aborted) return { aborted: true };
   return warning !== undefined ? { warning } : {};
@@ -862,6 +996,34 @@ async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
 /** Spread a settle's warning onto an outcome, leaving no `warning: undefined` key behind. */
 function warned(settle: { warning?: string }): { warning?: string } {
   return settle.warning !== undefined ? { warning: settle.warning } : {};
+}
+
+/**
+ * The warning a dispatched tool's result carries, if any: a gesture on a
+ * foldable whose panel could not be resolved, so it went to the cover panel.
+ * The step owes it to the report like a settle's warning.
+ */
+function toolWarning(result: unknown): string | undefined {
+  const warning = (result as { warning?: unknown } | null | undefined)?.warning;
+  return typeof warning === "string" && warning.length > 0 ? warning : undefined;
+}
+
+/** Every warning a step owes, joined, leaving no `warning: undefined` key behind. */
+function warnedBy(...warnings: Array<string | undefined>): { warning?: string } {
+  const text = warnings.filter((w): w is string => w !== undefined).join(" ");
+  return text.length > 0 ? { warning: text } : {};
+}
+
+/**
+ * What a direction swipe adds to that warning: without a tree read, nothing
+ * said how the UI lies on the screen now.
+ */
+function unreadOrientationNote(orientation: UiOrientation | undefined): string {
+  return orientation
+    ? `The direction was turned for the UI orientation an earlier read reported ` +
+        `(${orientation}); if the UI has turned since, the finger went another way.`
+    : `No read reported the UI's orientation, so the direction was sent in the screen's ` +
+        `portrait space; on a landscape UI the finger went sideways.`;
 }
 
 /** What a gesture reports when an outage left it unsettled, in the source's own words. */
@@ -877,7 +1039,7 @@ function unsettledGestureWarning(err: unknown): string {
 }
 
 /**
- * Resolve a gesture target (`tap`/`long-press`) to a normalized point: a
+ * Resolve a gesture target (`tap`/`long-press`/`swipe`) to a normalized point: a
  * selector resolves to its frame centre (settled tree + auto-wait); raw
  * coordinates need no resolution, but still settle before they are used.
  * Coordinates are the fallback for elements with no stable selector.
@@ -897,10 +1059,26 @@ async function resolveTargetPoint(
     }
     return { point: getDescribeTapPoint(frame) };
   }
+  const point = targetPointFromFrame(target, undefined);
+  if ("fail" in point) return point;
+  const settle = await settleForGesture(env);
+  if (settle.aborted) return { fail: ABORTED_OUTCOME };
+  return { point, ...warned(settle) };
+}
+
+/**
+ * The tree-free half of {@link resolveTargetPoint}, for callers that resolved
+ * the selector themselves (a swipe resolves both ends on one tree). Reading no
+ * tree, it settles none: the coordinate branch's {@link settleForGesture} stays
+ * in `resolveTargetPoint`, around this call.
+ */
+function targetPointFromFrame(
+  target: { selector?: FlowSelector; x?: number; y?: number },
+  frame: DescribeFrame | undefined
+): { x: number; y: number } | { fail: DirectiveOutcome } {
+  if (frame) return getDescribeTapPoint(frame);
   if (typeof target.x === "number" && typeof target.y === "number") {
-    const settle = await settleForGesture(env);
-    if (settle.aborted) return { fail: ABORTED_OUTCOME };
-    return { point: { x: target.x, y: target.y }, ...warned(settle) };
+    return { x: target.x, y: target.y };
   }
   return { fail: { ok: false, reason: "gesture needs a selector or x/y coordinates" } };
 }
@@ -916,11 +1094,11 @@ async function runTap(
 ): Promise<DirectiveOutcome> {
   const resolved = await resolveTargetPoint(env, target);
   if ("fail" in resolved) return resolved.fail;
-  await invokeOnDevice(env, "gesture-tap", {
+  const sent = await invokeOnDevice(env, "gesture-tap", {
     ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
   });
-  return { ok: true, ...warned(resolved) };
+  return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
 
 /**
@@ -933,7 +1111,8 @@ const DEFAULT_LONG_PRESS_MS = 800;
 /**
  * Press-and-hold on a target (same resolution as tap) for `duration` ms. Touch
  * platforms dispatch ONE `gesture-custom` train (Down, then Up delayed by the
- * duration) so the hold length is exact; Chromium has no touch, so the closest
+ * duration) so the hold length is exact. On a physical iOS device the train
+ * maps to the runner longPress. Chromium has no touch, so the closest
  * honest mapping is a mouse press-hold-release (`gesture-drag` with from == to)
  * — apps implementing pointer-based long-press respond, anything else sees a
  * slow click. A desktop context menu is a *right*-click, deliberately not
@@ -947,23 +1126,31 @@ async function runLongPress(
   if ("fail" in resolved) return resolved.fail;
   const point = resolved.point;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
+  let sent: unknown;
   if (env.device.platform === "chromium") {
-    await invokeOnDevice(env, "gesture-drag", {
-      fromX: point.x,
-      fromY: point.y,
-      toX: point.x,
-      toY: point.y,
-      durationMs: duration,
-    });
+    try {
+      await invokeOnDevice(env, "gesture-drag", {
+        fromX: point.x,
+        fromY: point.y,
+        toX: point.x,
+        toY: point.y,
+        durationMs: duration,
+      });
+    } catch (err) {
+      // gesture-drag rejects when cancelled mid-hold; per ABORTED_OUTCOME that
+      // must read as an aborted skip, never a step failure with the tool's message.
+      if (env.signal?.aborted) return ABORTED_OUTCOME;
+      throw err;
+    }
   } else {
-    await invokeOnDevice(env, "gesture-custom", {
+    sent = await invokeOnDevice(env, "gesture-custom", {
       events: [
         { type: "Down", x: point.x, y: point.y, delayMs: 0 },
         { type: "Up", x: point.x, y: point.y, delayMs: duration },
       ],
     });
   }
-  return { ok: true, ...warned(resolved) };
+  return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
 
 /**
@@ -1026,12 +1213,13 @@ async function runPinch(
     args[selected.angle === 0 ? "endCenterX" : "endCenterY"] = selected.endCenter;
   }
 
+  let sentWarning: string | undefined;
   for (let i = 0; i < n; i++) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
-    await invokeOnDevice(env, "gesture-pinch", args);
+    sentWarning ??= toolWarning(await invokeOnDevice(env, "gesture-pinch", args));
     if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
   }
-  return { ok: true, ...warned(settle) };
+  return { ok: true, ...warnedBy(settle.warning, sentWarning) };
 }
 
 /**
@@ -1129,8 +1317,9 @@ async function runRotate(
   }
 
   if (env.signal?.aborted) return ABORTED_OUTCOME;
+  let sent: unknown;
   try {
-    await invokeOnDevice(env, "gesture-rotate", {
+    sent = await invokeOnDevice(env, "gesture-rotate", {
       centerX: center.x,
       centerY: center.y,
       ...(aspect === undefined
@@ -1147,7 +1336,261 @@ async function runRotate(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     throw err;
   }
-  return { ok: true, ...warned(settle) };
+  return { ok: true, ...warnedBy(settle.warning, toolWarning(sent)) };
+}
+
+/**
+ * Per-direction swipe geometry, byte-for-byte Maestro's table. The asymmetries
+ * are edge-gesture avoidance: a `down` swipe starting at the very top would grab
+ * the notification shade, and an `up` swipe starting near the bottom lands in the
+ * home-indicator zone. Each entry is a default start point and the end line that
+ * start travels to on the travel axis; an explicit `from` replaces the start,
+ * keeps its own cross-axis coordinate, and travels the line's signed magnitude
+ * rather than landing on it.
+ */
+const SWIPE_GEOMETRY: Record<
+  SwipeDirection,
+  { start: { x: number; y: number }; axis: "x" | "y"; end: number }
+> = {
+  left: { start: { x: 0.9, y: 0.5 }, axis: "x", end: 0.1 },
+  right: { start: { x: 0.1, y: 0.5 }, axis: "x", end: 0.9 },
+  down: { start: { x: 0.5, y: 0.2 }, axis: "y", end: 0.9 },
+  up: { start: { x: 0.5, y: 0.5 }, axis: "y", end: 0.1 },
+};
+
+/**
+ * One semantic finger travel (dismiss a card, page a carousel, open a drawer),
+ * distinct from goal-seeking `scroll-to`. The start is `from` or the travel
+ * spec's default; the end comes from exactly one of `direction`
+ * ({@link SWIPE_GEOMETRY}, clamped short at the screen edge), `by` (signed
+ * relative delta delivered exactly: an unanchored start slides on-screen to fit
+ * it, an authored anchor fails instead), or `to`. Touch dispatches one
+ * `gesture-swipe`; Chromium has no touch, so a swipe is a mouse drag
+ * (`gesture-drag`), where a `from` on a draggable node hands the gesture to the
+ * browser's own drag-and-drop exactly as a real mouse would. `momentum` rides
+ * both dispatches.
+ */
+async function runSwipe(
+  env: ActionEnv,
+  step: {
+    from?: GestureTarget;
+    direction?: SwipeDirection;
+    to?: GestureTarget;
+    by?: { x?: number; y?: number };
+    momentum?: boolean;
+    duration?: number;
+  }
+): Promise<DirectiveOutcome> {
+  // Both selector ends come from ONE settled tree, so neither is read before the
+  // other's auto-wait. `from` leads the pair so a swipe where NEITHER end ever
+  // appears is blamed on the anchor, the element the finger needs first.
+  const ends = [step.from, step.to] as const;
+  const selectors = ends.map((end) => (end && "selector" in end ? end.selector : undefined));
+  const frames = await waitForFrames(env, selectors);
+  if (frames === "aborted") return ABORTED_OUTCOME;
+  if (!Array.isArray(frames)) return { ok: false, reason: offscreenHint(frames.unresolved) };
+  const [fromFrame, toFrame] = frames;
+
+  // A selector end already resolved against a settled tree; with neither end
+  // carrying one, `waitForFrames` read no tree, so this is the only wait between
+  // the touch-down and whatever motion earlier steps left behind.
+  let settle: GestureSettle = {};
+  if (selectors.every((selector) => selector === undefined)) {
+    settle = await settleForGesture(env);
+    if (settle.aborted) return ABORTED_OUTCOME;
+  }
+
+  let toPoint: { x: number; y: number } | undefined;
+  if (step.to) {
+    const p = targetPointFromFrame(step.to, toFrame);
+    if ("fail" in p) return p.fail;
+    toPoint = p;
+  }
+
+  // A direction is the UI's; the points dispatched are in the frame space, and
+  // on a landscape UI the two differ by a rotation (flow-orientation.ts). The
+  // settle above is the read that said which.
+  const orientation = env.lastRead?.uiOrientation;
+  if (settle.warning !== undefined && step.direction) {
+    // No tree this time: the turn comes from an older read, or from none.
+    settle = { ...settle, warning: `${settle.warning} ${unreadOrientationNote(orientation)}` };
+  }
+
+  let start: { x: number; y: number };
+  if (step.from) {
+    const p = targetPointFromFrame(step.from, fromFrame);
+    if ("fail" in p) return p.fail;
+    start = p;
+  } else if (step.direction) {
+    // A fresh object: SWIPE_GEOMETRY is shared by every swipe in the process,
+    // and the unanchored `by` arm below slides the local start in place.
+    start = uiPointToNative(SWIPE_GEOMETRY[step.direction].start, orientation);
+  } else {
+    start = { x: 0.5, y: 0.5 };
+  }
+
+  // Selector frames come from the platform's layout tree, so their centres are
+  // not covered by parseTarget's [0, 1] validation - describeFrameSchema bounds
+  // each field independently, so a conformant frame can still centre off-screen.
+  // Never dispatch an off-screen touch-down, and never silently move an element
+  // anchor to make the gesture valid.
+  if (
+    !Number.isFinite(start.x) ||
+    start.x < 0 ||
+    start.x > 1 ||
+    !Number.isFinite(start.y) ||
+    start.y < 0 ||
+    start.y > 1
+  ) {
+    return {
+      ok: false,
+      reason: `swipe.from resolved outside the normalized screen: (${start.x}, ${start.y}); both coordinates must be between 0 and 1`,
+    };
+  }
+
+  let end: { x: number; y: number };
+  if (step.direction) {
+    const g = SWIPE_GEOMETRY[step.direction];
+    // The preset's travel, as a UI-space vector along its axis, turned into the
+    // frame space. Its magnitude is the same in both.
+    const travelVector = uiVectorToNative(
+      g.axis === "x" ? { x: g.end - g.start.x, y: 0 } : { x: 0, y: g.end - g.start.y },
+      orientation
+    );
+    const axis: "x" | "y" = travelVector.x !== 0 ? "x" : "y";
+    const startOnTravelAxis = start[axis];
+    // The preset line is the endpoint only for the unanchored default start; any
+    // other anchor travels the preset's signed magnitude from where the finger
+    // goes down, so an element in the last band of the axis still swipes in the
+    // requested direction instead of reversing.
+    const endOnTravelAxis = step.from
+      ? clamp01(startOnTravelAxis + travelVector[axis])
+      : uiPointToNative(
+          g.axis === "x" ? { x: g.end, y: g.start.y } : { x: g.start.x, y: g.end },
+          orientation
+        )[axis];
+    end = axis === "x" ? { x: endOnTravelAxis, y: start.y } : { x: start.x, y: endOnTravelAxis };
+    // Clamping can only shorten travel, never flip its sign, so a below-floor
+    // result means the anchor sits too near the edge to swipe.
+    const travel = Math.abs(endOnTravelAxis - startOnTravelAxis);
+    if (travel < SWIPE_MIN_TRAVEL) {
+      return {
+        ok: false,
+        reason: `cannot swipe ${step.direction} from ${axis}=${startOnTravelAxis}: only ${travel} of travel to the screen edge, less than the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a tap, not a swipe`,
+      };
+    }
+  } else if (step.by) {
+    // `by` is a QUANTITATIVE delta — magnitude AND angle are the authored intent
+    // — so it lands the exact vector or fails, never truncating an axis or
+    // rotating a diagonal to fit. An axis overflows when start + by leaves [0, 1].
+    const overflowAxis = (["x", "y"] as const).find((axis) => {
+      const d = step.by![axis];
+      return d !== undefined && (start[axis] + d < 0 || start[axis] + d > 1);
+    });
+    if (overflowAxis === undefined) {
+      // Deliverable as authored: land the exact endpoint, an absent axis staying
+      // put. No clamp touches it, so a delta one ulp inside the bound survives.
+      end = {
+        x: step.by.x !== undefined ? start.x + step.by.x : start.x,
+        y: step.by.y !== undefined ? start.y + step.by.y : start.y,
+      };
+    } else if (step.from) {
+      // A fixed anchor can't absorb the overflow: delivering the delta runs
+      // off-screen, and clamping would truncate its magnitude or rotate its angle.
+      const requested = step.by[overflowAxis]!;
+      const raw = start[overflowAxis] + requested;
+      return {
+        ok: false,
+        reason: `swipe.by.${overflowAxis} of ${requested} from ${overflowAxis}=${start[overflowAxis]} lands at ${raw}, off the normalized screen; reduce the delta so from + by stays within [0, 1]`,
+      };
+    } else {
+      // Unanchored default start: slide each overflowing axis's start→end segment
+      // into [0, 1], preserving the exact delta. The parser bounds |by[axis]| ≤ 1,
+      // so a shift always exists.
+      end = { x: start.x, y: start.y };
+      for (const axis of ["x", "y"] as const) {
+        const d = step.by[axis];
+        if (d === undefined) {
+          end[axis] = start[axis];
+          continue;
+        }
+        const s = start[axis];
+        const lo = Math.min(s, s + d);
+        const hi = Math.max(s, s + d);
+        const shift = lo < 0 ? -lo : hi > 1 ? 1 - hi : 0;
+        start[axis] = s + shift;
+        end[axis] = s + d + shift;
+      }
+    }
+  } else {
+    end = toPoint!;
+    // The start guard's twin at the other end: `to` is the only spelling whose
+    // endpoint can leave the screen, and only through a SELECTOR - an authored
+    // `to: {x, y}` was already bounded by parseTarget. It runs before the travel
+    // gate so an off-screen endpoint is reported as off-screen rather than as a
+    // distance verdict it only incidentally passes.
+    if (
+      !Number.isFinite(end.x) ||
+      end.x < 0 ||
+      end.x > 1 ||
+      !Number.isFinite(end.y) ||
+      end.y < 0 ||
+      end.y > 1
+    ) {
+      return {
+        ok: false,
+        reason: `swipe.to resolved outside the normalized screen: (${end.x}, ${end.y}); both coordinates must be between 0 and 1`,
+      };
+    }
+    // A selector endpoint only resolves at run time, so the parser cannot see it
+    // landing within tap range of the start. Gate on the travel VECTOR's
+    // magnitude, so the boundary matches `by`/`direction` and stays monotonic in
+    // distance.
+    if (Math.hypot(end.x - start.x, end.y - start.y) < SWIPE_MIN_TRAVEL) {
+      return {
+        ok: false,
+        reason: `swipe.to (${end.x}, ${end.y}) resolved within the minimum swipe travel of the start point (${start.x}, ${start.y}); aim it at a point or element farther from the start`,
+      };
+    }
+  }
+
+  const travel = {
+    fromX: start.x,
+    fromY: start.y,
+    toX: end.x,
+    toY: end.y,
+    ...(step.duration !== undefined ? { durationMs: step.duration } : {}),
+    ...(step.momentum === false ? { momentum: false } : {}),
+  };
+  let sent: unknown;
+  try {
+    sent = await invokeOnDevice(
+      env,
+      env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
+      travel
+    );
+  } catch (err) {
+    // Both tools reject when cancelled mid-gesture; per ABORTED_OUTCOME that must
+    // read as an aborted skip, never a step failure with the tool's message.
+    if (env.signal?.aborted) return ABORTED_OUTCOME;
+    throw err;
+  }
+
+  // The momentum this swipe created is this step's business: a following point
+  // target would otherwise touch down mid-deceleration, where the scroll view
+  // eats the touch and both steps still report pass. Unconditional, since
+  // `momentum: false` zeroes the finger's release velocity, not the app's
+  // animations.
+  try {
+    await settleTree(env);
+  } catch {
+    // Tree-source outage AFTER the gesture landed: proceed as runSnapshot's
+    // settle does rather than fail a swipe that happened.
+  }
+  // settleTree returns undefined only on abort, which must read as the uniform
+  // aborted skip, never a pass.
+  if (env.signal?.aborted) return ABORTED_OUTCOME;
+  return { ok: true, ...warnedBy(settle.warning, toolWarning(sent)) };
 }
 
 /**
@@ -1165,7 +1608,7 @@ async function runType(
   if (!frame) {
     return { ok: false, reason: offscreenHint(step.into) };
   }
-  await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
+  const focusTap = await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
   // Keys are injected at the HID level and go to whatever holds focus, so the
   // tap→type gap must cover the app's focus round-trip (see the constants).
   if (!(await sleepOrAbort(TYPE_FOCUS_SETTLE_MS, env.signal))) {
@@ -1189,7 +1632,7 @@ async function runType(
     // UDID.)
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
-  return { ok: true };
+  return { ok: true, ...warnedBy(toolWarning(focusTap)) };
 }
 
 /**
@@ -1205,7 +1648,8 @@ async function runType(
  * - `assert` ({@link DEFAULT_ASSERT_TIMEOUT_MS}) — a correctness check that only
  *   absorbs the latency of an update landing a frame after an action.
  *
- * Mirrors `await-ui-element`'s blind-read guard: an EMPTY tree is not
+ * Applies the shared blind-read guard ({@link isBlindRead}), the same one
+ * `await-ui-element` polls with: an EMPTY tree is not
  * trustworthy evidence for `hidden` (the only condition an empty tree satisfies)
  * when the adapter flagged the read as degraded or the selector had matched on
  * an earlier poll — a transient blank frame mid-navigation must not confirm the
@@ -1238,16 +1682,21 @@ async function waitForCondition(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
       const data = await readFlowTree(env);
-      lastMatches = flowFindAll(data.tree, step.selector);
+      lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
-      const blind =
-        data.tree.children.length === 0 && Boolean(data.hint || data.should_restart || everMatched);
+      const blind = isBlindRead(data, everMatched);
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
       if (
         !blind &&
-        evaluateCondition(step.condition, step.expectedText, lastMatches, step.textMatch)
+        evaluateCondition(
+          step.condition,
+          step.expectedText,
+          lastMatches,
+          step.textMatch,
+          data.uiOrientation
+        )
       ) {
         return { ok: true };
       }
@@ -1332,8 +1781,16 @@ async function waitForCondition(
   return {
     ok: false,
     reason:
-      assertReason(step.condition, step.selector, step.expectedText, step.textMatch, lastMatches) +
-      blipNote,
+      assertReason(
+        step.condition,
+        step.selector,
+        step.expectedText,
+        step.textMatch,
+        lastMatches,
+        // The read `lastMatches` came from is the last one that answered, and
+        // only a read that answers writes the orientation.
+        readingOrientation(env)
+      ) + blipNote,
   };
 }
 
@@ -1532,6 +1989,9 @@ async function waitForIdle(
   // frame in a run of twenty says nothing about that.
   let comparedAPair = false;
   let firstCapture = true;
+  // What the captures had to say: on a foldable whose panel could not be
+  // resolved, that they are of the cover panel.
+  let panelWarning: string | undefined;
 
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
@@ -1558,6 +2018,7 @@ async function waitForIdle(
       capturePixelsWithin(env, deadline, firstCapture),
     ]);
     firstCapture = false;
+    panelWarning ??= frame?.warning;
     // A capture abandoned by an abort comes back indistinguishable from one that
     // failed, and no verdict may be derived from a run that was cancelled.
     if (env.signal?.aborted || read.type === "aborted") return ABORTED_OUTCOME;
@@ -1694,9 +2155,13 @@ async function waitForIdle(
           heldForMs = now - bothSince;
           if (localizedThisInterval) localizedMotionDuringHold = true;
           if (stillIntervals >= MIN_STILL_INTERVALS && heldForMs >= stableFor) {
-            return localizedMotionDuringHold
-              ? { ok: true, warning: LOCALIZED_MOTION_WARNING }
-              : { ok: true };
+            return {
+              ok: true,
+              ...warnedBy(
+                localizedMotionDuringHold ? LOCALIZED_MOTION_WARNING : undefined,
+                panelWarning
+              ),
+            };
           }
         }
         // Otherwise the tree held and no pair could be compared: this round
@@ -1905,7 +2370,8 @@ function assertReason(
   selector: FlowSelector,
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
-  matches: ReturnType<typeof findAll>
+  matches: ReturnType<typeof findAll>,
+  orientation: UiOrientation | undefined
 ): string {
   const sel = describeSelector(selector);
   switch (condition) {
@@ -1922,7 +2388,11 @@ function assertReason(
       // holds what that read saw: the element, still on screen.
       return `an element matching ${sel} was still visible`;
     case "text": {
-      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      // The same pick evaluateCondition made, so the reason quotes the element
+      // the check read.
+      const first =
+        firstInReadingOrder(matches.filter(isVisible), orientation) ??
+        firstInReadingOrder(matches, orientation);
       if (!first) return `no element matched selector ${sel}`;
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted

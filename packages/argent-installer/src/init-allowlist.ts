@@ -3,7 +3,7 @@ import pc from "picocolors";
 import type { McpConfigAdapter } from "./mcp-configs.js";
 import { InitCancelled } from "./init-args.js";
 
-export interface AllowlistResult {
+interface AllowlistResult {
   enabled: boolean;
   lines: string[];
 }

@@ -33,7 +33,7 @@ export interface DecideTargetsContext {
   nonInteractiveBothDefault: InstallMode[];
 }
 
-export type TargetDecision =
+type TargetDecision =
   | { kind: "targets"; targets: InstallMode[]; reason: "flags" | "single" | "noninteractive-both" }
   | { kind: "prompt" };
 

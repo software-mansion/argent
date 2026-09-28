@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import type { ShellCommand } from "./package-manager.js";
 
-export interface TrustDiskOutcome {
+interface TrustDiskOutcome {
   /** The caller's on-disk probe found the desired outcome. */
   landed: boolean;
   exitError: Error | null;

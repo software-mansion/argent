@@ -57,15 +57,12 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
 
 /**
  * No-op stub: real OS ↔ device sync would need the Chromium app to opt in via
- * main-process IPC, which CDP cannot reach, so the requested state is only
- * recorded for a future native bridge.
+ * main-process IPC, which CDP cannot reach. It holds no field — nothing can read
+ * the requested state back, and a stored one would only look like state the rest
+ * of the server consults. What the type buys is the seam: `setClipboardSync`
+ * resolves like the other commands, so the WS `clipboardSync` route needs no
+ * not-yet-implemented branch, and a future native bridge lands here.
  */
 export class ClipboardSyncState {
-  private enabled = false;
-  set(enabled: boolean): void {
-    this.enabled = enabled;
-  }
-  isEnabled(): boolean {
-    return this.enabled;
-  }
+  set(_enabled: boolean): void {}
 }

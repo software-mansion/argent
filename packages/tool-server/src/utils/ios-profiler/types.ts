@@ -7,14 +7,7 @@ export type {
   ProfilerPayload,
   UiHangStateBreakdownEntry,
   NativeProfilerAnalyzeResult,
-  NativeProfilerAnalyzeResult as IosProfilerAnalyzeResult,
 } from "../profiler-shared/types";
-
-export interface ProfilerStartStatus {
-  status: "recording";
-  pid: number;
-  traceFile: string;
-}
 
 // Raw rows produced by pipeline/xml-parser.ts from the xctrace XML export.
 

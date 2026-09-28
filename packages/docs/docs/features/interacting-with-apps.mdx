@@ -21,13 +21,13 @@ The agent uses the same tools on iOS, Android, TV and Chromium. Argent reads the
 
 ## Discovery before interaction
 
-The agent does not read coordinates from a screenshot. Before each tap, the agent reads the elements on the screen with their roles, labels and positions. The source depends on the app:
+The agent does not read coordinates from a screenshot. Before a tap, the agent has the elements on the screen with their roles, labels and positions. Each interaction tool returns these elements together with the screenshot. The agent reads the screen separately only before the first action on a new screen. The source depends on the app:
 
 - the accessibility tree on iOS, Android and TV,
 - the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
-After a screen change, the agent reads the screen again. Most actions return a screenshot, so the agent sees the result without an extra call.
+After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
 
 ## Launching apps
 
@@ -52,7 +52,7 @@ The agent grants, denies or resets a runtime permission such as location, camera
 
 ## Device state and hardware
 
-The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
+The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent folds and unfolds a foldable iOS simulator. Screenshots, element trees and taps use the panel that shows the UI. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
 
 <Video
   src="/video/shake.mp4"

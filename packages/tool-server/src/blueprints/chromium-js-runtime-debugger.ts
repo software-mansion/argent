@@ -109,15 +109,6 @@ function makeStubSourceResolver(): SourceResolver {
   };
 }
 
-class StubSourceMapsRegistry extends SourceMapsRegistry {
-  constructor() {
-    super("");
-  }
-  override async waitForPending(): Promise<void> {
-    // Nothing to await: no source map is ever registered on the Chromium path.
-  }
-}
-
 export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
   namespace: CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE,
 
@@ -205,7 +196,13 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     // only two callers are gated RN-only), so a failure here is not fatal.
     await cdp.addBinding("__argent_callback").catch(() => {});
 
-    const sourceMaps = new StubSourceMapsRegistry();
+    // The base registry IS the stub here. Nothing calls
+    // `registerFromScriptParsed` on a Chromium session — page scripts carry
+    // their own //# sourceMappingURL=data:... or rely on the browser
+    // devtools' own resolution — so it holds no pending registrations and
+    // `waitForPending()` resolves at once, which is what `debugger-status`
+    // reports as `sourceMapReady`.
+    const sourceMaps = new SourceMapsRegistry();
     const sourceResolver = makeStubSourceResolver();
 
     const api: JsRuntimeDebuggerApi = {

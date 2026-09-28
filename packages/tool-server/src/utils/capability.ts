@@ -12,14 +12,10 @@ import {
  * declaration. The HTTP dispatcher maps this to `400 Bad Request`.
  */
 export class UnsupportedOperationError extends Error {
-  readonly toolId: string;
-  readonly device: DeviceInfo;
   constructor(toolId: string, device: DeviceInfo, reason?: string) {
     const detail = reason ? ` (${reason})` : "";
     super(`Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.`);
     this.name = "UnsupportedOperationError";
-    this.toolId = toolId;
-    this.device = device;
     withFailureSignal(this, {
       error_code: FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION,
       failure_stage: "tool_capability_assert_supported",

@@ -1,6 +1,6 @@
 import type { ChildProcess } from "child_process";
 
-export interface ShutdownTimings {
+interface ShutdownTimings {
   /** SIGINT → exit window. */
   graceMs: number;
   /** SIGTERM → exit window if SIGINT was ignored. */
@@ -9,7 +9,7 @@ export interface ShutdownTimings {
   killMs: number;
 }
 
-export interface ShutdownResult {
+interface ShutdownResult {
   /** No escalation past SIGINT was needed. */
   clean: boolean;
   /** Furthest signal the ladder reached. */

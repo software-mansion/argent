@@ -36,7 +36,10 @@ import {
   getUdidFromArgs,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
-} from "./auto-screenshot.js";
+  autoDescribeEnabled,
+  shouldAutoDescribe,
+  AUTO_DESCRIBE_HEADER,
+} from "./auto-capture.js";
 import { toMcpTool } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
 
@@ -105,6 +108,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // isFlagEnabled hits disk, so resolve it once at startup rather than on every
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();
+  const autoDescribeOn = autoDescribeEnabled();
 
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
@@ -234,7 +238,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       capabilities: { tools: {} },
       instructions:
         "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
-        "Always use discovery tools (describe / debugger-component-tree / screenshot) before tapping — never guess coordinates. " +
+        "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe (or debugger-component-tree) only when no fresh tree is available — never guess coordinates from pixels. " +
         "On session end: call stop-all-simulator-servers with devices: [...] naming the devices this session used, and perform any necessary cleanup. " +
         "One tool-server is shared by every agent using this argent install, so an unscoped call tears down their devices too — reserve it for a deliberate machine-wide cleanup. " +
         "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
@@ -300,27 +304,25 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      if (
-        autoScreenshotOn &&
-        udid &&
-        shouldAutoScreenshot(params.name) &&
-        containsSecretPlaceholder(params.arguments)
-      ) {
+      const wantScreenshot = autoScreenshotOn && shouldAutoScreenshot(params.name);
+      const wantTree = autoDescribeOn && shouldAutoDescribe(params.name);
+      if (udid && (wantScreenshot || wantTree) && containsSecretPlaceholder(params.arguments)) {
         // The tool-server typed the *resolved* secret; a screenshot of a
         // non-secure-entry field would hand the plaintext back to the model as
-        // pixels. Every instruction in the note must be safe to follow AFTER the
-        // typing, since this branch only fires on a call that already typed it:
-        // hence it forbids re-sending the typing step (a rebuilt `run-sequence`
+        // pixels, and the element tree would hand it back as text. Every
+        // instruction in the note must be safe to follow AFTER the typing,
+        // since this branch only fires on a call that already typed it: hence
+        // it forbids re-sending the typing step (a rebuilt `run-sequence`
         // would type the secret a second time on top of the first) and states
         // that only this call is skipped, the decision being per call's args.
         content = [
           ...content,
           {
             type: "text" as const,
-            text: "Auto-screenshot skipped: the input contains a {{secret:…}} placeholder, and a screenshot of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is screenshotted normally, and captures the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
+            text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
           },
         ];
-      } else if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
+      } else if (udid && (wantScreenshot || wantTree)) {
         // Let the screen settle before capturing, bounded by the per-tool
         // budget: `await-screen-idle` polls the tree server-side and usually
         // returns well under the cap. If the call fails (e.g. a tool-server
@@ -341,26 +343,61 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           }
         }
 
-        try {
-          const screenshotResult = await callTool("screenshot", { udid });
-          const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
-            toolsUrl: TOOLS_URL,
-            authToken: AUTH_TOKEN,
-            deviceId: udid,
-          });
-          const hasImage = screenshotContent.some((b) => b.type === "image");
-          if (hasImage) {
-            content = [
-              ...content,
-              {
-                type: "text" as const,
-                text: "--- Screen after action ---",
-              },
-              ...screenshotContent,
-            ];
+        if (wantScreenshot) {
+          try {
+            const screenshotResult = await callTool("screenshot", { udid });
+            const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
+              toolsUrl: TOOLS_URL,
+              authToken: AUTH_TOKEN,
+              deviceId: udid,
+            });
+            const hasImage = screenshotContent.some((b) => b.type === "image");
+            if (hasImage) {
+              content = [
+                ...content,
+                {
+                  type: "text" as const,
+                  text: "--- Screen after action ---",
+                },
+                ...screenshotContent,
+              ];
+            }
+          } catch {
+            /* best-effort */
           }
-        } catch {
-          /* best-effort */
+        }
+
+        // Append the element tree the agent would otherwise have to fetch with
+        // a `describe` round-trip before its next tap. Measured on Sonnet over
+        // 70 runs: −21% turns, −23% wall time, −17% cost at equal task success
+        // (see PR #958). The tree is a few hundred tokens per action.
+        if (wantTree) {
+          const t1 = Date.now();
+          try {
+            const d = await callTool("describe", { udid });
+            const desc = (d.result as { description?: unknown } | null)?.description;
+            if (typeof desc === "string" && desc.length > 0) {
+              content = [
+                ...content,
+                { type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` },
+              ];
+            }
+            await spyLog({
+              ts: new Date().toISOString(),
+              event: "auto_describe",
+              name: params.name,
+              durationMs: Date.now() - t1,
+              chars: typeof desc === "string" ? desc.length : 0,
+            });
+          } catch (e) {
+            await spyLog({
+              ts: new Date().toISOString(),
+              event: "auto_describe",
+              name: params.name,
+              durationMs: Date.now() - t1,
+              error: String(e instanceof Error ? e.message : e),
+            });
+          }
         }
       }
 

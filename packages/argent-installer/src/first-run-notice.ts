@@ -28,7 +28,7 @@ export function printFirstRunNotice(): void {
   markFirstRunNoticeShown();
 }
 
-export type TelemetryConsentOutcome =
+type TelemetryConsentOutcome =
   | { kind: "enabled"; commit: () => void }
   | { kind: "disabled"; reason: "flag" }
   | { kind: "disabled"; reason: "choice"; commit: () => void }

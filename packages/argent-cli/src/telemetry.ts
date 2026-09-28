@@ -20,19 +20,30 @@ const TELEMETRY_OPTIONS = {
 export async function telemetry(args: string[]): Promise<void> {
   const sub = args[0];
   let scope: FlagScope = "global";
-  try {
-    const { positionals, options } = parseCommandArgs(args.slice(1), TELEMETRY_OPTIONS);
-    if (positionals.length > 0) {
-      throw new UsageError(`Unexpected argument "${positionals[0]}".`);
+  // Help is accepted in any position, including after a subcommand; the option
+  // parser below knows only `--scope` and would reject it as an unknown flag.
+  const wantsHelp = args.includes("--help") || args.includes("-h");
+  if (!wantsHelp) {
+    try {
+      const { positionals, options } = parseCommandArgs(args.slice(1), TELEMETRY_OPTIONS);
+      if (positionals.length > 0) {
+        throw new UsageError(`Unexpected argument "${positionals[0]}".`);
+      }
+      if (options.scope !== undefined) scope = options.scope as FlagScope;
+    } catch (err) {
+      if (!(err instanceof UsageError)) throw err;
+      console.error(`Error: ${err.message}`);
+      printUsage();
+      process.exit(2);
     }
-    if (options.scope !== undefined) scope = options.scope as FlagScope;
-  } catch (err) {
-    if (!(err instanceof UsageError)) throw err;
-    console.error(`Error: ${err.message}`);
-    printUsage();
-    process.exit(2);
   }
   telemetryInit("cli");
+
+  if (wantsHelp) {
+    printUsage();
+    await telemetryShutdown();
+    return;
+  }
 
   switch (sub) {
     case undefined:
@@ -48,11 +59,6 @@ export async function telemetry(args: string[]): Promise<void> {
       return;
     case "disable":
       await cmdDisable(scope);
-      return;
-    case "--help":
-    case "-h":
-      printUsage();
-      await telemetryShutdown();
       return;
     default:
       console.error(`Unknown subcommand: telemetry ${sub}`);

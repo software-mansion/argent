@@ -8,7 +8,7 @@ export function isDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return norm === "1" || norm === "true" || norm === "yes" || norm === "on";
 }
 
-export interface DebugPayload {
+interface DebugPayload {
   event: string;
   distinctId: string;
   properties: Record<string, unknown>;

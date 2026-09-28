@@ -1,12 +1,12 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { NativeAppState, NativeDevtoolsApi } from "../blueprints/native-devtools";
 
-export type NativeTargetResolutionSource =
+type NativeTargetResolutionSource =
   | "explicit"
   | "single_connected_foreground_like"
   | "frontmost_detected";
 
-export interface ResolvedNativeTargetApp {
+interface ResolvedNativeTargetApp {
   bundleId: string;
   source: NativeTargetResolutionSource;
 }

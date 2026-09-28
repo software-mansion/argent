@@ -65,12 +65,12 @@ export interface TextAnalysis {
   changes: TextChange[];
 }
 
-export interface RegionScale {
+interface RegionScale {
   x: number;
   y: number;
 }
 
-export interface AnalyzeScreenshotTextOptions {
+interface AnalyzeScreenshotTextOptions {
   baselinePath: string;
   currentPath: string;
   hasPixelDiff?: boolean;

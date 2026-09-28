@@ -144,6 +144,19 @@ export interface RegisterArtifactOptions {
 export class ArtifactStore {
   private readonly entries = new Map<string, ArtifactEntry>();
 
+  /**
+   * @public
+   * Every caller is in tool-server — `tools/flows/flow-visual`,
+   * `tools/screenshot`, `tools/screenshot-diff`, `tools/screen-recording-stop`,
+   * both `tools/profiler/native-profiler` stop/analyze handlers and
+   * `tools/profiler/react/react-profiler-analyze` — and the dead-code gate runs
+   * against an unbuilt tree, where a cross-workspace edge cannot form. See
+   * `knip.jsonc`.
+   *
+   * To re-audit whether this tag is still earned, rename the member and read
+   * the `Property 'register' does not exist` errors `tsc --build` reports. Do
+   * not grep `.register(`: `registerTool` / `registerBlueprint` swamp the hits.
+   */
   async register(opts: RegisterArtifactOptions): Promise<ArtifactHandle> {
     const { hostPath, kind } = opts;
     const filename = opts.filename ?? basename(hostPath);
@@ -177,10 +190,22 @@ export class ArtifactStore {
     return handle;
   }
 
+  /**
+   * @public
+   * The only caller is the tool-server `GET /artifacts/:id` route, and the
+   * dead-code gate runs against an unbuilt tree, where a cross-workspace edge
+   * cannot form. See `knip.jsonc`.
+   */
   get(id: string): ArtifactEntry | undefined {
     return this.entries.get(id);
   }
 
+  /**
+   * @public
+   * The only caller is the tool-server `/artifacts` route, and the dead-code
+   * gate runs against an unbuilt tree, where a cross-workspace edge cannot
+   * form. See `knip.jsonc`.
+   */
   list(): ArtifactListItem[] {
     return [...this.entries.entries()].map(([id, entry]) => ({
       id,

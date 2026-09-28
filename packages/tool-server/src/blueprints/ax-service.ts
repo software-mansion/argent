@@ -1,7 +1,7 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as readline from "node:readline";
 import { ChildProcess } from "node:child_process";
+import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
 import {
   FAILURE_CODES,
   FailureError,
@@ -11,6 +11,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
@@ -22,7 +23,7 @@ export {
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
-export type AXServiceTransport = "unix" | "tcp";
+type AXServiceTransport = "unix" | "tcp";
 
 type AxServiceFactoryOptions = Record<string, unknown> & {
   device: DeviceInfo;
@@ -68,7 +69,22 @@ export interface AXServiceApi {
   describe(): Promise<AXDescribeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
+  /**
+   * The display id of the panel the guest renders to (1 the cover panel, 3
+   * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
+   * Null when the daemon names none, as on a device with one panel. Answered
+   * in a few milliseconds; every touch of a foldable asks it
+   * (`utils/foldable.ts`), so its budget is short. A daemon build that
+   * predates the command answers an error.
+   */
+  livePanel(): Promise<number | null>;
 }
+
+/**
+ * How long `live_panel` gets: a healthy daemon answers in a few milliseconds,
+ * and a caller that asks before every touch must not wait on one that hangs.
+ */
+const LIVE_PANEL_TIMEOUT_MS = 2_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -241,6 +257,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       );
     }
 
+    /**
+     * Mechanism gate for provider-supplied devices. Gating here at the
+     * blueprint, rather than per tool is what keeps this bounded. Every tool
+     * built on `AX_SERVICE_NAMESPACE`, now and in future, inherits the check
+     * without being re-audited. A no-op for every device Argent booted itself.
+     */
+    await assertExternalCapability(AX_SERVICE_NAMESPACE, device, "ax-service");
+
     const udid = device.id;
     const host = pickIosHost(device);
     // Unix sockets don't bridge the sim-remote tunnel, so remote is TCP-only.
@@ -274,38 +298,34 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       }
       daemonSocket = socket;
 
-      const rl = readline.createInterface({ input: socket });
-      rl.on("line", (raw) => {
-        let msg: { id?: number; result?: unknown; error?: unknown };
-        try {
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
-        if (typeof msg.id !== "number") return;
-        const pending = pendingRpc.get(msg.id);
-        if (!pending) return;
-        pendingRpc.delete(msg.id);
-        clearTimeout(pending.timer);
-        if (msg.error !== undefined && msg.error !== null) {
-          pending.reject(
-            new FailureError(
-              typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error),
-              {
-                error_code: FAILURE_CODES.AX_QUERY_FAILED,
-                failure_stage: "ax_service_query_rpc",
-                failure_area: "tool_server",
-                error_kind: "unknown",
-              }
-            )
-          );
-        } else {
-          pending.resolve(msg.result);
-        }
+      attachNdjsonReader(socket, {
+        onDropped: reportDroppedFrameToStderr(`ax-service ${udid.slice(0, 8)}`),
+        onMessage: (parsed) => {
+          const msg = parsed as { id?: number; result?: unknown; error?: unknown };
+          if (typeof msg.id !== "number") return;
+          const pending = pendingRpc.get(msg.id);
+          if (!pending) return;
+          pendingRpc.delete(msg.id);
+          clearTimeout(pending.timer);
+          if (msg.error !== undefined && msg.error !== null) {
+            pending.reject(
+              new FailureError(
+                typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error),
+                {
+                  error_code: FAILURE_CODES.AX_QUERY_FAILED,
+                  failure_stage: "ax_service_query_rpc",
+                  failure_area: "tool_server",
+                  error_kind: "unknown",
+                }
+              )
+            );
+          } else {
+            pending.resolve(msg.result);
+          }
+        },
       });
 
       socket.on("close", () => {
-        rl.close();
         if (daemonSocket === socket) {
           daemonSocket = null;
           if (!disposed) {
@@ -433,6 +453,24 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
         };
+      },
+
+      async livePanel(): Promise<number | null> {
+        const result = (await query("live_panel", LIVE_PANEL_TIMEOUT_MS)) as {
+          displayId?: number | null;
+          error?: string;
+        };
+        if (result.error) {
+          throw new FailureError(`ax-service live_panel error: ${result.error}`, {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_live_panel",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return typeof result.displayId === "number" && result.displayId > 0
+          ? result.displayId
+          : null;
       },
 
       async alertCheck(): Promise<boolean> {

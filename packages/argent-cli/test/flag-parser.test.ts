@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
+import { zodObjectToJsonSchema } from "@argent/registry";
 import {
   parseFlags,
   formatSchemaUsage,
@@ -512,5 +514,175 @@ describe("boolean value syntax is discoverable from --help", () => {
     for (const line of formatSchemaUsage(boolSchema).split("\n")) {
       if (line.includes("Booleans:")) expect(line.trimStart().startsWith("--")).toBe(false);
     }
+  });
+});
+
+/**
+ * A tool carrying a retired key: `z.never().optional().describe(...)` serializes
+ * to `{description, not: {}}` with no `type`. Rendered as a flag row it would
+ * read as `--settle <value>  any`, indistinguishable from the live optional
+ * flags, and the e2e harness would pick it up as a real flag. Carrying no
+ * `type`, it also matches none of the parser's branches, so every spelling of it
+ * must be refused outright.
+ *
+ * The fixtures below run the REAL registry serializer over a REAL zod object
+ * rather than hand-writing that shape; the shape itself is pinned by the first
+ * test.
+ */
+function schemaFrom(shape: z.ZodRawShape): JsonSchema {
+  return zodObjectToJsonSchema(z.object(shape)) as unknown as JsonSchema;
+}
+
+const RETIREMENT_NOTE =
+  "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
+
+const retiredSchema = schemaFrom({
+  durationMs: z.number().optional().describe("Total gesture duration in milliseconds"),
+  momentum: z.boolean().optional().describe("Whether the swipe releases with momentum"),
+  // Declared exactly as gesture-drag declares it: `.never({error})` so the
+  // server can name the replacement, `.optional()` so the key is
+  // declared-and-refused rather than required.
+  settle: z
+    .never({ error: "`settle` was renamed to `momentum`, with the opposite sense" })
+    .optional()
+    .describe(RETIREMENT_NOTE),
+});
+
+describe("retired (never-typed) keys in usage", () => {
+  it("serializes to the {description, not: {}} shape the retirement check keys on", () => {
+    // Everything below recognises a retired key by `not: {}` with no `type`, so a
+    // change in what the serializer emits for `z.never().optional()` must fail
+    // HERE rather than regress usage to a `--settle <value>  any` row.
+    expect(retiredSchema.properties?.settle).toEqual({ description: RETIREMENT_NOTE, not: {} });
+    // The live siblings keep a plain `type` and no `not`, so the check above is
+    // matching the retirement rather than everything the serializer emits.
+    expect(retiredSchema.properties?.durationMs).toEqual({
+      type: "number",
+      description: "Total gesture duration in milliseconds",
+    });
+  });
+
+  it("renders no flag row for the retired key", () => {
+    for (const line of formatSchemaUsage(retiredSchema).split("\n")) {
+      if (line.trimStart().startsWith("--")) expect(line).not.toContain("settle");
+    }
+  });
+
+  it("still surfaces the field and its retirement, without doubling 'Retired:'", () => {
+    const usage = formatSchemaUsage(retiredSchema);
+    expect(usage).toMatch(
+      /^ {2}Retired: settle - renamed to `momentum` with the opposite sense\. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key\.$/m
+    );
+    expect(usage).not.toMatch(/Retired:.*Retired:/);
+  });
+
+  it("keeps the live flags rendering as before", () => {
+    const usage = formatSchemaUsage(retiredSchema);
+    expect(usage).toMatch(/^ {2}--durationMs <value> {2}number {2}Total gesture duration/m);
+    expect(usage).toMatch(/^ {2}--momentum\s+boolean {2}Whether the swipe/m);
+    expect(usage).toMatch(/Booleans:/);
+  });
+});
+
+describe("retired (never-typed) keys in parseFlags", () => {
+  // Spelled out rather than derived from RETIREMENT_NOTE: re-running the source's
+  // own "Retired: " strip here would assert nothing about it.
+  const REFUSAL =
+    "--settle is retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
+
+  // A retired key has no `type`, so every spelling used to find a wrong branch:
+  // bare `--settle` and `--no-settle` fell to the unknown-scalar tail, and
+  // `--settle-json` filed a `settle` key for the server schema to strip. All of
+  // them now resolve to one refusal, reachable from whatever the caller typed.
+  const spellings = [
+    ["--settle"],
+    ["--settle", "true"],
+    ["--settle=v"],
+    ["--no-settle"],
+    ["--no-settle", "v"],
+    ["--settle-json", '{"a":1}'],
+    ["--no-settle-json", "{}"],
+  ];
+
+  for (const argv of spellings) {
+    it(`refuses \`${argv.join(" ")}\` and names the field, not the spelling`, () => {
+      let err: unknown;
+      try {
+        parseFlags(argv, retiredSchema);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(FlagParseException);
+      // Asserted whole: the message must name the retired FIELD (`--settle`, never
+      // `--no-settle-json`) and carry the guidance minus its "Retired: " label.
+      expect((err as Error).message).toBe(REFUSAL);
+    });
+  }
+
+  it("refuses before consuming anything, so the next flag is not blamed", () => {
+    // The pre-refusal failure mode for the bare form: `--settle` took the
+    // following flag as its value, so the user was told about `--durationMs` and
+    // never about the retirement.
+    expect(() => parseFlags(["--settle", "--durationMs", "300"], retiredSchema)).toThrow(REFUSAL);
+    expect(() => parseFlags(["--durationMs", "300", "--settle"], retiredSchema)).toThrow(REFUSAL);
+  });
+
+  it("degrades to a bare refusal when the retired key carries no guidance", () => {
+    // `retirementGuidance` returns "" for a key declared without `.describe()`;
+    // the message must then stop cleanly rather than trail a dangling colon.
+    const undocumented = schemaFrom({ settle: z.never().optional() });
+    expect(() => parseFlags(["--settle"], undocumented)).toThrow(/^--settle is retired$/);
+  });
+
+  it("still parses the live fields of the same schema", () => {
+    // The refusal is keyed on the retired property, not on the schema owning
+    // one: retiring a key must not cost its neighbours their flags.
+    const r = parseFlags(["--durationMs", "300", "--momentum", "false"], retiredSchema);
+    expect(r.args).toEqual({ durationMs: 300, momentum: false });
+    expect(parseFlags(["--no-momentum"], retiredSchema).args).toEqual({ momentum: false });
+    expect(parseFlags(["--momentum"], retiredSchema).args).toEqual({ momentum: true });
+  });
+});
+
+// A live field literally named `no-x` beside a retired `x`: `--no-x` is both
+// the live field's own name and the retired field's negation form. The live
+// property is a declared name, so it wins and keeps its flag.
+const liveNoPrefixSchema = schemaFrom({
+  "no-x": z.boolean().optional().describe("A live field literally named no-x"),
+  "x": z.never().optional().describe("Retired: use `no-x` instead."),
+});
+
+// A live `y-json` beside a retired `y`: `--y-json` is both the live field's own
+// name and the retired field's JSON hatch. Again the declared name wins, so the
+// token keeps routing through the hatch to field `y`.
+const liveJsonSuffixSchema = schemaFrom({
+  "y-json": z.string().optional(),
+  "y": z.never().optional().describe("Retired: pass it as `y-json`."),
+});
+
+describe("retirement refusal resolves the flag spelling in a fixed order", () => {
+  it("keeps a live `no-x` readable as itself, not as the retired `x`'s negation", () => {
+    // Resolving the bare name first would read `--no-x` as `x`'s negation and
+    // refuse it, taking a live flag away from a tool that never retired it.
+    expect(parseFlags(["--no-x"], liveNoPrefixSchema).args).toEqual({ "no-x": true });
+  });
+
+  it("still refuses the retired `x` in that schema", () => {
+    // Control for the case above: the live `no-x` must not shield `x` itself.
+    expect(() => parseFlags(["--x", "1"], liveNoPrefixSchema)).toThrow(
+      "--x is retired: use `no-x` instead."
+    );
+  });
+
+  it("keeps a live `y-json` routing through the -json hatch", () => {
+    // `--y-json` resolves to the declared `y-json` property (live), so nothing
+    // is refused and the hatch files the parsed JSON under `y`, unchanged.
+    expect(parseFlags(["--y-json", '{"a":1}'], liveJsonSuffixSchema).args).toEqual({ y: { a: 1 } });
+  });
+
+  it("still refuses the retired `y` in that schema", () => {
+    expect(() => parseFlags(["--y", "1"], liveJsonSuffixSchema)).toThrow(
+      "--y is retired: pass it as `y-json`."
+    );
   });
 });

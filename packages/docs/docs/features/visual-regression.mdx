@@ -55,6 +55,6 @@ Thus you can keep visual checks in the repository and run them in CI.
 - The comparison does not replace a check of the accessibility tree, the logs or the network record. The agent uses these sources together with the comparison.
 - The two screenshots must come from the same device class and the same orientation. When the resolution differs, Argent scales one screenshot down, and small differences can come from the scaling.
 - The agent does not use the comparison to find the position of an element for a tap. The agent uses the screen description for that.
-- The comparison works on an iOS simulator or device, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps.
+- The comparison works on an iOS simulator, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps. On a [physical iPhone](/docs/features/physical-ios-devices), the agent captures full-resolution screenshots and compares them on the host instead.
 
 Argent does this with the `screenshot` and `screenshot-diff` tools. The [tools reference](/docs/reference/tools) contains all tools.

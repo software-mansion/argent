@@ -73,7 +73,7 @@ async function resolveVegaOrThrow(): Promise<string> {
   return path;
 }
 
-export interface VegaRunResult {
+interface VegaRunResult {
   stdout: string;
   stderr: string;
 }

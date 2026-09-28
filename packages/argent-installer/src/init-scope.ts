@@ -7,7 +7,7 @@ import type { InstallMode } from "./install-record.js";
 
 export type Scope = "local" | "global" | "custom";
 
-export interface ScopeChoice {
+interface ScopeChoice {
   scope: Scope;
   customRoot?: string;
 }

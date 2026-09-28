@@ -36,16 +36,17 @@ function rejectTv(device: DeviceInfo): never {
  */
 async function pasteSimulator(api: SimulatorServerApi, text: string): Promise<PasteResult> {
   await setSimulatorClipboardText(api, text);
-  api.pressKey("Down", LEFT_GUI_KEYCODE);
+  await api.pressKey("Down", LEFT_GUI_KEYCODE);
   await sleep(CHORD_STEP_MS);
-  api.pressKey("Down", V_KEYCODE);
+  await api.pressKey("Down", V_KEYCODE);
   await sleep(CHORD_STEP_MS);
-  api.pressKey("Up", V_KEYCODE);
+  await api.pressKey("Up", V_KEYCODE);
   await sleep(CHORD_STEP_MS);
-  api.pressKey("Up", LEFT_GUI_KEYCODE);
-  // `pressKey` only writes a line to the server's stdin, so the final Up needs
-  // the same gap before success is reported — otherwise the caller's next action,
-  // or the MCP auto-screenshot, precedes the completed chord.
+  await api.pressKey("Up", LEFT_GUI_KEYCODE);
+  // On the spawned server `pressKey` only writes a line to its stdin, so the
+  // final Up needs the same gap before success is reported — otherwise the
+  // caller's next action, or the MCP auto-screenshot, precedes the completed
+  // chord.
   await sleep(CHORD_STEP_MS);
   return { pasted: true };
 }

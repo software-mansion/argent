@@ -27,6 +27,7 @@
  * `node-pty` (an optional native dependency that degrades to the fallback).
  */
 
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -320,45 +321,36 @@ export function formatLensFeedback(o: LensOutcome): string {
   );
 }
 
+const LENS_OPTIONS = {
+  help: { kind: "boolean", alias: "h" },
+  forget: { kind: "boolean" },
+  terminal: { kind: "value", alias: "t", choices: ["iterm", "terminal"] },
+  agent: { kind: "value", alias: "a" },
+} as const satisfies OptionSpecs;
+
 function parseArgs(argv: string[]): {
   terminal: TerminalApp | undefined;
   agent: string | undefined;
   help: boolean;
   forget: boolean;
 } {
-  let terminal: TerminalApp | undefined;
-  let agent: string | undefined;
-  let help = false;
-  let forget = false;
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i];
-    if (tok === "--help" || tok === "-h") help = true;
-    else if (tok === "--forget") {
-      forget = true;
-      // Mirrors the flow parser: `argent run` accepts `--flag false`, so that
-      // form must be refused here rather than silently dropping the word and
-      // leaving forget ON.
-      const next = argv[i + 1]?.trim().toLowerCase();
-      if (next === "true" || next === "false") {
-        process.stderr.write(`lens: --forget does not take a value; omit it to keep the state\n`);
-        process.exit(2);
-      }
-    } else if (tok === "--terminal" || tok === "-t") {
-      const v = argv[++i];
-      if (v === "iterm" || v === "terminal") terminal = v;
-      else {
-        process.stderr.write(`lens: --terminal expects "iterm" or "terminal", got "${v ?? ""}"\n`);
-        process.exit(2);
-      }
-    } else if (tok === "--agent" || tok === "-a") {
-      agent = argv[++i];
-      if (!agent) {
-        process.stderr.write(`lens: --agent expects one of: ${agentIds().join(", ")}\n`);
-        process.exit(2);
-      }
+  try {
+    const { positionals, options } = parseCommandArgs(argv, LENS_OPTIONS);
+    if (positionals.length > 0) {
+      throw new UsageError(`Unexpected argument "${positionals[0]}"`);
     }
+    return {
+      terminal: options.terminal as TerminalApp | undefined,
+      agent: options.agent as string | undefined,
+      help: options.help === true,
+      forget: options.forget === true,
+    };
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    const hint = err.message.startsWith("--agent") ? ` (one of: ${agentIds().join(", ")})` : "";
+    process.stderr.write(`lens: ${err.message}${hint}\n`);
+    process.exit(2);
   }
-  return { terminal, agent, help, forget };
 }
 
 function printHelp(): void {

@@ -5,7 +5,7 @@
 // the legacy .keyCode/.which — apps still reading keyCode see 0 unless all three
 // are set.
 
-export interface ChromiumNamedKey {
+interface ChromiumNamedKey {
   key: string;
   code: string;
   windowsVirtualKeyCode: number;
