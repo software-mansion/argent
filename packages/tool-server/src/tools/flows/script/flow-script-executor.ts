@@ -1295,12 +1295,36 @@ function memberPath(key: string): string {
 
 function secretForms(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
   const forms = [...secrets];
-  for (const { name, value } of secrets) {
-    for (const form of Object.keys(makeSensitiveBank([value]))) {
-      if (!forms.some((seen) => seen.value === form)) forms.push({ name, value: form });
+  for (const secret of secrets) {
+    for (const form of spellingsOf(secret)) {
+      if (!forms.some((seen) => seen.value === form))
+        forms.push({ name: secret.name, value: form });
     }
   }
   return forms;
+}
+
+/** Kept per secret: the log asks for the forms again on every chunk it reads. */
+const SPELLINGS = new WeakMap<FlowScriptSecret, readonly string[]>();
+
+function spellingsOf(secret: FlowScriptSecret): readonly string[] {
+  let spellings = SPELLINGS.get(secret);
+  if (!spellings) {
+    const { value } = secret;
+    spellings = isLongEnoughToBeSecret(value)
+      ? [...Object.keys(makeSensitiveBank([value])), ...printedSpellings(value)]
+      : [];
+    SPELLINGS.set(secret, spellings);
+  }
+  return spellings;
+}
+
+/** Spellings Node or bash print by default that the package's bank does not hold. */
+function printedSpellings(value: string): string[] {
+  // A URL's user name or password: `@ : / ;` escaped, `$ & + , %` kept.
+  const url = new URL("http://host");
+  url.password = value;
+  return [url.password];
 }
 
 export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret[]): string {

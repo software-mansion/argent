@@ -65,12 +65,15 @@ async function runScript(
 const RUN = 6;
 
 function spellingsOf(value: string): string[] {
+  const url = new URL("http://host");
+  url.password = value;
   return [
     value,
     JSON.stringify(value).slice(1, -1),
     encodeURIComponent(value),
     new URLSearchParams([["", value]]).toString().slice(1),
     Buffer.from(value, "utf8").toString("base64"),
+    url.password,
   ];
 }
 
@@ -155,6 +158,27 @@ describe("script log redaction - a value an encoder rewrote", () => {
 
     expect(result.log).toBe("POST /login p={{secret:PASSWORD}}\n");
     expectRedacted(result.log, PASSWORD);
+  }, 30_000);
+
+  it("replaces a password a URL wrote in its user part, in the log and in the error", async () => {
+    const PW: FlowScriptSecret = { name: "URL_PASS", value: "P@ss$word&1" };
+    const ws = workspace();
+    const result = await executor().execute({
+      scriptPath: ws.write(
+        "userinfo.mjs",
+        `const db = new URL(process.env.DATABASE_URL);
+         console.log("seeding", db.href);
+         throw new Error(\`could not connect to \${db}\`);`
+      ),
+      projectRoot: ws.dir,
+      env: { DATABASE_URL: `postgres://svc:${PW.value}@db.internal:5432/app` },
+      secrets: [PW],
+    });
+
+    const connect = "postgres://svc:{{secret:URL_PASS}}@db.internal:5432/app";
+    expect(result.log).toBe(`seeding ${connect}\n`);
+    expect(result.failure?.message).toBe(`could not connect to ${connect}`);
+    expectRedacted(`${result.log}${result.failure?.stack ?? ""}`, PW);
   }, 30_000);
 
   it("replaces a value printed as base64", async () => {
@@ -271,6 +295,17 @@ describe("script log redaction - what must stay", () => {
 
     expect(result.log).toBe(printed);
     expect(result.logTruncated).toBe(false);
+  }, 30_000);
+
+  it("leaves an encoded spelling of a value under six characters alone", async () => {
+    const PIN: FlowScriptSecret = { name: "PIN", value: "P@ss1" };
+    const result = await runScript(
+      "short-value.mjs",
+      `console.log(process.env.PIN, new URL("http://u:" + process.env.PIN + "@host").password);`,
+      [PIN]
+    );
+
+    expect(result.log).toBe("{{secret:PIN}} P%40ss1\n");
   }, 30_000);
 
   it("leaves the end of a log nothing cut, where it opens a value", async () => {
