@@ -36,9 +36,9 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu;
 /**
  * Escape only the invisible characters of a value, each in its JSON spelling
  * (`\n`, `\t`, `\u0007`, `\u00a0`). Everything else — a backslash above all —
- * stays as the device reported it.
+ * stays as it is.
  */
-function escapeInvisible(v: string): string {
+export function escapeInvisible(v: string): string {
   return v.replace(INVISIBLE, (c) => {
     const json = JSON.stringify(c).slice(1, -1);
     if (json !== c) return json;

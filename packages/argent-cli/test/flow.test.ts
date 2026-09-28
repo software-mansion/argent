@@ -57,6 +57,10 @@ interface StepFixture {
   artifacts?: Record<string, unknown>;
   /** Wire-only tool-step payload; the CLI StepReport type has no such field. */
   result?: unknown;
+  /** A string only as a malformed wire value the CLI must not trust. */
+  line?: number | string;
+  /** Null only as a malformed wire value the CLI must not trust. */
+  file?: string | null;
 }
 
 /** A wire artifact handle as the tool-server emits it (image/png). */
@@ -111,6 +115,41 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
     steps,
     ...overrides,
   };
+}
+
+/** A flow whose step on line 4 is the one LOGIN_STEPS fails. */
+const LOGIN_YAML = [
+  "name: login",
+  "steps:",
+  "  - launch: com.acme.shop",
+  "  - assert: { visible: { text: Home } }",
+  "  - tap: { text: Profile }",
+  "",
+].join("\n");
+
+/** LOGIN_YAML's frame around line 4, indented as a recap prints it. */
+const LOGIN_FRAME = [
+  "      3 |   - launch: com.acme.shop",
+  "    > 4 |   - assert: { visible: { text: Home } }",
+  "      5 |   - tap: { text: Profile }",
+];
+
+/** The steps of a LOGIN_YAML run, each on the line the tool-server reports. */
+const LOGIN_STEPS: StepFixture[] = [
+  { index: 0, kind: "launch", status: "pass", line: 3 },
+  {
+    index: 1,
+    kind: "assert",
+    status: "fail",
+    target: 'visible "Home"',
+    reason: 'no element matched selector text="Home"',
+    line: 4,
+  },
+  { index: 2, kind: "tap", status: "skip", target: '"Profile"', line: 5 },
+];
+
+function loginReport(flow: string): Record<string, unknown> {
+  return report({ flow, ok: false, passed: 1, failed: 1, skipped: 1, steps: LOGIN_STEPS });
 }
 
 describe("parseRunArgs", () => {
@@ -475,6 +514,67 @@ describe("argent flow run", () => {
       "    hint: the cart may still be loading",
       "",
       "FAIL (started on SIM-1) — 0 passed, 1 failed, 0 errored, 1 skipped",
+    ]);
+  });
+
+  it("shows where a single run's failing step is written, framed from the file, in its recap", async () => {
+    const dir = path.join(tempRoot, "frame");
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, "login.yaml"), LOGIN_YAML);
+    toolsClientMock.callTool.mockResolvedValue({ data: loginReport("login") });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", path.join("frame", "login.yaml")], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // No progress events, so the buffered renderer prints the whole report.
+    expect(logs.join("\n").split("\n")).toEqual([
+      'Flow "login" on SIM-1',
+      "  ✓  1 launch",
+      '  ✗  2 assert visible "Home" — no element matched selector text="Home"',
+      '  ·  3 tap "Profile"',
+      "",
+      '  ✗ step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    at ${path.join("frame", "login.yaml")}:4`,
+      ...LOGIN_FRAME,
+      "",
+      "FAIL — 1 passed, 1 failed, 0 errored, 1 skipped",
+    ]);
+  });
+
+  it("frames the failing step in a live run's final recap, by absolute path outside the working directory", async () => {
+    const dir = path.join(tempRoot, "frame-live");
+    await fsp.mkdir(dir, { recursive: true });
+    const flowFile = path.join(dir, "login.yaml");
+    await fsp.writeFile(flowFile, LOGIN_YAML);
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of LOGIN_STEPS) opts?.onProgress?.(step);
+        return { data: loginReport("login") };
+      }
+    );
+
+    // The working directory is the package's, so the temp flow is outside it.
+    await expect(flow(["run", flowFile], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'Flow "login"',
+      "  ✓  1 launch",
+      '  ✗  2 assert visible "Home" — no element matched selector text="Home"',
+      '  ·  3 tap "Profile"',
+      "",
+      '  ✗ step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    at ${flowFile}:4`,
+      ...LOGIN_FRAME,
+      "",
+      "FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
     ]);
   });
 
@@ -1329,6 +1429,36 @@ describe("argent flow run", () => {
     expect(JSON.parse(logs.join("\n"))).toEqual(report());
   });
 
+  it("passes a step's line and fragment through --json and --json-stream, printing no source frame", async () => {
+    const dir = path.join(tempRoot, "frame-json");
+    await fsp.mkdir(dir, { recursive: true });
+    const flowFile = path.join(dir, "login.yaml");
+    await fsp.writeFile(flowFile, LOGIN_YAML);
+    const steps: StepFixture[] = [
+      LOGIN_STEPS[0]!,
+      { ...LOGIN_STEPS[1]!, depth: 1, flow: "sign-in", line: 2, file: flowFile },
+    ];
+    const failed = report({ flow: "login", ok: false, passed: 1, failed: 1, steps });
+
+    toolsClientMock.callTool.mockResolvedValue({ data: failed });
+    await expect(flow(["run", flowFile, "--json"], opts)).rejects.toThrow("process.exit:1");
+    expect(JSON.parse(logs.join("\n"))).toEqual(failed);
+
+    logs.length = 0;
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of steps) opts?.onProgress?.(step);
+        return { data: failed };
+      }
+    );
+    await expect(flow(["run", flowFile, "--json-stream"], opts)).rejects.toThrow("process.exit:1");
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      { event: "progress", data: steps[0] },
+      { event: "progress", data: steps[1] },
+      { event: "result", data: failed },
+    ]);
+  });
+
   it("prints each progress step followed by one final result with --json-stream", async () => {
     let finish!: () => void;
     const finalGate = new Promise<void>((resolve) => (finish = resolve));
@@ -1927,6 +2057,68 @@ describe("argent flow run <dir>", () => {
     errSpy.mockRestore();
   });
 
+  /** A flow whose line 3 runs the SIGN_IN_YAML fragment. */
+  const CHECKOUT_YAML = [
+    "name: b-checkout",
+    "steps:",
+    "  - run: fragments/sign-in.yaml",
+    "  - tap: { text: Pay }",
+    "",
+  ].join("\n");
+  const SIGN_IN_YAML = [
+    "steps:",
+    "  - tap: { text: Sign in }",
+    "  - type: { text: hunter2 }",
+    "",
+  ].join("\n");
+
+  /**
+   * A suite of two flows under `name` in tempRoot: a-login fails on its own
+   * line 4, b-checkout on line 2 of the fragment its line 3 runs. The
+   * fragment sits in a subdirectory, so a non-recursive run does not list it.
+   */
+  async function writeFramedSuite(name: string) {
+    const suite = path.join(tempRoot, name);
+    await fsp.mkdir(path.join(suite, "fragments"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(suite, "a-login.yaml"), LOGIN_YAML),
+      fsp.writeFile(path.join(suite, "b-checkout.yaml"), CHECKOUT_YAML),
+      fsp.writeFile(path.join(suite, "fragments", "sign-in.yaml"), SIGN_IN_YAML),
+    ]);
+    // The tool-server names a fragment by its resolved path.
+    const fragment = await fsp.realpath(path.join(suite, "fragments", "sign-in.yaml"));
+    const checkout = report({
+      flow: "b-checkout",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      skipped: 1,
+      steps: [
+        {
+          index: 0,
+          kind: "run",
+          status: "pass",
+          flow: "sign-in",
+          target: "fragments/sign-in.yaml",
+          line: 3,
+        },
+        {
+          index: 1,
+          kind: "tap",
+          status: "fail",
+          depth: 1,
+          flow: "sign-in",
+          target: '"Sign in"',
+          reason: 'no element matched selector text="Sign in"',
+          line: 2,
+          file: fragment,
+        },
+        { index: 2, kind: "tap", status: "skip", target: '"Pay"', line: 4 },
+      ],
+    });
+    return { suite, fragment, login: loginReport("a-login"), checkout };
+  }
+
   it("runs each top-level flow in order without live progress and exits 0 when all pass", async () => {
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
 
@@ -2448,6 +2640,186 @@ describe("argent flow run <dir>", () => {
     ]);
   });
 
+  it("shows in the recap where each failed step is written: its flow, or the fragment it runs", async () => {
+    const { login, checkout } = await writeFramedSuite("framed");
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: login })
+      .mockResolvedValueOnce({ data: checkout });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./framed"], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // A flow's own block keeps its step lines alone; only the recap says where.
+    expect(logs.join("\n").split("\n")).toEqual([
+      "[1/2] a-login.yaml",
+      '  ✗  2 assert visible "Home" — no element matched selector text="Home"',
+      "  FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
+      "[2/2] b-checkout.yaml",
+      '  ✗  2   tap "Sign in" [sign-in] — no element matched selector text="Sign in"',
+      "  FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
+      "",
+      "Failed flows (2)",
+      "",
+      '  ✗ a-login.yaml › step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    at ${path.join("framed", "a-login.yaml")}:4`,
+      ...LOGIN_FRAME,
+      `    re-run: argent flow run ${path.join("framed", "a-login.yaml")}`,
+      "",
+      '  ✗ b-checkout.yaml › step 2 tap "Sign in" [sign-in]',
+      '    no element matched selector text="Sign in"',
+      `    at ${path.join("framed", "fragments", "sign-in.yaml")}:2`,
+      "      1 | steps:",
+      "    > 2 |   - tap: { text: Sign in }",
+      "      3 |   - type: { text: hunter2 }",
+      `    re-run: argent flow run ${path.join("framed", "b-checkout.yaml")}`,
+      "",
+      "FAIL — 2 flows: 0 passed, 2 failed, 0 skipped (0.0s)",
+    ]);
+  });
+
+  it("shows no source for a step without a usable line or fragment, and never the flow's own file instead", async () => {
+    const suite = path.join(tempRoot, "unframed");
+    await fsp.mkdir(path.join(suite, "fragments"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(suite, "fragments", "sign-in.yaml"), SIGN_IN_YAML),
+      fsp.writeFile(path.join(suite, "fragments", "sign-in.yml"), SIGN_IN_YAML),
+    ]);
+    const realSuite = await fsp.realpath(suite);
+    // Every file named here is readable and has the line, so any frame in the
+    // output would come from a value the CLI should have refused.
+    const variants: [string, Pick<StepFixture, "line" | "file">][] = [
+      // A tool-server older than the field sends no line.
+      ["a-no-line", {}],
+      // The fragment path is wire data: only an absolute path to a flow file is read.
+      ["b-relative-file", { line: 2, file: path.join("unframed", "fragments", "sign-in.yaml") }],
+      ["c-yml-file", { line: 2, file: path.join(realSuite, "fragments", "sign-in.yml") }],
+      ["d-null-file", { line: 2, file: null }],
+      ["e-zero-line", { line: 0 }],
+      ["f-fractional-line", { line: 2.5 }],
+      ["g-string-line", { line: "4" }],
+    ];
+    await Promise.all(
+      variants.map(([name]) => fsp.writeFile(path.join(suite, `${name}.yaml`), LOGIN_YAML))
+    );
+    const where = new Map(variants);
+    toolsClientMock.callTool.mockImplementation(async (_tool: string, payload: unknown) => {
+      const name = path.basename((payload as { flow_path: string }).flow_path, ".yaml");
+      const step = { index: 0, kind: "tap", status: "fail", target: '"Home"', reason: "gone" };
+      return {
+        data: report({
+          flow: name,
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ ...step, ...where.get(name) }],
+        }),
+      };
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./unframed"], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(variants.length);
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf(`Failed flows (${variants.length})`))).toEqual([
+      `Failed flows (${variants.length})`,
+      ...variants.flatMap(([name]) => [
+        "",
+        `  ✗ ${name}.yaml › step 1 tap "Home"`,
+        "    gone",
+        `    re-run: argent flow run ${path.join("unframed", `${name}.yaml`)}`,
+      ]),
+      "",
+      `FAIL — ${variants.length} flows: 0 passed, ${variants.length} failed, 0 skipped (0.0s)`,
+    ]);
+  });
+
+  it("names the file and line alone when the file cannot be read or no longer has the line", async () => {
+    const suite = path.join(tempRoot, "unreadable-source");
+    await fsp.mkdir(path.join(suite, "fragments", "dir.yaml"), { recursive: true });
+    const realSuite = await fsp.realpath(suite);
+    const denied = path.join(realSuite, "fragments", "denied.yaml");
+    await fsp.writeFile(denied, SIGN_IN_YAML);
+    const variants: [string, Pick<StepFixture, "line" | "file">, string][] = [
+      [
+        "a-missing-fragment",
+        { line: 2, file: path.join(realSuite, "fragments", "gone.yaml") },
+        `${path.join("unreadable-source", "fragments", "gone.yaml")}:2`,
+      ],
+      [
+        "b-directory-fragment",
+        { line: 2, file: path.join(realSuite, "fragments", "dir.yaml") },
+        `${path.join("unreadable-source", "fragments", "dir.yaml")}:2`,
+      ],
+      // Removed while it ran, before the recap reads it.
+      ["c-deleted", { line: 4 }, `${path.join("unreadable-source", "c-deleted.yaml")}:4`],
+      // Edited while it ran, and now shorter than the reported line.
+      ["d-shrunk", { line: 40 }, `${path.join("unreadable-source", "d-shrunk.yaml")}:40`],
+    ];
+    // Root reads a file whatever its mode, so only elsewhere is this one unreadable.
+    if (canDenyRead) {
+      variants.push([
+        "e-denied-fragment",
+        { line: 2, file: denied },
+        `${path.join("unreadable-source", "fragments", "denied.yaml")}:2`,
+      ]);
+    }
+    await Promise.all(
+      variants.map(([name]) => fsp.writeFile(path.join(suite, `${name}.yaml`), LOGIN_YAML))
+    );
+    await fsp.chmod(denied, 0o000);
+    const where = new Map(variants.map(([name, at]) => [name, at]));
+    toolsClientMock.callTool.mockImplementation(async (_tool: string, payload: unknown) => {
+      const flowPath = (payload as { flow_path: string }).flow_path;
+      const name = path.basename(flowPath, ".yaml");
+      if (name === "c-deleted") await fsp.rm(flowPath);
+      const step = { index: 0, kind: "tap", status: "fail", target: '"Home"', reason: "gone" };
+      return {
+        data: report({
+          flow: name,
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ ...step, ...where.get(name) }],
+        }),
+      };
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./unreadable-source"], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.chmod(denied, 0o600);
+    }
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf(`Failed flows (${variants.length})`))).toEqual([
+      `Failed flows (${variants.length})`,
+      ...variants.flatMap(([name, , at]) => [
+        "",
+        `  ✗ ${name}.yaml › step 1 tap "Home"`,
+        "    gone",
+        `    at ${at}`,
+        `    re-run: argent flow run ${path.join("unreadable-source", `${name}.yaml`)}`,
+      ]),
+      "",
+      `FAIL — ${variants.length} flows: 0 passed, ${variants.length} failed, 0 skipped (0.0s)`,
+    ]);
+  });
+
   it("re-runs a flow outside the working directory by its absolute path, quoted", async () => {
     const suiteDir = path.join(tempRoot, "night suite");
     await fsp.mkdir(suiteDir, { recursive: true });
@@ -2693,6 +3065,26 @@ describe("argent flow run <dir>", () => {
         { path: path.join("sub", "c-search.yaml"), status: "skip" },
       ],
     });
+  });
+
+  it("prints no source frame with --json, passing each step's line and fragment through", async () => {
+    const { suite, fragment, login, checkout } = await writeFramedSuite("framed-json");
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: login })
+      .mockResolvedValueOnce({ data: checkout });
+
+    await expect(flow(["run", suite, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    // The whole of stdout parses as the one aggregate object.
+    const parsed = JSON.parse(logs.join("\n")) as { flows: unknown[] };
+    expect(parsed.flows).toEqual([
+      { path: "a-login.yaml", status: "fail", report: login },
+      { path: "b-checkout.yaml", status: "fail", report: checkout },
+    ]);
+    expect(parsed.flows[1]).toMatchObject({
+      report: { steps: [{ line: 3 }, { line: 2, file: fragment }, { line: 4 }] },
+    });
+    expect(errs).toEqual([]);
   });
 
   it("keys --output exports by the flow's subdirectory in recursive runs", async () => {

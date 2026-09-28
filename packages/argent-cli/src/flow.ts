@@ -2,9 +2,10 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
+import { FAILURE_CODES, FLOW_NAME_PATTERN, printCapped } from "@argent/registry";
 import {
   createToolsClient,
+  escapeInvisible,
   getResolvedToolsUrl,
   isArtifactHandle,
   materializeArtifacts,
@@ -53,6 +54,10 @@ export interface StepReport extends FlowStepDetails {
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   durationMs?: number;
+  /** The line the step starts on in the flow file, or in `file` when set. */
+  line?: number;
+  /** The absolute path of the fragment the step is written in, set beside `line`. */
+  file?: string;
 }
 
 export interface FlowReport {
@@ -403,7 +408,20 @@ interface FailedFlow {
   path?: string;
   headline: string;
   detail?: string;
+  /** Where the failed step is written: see renderSourceFrame. */
+  source?: string[];
   rerun?: string;
+}
+
+/** A report's first failing step, and its number as renderFailedSteps numbers it. */
+function firstFailedStep(report: FlowReport): { step: StepReport; n: number } | undefined {
+  let n = 0;
+  for (const step of report.steps) {
+    if (step.kind === "echo") continue;
+    n++;
+    if (step.status === "fail" || step.status === "error") return { step, n };
+  }
+  return undefined;
 }
 
 /**
@@ -416,28 +434,71 @@ interface FailedFlow {
  * are in its expected, actual and hint lines, so the recap carries those too.
  */
 export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
-  let n = 0;
-  for (const s of report.steps) {
-    if (s.kind === "echo") continue;
-    n++;
-    if (s.status === "fail" || s.status === "error") {
-      const lines = [...(s.reason ? [String(s.reason)] : []), ...renderFlowStepDetails(s)];
-      const detail = lines.length > 0 ? lines.join("\n") : undefined;
-      return { headline: `step ${n} ${stepLabel(s, report.flow)}`, detail };
-    }
+  const failed = firstFailedStep(report);
+  if (!failed) return { headline: "failed with no failing step" };
+  const { step: s, n } = failed;
+  const lines = [...(s.reason ? [String(s.reason)] : []), ...renderFlowStepDetails(s)];
+  const detail = lines.length > 0 ? lines.join("\n") : undefined;
+  return { headline: `step ${n} ${stepLabel(s, report.flow)}`, detail };
+}
+
+/**
+ * An `at <file>:<line>` line, then the lines of `text` from the one before
+ * `line` to the one after it, each behind a `NN |` gutter that marks `line`
+ * with `>`. Only the location when the file could not be read or no longer has
+ * that line. Each line is cut and escaped the way a found text is, so it stays
+ * one terminal line.
+ */
+export function renderSourceFrame(where: string, line: number, text: string | undefined): string[] {
+  const location = `at ${where}:${line}`;
+  // A byte order mark is no text of line 1, and an editor does not show it.
+  const lines = text?.replace(/^\uFEFF/, "").split(/\r?\n/) ?? [];
+  // The newline that ends the last line starts no line of its own.
+  if (lines.at(-1) === "") lines.pop();
+  if (line > lines.length) return [location];
+  const last = Math.min(lines.length, line + 1);
+  const frame = [location];
+  for (let i = Math.max(1, line - 1); i <= last; i++) {
+    const gutter = `${i === line ? ">" : " "} ${String(i).padStart(String(last).length)} |`;
+    const code = printCapped(lines[i - 1]!, escapeInvisible);
+    frame.push(code ? `${gutter} ${code}` : gutter);
   }
-  return { headline: "failed with no failing step" };
+  return frame;
+}
+
+/**
+ * Where a report's failed step is written, read from the file now: the flow
+ * at `flowPath`, or the fragment the step names. Undefined when the step
+ * carries no line, which a tool-server older than this field sends. The
+ * fragment path is wire data, so only an absolute path to a flow file is read.
+ */
+async function readFailureSource(
+  report: FlowReport,
+  flowPath: string,
+  projectRoot: string
+): Promise<string[] | undefined> {
+  const step = firstFailedStep(report)?.step;
+  if (!step || typeof step.line !== "number" || !Number.isInteger(step.line) || step.line < 1) {
+    return undefined;
+  }
+  const file = step.file === undefined ? flowPath : step.file;
+  if (typeof file !== "string" || !path.isAbsolute(file) || !file.endsWith(".yaml")) {
+    return undefined;
+  }
+  const text = await fsp.readFile(file, "utf8").catch(() => undefined);
+  return renderSourceFrame(displayPath(file, projectRoot), step.line, text);
 }
 
 function renderFailedFlow(f: FailedFlow): string[] {
   const lines = [`  ${STATUS_GLYPH.fail} ${f.path ? `${f.path} › ` : ""}${f.headline}`];
   for (const line of f.detail?.split("\n") ?? []) if (line) lines.push(`    ${line}`);
+  for (const line of f.source ?? []) lines.push(`    ${line}`);
   if (f.rerun) lines.push(`    re-run: ${f.rerun}`);
   return lines;
 }
 
-export function renderSingleFailure(report: FlowReport): string[] {
-  return report.ok ? [] : ["", ...renderFailedFlow(summarizeFailure(report))];
+export function renderSingleFailure(report: FlowReport, source?: string[]): string[] {
+  return report.ok ? [] : ["", ...renderFailedFlow({ ...summarizeFailure(report), source })];
 }
 
 export function renderFailedFlows(failed: readonly FailedFlow[]): string[] {
@@ -486,6 +547,15 @@ function shellQuoteArg(arg: string): string {
 }
 
 /**
+ * A path as the recap prints it: relative to the working directory, or
+ * absolute when it lies outside it, since `run` refuses ".." segments.
+ */
+function displayPath(filePath: string, projectRoot: string): string {
+  const fromCwd = path.relative(projectRoot, filePath);
+  return path.isAbsolute(fromCwd) || fromCwd.split(/[\\/]+/).includes("..") ? filePath : fromCwd;
+}
+
+/**
  * The command that runs one flow of a directory run alone, from the same
  * working directory, with the same --device, --platform and --update-baselines,
  * and an --output that exports to the directory the batch exported that flow
@@ -500,10 +570,7 @@ function rerunCommand(
   args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
 ): string {
   const pathArg = (p: string) => shellQuoteArg(p.startsWith("-") ? `.${path.sep}${p}` : p);
-  const fromCwd = path.relative(projectRoot, flowPath);
-  const shown =
-    path.isAbsolute(fromCwd) || fromCwd.split(/[\\/]+/).includes("..") ? flowPath : fromCwd;
-  const parts = ["argent flow run", pathArg(shown)];
+  const parts = ["argent flow run", pathArg(displayPath(flowPath, projectRoot))];
   if (args.device) parts.push("--device", shellQuoteArg(args.device));
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
   if (args.updateBaselines) parts.push("--update-baselines");
@@ -851,7 +918,7 @@ export function exitAfterFlush(
   ).then(() => process.exit(code));
 }
 
-export function renderReport(report: FlowReport): string {
+export function renderReport(report: FlowReport, failureSource?: string[]): string {
   const lines: string[] = [];
   lines.push(`Flow "${report.flow}"${report.device ? ` on ${report.device}` : ""}`);
   if (report.executionPrerequisite) {
@@ -868,7 +935,7 @@ export function renderReport(report: FlowReport): string {
     n++;
     lines.push(...renderStepLines(s, n, report.flow), ...renderStepArtifactLines(s, n));
   }
-  lines.push(...renderSingleFailure(report));
+  lines.push(...renderSingleFailure(report, failureSource));
   lines.push(`\n${renderSummary(report)}`);
   return lines.join("\n");
 }
@@ -1268,7 +1335,10 @@ async function runFlowDirectory(
       baseUrl
     );
     results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
-    if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
+    if (!report.ok) {
+      const source = args.json ? undefined : await readFailureSource(report, flowPath, projectRoot);
+      failures.push({ path: rel, ...summarizeFailure(report), source, rerun });
+    }
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
@@ -1652,15 +1722,18 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     writeJsonStreamRecord({ event: "result", data: report });
   } else if (args.json) {
     console.log(JSON.stringify(report, null, 2));
-  } else if (liveSteps > 0) {
-    // Steps already printed live — emit only what the final report knows: the
-    // prerequisite note, materialized artifact paths, and the summary.
-    if (report.executionPrerequisite) console.log(`  assumes: ${report.executionPrerequisite}`);
-    for (const line of renderArtifactLines(report)) console.log(line);
-    for (const line of renderSingleFailure(report)) console.log(line);
-    console.log(`\n${renderSummary(report, { withDevice: true })}`);
   } else {
-    console.log(renderReport(report));
+    const source = await readFailureSource(report, flowPath, projectRoot);
+    if (liveSteps > 0) {
+      // Steps already printed live — emit only what the final report knows: the
+      // prerequisite note, materialized artifact paths, and the summary.
+      if (report.executionPrerequisite) console.log(`  assumes: ${report.executionPrerequisite}`);
+      for (const line of renderArtifactLines(report)) console.log(line);
+      for (const line of renderSingleFailure(report, source)) console.log(line);
+      console.log(`\n${renderSummary(report, { withDevice: true })}`);
+    } else {
+      console.log(renderReport(report, source));
+    }
   }
 
   return exitAfterFlush(report.ok ? 0 : 1);
