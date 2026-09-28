@@ -371,6 +371,17 @@ article [class*="llmDropdownItem"]:hover {
   mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
 }
 
+/*
+ * In the mobile sidebar the shared theme pads the items panel on the left, but Infima
+ * gives the menu inside it the full width of the sidebar, so the menu overflows on the
+ * right. The menu fills the padded panel instead, and its right padding lines the
+ * switcher up with the search box above it.
+ */
+.navbar-sidebar__items > .navbar-sidebar__item.menu {
+  width: 100%;
+  padding-right: 20px;
+}
+
 .product-switcher {
   flex: 1;
   max-width: 100%;
