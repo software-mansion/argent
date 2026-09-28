@@ -5,6 +5,11 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError, ToolExecutionError } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import {
+  __resetDeviceSetCacheForTesting,
+  rememberDeviceSet,
+} from "../../src/utils/ios-device-sets";
 
 // `await-ui-element` reads the agent-facing describe tree; the `await:`/`assert:`
 // directive polish converts the step into reads `fetchFlowTree`'s. Neither tree
@@ -27,7 +32,9 @@ vi.mock("../../src/tools/flows/flow-actions", async () => {
   };
 });
 
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+// Spread the original: only the fetch is stubbed.
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn((): Promise<DescribeTreeData> => {
     fetchCount += 1;
     return fetchRunnerTree();
@@ -38,7 +45,10 @@ import { createAwaitUiElementTool, evaluateMatches } from "../../src/tools/await
 import { assertSupported } from "../../src/utils/capability";
 import { resolveDevice } from "../../src/utils/device-info";
 import { findAll, type Selector } from "../../src/utils/ui-tree-match";
-import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
+import {
+  adaptFullHierarchyToDescribeResult,
+  queryFullHierarchyTree,
+} from "../../src/tools/flows/flow-ios-tree";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
@@ -63,6 +73,7 @@ const IOS = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
 const CHROMIUM = "chromium-cdp-9222"; // chromium-cdp- prefix → classifies chromium
 const VEGA = "amazon-4a27df03c9777152"; // amazon- prefix → classifies vega
+const IOS_REMOTE = `remote:${IOS}`; // remote: prefix → classifies ios-remote
 
 const FULL: DescribeNode["frame"] = { x: 0, y: 0, width: 1, height: 1 };
 const ROW: DescribeNode["frame"] = { x: 0.1, y: 0.1, width: 0.5, height: 0.05 };
@@ -277,6 +288,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __resetRecordingsForTesting();
+  // The udid to device-set memo is module state; a seeded entry would outlive
+  // the case that seeded it.
+  __resetDeviceSetCacheForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
   vi.clearAllMocks();
 });
@@ -741,6 +755,31 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("ios")).toHaveLength(1);
   });
 
+  it("iOS: a remote simulator reads as iOS, not as an unnamed platform", async () => {
+    // A cloud sim resolves as platform "ios-remote", but both its trees are the
+    // iOS ones — so the prose is the iOS prose. Read raw, "ios-remote" matches
+    // no clause and the author gets UNSUPPORTED_PLATFORM, which says no tool on
+    // this platform is known.
+    serveTree(iosRunnerTree(IOS_ACCESSIBLE_CONTAINER));
+    await startRecording("iosremote");
+
+    const result = await recordWait("iosremote", {
+      udid: IOS_REMOTE,
+      condition: "visible",
+      selector: { text: "Total $5.00" },
+    });
+    const warning = warningOf(result, "iosremote");
+
+    expect(warning).toContain(
+      "The recorder reads the accessibility tree and the runner reads the full native view " +
+        "hierarchy; they overlap but neither contains the other."
+    );
+    expect(warning).toContain("No read-only tool reports the runner's projection on iOS");
+    expect(warning).toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
+    // The fallback the fold exists to keep the author out of.
+    expect(warning).not.toContain("No read-only tool is known to report");
+  });
+
   // Whether the AX tree reports an `alpha: 0` view is a device question; this is not.
   it("iOS: the runner's projection drops a transparent view", () => {
     expect(findAll(iosRunnerTree([iosLabel("Continue")]), { text: "Continue" })).toHaveLength(1);
@@ -1194,14 +1233,31 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("no directive takes a bundleId");
   });
 
-  // The quoted reason ends "provide bundleId explicitly", but no directive takes one.
-  it("iOS: says the bundleId its quoted reason recommends cannot reach the probe", async () => {
+  /**
+   * The iOS caveat rides on a reason the RUNNER's own tree source writes, so
+   * build that reason with the real function. A hand-copied one is what let the
+   * caveat go on describing a message production had stopped emitting.
+   */
+  async function realIosTargetingFailure(udid = IOS): Promise<Error> {
+    // Seed the device set so `terminateCommand` answers from the memo instead of
+    // probing simctl.
+    rememberDeviceSet(udid, null);
+    const api = {
+      listConnectedBundleIds: () => [] as string[],
+      getAppState: vi.fn(),
+    } as unknown as NativeDevtoolsApi;
+    const registry = { resolveService: vi.fn(async () => api) } as unknown as Registry;
+    return (await queryFullHierarchyTree(registry, resolveDevice(udid)).catch(
+      (err: unknown) => err
+    )) as Error;
+  }
+
+  // That reason carries its own remedy, so the caveat must not answer it with a
+  // second one.
+  it("iOS: adds no remedy of its own to the reason the runner's source wrote", async () => {
+    const failure = await realIosTargetingFailure();
     fetchRunnerTree = async () => {
-      throw new Error(
-        "No native-devtools-connected apps are available for auto-targeting. " +
-          "Launch or restart the app first, provide bundleId explicitly, or use screenshot " +
-          "to inspect visible Home/system UI."
-      );
+      throw failure;
     };
     await startRecording("iosblind");
 
@@ -1211,16 +1267,27 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     });
     const warning = warningOf(result, "iosblind");
 
-    // The quoted reason still arrives whole — its tail is the recovery.
-    expect(warning).toContain("provide bundleId explicitly");
+    // The reason arrives whole, its own recovery included.
+    expect(warning).toContain(failure.message);
+    expect(warning).toContain("Relaunch with restart-app");
+    // launch-app does not terminate, so it cannot instrument a process that is
+    // already running — the opposite move to the one just quoted.
+    expect(warning).not.toContain("relaunch it with `launch-app`");
+    // And no advice attributed to the reason that it does not carry.
+    expect(warning).not.toContain("provide bundleId explicitly");
+    expect(warning).not.toContain("quoted from the shared native-target");
+    // The reason is not always the iOS tree source's: a blind-but-not-throwing
+    // read is described by the poll loop instead, and names no recovery at all.
+    // So the caveat asserts nothing about where the reason came from.
+    expect(warning).not.toContain("tree source writes it");
+    // What the reason cannot see — this step — is still said.
     expect(warning).toContain("no directive takes a bundleId");
-    expect(warning).toContain("`launch-app`");
-    expect(warning).toContain("keep the check as a raw `tool:` step");
   });
 
   it("iOS: the caveat holds when the step DID carry a bundleId", async () => {
+    const failure = await realIosTargetingFailure();
     fetchRunnerTree = async () => {
-      throw new Error("no connected app; provide bundleId explicitly");
+      throw failure;
     };
     await startRecording("iosblindbundle");
 
@@ -1244,6 +1311,35 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warningOf(result, "iosblindbundle")).toContain(
       "the `bundleId` on this step reached the live wait only"
     );
+  });
+
+  it("offers the iOS repair on a remote simulator, whose source is real", async () => {
+    // `ios-remote` folds to iOS for the PROSE above, and the repair is a machine
+    // question — but the machine reads the iOS full hierarchy too, over the
+    // sim-remote tunnel. So a silent read there is an outage like any other, and
+    // the iOS remedy is the one that repairs it.
+    const failure = await realIosTargetingFailure(IOS_REMOTE);
+    fetchRunnerTree = async () => {
+      throw failure;
+    };
+    await startRecording("remoteblind");
+
+    const result = await recordWait("remoteblind", {
+      udid: IOS_REMOTE,
+      condition: "visible",
+      selector: { text: "General" },
+    });
+    const warning = warningOf(result, "remoteblind");
+
+    // Recorded, honestly labelled UNKNOWN — and repaired with the iOS advice,
+    // which the iOS source writes into the reason it throws.
+    expect(warning).toContain("is UNKNOWN, not known-bad");
+    // An outage, so the author is told to wait for the source to come back.
+    expect(warning).toContain("re-probe once that tree source is back");
+    expect(warning).toContain(failure.message);
+    expect(warning).toContain("Relaunch with restart-app");
+    expect(warning).toContain("no directive takes a bundleId");
+    expect(await recordedSteps("remoteblind")).toHaveLength(1);
   });
 
   // `probeWhenCondition` budgets its POLL LOOP at the 1s assert grace, but each
@@ -2044,15 +2140,14 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("cancelmid")).toHaveLength(1);
   });
 
-  // The wait tool itself now accepts a remote sim: it polls the same AX tree
-  // through describeIos, which the ax-service blueprint routes over the
-  // sim-remote tunnel. The recorder's tables still have no `ios-remote` arm
-  // (FLOW_TREE_SOURCES in flow-tree.ts, REPLAY_TREE_SOURCES in flow-add-step.ts),
-  // so the re-probe now REACHES them — the flow tools declare no capability at
-  // all, so nothing gates a remote udid out. `fetchTree` throws its
-  // not-supported error there, the recorder catches it, and the step records
-  // with the UNKNOWN-verdict warning rather than a known-bad one. Giving both
-  // tables an `ios-remote` arm is what would let the re-probe actually verify.
+  // The wait tool itself accepts a remote sim: it polls the same AX tree through
+  // describeIos, which the ax-service blueprint routes over the sim-remote
+  // tunnel. The re-probe reaches the recorder's tables too — the flow tools
+  // declare no capability at all, so nothing gates a remote udid out — and both
+  // tables answer for one: REPLAY_TREE_SOURCES through the authoring fold, and
+  // FLOW_TREE_SOURCES with its own `ios-remote` arm onto the iOS full
+  // hierarchy. This file stubs that fetch, so the determinate verdict the arm
+  // buys is pinned in flow-remote-tree.test.ts, which reads the real table.
   it("is reachable on ios-remote: await-ui-element accepts the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
     expect(tool.capability?.appleRemote).toEqual({ simulator: true });

@@ -103,9 +103,10 @@ function titleMatchLookup(procNamesExpr: string, needles: string[]): string {
 /**
  * AppleScript that leaves the window to animate in `win`, or `missing value`.
  *
- * The window belongs to Simulator.app, or Device Hub.app under Xcode 27 (the
- * same pair `boot-device` opens), so both are tried, title-matched on the
- * device name because each booted device gets its own window.
+ * The window belongs to Simulator.app, or Device Hub under Xcode 27 (the same
+ * pair `boot-device` opens; its process is named "DeviceHub"), so both are
+ * tried, title-matched on the device name because each booted device gets its
+ * own window.
  */
 function windowLookup(needles: string[]): string {
   if (needles.length === 0) {
@@ -114,7 +115,7 @@ function windowLookup(needles: string[]): string {
     // and it beats skipping the animation.
     return `
 	set win to missing value
-	repeat with procRef in {"Simulator", "Device Hub"}
+	repeat with procRef in {"Simulator", "DeviceHub"}
 		-- A repeat variable is a reference into the list and "process <ref>"
 		-- will not coerce one, so without "contents of" the lookup misses.
 		set procName to contents of procRef
@@ -127,7 +128,7 @@ function windowLookup(needles: string[]): string {
 	end repeat`;
   }
   return titleMatchLookup(
-    `name of every process whose name is "Simulator" or name is "Device Hub"`,
+    `name of every process whose name is "Simulator" or name is "DeviceHub"`,
     needles
   );
 }

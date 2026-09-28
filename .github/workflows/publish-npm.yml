@@ -12,7 +12,9 @@ name: Publish npm package
 #                        the dist-tag derived from that version. `dry_run`
 #                        rehearses only this path — the canary machinery
 #                        (stamping, --version check, collision retry) is never
-#                        exercised by it.
+#                        exercised by it. A real (non-dry-run) dispatch also
+#                        attaches the published tarball to the tag's GitHub
+#                        release.
 #
 # Trusted publishing: THIS file is registered on npmjs.com as the npm Trusted
 # Publisher for @swmansion/argent, so the OIDC exchange authenticates the
@@ -60,6 +62,8 @@ jobs:
     # Unsetting PUBLISH_NPM_UNIFIED is the canary kill-switch; manual dispatches
     # always run.
     if: github.event_name == 'workflow_dispatch' || vars.PUBLISH_NPM_UNIFIED == '1'
+    outputs:
+      version: ${{ steps.mode.outputs.version }}
     permissions:
       contents: read
       id-token: write # npm provenance attestation + trusted-publishing OIDC exchange
@@ -107,6 +111,7 @@ jobs:
             fi
             echo "Resolved version: $VERSION → dist-tag '$DERIVED'"
             echo "mode=dispatch" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
             echo "dist_tag=$DERIVED" >> "$GITHUB_OUTPUT"
             echo "binaries_tag=argent-${REF//\//-}" >> "$GITHUB_OUTPUT"
           fi
@@ -283,6 +288,20 @@ jobs:
         env:
           DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
 
+      # For attach-release-tarball. `npm publish` packs with the same packer
+      # (libnpmpack) and packing is deterministic, so this is byte-identical to
+      # the tarball npm just received.
+      - name: Pack the published tarball
+        if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
+        run: npm pack -w @swmansion/argent --pack-destination .
+
+      - uses: actions/upload-artifact@v7
+        if: steps.mode.outputs.mode == 'dispatch' && !inputs.dry_run
+        with:
+          name: npm-tarball
+          path: swmansion-argent-${{ steps.mode.outputs.version }}.tgz
+          if-no-files-found: error
+
       # Serialization makes concurrent index collisions impossible, but npm's
       # read-after-write lag can still hand a back-to-back run a stale version
       # list, so retry a version-exists collision by recomputing + restamping.
@@ -321,3 +340,42 @@ jobs:
       # highest published version (and repairing it if stale) is the
       # "Sync 'next' dist-tag" workflow, which runs automatically once this one
       # succeeds.
+
+  # Attaches the published tarball to the GitHub release for its tag, so users
+  # who don't pull from the npm registry can download it from the release page.
+  # The asset is the tarball the publish job packed, byte-identical to the one
+  # npm received. A separate job keeps `contents: write` away from the
+  # OIDC-privileged publish job. The release itself is created by release.yml
+  # when the tag is pushed.
+  attach-release-tarball:
+    needs: publish
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+    # The package is already on npm by now, and sync-next-tag.yml only follows a
+    # successful run, so a failed attach must not fail the run. Re-run this job
+    # once the cause is fixed.
+    continue-on-error: true
+    permissions:
+      contents: write
+
+    steps:
+      # The tarball the publish job packed. Not fetched back from npm: a version
+      # published seconds ago is not yet visible there (the 0.25.2 attach failed
+      # on exactly that), and the packed file already has npm's bytes.
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-tarball
+
+      - name: Attach tarball to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null; then
+            echo "::error::no GitHub release for ${TAG}; push the tag (release.yml creates the release), then re-run this job"
+            exit 1
+          fi
+          # --clobber keeps a re-run of this job idempotent.
+          gh release upload "$TAG" "swmansion-argent-${VERSION}.tgz" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Attached \`swmansion-argent-${VERSION}.tgz\` to release [${TAG}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG})" >> "$GITHUB_STEP_SUMMARY"
