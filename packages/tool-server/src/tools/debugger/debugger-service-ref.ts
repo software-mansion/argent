@@ -2,6 +2,7 @@ import type { ServiceRef, ToolCapability } from "@argent/registry";
 import { CHROMIUM_ID_PREFIX, resolveDevice } from "../../utils/device-info";
 import { chromiumJsRuntimeDebuggerRef } from "../../blueprints/chromium-js-runtime-debugger";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { metroPort } from "../../utils/debugger/metro-port";
 
 /**
  * For tools that work on every platform including Chromium: iOS / Android /
@@ -54,7 +55,7 @@ export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
  * for Chromium — its CDP port lives inside the device id — so the 8081 default
  * in the tools' zodSchemas does no harm.
  */
-export function debuggerServiceRef(params: { port: number; device_id?: string }): ServiceRef {
+export function debuggerServiceRef(params: { port?: number; device_id?: string }): ServiceRef {
   // Collapse a forwarded logicalDeviceId back onto the id its device was
   // connected with, so it resolves to the one open debugger instance rather
   // than minting a second URN. See utils/debugger/device-alias.ts.
@@ -66,5 +67,5 @@ export function debuggerServiceRef(params: { port: number; device_id?: string })
     const device = resolveDevice(deviceId);
     return chromiumJsRuntimeDebuggerRef(device);
   }
-  return `JsRuntimeDebugger:${params.port}:${deviceId}`;
+  return `JsRuntimeDebugger:${metroPort(params)}:${deviceId}`;
 }

@@ -1225,7 +1225,9 @@ describe("worst-case time budget vs the MCP client's per-attempt cap", () => {
   it("the iOS `simctl ui` path fits, dependency check and tvOS probe included", () => {
     // `ensureDeps(["xcrun"])` → one PATH lookup, then the runtime probe → one
     // `simctl list devices --json`, then the `simctl ui` call itself. That is
-    // the whole serial path at any `ios.additionalDeviceSets` count:
+    // the whole serial path a wedged CoreSimulatorService takes (the listing's
+    // foldable device-type probe runs only on simulators a listing returned),
+    // at any `ios.additionalDeviceSets` count:
     // `deviceSetForUdid` probes only a UDID it has no entry for, and the one
     // listing that can answer "mobile" is the one that records the entry — so
     // the call below is reached only with the map already warm.

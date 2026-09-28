@@ -259,16 +259,17 @@ function killChromiumByPidFallback(pid: number): void {
 }
 
 /**
- * Chromium switches that keep an argent-booted app responsive while its window
- * is unfocused, occluded, or minimized. Without them the compositor throttles a
- * hidden window: mouse-input acks stall for seconds each on hit-testing, wheel
- * scrolls hang, and `document.visibilityState` flips to "hidden".
+ * Chromium throttles an unfocused or occluded window: mouse-input acks stall
+ * for seconds each on hit-testing, wheel scrolls hang, and
+ * `document.visibilityState` flips to "hidden". These switches disable the
+ * timer throttling and renderer backgrounding behind that.
  *
- * primePageSession's focus emulation covers the same ground, but only while a
- * CDP session is attached, and sessions are created lazily and die with the
- * tool-server (which idle-exits while the app lives on) — hence flags, applied
- * unconditionally to apps we spawn. Externally launched CDP targets are
- * unaffected.
+ * They do not reach minimization: a window carrying all three still reads
+ * "hidden" and still costs ~5s per Input.dispatchMouseEvent once minimized
+ * (measured on Electron 42 and Chrome 152). primePageSession's focus emulation
+ * does cover that, but only while a CDP session is attached, and sessions are
+ * created lazily and die with the tool-server (which idle-exits while the app
+ * lives on) — hence flags as well, applied unconditionally to apps we spawn.
  */
 const ANTI_THROTTLING_ARGS = [
   "--disable-background-timer-throttling",
@@ -292,7 +293,10 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   try {
     child = spawn(launcher.command, args, {
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      // stdout is discarded, not piped: nothing reads it, and an unread pipe
+      // blocks the child's writes once the OS buffer fills. The
+      // ELECTRON_ENABLE_LOGGING below is what keeps it writing.
+      stdio: ["ignore", "ignore", "pipe"],
       // Strip ELECTRON_RUN_AS_NODE (see electronGuiChildEnv): inherited from an
       // Electron-based MCP host it would boot the binary in Node mode with no
       // CDP endpoint, failing boot-device instead of bringing the app up.

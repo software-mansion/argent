@@ -3,7 +3,7 @@ import { createProposeVariantTool } from "../../src/tools/variants/propose-varia
 import { awaitUserSelectionTool } from "../../src/tools/variants/await-user-selection";
 
 /** Every tool argent can serve. Bump deliberately when a tool is added or removed. */
-export const EXPECTED_TOOL_COUNT = 78;
+export const EXPECTED_TOOL_COUNT = 80;
 
 /**
  * The full catalog, keyed by id. The Lens tools never reach

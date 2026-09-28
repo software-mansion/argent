@@ -8,6 +8,10 @@ const path = require("path");
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const DEVICE_PROVIDERS_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/device-providers/src/index.ts"
+);
 const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
@@ -50,6 +54,7 @@ const ALIASES = {
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
   "@argent/telemetry": TELEMETRY_ENTRY,
+  "@argent/device-providers": DEVICE_PROVIDERS_ENTRY,
 };
 
 // Build-time constants for @argent/telemetry. An unset ARGENT_OTEL_INGEST_TOKEN
@@ -152,6 +157,18 @@ const TRACECFG_SRC = path.resolve(
   "packages/native-devtools-android/assets/argent.tracecfg.pbtxt"
 );
 const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt");
+// Nothing imports these, so esbuild cannot bundle them. The executor resolves
+// the runner from its own `__dirname` and the runner resolves both watchdogs
+// from its module URL, so all three must land flat beside tool-server.cjs.
+const FLOW_SCRIPT_SRC_DIR = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/tool-server/src/tools/flows/script"
+);
+const FLOW_SCRIPT_FILES = [
+  "flow-script-runner.mjs",
+  "flow-script-watchdog-lifeline.mjs",
+  "flow-script-watchdog-deadline.mjs",
+];
 const IOS_RUNNER_SRC = path.resolve(WORKSPACE_ROOT, "packages/ios-device-runner/ArgentRunner");
 const IOS_RUNNER_DEST = path.resolve(__dirname, "../dist/ios-device-runner/ArgentRunner");
 // Local Xcode state that must never ship: per-user schemes/breakpoints and
@@ -371,6 +388,18 @@ const ASSETS = [
         .readdirSync(src, { withFileTypes: true })
         .filter((e) => e.isFile() && e.name.endsWith(".md")).length,
   },
+  ...FLOW_SCRIPT_FILES.map(
+    (name) =>
+      /** @type {Asset} */ ({
+        kind: "file",
+        src: path.join(FLOW_SCRIPT_SRC_DIR, name),
+        dest: path.resolve(__dirname, "../dist", name),
+        required: true,
+        copiedLabel: name,
+        missLabel: name,
+        hint: "This file is required for flow `script` steps.",
+      })
+  ),
 ];
 
 /**
@@ -529,6 +558,13 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // back to a literal and then chokes on dtrace-provider's own dynamic native
 // binding require. External restores bunyan's intent: the published package
 // never declares it, so the require misses and bunyan nulls it out.
+//
+// `sharp` is the optional Chromium screenshot post-processor: the tool-server
+// `require("sharp")`s it inside a try/catch and skips scale / rotation when it
+// is absent. It is never declared here, so in CI esbuild leaves the require
+// alone — but a developer with sharp in node_modules (e.g. installed to test
+// that path) would have the bundle inline its native addon and fail. External
+// keeps the runtime require resolving against whatever the user installed.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -541,6 +577,7 @@ buildBundle({
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
     "dtrace-provider",
+    "sharp",
   ],
 });
 

@@ -23,6 +23,9 @@ export interface CaptureTarget {
 /** Inputs needed to build the `xctrace record …` argv. */
 export interface RecordArgsInput {
   templatePath: string;
+  /**
+   * CoreSimulator UDID, as `xctrace` resolves it (never an argent-side `ext:` id).
+   */
   deviceId: string;
   target: CaptureTarget;
   outputFile: string;

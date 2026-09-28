@@ -132,6 +132,14 @@
     // file here passes too — so the list holds only packages this workspace
     // genuinely cannot declare.
     "packages/tool-server": {
+      // Reached only dynamically, so knip cannot see them: the executor puts
+      // the runner in front of the script as an `--import` preload by path, and
+      // the runner starts each watchdog with `new Worker(url)`.
+      "entry": [
+        "src/tools/flows/script/flow-script-runner.mjs",
+        "src/tools/flows/script/flow-script-watchdog-lifeline.mjs",
+        "src/tools/flows/script/flow-script-watchdog-deadline.mjs",
+      ],
       "ignoreDependencies": [
         // --- Declared in package.json, loaded too dynamically to detect.
         //     Without these: "unused dependencies". ---
