@@ -41,6 +41,12 @@ const h = vi.hoisted(() => ({
     expected: { width: number; height: number };
     actual: { width: number; height: number };
   },
+  /** What the foldable posture check says about a full-screen size mismatch. */
+  postureHint: undefined as string | undefined,
+}));
+
+vi.mock("../../src/utils/foldable", () => ({
+  foldablePostureHint: vi.fn(async () => h.postureHint),
 }));
 
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
@@ -179,6 +185,7 @@ beforeEach(async () => {
   h.cropFrame = undefined;
   h.cropFrameError = null;
   h.dimensionMismatch = null;
+  h.postureHint = undefined;
   await writeFakePng(h.shotPath);
 });
 afterEach(async () => {
@@ -282,6 +289,24 @@ describe("runSnapshot baselines", () => {
     expect(r.hint).toBeUndefined();
     expect(r.artifacts?.baseline).toMatchObject({ __argentArtifact: true });
     expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+  });
+
+  it("gives a foldable's posture advice as the hint of a dimension-mismatch bail", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    h.dimensionMismatch = {
+      expected: { width: 1206, height: 2622 },
+      actual: { width: 750, height: 1334 },
+    };
+    h.postureHint =
+      "This simulator is foldable: a baseline belongs to the posture that produced it. " +
+      "Fold the device to the baseline's posture with the fold tool.";
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toMatch(/nothing was compared$/);
+    expect(r).toMatchObject({ expected: "1206x2622", actual: "750x1334", hint: h.postureHint });
   });
 
   it("fails an over-threshold diff and exposes the context diff as an artifact", async () => {
