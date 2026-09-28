@@ -426,6 +426,7 @@ The `Failed flows` section has one entry for each flow that failed. Each entry h
 - The first step that failed or errored, with its number. A flow without a report gives its outcome line instead.
 - The reason of that step, or the error message of a flow without a report.
 - The `expected:`, `actual:`, `indeterminate:` and `hint:` lines of that step that apply to the failure.
+- The location of that step in its YAML file. A flow without a report has no location.
 - A `re-run:` command that runs only that flow. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that flow to the same directory as the directory run.
 
 The section does not include the flows that Argent skipped.
@@ -437,6 +438,10 @@ Failed flows (2)
 
   ✗ a-login.yaml › step 3 assert visible "Dashboard"
     no element matched selector text="Dashboard"
+    at flows/a-login.yaml:6
+      5 |   - tap: { text: Sign in }
+    > 6 |   - assert: { visible: { text: Dashboard } }
+      7 |   - tap: { text: Profile }
     re-run: argent flow run flows/a-login.yaml --platform chromium
 
   ✗ sub/c-search.yaml › not run (invalid flow)
@@ -446,13 +451,19 @@ Failed flows (2)
 FAIL — 4 flows: 2 passed, 2 failed, 0 skipped (10.2s)
 ```
 
-When a single flow run fails its steps, Argent prints the first step that failed or errored again above the last line. Under that step, Argent prints its reason and its `expected:`, `actual:`, `indeterminate:` and `hint:` lines again.
+When a single flow run fails its steps, Argent prints the first step that failed or errored again above the last line. Under that step, Argent prints its reason and its `expected:`, `actual:`, `indeterminate:` and `hint:` lines again. Then Argent prints the location of the step.
 
-`--json` and `--json-stream` print no header, no outcome line, no `Failed flows` section and no summary.
+The location starts with an `at <path>:<line>` line. `<line>` is the line where the step starts in its YAML file. For a step in a fragment that a `run:` step loaded, `<path>` and `<line>` point to the fragment file. `<path>` is relative to the current directory. When the file is outside the current directory, `<path>` is absolute. Thus a terminal or an editor can open the location.
+
+Under the `at` line, Argent prints the line of the step, marked with `>`. Argent also prints the line before and the line after the step, when the file has them. Argent prints each line of the file on one line. An invisible character becomes an escape, as in a value. Argent shows the first 300 characters of a longer line, then the number of characters that it does not show.
+
+Argent reads the file when the flow ends. If the file changed during the run, the lines show the changed file. Argent prints only the `at` line when it cannot read the file, or when the file has fewer lines than `<line>`.
+
+`--json` and `--json-stream` print no header, no outcome line, no `Failed flows` section, no location and no summary.
 
 A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
 
-A single flow run with `--json` writes the report of that flow. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. A step that did not pass can also hold `hint`, `expected` and `actual`, with the content of the lines above. `actual` holds all of the text that the check found. A step whose `expected` holds a regular expression also holds `expectedKind: "pattern"`. The `expected` field of such a step holds the source of the pattern, without the slashes. A step holds `indeterminate: true`, shown as the `indeterminate:` line, when the step did not do its check because Argent could not read the UI tree. A `tool: flow-execute` step copies these fields from the first step that failed in the composed flow. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
+A single flow run with `--json` writes the report of that flow. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. A step that did not pass can also hold `hint`, `expected` and `actual`, with the content of the lines above. `actual` holds all of the text that the check found. A step whose `expected` holds a regular expression also holds `expectedKind: "pattern"`. The `expected` field of such a step holds the source of the pattern, without the slashes. A step holds `indeterminate: true`, shown as the `indeterminate:` line, when the step did not do its check because Argent could not read the UI tree. A `tool: flow-execute` step copies these fields from the first step that failed in the composed flow. A step holds `line`, the line where the step starts in its YAML file. The first line of a file is line 1. A step in a fragment that a `run:` step loaded also holds `file`, the absolute path of the fragment file. Argent resolves symbolic links in this path. The `line` of a `run:` step is in the file that holds the `run:` step. Thus a `run:` step in the flow that you ran holds no `file`. A step in a `when:` block holds its own `line`. A step that did not run also holds `line`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`, `line` and `file`. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
 
 These steps can hold `indeterminate: true`:
 

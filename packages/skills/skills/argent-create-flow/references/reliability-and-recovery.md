@@ -119,7 +119,7 @@ Classify before editing:
 
 Then:
 
-1. Record the first failure or divergence index and message. Also record its `expected:`, `actual:`, `indeterminate:` and `hint:` lines.
+1. Record the first failure or divergence index and message. Also record its `expected:`, `actual:`, `indeterminate:` and `hint:` lines. `argent flow run` also prints `at <path>:<line>`, the file and line that hold the step (in `--json`, the step's `line`, plus `file` for a step in a fragment).
 2. Capture `screenshot` and `describe`. Use native or React Native discovery when needed.
 3. Compare actual state with the preceding echo and expected destination. If the step has a hint, read it now. A hint is only one possible cause. Many failures have no hint.
 4. Classify the cause: selector, screen, missing element, readiness, stale data, optional interstitial, or product behavior.
