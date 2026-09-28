@@ -20,7 +20,7 @@ const zodSchema = z.object({
 });
 
 const capability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
 

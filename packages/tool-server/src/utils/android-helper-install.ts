@@ -3,12 +3,6 @@ import { bundledHelperApkPath, helperManifest } from "@argent/native-devtools-an
 
 /** Manifest-driven install of the argent-android-devtools helper APK. */
 
-const installedHelpers = new Map<string, true>();
-
-function cacheKey(serial: string, versionCode: number): string {
-  return `${serial}|${versionCode}`;
-}
-
 interface InstalledVersionProbe {
   installed: boolean;
   versionCode: number | null;
@@ -46,20 +40,46 @@ async function probeInstalledVersion(
   return { installed: false, versionCode: null };
 }
 
-/** Install the helper APK unless the device already has at least the bundled versionCode. */
-export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<void> {
+/**
+ * Install the helper APK unless the device already has at least the bundled
+ * versionCode.
+ *
+ * The probe runs on every call rather than being memoized per serial: a wipe or
+ * a snapshot restore drops the package while the same serial stays connected,
+ * and a memo would keep skipping the install for the life of the process. One
+ * `cmd package list packages` per service instantiation is cheap enough to pay.
+ *
+ * `force` installs without probing, and with `-d` so the install may go
+ * backwards in versionCode. The probe cannot tell a working helper from a
+ * foreign build carrying the same versionCode (the manifest pins it at 1), so a
+ * repair has to ignore its verdict.
+ */
+export async function ensureAndroidDevtoolsInstalled(
+  serial: string,
+  options: { force?: boolean } = {}
+): Promise<void> {
   const manifest = helperManifest();
-  const key = cacheKey(serial, manifest.versionCode);
-  if (installedHelpers.has(key)) return;
 
-  const probe = await probeInstalledVersion(serial, manifest.packageName);
-  if (probe.installed && probe.versionCode !== null && probe.versionCode >= manifest.versionCode) {
-    installedHelpers.set(key, true);
-    return;
+  if (!options.force) {
+    const probe = await probeInstalledVersion(serial, manifest.packageName);
+    // A null versionCode means the `pm list packages` fallback answered (API
+    // levels without `cmd package`), which reports presence only. Treat a
+    // present package as current there: installing on every instantiation
+    // would replace a working helper each time, and a stale one is caught by
+    // the forced reinstall once `am instrument` refuses it. Only API 23 — the
+    // helper's minSdk — lacks `cmd package`, so the one device class that
+    // never upgrades a stale-but-present helper is also the oldest supported.
+    if (
+      probe.installed &&
+      (probe.versionCode === null || probe.versionCode >= manifest.versionCode)
+    ) {
+      return;
+    }
   }
 
   const apkPath = bundledHelperApkPath();
-  const args = ["-s", serial, "install", ...manifest.installFlags, apkPath];
+  const flags = options.force ? [...manifest.installFlags, "-d"] : manifest.installFlags;
+  const args = ["-s", serial, "install", ...flags, apkPath];
 
   try {
     await runAdb(args, { timeoutMs: 60_000 });
@@ -78,19 +98,15 @@ export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<vo
       throw err;
     }
   }
-
-  installedHelpers.set(key, true);
 }
 
 /**
- * Test-only helper to reset the install cache between runs.
+ * No-op: there is no install cache any more. Every call probes the device, so
+ * nothing survives between calls for a reset to clear.
  *
  * @public so knip keeps it: the only caller lives in the `argent-private`
  * submodule, which knip lists under `ignoreWorkspaces` and CI never checks out.
  * `research/android-describe-busy-ui/drivers/test-fallback.js` requires this
- * module from `dist/` and calls this twice - once to force the install-fallback
- * path, once to restore. Drop the tag when that driver becomes a vitest test.
+ * module from `dist/` and calls it. Drop the export once that driver does.
  */
-export function __resetAndroidDevtoolsInstallCache(): void {
-  installedHelpers.clear();
-}
+export function __resetAndroidDevtoolsInstallCache(): void {}

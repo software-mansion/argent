@@ -94,8 +94,8 @@ find "${DEST_DIR}" \( -name simulator-server -o -name 'simulator-server.exe' \) 
 # The simulator-server `android_device` controller pushes the screen-sharing
 # agent (host-independent .jar + per-ABI .so) to the phone over adb, resolving
 # it from `resources/android/` relative to its working directory — which the
-# blueprint sets to the binary's own platform dir. The payload runs on the
-# phone, so one tarball serves every host; extract a copy next to each binary.
+# blueprint sets to the bin root via simulatorServerRunDir(). The payload runs
+# on the phone, so one shared copy serves every host platform.
 # A missing asset is tolerated: physical-device support is then unavailable.
 AGENT_ASSET="screen-sharing-agent.tar.gz"
 AGENT_TMP="$(mktemp -d)"
@@ -108,14 +108,11 @@ if gh release download "${TAG}" \
      --dir "${AGENT_TMP}" \
      --clobber 2>"${GH_STDERR}"; then
   rm -f "${GH_STDERR}"
-  while IFS= read -r bin; do
-    plat_dir="$(dirname "${bin}")"
-    res_dir="${plat_dir}/resources/android"
-    rm -rf "${res_dir}"
-    mkdir -p "${res_dir}"
-    tar -xzf "${AGENT_TMP}/${AGENT_ASSET}" -C "${res_dir}"
-    echo "  ✓ screen-sharing agent → ${res_dir}"
-  done < <(find "${DEST_DIR}" \( -name simulator-server -o -name 'simulator-server.exe' \) -type f)
+  res_dir="${DEST_DIR}/resources/android"
+  rm -rf "${res_dir}"
+  mkdir -p "${res_dir}"
+  tar -xzf "${AGENT_TMP}/${AGENT_ASSET}" -C "${res_dir}"
+  echo "  ✓ screen-sharing agent → ${res_dir}"
 else
   GH_MSG=$(<"${GH_STDERR}")
   rm -f "${GH_STDERR}"

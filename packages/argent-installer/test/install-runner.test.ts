@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { runInstall, type InstallOutcome } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
 import {
@@ -9,6 +11,7 @@ import {
   hasProjectPackageJson,
   isGloballyInstalled,
   isLocallyInstalled,
+  resolveProjectRoot,
 } from "../src/utils.js";
 import { probeGlobalInstallTarget } from "../src/global-prefix.js";
 import { InitCancelled } from "../src/init-args.js";
@@ -218,6 +221,43 @@ describe("installLocally failure handling", () => {
       platformSpy.mockRestore();
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "quotes the project root in the manual-install advice",
+    async () => {
+      // The advice is pasted into a shell, so the path has to survive as one
+      // word: `cd /a/My Project` runs `cd /a/My`.
+      const parent = fs.mkdtempSync(path.join(os.tmpdir(), "argent-install-advice-"));
+      const projectRoot = path.join(parent, "My 'Project' $x");
+      fs.mkdirSync(projectRoot);
+      try {
+        vi.mocked(log.info).mockClear();
+        vi.mocked(resolveProjectRoot).mockReturnValueOnce(projectRoot);
+        vi.mocked(runShellCommand).mockRejectedValue(
+          new ShellCommandError("registry down", 1, null)
+        );
+
+        await expect(localInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+        const esc = String.fromCharCode(27);
+        const advice = vi
+          .mocked(log.info)
+          .mock.calls.map((c) =>
+            String(c[0])
+              .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+              .join("")
+          )
+          .find((line) => line.startsWith("Install manually with: "));
+        expect(advice).toBeDefined();
+
+        const cd = advice!.slice(advice!.indexOf("cd ")).split(" && ")[0];
+        const landed = execFileSync("/bin/sh", ["-c", `${cd} && pwd`], { encoding: "utf8" }).trim();
+        expect(landed).toBe(projectRoot);
+      } finally {
+        fs.rmSync(parent, { recursive: true, force: true });
+      }
+    }
+  );
 });
 
 // The Nix case: npm's global directory is inside the read-only store. Every way
