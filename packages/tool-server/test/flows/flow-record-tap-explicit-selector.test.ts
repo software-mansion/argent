@@ -178,6 +178,29 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(await recordedSteps()).toHaveLength(0);
   });
 
+  // The role-only warning's reason is about a DERIVED selector; a supplied one
+  // lands on an element that has an id and text, so it must not claim otherwise.
+  it("warns on a supplied role-only selector without blaming the element", async () => {
+    setTree([
+      n({
+        role: "AXButton",
+        frame: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 },
+        label: "Settings",
+        identifier: "row-3",
+      }),
+    ]);
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
+      selector: { role: "AXButton" },
+    })) as { message: string };
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXButton" } }]);
+    expect(res.message).toContain("the selector you passed");
+    expect(res.message).toContain("matches by role alone");
+    expect(res.message).not.toContain("has no id or visible text");
+  });
+
   it("still derives a selector when none is supplied", async () => {
     setTree([n({ frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.2 }, label: "Continue" })]);
     await record({

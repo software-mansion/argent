@@ -1,7 +1,6 @@
 import type { DeviceInfo, Platform, Registry } from "@argent/registry";
-import { fetchTree } from "../../utils/ui-tree-match";
 import type { FlowTreeTarget } from "./flow-actions";
-import { queryFullHierarchyTree } from "./flow-ios-tree";
+import { queryFullHierarchyTree, queryIosDeviceFlowTree } from "./flow-ios-tree";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
 import { queryVegaTree } from "./flow-vega-tree";
@@ -30,40 +29,31 @@ export async function fetchFlowTree(
   device: DeviceInfo,
   target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
-  const source = FLOW_TREE_SOURCES[device.platform];
-  // Only `ios-remote` is left, and `fetchTree` throws its not-supported error
-  // naming the platform.
-  if (!source) return fetchTree(registry, device);
-  return source(registry, device, target);
+  return FLOW_TREE_SOURCES[device.platform](registry, device, target);
 }
-
-/** The source {@link fetchFlowTree} reads on each platform that has one. */
-const FLOW_TREE_SOURCES: Partial<
-  Record<
-    Platform,
-    (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
-  >
-> = {
-  // Only iOS consumes the target: the platforms below resolve their tree
-  // source per-device and never auto-resolve.
-  ios: (registry, device, target) => queryFullHierarchyTree(registry, device, target),
-  android: (registry, device) => queryAndroidFullHierarchy(registry, device),
-  chromium: (registry, device) => queryChromiumTree(registry, device),
-  vega: (_registry, device) => queryVegaTree(device),
-};
 
 /**
- * Whether a platform has a flow tree source at all — read off the table
- * {@link fetchFlowTree} dispatches through, so it cannot drift from what a read
- * would do.
- *
- * The distinction a caller needs is "structurally absent" versus "down": on
- * `ios-remote` every read fails by construction, so a best-effort caller would
- * otherwise report a degradation on every gesture of every run there — see
- * `settleForGesture`.
+ * The source {@link fetchFlowTree} reads on each platform. Total by type: a
+ * `Platform` added without a source here is a compile error, not a read that
+ * quietly degrades at runtime.
  */
-export function supportsFlowTree(platform: Platform): boolean {
-  // Lookup, not `in`: `fetchFlowTree` also treats an explicit undefined entry
-  // as no source.
-  return FLOW_TREE_SOURCES[platform] !== undefined;
-}
+const FLOW_TREE_SOURCES: Record<
+  Platform,
+  (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
+> = {
+  // Simulator iOS uses the injected hierarchy and an optional target.
+  // Physical devices use the XCUITest runner tree.
+  "ios": (registry, device, target) =>
+    device.kind === "device"
+      ? queryIosDeviceFlowTree(registry, device)
+      : queryFullHierarchyTree(registry, device, target),
+  // A remote sim is an iOS simulator reached over the sim-remote tunnel, and
+  // the native-devtools blueprint routes `getFullHierarchy` over TCP for one.
+  // So it is the local simulator source with no `kind === "device"` arm:
+  // `ios-remote` is always kind "simulator" (utils/device-info.ts) and has no
+  // physical-device variant.
+  "ios-remote": (registry, device, target) => queryFullHierarchyTree(registry, device, target),
+  "android": (registry, device) => queryAndroidFullHierarchy(registry, device),
+  "chromium": (registry, device) => queryChromiumTree(registry, device),
+  "vega": (_registry, device) => queryVegaTree(device),
+};

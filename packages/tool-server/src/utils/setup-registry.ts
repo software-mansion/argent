@@ -1,6 +1,7 @@
 import { Registry } from "@argent/registry";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
+import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
@@ -38,13 +39,14 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
 import { rotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
 import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro";
-import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
 import { createDebuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
@@ -78,6 +80,7 @@ import { stopMetroTool } from "../tools/simulator/stop-metro";
 import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
+import { flowAddScriptTool } from "../tools/flows/flow-add-script";
 import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
 import { createRunFlowTool } from "../tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
@@ -90,6 +93,9 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
+import { resolveDevice } from "./device-info";
+import { setLivePanelSourceProvider } from "./foldable";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
@@ -97,7 +103,15 @@ export function createRegistry(): Registry {
   // enable/disable <flag>` needs no tool-server restart.
   const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
+  // The panel a foldable renders to is asked of the ax-service before every
+  // touch and capture (`utils/foldable.ts`); that daemon is a service of this
+  // registry, started on first use like a `describe` starts it.
+  setLivePanelSourceProvider((udid) => {
+    const ref = axServiceRef(resolveDevice(udid));
+    return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+  });
   registry.registerBlueprint(simulatorServerBlueprint);
+  registry.registerBlueprint(iosDeviceRunnerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
@@ -137,13 +151,14 @@ export function createRegistry(): Registry {
   registry.registerTool(createPasteTool(registry));
   registry.registerTool(rotateTool);
   registry.registerTool(shakeTool);
+  registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(debuggerComponentTreeTool);
+  registry.registerTool(createDebuggerComponentTreeTool(registry));
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
@@ -183,6 +198,7 @@ export function createRegistry(): Registry {
   registry.registerTool(flowStartRecordingTool);
   registry.registerTool(createFlowAddStepTool(registry));
   registry.registerTool(flowInsertEchoTool);
+  registry.registerTool(flowAddScriptTool);
   registry.registerTool(flowFinishRecordingTool);
   registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));

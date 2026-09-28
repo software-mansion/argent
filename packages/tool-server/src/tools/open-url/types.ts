@@ -1,6 +1,8 @@
 export interface OpenUrlParams {
   udid: string;
   url: string;
+  /** Physical iOS only. The app that receives the URL. */
+  bundleId?: string;
 }
 
 export interface OpenUrlResult {

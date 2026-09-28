@@ -73,7 +73,9 @@ export type DescribeSource =
   | "android-devtools"
   | "cdp-dom"
   | "vega-automation"
-  | "tv-focus";
+  | "tv-focus"
+  // Physical iOS: the XCUITest runner accessibility snapshot.
+  | "xcuitest-runner";
 
 // Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
 // callers get `DescribeResult` below, i.e. only the rendered text.
@@ -81,12 +83,38 @@ export interface DescribeTreeData {
   tree: DescribeNode;
   source: DescribeSource;
   should_restart?: boolean;
+  // "degraded" means boot-state on the simulator path and a truncated snapshot on the device path.
+  // Each path writes this hint once.
   hint?: string;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set
   // only by the flow tree adapters that know it.
   screen?: { width: number; height: number };
+  // How the UI lies on the space the frames are in, when the two differ: the
+  // iOS simulator adapter frames in the screen's fixed (portrait-native)
+  // space, the space touches are taken in, and a landscape UI — a rotated
+  // device, an unfolded foldable — is rotated on it. The flow directions
+  // (`swipe: down`, `scroll-to` `direction`) are the UI's, and are mapped
+  // into the frame space with this. Absent when the source does not report
+  // it, which is when its frames are in the UI's own space.
+  uiOrientation?: UiOrientation;
+}
+
+/** Interface orientation as UIKit names it, relative to the portrait-native screen. */
+export type UiOrientation = "portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown";
+
+const UI_ORIENTATIONS: readonly UiOrientation[] = [
+  "portrait",
+  "portraitUpsideDown",
+  "landscapeLeft",
+  "landscapeRight",
+];
+
+export function asUiOrientation(v: unknown): UiOrientation | undefined {
+  return typeof v === "string" && (UI_ORIENTATIONS as readonly string[]).includes(v)
+    ? (v as UiOrientation)
+    : undefined;
 }
 
 export interface DescribeResult {
