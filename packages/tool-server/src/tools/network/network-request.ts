@@ -44,7 +44,8 @@ const MAX_BODY_SIZE = 1000;
 
 /** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
 function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
-  if (postData == null || (postData.length <= MAX_BODY_SIZE && !truncated)) return postData;
+  // A body the interceptor cut is always longer than MAX_BODY_SIZE.
+  if (postData == null || postData.length <= MAX_BODY_SIZE) return postData;
   const originalSize = truncated
     ? `more than ${postData.length} chars`
     : `${postData.length} chars`;
@@ -87,10 +88,8 @@ interface RawEntry {
   resourceType?: string;
   encodedDataLength?: number;
   timestamp?: number;
-  wallTime?: number;
   durationMs?: number;
   errorText?: string;
-  initiator?: { type: string; url?: string; lineNumber?: number };
   responseBody?: string;
   /** The interceptor kept only the start of the body; encodedDataLength is its full size. */
   bodyTruncated?: boolean;
@@ -131,8 +130,8 @@ export const networkRequestTool: ToolDefinition<
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
-Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
-Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
+Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
+Request and response bodies over 1000 chars are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
@@ -221,7 +220,6 @@ Returns an error message string if the requestId is not found — use view-netwo
       durationMs: entry.durationMs,
       encodedDataLength: entry.encodedDataLength,
       errorText: entry.errorText,
-      initiator: entry.initiator,
     };
 
     if (entry.request) {

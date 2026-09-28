@@ -15,6 +15,14 @@ import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const ITEMS_PER_PAGE = 50;
 
+// Each call installs the interceptor first, so it is missing only when that install failed or the
+// app's JS runtime reloaded in between.
+function notInstalled(installError: string | undefined): string {
+  return installError
+    ? `Network interceptor could not be installed in the app's JS runtime: ${installError}`
+    : "Network interceptor not installed — the app's JS runtime reloaded, which clears captured requests. Call view-network-logs again to reinstall it, then repeat the action that sends the requests.";
+}
+
 // Auto-scaled base-1024 units: a big download reads `1.4 GB`, not `1433.6 MB`.
 function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
@@ -50,9 +58,6 @@ function formatEntry(entry: LogEntry): string {
     status = entry.errorText ?? "failed";
   } else if (entry.response) {
     status = `${entry.response.status} ${entry.response.statusText}`;
-  } else if (entry.state === "finished") {
-    // The app's fetch wrapper resolved something that is no Response, so nothing of it was read.
-    status = "finished, response not captured";
   } else {
     status = "pending";
   }
@@ -128,7 +133,7 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it captures fetch() and XMLHttpRequest calls, axios included. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it records each request once: XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that replaces the global fetch and Response, such as react-native-fetch-api (once its response arrives; status and headers, no body). Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,
@@ -151,14 +156,22 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     const api = services.inspector as NetworkInspectorApi;
 
     // Idempotent: a second install is a no-op.
-    await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+    const installError = await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).then(
+      () => undefined,
+      (err: unknown) => (err instanceof Error ? err.message : String(err))
+    );
 
     // Zero-length slice: reuses the read script's Metro filtering just to get the total.
     const countRaw = await api.cdp.evaluate(makeNetworkLogReadScript(0, 0, api.port));
-    const { total } = JSON.parse(countRaw as string) as { total: number };
+    const { total, interceptorInstalled } = JSON.parse(countRaw as string) as {
+      total: number;
+      interceptorInstalled: boolean;
+    };
+
+    if (!interceptorInstalled) return notInstalled(installError);
 
     if (total === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() and XMLHttpRequest calls, axios included.";
+      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that replaces the global fetch and Response (once its response arrives), but not requests sent before capture started (at the first network-tool call).";
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
@@ -177,9 +190,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
       interceptorInstalled: boolean;
     };
 
-    if (!data.interceptorInstalled) {
-      return "Network interceptor not installed. Try reconnecting with network-inspector-connect.";
-    }
+    if (!data.interceptorInstalled) return notInstalled(installError);
 
     const lines = data.entries.map(formatEntry);
 

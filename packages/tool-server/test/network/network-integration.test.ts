@@ -37,6 +37,10 @@ let wsConnectionCount = 0;
  * we return responses matching what the real runtime would produce.
  */
 let interceptorInstalled = false;
+/** Makes the interceptor script throw in the "runtime", so it stays uninstalled. */
+let failInstall = false;
+// The install succeeds, but the app's JS runtime reloads before the log is read.
+let reloadAfterInstall = false;
 const networkLog: Array<{
   id: number;
   requestId: string;
@@ -110,7 +114,24 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
       // scripts never mention it.
       if (expr.includes("__argent_network_v2")) {
         // This is the network interceptor installation script
-        interceptorInstalled = true;
+        if (failInstall) {
+          ws.send(
+            JSON.stringify({
+              id,
+              result: {
+                result: { type: "object" },
+                exceptionDetails: {
+                  exceptionId: 1,
+                  text: "Uncaught",
+                  lineNumber: 0,
+                  columnNumber: 0,
+                },
+              },
+            })
+          );
+          break;
+        }
+        interceptorInstalled = !reloadAfterInstall;
         ws.send(
           JSON.stringify({
             id,
@@ -201,7 +222,23 @@ function handleLogReadScript(ws: WebSocket, id: number, expr: string) {
     return;
   }
 
-  // List read script — extract start and limit from the script
+  // List read script. Like the real one, it finds no log in a runtime without the interceptor.
+  if (!interceptorInstalled) {
+    ws.send(
+      JSON.stringify({
+        id,
+        result: {
+          result: {
+            type: "string",
+            value: JSON.stringify({ entries: [], total: 0, interceptorInstalled: false }),
+          },
+        },
+      })
+    );
+    return;
+  }
+
+  // Extract start and limit from the script
   const startMatch = expr.match(/var start = (\d+)/);
   const limitMatch = expr.match(/var limit = (\d+)/);
   const start = startMatch ? parseInt(startMatch[1], 10) : 0;
@@ -505,18 +542,9 @@ describe("NetworkInspector integration (mock server)", () => {
     }
   });
 
-  it("view-network-logs says when a finished request has no captured response", async () => {
-    // The app's fetch wrapper resolved parsed JSON: the interceptor finished the record blind.
-    networkLog.push({
-      id: networkLog.length,
-      requestId: "rn-net-blind",
-      state: "finished",
-      request: { url: "https://api.example.com/blind", method: "GET", headers: {} },
-      resourceType: "Fetch",
-      timestamp: Date.now() / 1000,
-      durationMs: 12,
-    });
-
+  it("view-network-logs reports an interceptor that could not be installed", async () => {
+    interceptorInstalled = false;
+    failInstall = true;
     try {
       const result = (await registry.invokeTool("view-network-logs", {
         port: mockPort,
@@ -524,12 +552,30 @@ describe("NetworkInspector integration (mock server)", () => {
       })) as string;
 
       expect(result).toContain(
-        '{id: rn-net-blind} "GET /blind" finished, response not captured Fetch  12 ms'
+        "Network interceptor could not be installed in the app's JS runtime:"
       );
-      expect(result).not.toContain("undefined");
+      expect(result).not.toContain("No network traffic captured");
     } finally {
-      const idx = networkLog.findIndex((e) => e.requestId === "rn-net-blind");
-      if (idx >= 0) networkLog.splice(idx, 1);
+      failInstall = false;
+      interceptorInstalled = true;
+    }
+  });
+
+  it("view-network-logs says to call it again when a reload removed the interceptor", async () => {
+    interceptorInstalled = false;
+    reloadAfterInstall = true;
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+
+      expect(result).toContain("Network interceptor not installed");
+      expect(result).toContain("Call view-network-logs again");
+      expect(result).not.toContain("No network traffic captured");
+    } finally {
+      reloadAfterInstall = false;
+      interceptorInstalled = true;
     }
   });
 
@@ -682,10 +728,20 @@ describe("NetworkInspector integration (mock server)", () => {
   });
 
   it.each([
-    { size: 1500, truncated: false, message: "original size: 1500 chars" },
-    { size: 1_048_576, truncated: true, message: "original size: more than 1048576 chars" },
+    {
+      size: 1500,
+      truncated: false,
+      says: "gives its size",
+      message: "original size: 1500 chars",
+    },
+    {
+      size: 1_048_576,
+      truncated: true,
+      says: "says the interceptor had already cut it at 1 MiB",
+      message: "original size: more than 1048576 chars",
+    },
   ])(
-    "view-network-request-details cuts a request body of $size chars",
+    "view-network-request-details shortens a request body of $size chars and $says",
     async ({ size, truncated, message }) => {
       const requestId = `rn-net-post-${size}`;
       networkLog.push({

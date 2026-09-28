@@ -1,16 +1,15 @@
 /**
  * Injected via Runtime.evaluate: records the app's HTTP requests for the network tools.
  *
- * - `XMLHttpRequest.prototype` is patched, so axios and every other XHR user is recorded.
- *   React Native's `fetch` is a polyfill over XHR, so its requests are recorded by their XHR.
- * - `globalThis.fetch` is wrapped too. A call that sends no XHR on the same stack is a native
- *   `fetch` (Expo's, for example) and gets its own record with `via: 'fetch-native'`. When the
- *   global fetch is Expo's own, that is the whole story. Only an app wrapper below this one needs
- *   matching: a wrapper that awaits before it calls React Native's fetch sends the XHR later, and
- *   that XHR removes the pending record of its fetch, so the request still has one record. When
- *   the XHR was not matched at send (a wrapper that returns one in-flight request to several
- *   callers, for example), the fetch record is removed once it settles and an XHR record of the
- *   same request ran while it was pending.
+ * Each request is recorded where it leaves JavaScript, so a request of XHR or of React Native's or
+ * Expo's `fetch` has one record whatever the app's own wrappers of `fetch` do with it:
+ * - `XMLHttpRequest.prototype` is patched: axios and every other XHR user, and React Native's
+ *   `fetch`, which is a polyfill over XHR.
+ * - Expo's native `fetch` (`expo/fetch`, the global `fetch` on Expo SDK 56+) sends each request
+ *   through a `NativeRequest` of its native module, which is patched too.
+ * - A fetch library that calls React Native's native network module itself (react-native-fetch-api)
+ *   sends neither. It also installs its own global Response class, and only then is
+ *   `globalThis.fetch` wrapped: a call is recorded once it resolves with that Response.
  * - Records stay in `__argent_network_log` / `__argent_network_by_id`, which the read scripts
  *   below serve.
  *
@@ -35,33 +34,12 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   g.__argent_network_by_id = byId;
   var nextId = 1;
   var bufferedChars = 0;
-  // The wrapped fetch call running on the current stack, if any.
-  var activeFetch = null;
-  // Native-fetch records whose promise has not settled. A fetch wrapper that awaits before it
-  // calls React Native's fetch sends the XHR from a later stack, and that XHR takes the record over.
-  var pendingNative = [];
-  // Set once a fetch resolves with a Response that React Native's fetch did not build: fetch is
-  // native here, so an XHR never belongs to a fetch record.
-  var nativeFetchSeen = false;
-  // The XHR record of each response object (Blob or ArrayBuffer) an XHR produced. React Native's
-  // fetch builds its Response around that object, which ties the fetch to its XHR.
-  var xhrByBody = new WeakMap();
-  // The native-fetch record that first resolved with each value. A wrapper that hands one
-  // in-flight request to several callers resolves them all with one object: one record.
-  var nativeByValue = new WeakMap();
-  // For each XHR record: whether React Native's fetch sent it, and the wrapped fetch call it was
-  // sent in (null outside any).
-  var xhrSource = new WeakMap();
+  // XHRs and Expo requests sent so far.
+  var transportSends = 0;
 
   function bodyChars(entry) {
     return (entry.responseBody ? entry.responseBody.length : 0) +
       (entry.request.postData ? entry.request.postData.length : 0);
-  }
-
-  function forgetPending(entry) {
-    for (var i = 0; i < pendingNative.length; i++) {
-      if (pendingNative[i].entry === entry) { pendingNative.splice(i, 1); return; }
-    }
   }
 
   function evict() {
@@ -69,152 +47,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var removed = log.shift();
       bufferedChars -= bodyChars(removed);
       delete byId[removed.requestId];
-      // A fetch whose promise never settles must not keep its record, nor a place in the list.
-      if (removed.via === 'fetch-native') forgetPending(removed);
     }
-  }
-
-  // Puts back a record a claim removed: its fetch turned out not to run over that XHR.
-  function restore(rec) {
-    var entry = rec.entry;
-    if (byId[entry.requestId] === entry) return;
-    var at = log.length;
-    while (at > 0 && log[at - 1].id > entry.id) at--;
-    log.splice(at, 0, entry);
-    byId[entry.requestId] = entry;
-    bufferedChars += bodyChars(entry);
-    evict();
-  }
-
-  // Removes a record that another record turned out to cover.
-  function discard(entry) {
-    var at = log.indexOf(entry);
-    if (at === -1) return;
-    log.splice(at, 1);
-    bufferedChars -= bodyChars(entry);
-    delete byId[entry.requestId];
-  }
-
-  // React Native's fetch sets the '_' query parameter of a GET or HEAD with cache 'no-store' or 'no-cache'.
-  function withoutCacheBuster(url) {
-    return url.replace(/([?&])_=[^&]*/, '$1_=');
-  }
-
-  function withCacheBuster(url) {
-    return /[?&]_=/.test(url) ? withoutCacheBuster(url) : url + (url.indexOf('?') === -1 ? '?' : '&') + '_=';
-  }
-
-  // Whether an XHR's method and URL are those of a fetch record, once React Native's fetch has
-  // added its cache buster to the URL.
-  function sameRequest(entry, method, url) {
-    if (entry.request.method !== method) return false;
-    if (entry.request.url === url) return true;
-    return (method === 'GET' || method === 'HEAD') && withCacheBuster(entry.request.url) === withoutCacheBuster(url);
-  }
-
-  // Whether an XHR is one React Native's fetch sends: it reads every response as a blob (as an
-  // arraybuffer where Blob is unavailable) and sets these handlers. axios sets onloadend, not onload.
-  function isPolyfillXhr(xhr) {
-    return (xhr.responseType === 'blob' || xhr.responseType === 'arraybuffer') && typeof xhr.onload === 'function' &&
-      typeof xhr.onabort === 'function' && typeof xhr.ontimeout === 'function';
-  }
-
-  // Finds the pending native-fetch record of the fetch that sent this XHR, and removes it. The
-  // record comes back (restore) if its fetch then resolves with a Response no XHR produced.
-  // Called for an XHR of React Native's fetch sent outside any wrapped fetch call, which is where
-  // a pending fetch record sends its XHR; an XHR sent inside a fetch call is that call's own.
-  function claimNativeFetch(method, url) {
-    if (nativeFetchSeen || !pendingNative.length) return false;
-    var pick = -1;
-    var sameMethod = -1;
-    var oldest = -1;
-    for (var i = 0; i < pendingNative.length; i++) {
-      var e = pendingNative[i].entry;
-      if (sameRequest(e, method, url)) { pick = i; break; }
-      // A wrapper can also change the URL, or the method: the oldest record with this method
-      // stands in, else the oldest record.
-      if (sameMethod === -1 && e.request.method === method) sameMethod = i;
-      if (oldest === -1) oldest = i;
-    }
-    if (pick === -1) pick = sameMethod !== -1 ? sameMethod : oldest;
-    if (pick === -1) return false;
-    var rec = pendingNative.splice(pick, 1)[0];
-    rec.claimed = true;
-    discard(rec.entry);
-    return true;
-  }
-
-  // Finds an XHR record that was in flight at some point while this fetch was pending and is of
-  // the same request: the XHR of the fetch itself, or the one in-flight request a wrapper handed
-  // to several callers. The XHR that produced the body of the Response React Native's fetch built
-  // is that XHR whatever the wrapper did to the URL or the method. Any other XHR must be one React
-  // Native's fetch sent, or one sent inside this very fetch call (a fetch built on its own XHR):
-  // an axios request to the same URL at the same time is a request of its own. The XHR record
-  // stands for the request; the fetch record goes.
-  function coveredByXhr(rec, settledAt, failedOnly, response) {
-    var e = rec.entry;
-    var body = response ? response._bodyInit : undefined;
-    var owner = body && typeof body === 'object' ? xhrByBody.get(body) : undefined;
-    for (var i = log.length - 1; i >= 0; i--) {
-      var x = log[i];
-      if (x.via !== 'xhr' || (failedOnly && x.state !== 'failed')) continue;
-      var started = x.timestamp * 1000;
-      if (started > settledAt + 1) continue;
-      var ended = x.state === 'pending' || typeof x.durationMs !== 'number' ? Infinity : started + x.durationMs;
-      if (ended < rec.startedAt - 1) continue;
-      if (x !== owner) {
-        var source = xhrSource.get(x);
-        if (!source || !(source.polyfill || source.call === rec.call)) continue;
-        if (!sameRequest(e, x.request.method, x.request.url)) continue;
-      }
-      x.resourceType = 'Fetch';
-      discard(e);
-      return true;
-    }
-    return false;
-  }
-
-  // Whether another fetch call, pending at the same time, already resolved with this very value:
-  // the app's wrapper shared one request between them. A value served again later, from a cache,
-  // is the later call's own. A native Response comes from one request whatever URL each call
-  // named (a wrapper that sends '/me' on as 'https://api.test/me' through the global fetch); a
-  // value such as parsed JSON must also come from the same request.
-  function sharedValue(rec, value, kind) {
-    if (!value || typeof value !== 'object') return false;
-    var owner = nativeByValue.get(value);
-    if (owner === undefined) { nativeByValue.set(value, rec); return false; }
-    if (owner === rec) return false;
-    if (kind !== 'native' && !sameRequest(owner.entry, rec.entry.request.method, rec.entry.request.url)) return false;
-    var ownerEnded = owner.entry.state === 'pending' || typeof owner.entry.durationMs !== 'number'
-      ? Infinity : owner.startedAt + owner.entry.durationMs;
-    if (ownerEnded < rec.startedAt - 1) return false;
-    discard(rec.entry);
-    return true;
-  }
-
-  // 'polyfill': React Native's fetch built it (whatwg-fetch sets _bodyInit). 'native': a Response
-  // from another fetch. 'other': a value that says nothing about the fetch.
-  function responseKind(response) {
-    try {
-      if (!response || typeof response !== 'object') return 'other';
-      if ('_bodyInit' in response) return 'polyfill';
-      // A native Response streams its body (Expo's does; whatwg-fetch has no body stream). A class an
-      // app wraps React Native's Response in has clone() too, so clone() alone says nothing.
-      return typeof response.clone === 'function' && hasBodyStream(response) ? 'native' : 'other';
-    } catch (e) { return 'other'; }
-  }
-
-  // Whether a Response has a body stream, without reading body: on Expo SDK 55 and older, reading
-  // it starts the native stream, and the app then reads an empty body.
-  function hasBodyStream(response) {
-    var depth = 0;
-    for (var o = response; o && depth < 10; o = Object.getPrototypeOf(o), depth++) {
-      var d = Object.getOwnPropertyDescriptor(o, 'body');
-      if (!d) continue;
-      if (typeof d.get === 'function') return true;
-      return !!d.value && typeof d.value === 'object' && typeof d.value.getReader === 'function';
-    }
-    return false;
   }
 
   // Runs on the app's JS thread for every text response. The loop costs about 200 ms per MiB in
@@ -282,35 +115,52 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return '[FormData] ' + parts.join('; ');
   }
 
-  function describeBody(body) {
-    if (body == null) return undefined;
-    if (typeof body === 'string') return body;
-    try {
-      if (typeof FormData === 'function' && body instanceof FormData) return describeFormData(body);
-      if (typeof Blob === 'function' && body instanceof Blob) return '[Blob ' + body.size + ' bytes]';
-      if (typeof ArrayBuffer === 'function' && (body instanceof ArrayBuffer || ArrayBuffer.isView(body))) {
-        return '[binary ' + body.byteLength + ' bytes]';
-      }
-    } catch (e) {}
-    return undefined;
+  // The text of UTF-8 bytes, cut at BODY_CAP on a character boundary; undefined when they are not
+  // UTF-8 or no decoder exists (React Native has none; Expo installs one).
+  function utf8Text(bytes) {
+    if (typeof TextDecoder !== 'function') return undefined;
+    var end = Math.min(bytes.byteLength, BODY_CAP);
+    if (end < bytes.byteLength) while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, end)); } catch (e) { return undefined; }
   }
 
-  function createRecord(via, resourceType, method, url, headers, body, startedAt) {
+  // Expo hands its native request the body as bytes: they show as text when they are UTF-8.
+  function describeBytes(bytes) {
+    var text = utf8Text(bytes);
+    return text === undefined ? { text: '[binary ' + bytes.byteLength + ' bytes]', cut: false } : { text: text, cut: bytes.byteLength > BODY_CAP };
+  }
+
+  // What a request body shows, and whether that is only its start.
+  function describeBody(body) {
+    var text;
+    try {
+      if (body == null) return undefined;
+      if (typeof body === 'string') text = body;
+      else if (typeof FormData === 'function' && body instanceof FormData) text = describeFormData(body);
+      else if (typeof Blob === 'function' && body instanceof Blob) text = '[Blob ' + body.size + ' bytes]';
+      else if (typeof Uint8Array === 'function' && body instanceof Uint8Array) return describeBytes(body);
+      else if (typeof ArrayBuffer === 'function' && (body instanceof ArrayBuffer || ArrayBuffer.isView(body))) {
+        text = '[binary ' + body.byteLength + ' bytes]';
+      }
+    } catch (e) {}
+    if (text === undefined) return undefined;
+    return text.length > BODY_CAP ? { text: text.slice(0, BODY_CAP), cut: true } : { text: text, cut: false };
+  }
+
+  function createRecord(resourceType, method, url, headers, body, startedAt) {
     var id = nextId++;
     var entry = {
       id: id,
       requestId: 'rn-net-' + id,
       state: 'pending',
-      via: via,
       resourceType: resourceType,
       request: { url: url, method: method, headers: headers },
-      timestamp: startedAt / 1000,
-      wallTime: startedAt / 1000
+      timestamp: startedAt / 1000
     };
     var postData = describeBody(body);
-    if (postData !== undefined) {
-      entry.request.postData = postData.length > BODY_CAP ? postData.slice(0, BODY_CAP) : postData;
-      if (postData.length > BODY_CAP) entry.request.postDataTruncated = true;
+    if (postData) {
+      entry.request.postData = postData.text;
+      if (postData.cut) entry.request.postDataTruncated = true;
     }
     log.push(entry);
     byId[entry.requestId] = entry;
@@ -324,9 +174,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     e.response = { url: url || e.request.url, status: status, statusText: statusText || '', headers: headers, mimeType: mimeTypeOf(headers) };
   }
 
-  // Ends a request that got a response and stores its body.
-  function complete(rec, body, byteLength, truncated) {
+  // Stores the body of a response, once.
+  function storeBody(rec, body, byteLength, truncated) {
     var e = rec.entry;
+    if (e.responseBody !== undefined || e.encodedDataLength !== undefined) return;
     if (typeof byteLength === 'number') e.encodedDataLength = byteLength;
     if (typeof body === 'string') {
       if (body.length > BODY_CAP) { body = body.slice(0, BODY_CAP); truncated = true; }
@@ -334,7 +185,14 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       if (truncated) e.bodyTruncated = true;
       if (byId[e.requestId] === e) { bufferedChars += body.length; evict(); }
     }
-    e.state = 'finished';
+  }
+
+  // Ends a request that got a response and stores its body. A request that failed meanwhile (the
+  // app aborted it while its body was read) stays failed.
+  function complete(rec, body, byteLength, truncated) {
+    if (rec.entry.state === 'failed') return;
+    storeBody(rec, body, byteLength, truncated);
+    rec.entry.state = 'finished';
   }
 
   function fail(rec, errorText) {
@@ -348,8 +206,8 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var XHR = g.XMLHttpRequest;
   if (typeof XHR === 'function') {
     var slots = new WeakMap();
-    // The end handler of each XHR's live request.
-    var enders = new WeakMap();
+    // The record and the end handler of each XHR's live request.
+    var live = new WeakMap();
     var proto = XHR.prototype;
     var origOpen = proto.open;
     var origSetRequestHeader = proto.setRequestHeader;
@@ -360,6 +218,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var raw;
       try { raw = xhr.getAllResponseHeaders(); } catch (e) {}
       setResponse(rec, xhr.responseURL, xhr.status, xhr.statusText, parseHeaders(raw));
+    };
+
+    // An XHR that React Native's fetch sends: it reads every response as a blob (as an arraybuffer
+    // where Blob is unavailable) and sets these handlers. axios sets onloadend, not onload.
+    var isFetchXhr = function(xhr) {
+      return (xhr.responseType === 'blob' || xhr.responseType === 'arraybuffer') && typeof xhr.onload === 'function' &&
+        typeof xhr.onabort === 'function' && typeof xhr.ontimeout === 'function';
     };
 
     // iOS resolves readAsText with null when the cut splits a UTF-8 character, so step back a
@@ -395,11 +260,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         if (typeof json === 'string') return complete(rec, json, undefined, false);
       } else if (type === 'arraybuffer') {
         var buffer = xhr.response;
-        if (buffer && typeof buffer === 'object') xhrByBody.set(buffer, rec.entry);
         return complete(rec, undefined, buffer ? buffer.byteLength : undefined, false);
       } else if (type === 'blob') {
         var blob = xhr.response;
-        if (blob && typeof blob === 'object') xhrByBody.set(blob, rec.entry);
         if (blob) return readBlob(rec, blob, blob.size, Math.min(blob.size, BODY_CAP));
       }
       complete(rec, undefined, undefined, false);
@@ -419,7 +282,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         // replaced, and the abort patch below recorded how that request ended.
         if (!force && xhr.readyState !== 4) return;
         for (var type in handlers) xhr.removeEventListener(type, handlers[type]);
-        if (enders.get(xhr) === end) enders.delete(xhr);
+        if (live.has(xhr) && live.get(xhr).end === end) live.delete(xhr);
         if (outcome === 'abort') return fail(rec, 'aborted');
         if (outcome === 'timeout') return fail(rec, 'timeout');
         if (outcome === 'error') {
@@ -432,7 +295,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         rec.entry.durationMs = Date.now() - rec.startedAt;
         try { readBody(rec, xhr); } catch (e) { complete(rec, undefined, undefined, false); }
       };
-      enders.set(xhr, end);
+      live.set(xhr, { rec: rec, end: end });
       // RN switches an XHR to incremental response updates once it has a readystatechange
       // listener. Restore the flag so these listeners do not change how the app gets data.
       var incremental = xhr._incrementalEvents;
@@ -441,7 +304,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     };
 
     proto.open = function(method, url) {
-      var orphan = enders.get(this);
+      var orphan = live.get(this);
       var previous = slots.get(this);
       // Set before the original open, which dispatches readystatechange: a handler may send from there.
       slots.set(this, { method: String(method || 'GET').toUpperCase(), url: String(url), headers: {} });
@@ -456,7 +319,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       // Open succeeds only on a reset XHR, so a request still listening here can never end: RN reset
       // it without an end event reaching these listeners (a re-send from inside an abort's own
       // handlers, or an app listener that stopped the event). Drop it before it takes a response.
-      if (orphan) orphan('abort', true);
+      if (orphan) orphan.end('abort', true);
       return result;
     };
 
@@ -471,17 +334,11 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
 
     proto.send = function(body) {
       var slot = slots.get(this);
-      var fetchCall = activeFetch;
       var startedAt = Date.now();
       var result = origSend.apply(this, arguments);
       if (!slot || !slot.headers) return result;
-      // A fetch that sends React Native's XHR on the same stack runs over XHR: this record is its
-      // only one. Another XHR sent there (a log beacon of a wrapper, say) is not the fetch's.
-      var polyfillXhr = isPolyfillXhr(this);
-      if (fetchCall && polyfillXhr) fetchCall.sentXhr = true;
-      var ofFetch = fetchCall ? polyfillXhr : polyfillXhr && claimNativeFetch(slot.method, slot.url);
-      var rec = createRecord('xhr', ofFetch ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
-      xhrSource.set(rec.entry, { polyfill: polyfillXhr, call: fetchCall });
+      var rec = createRecord(isFetchXhr(this) ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
+      transportSends++;
       slot.headers = null;
       listen(this, rec);
       return result;
@@ -490,119 +347,199 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     // To reuse an XHR from its own handler, the app aborts it first, and RN runs that handler
     // before these listeners. Record a request that has already ended before abort resets the XHR.
     // RN keeps _aborted set until the next open, so an abort called from a handler of an abort
-    // still counts as one.
+    // still counts as one. An app can also abort from its own handler of HEADERS_RECEIVED, which
+    // runs before the listener that records the headers: keep them.
     proto.abort = function() {
-      var end = enders.get(this);
-      if (end && this.readyState === 4) {
-        end(this._aborted ? 'abort' : this._hasError ? (this._timedOut ? 'timeout' : 'error') : 'load');
+      var request = live.get(this);
+      if (request && this.readyState >= 2 && !request.rec.entry.response) onHeaders(this, request.rec);
+      if (request && this.readyState === 4) {
+        request.end(this._aborted ? 'abort' : this._hasError ? (this._timedOut ? 'timeout' : 'error') : 'load');
       }
       return origAbort.apply(this, arguments);
     };
   }
 
-  // ── fetch ──
-  var origFetch = g.fetch;
-  if (typeof origFetch === 'function') {
-    // Expo marks the fetch it installs as the global one. With no wrapper of the app below this
-    // one, each call is one native request with no XHR under it, so a record needs no matching.
-    var expoGlobalFetch = false;
-    try { expoGlobalFetch = origFetch[Symbol.for('expo.builtin')] === true; } catch (e) {}
+  // ── Expo's native fetch ──
+  // expo/fetch builds each request as new NativeRequest(response) and sends it with start(url, init,
+  // body), whether the app calls it as the global fetch or imports it. The app gets that response
+  // once start resolves.
+  var expoFetch;
+  try { expoFetch = g.expo && g.expo.modules && g.expo.modules.ExpoFetchModule; } catch (e) {}
 
-    // Returns the promise the app gets. It settles like the native one, so a rejection the app
-    // never handles is still reported as unhandled.
-    var observeNativeFetch = function(input, init, startedAt, promise, call) {
-      var method = (init && init.method) || (input && typeof input === 'object' && input.method) || 'GET';
-      var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
-      var headers = headersObject(init && init.headers !== undefined ? init.headers : input && input.headers);
-      var rec = createRecord('fetch-native', 'Fetch', String(method).toUpperCase(), url, headers, init && init.body, startedAt);
-      rec.call = call;
-      if (!expoGlobalFetch) pendingNative.push(rec);
-      // Returns true when an XHR took the record over.
-      function settle() {
-        var at = pendingNative.indexOf(rec);
-        if (at !== -1) pendingNative.splice(at, 1);
-        return rec.claimed === true;
-      }
-      return promise.then(function(response) {
-        var kind = responseKind(response);
-        if (!expoGlobalFetch) {
-          if (settle()) {
-            if (kind !== 'native') return response;
-            // The XHR that took this record was another fetch's: the record is back.
-            restore(rec);
-          } else if (sharedValue(rec, response, kind)) {
-            return response;
-          } else if (kind !== 'native') {
-            // This fetch may have run over an XHR after all, one that was not matched at send. A
-            // value that is no Response (a wrapper returning parsed JSON, say) carries no body to match.
-            if (coveredByXhr(rec, Date.now(), false, kind === 'polyfill' ? response : undefined)) return response;
-          }
-        }
-        if (kind === 'native') nativeFetchSeen = true;
-        if (response == null || typeof response.status !== 'number') {
-          // The wrapper resolved a value that is no Response (parsed JSON, say): the request ran,
-          // but nothing of its response can be read.
-          rec.entry.durationMs = Date.now() - rec.startedAt;
-          complete(rec, undefined, undefined, false);
-          return response;
-        }
-        try {
-          setResponse(rec, response.url, response.status, response.statusText, headersObject(response.headers));
-          // Blob size is the decoded entity's byte length; Content-Length is wrong for HEAD, 304 and compression.
-          var sizeClone = response.clone();
-          var bodyClone = response.clone();
-          var sizePromise = typeof sizeClone.blob === 'function'
-            ? sizeClone.blob().then(function(blob) { return blob && typeof blob.size === 'number' ? blob.size : undefined; }, function() { return undefined; })
-            : Promise.resolve(undefined);
-          var bodyPromise = bodyClone.text().then(null, function() { return undefined; });
-          Promise.all([sizePromise, bodyPromise]).then(function(values) {
-            rec.entry.durationMs = Date.now() - rec.startedAt;
-            complete(rec, values[1], values[0], false);
-          });
-        } catch (e) {
-          rec.entry.durationMs = Date.now() - rec.startedAt;
-          complete(rec, undefined, undefined, false);
-        }
-        return response;
-      }, function(err) {
-        // A rejection carries no Response to tell React Native's fetch from a native one, so a
-        // failed XHR of the same request that overlapped this fetch is taken as its own. A native
-        // fetch and an XHR to one URL at one time, both failing, then count once. Two calls that
-        // reject with one error object shared one request, like two calls resolving one Response.
-        if (expoGlobalFetch || (!settle() && !sharedValue(rec, err, 'native') && !coveredByXhr(rec, Date.now(), true))) {
-          fail(rec, err ? String(err.message || err) : 'Network error');
-        }
-        throw err;
+  // Hands each result of an object's method to tap as well. The caller gets a promise that settles
+  // like the original, so a rejection it never handles is still reported as unhandled.
+  function tapMethod(target, name, tap) {
+    var method = target[name];
+    if (typeof method !== 'function') return;
+    target[name] = function() {
+      var result = method.apply(this, arguments);
+      if (!result || typeof result.then !== 'function') return result;
+      return result.then(function(value) {
+        try { tap(value); } catch (e) {}
+        return value;
       });
     };
+  }
 
-    // The promises of calls that React Native's fetch recorded by their XHR. A wrapper of the app
-    // that hands one of them to a later call, which sends no XHR, shares that request. A promise of
-    // a native fetch proves nothing: the later call may still have sent a request of its own.
-    var xhrPromises = new WeakSet();
+  // Native Expo hands a body out once, so reading it here, or through a clone, would take it from the
+  // app or make it wait. The body is taken as the app reads it: its text() or arrayBuffer() (json(),
+  // blob() and bytes() go through them), or the chunks of its body stream. A body the app never
+  // reads is not recorded. The native side announces the end of every request with
+  // readyForJSFinalization, a failed one too, and that event can come before start rejects: the
+  // record ends only once start resolved.
+  function observeExpoResponse(rec, response, started) {
+    var chunks = [];
+    var kept = 0;
+    var streamed = 0;
+    var endedAt = 0;
+    var responded = false;
+    // 3 bytes past the cap let utf8Text step back to a character boundary.
+    var take = function(data) {
+      if (!data || typeof data.byteLength !== 'number') return;
+      var view = ArrayBuffer.isView(data) ? data : new Uint8Array(data);
+      streamed += view.byteLength;
+      if (kept >= BODY_CAP + 3) return;
+      chunks.push(new Uint8Array(view.buffer.slice(view.byteOffset, view.byteOffset + Math.min(view.byteLength, BODY_CAP + 3 - kept))));
+      kept += chunks[chunks.length - 1].byteLength;
+    };
+    // A whole body, which can come after the request ended.
+    var takeWhole = function(data) {
+      if (!data || typeof data.byteLength !== 'number' || rec.entry.state === 'failed') return;
+      var bytes = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
+      storeBody(rec, utf8Text(bytes), bytes.byteLength, bytes.byteLength > BODY_CAP);
+    };
+    var onData = function(data) { take(data); };
+    var onFail = function(error) { if (rec.entry.state === 'pending') fail(rec, String(error)); };
+    var finish = function() {
+      if (!endedAt || !responded || rec.entry.state !== 'pending') return;
+      rec.entry.durationMs = endedAt - rec.startedAt;
+      if (!streamed) return complete(rec, undefined, undefined, false);
+      var bytes = new Uint8Array(kept);
+      for (var i = 0, at = 0; i < chunks.length; at += chunks[i].byteLength, i++) bytes.set(chunks[i], at);
+      complete(rec, utf8Text(bytes), streamed, streamed > BODY_CAP);
+    };
+    var onEnd = function() {
+      try { response.removeListener('readyForJSFinalization', onEnd); } catch (e) {}
+      endedAt = Date.now();
+      finish();
+    };
+    // Expo drops the stream listeners itself when the request ends.
+    response.addListener('didReceiveResponseData', onData);
+    response.addListener('didFailWithError', onFail);
+    response.addListener('readyForJSFinalization', onEnd);
+    // startStreaming returns the whole body when it completed before the app opened its stream (on
+    // iOS, SDK 55 resolves fetch only then), else null and the chunks follow as events.
+    tapMethod(response, 'startStreaming', takeWhole);
+    tapMethod(response, 'arrayBuffer', takeWhole);
+    tapMethod(response, 'text', function(text) {
+      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, utf8Length(text), false);
+    });
+    started.then(function() {
+      if (rec.entry.state === 'failed') return;
+      setResponse(rec, response.url, response.status, response.statusText, headersObject(response.headers));
+      responded = true;
+      finish();
+    }, function(err) {
+      if (rec.entry.state === 'pending') fail(rec, err ? String(err.message || err) : 'Network error');
+    });
+  }
 
+  if (expoFetch && typeof expoFetch.NativeRequest === 'function' && typeof expoFetch.NativeRequest.prototype.start === 'function' &&
+    typeof Proxy === 'function' && typeof Reflect === 'object') {
+    var NativeRequest = expoFetch.NativeRequest;
+    var nativeProto = NativeRequest.prototype;
+    var origStart = nativeProto.start;
+    var origCancel = nativeProto.cancel;
+    // The response each request fills, and the record of each request sent.
+    var responses = new WeakMap();
+    var nativeRecords = new WeakMap();
+    try {
+      expoFetch.NativeRequest = new Proxy(NativeRequest, {
+        construct: function(target, args, newTarget) {
+          var request = Reflect.construct(target, args, newTarget);
+          if (args[0] && typeof args[0] === 'object') responses.set(request, args[0]);
+          return request;
+        }
+      });
+    } catch (e) {}
+    if (expoFetch.NativeRequest !== NativeRequest) {
+      nativeProto.start = function(url, init, body) {
+        var startedAt = Date.now();
+        var promise = origStart.apply(this, arguments);
+        var response = responses.get(this);
+        if (!response || !promise || typeof promise.then !== 'function') return promise;
+        try {
+          var rec = createRecord('Fetch', String((init && init.method) || 'GET').toUpperCase(), String(url),
+            headersObject(init && init.headers), body, startedAt);
+          transportSends++;
+          nativeRecords.set(this, rec);
+          observeExpoResponse(rec, response, promise);
+        } catch (e) {}
+        return promise;
+      };
+      // expo/fetch cancels the request when the app aborts it, also while the app reads the body.
+      if (typeof origCancel === 'function') {
+        nativeProto.cancel = function() {
+          var rec = nativeRecords.get(this);
+          if (rec && rec.entry.state === 'pending') fail(rec, 'aborted');
+          return origCancel.apply(this, arguments);
+        };
+      }
+    }
+  }
+
+  // ── Another fetch library ──
+  // react-native-fetch-api (installed by react-native-polyfill-globals) calls React Native's native
+  // network module itself, so it sends neither an XHR nor an Expo request. It replaces the global
+  // Response class too, while React Native and Expo keep whatwg-fetch's (it has _initBody). Only then
+  // is the global fetch wrapped, and only a Response of that class gets a record: an app's own class
+  // around the Response of React Native's or Expo's fetch never does.
+  var LibResponse = g.Response;
+  var origFetch = g.fetch;
+  var libFetch = false;
+  try {
+    libFetch = typeof origFetch === 'function' && typeof LibResponse === 'function' && !!LibResponse.prototype &&
+      !('_initBody' in LibResponse.prototype);
+  } catch (e) {}
+  if (libFetch) {
+    // The last calls recorded: a call with the same method and URL that overlaps one of them may be a
+    // caller the app's wrapper handed a copy of that request's Response, so it gets no record of its own.
+    var libCalls = [];
+    var recorded = new WeakSet();
     g.fetch = function fetch(input, init) {
-      var call = { sentXhr: false, nested: null };
-      var outer = activeFetch;
-      var startedAt = Date.now();
-      activeFetch = call;
-      var promise;
-      try {
-        promise = origFetch.apply(g, arguments);
-      } finally {
-        activeFetch = outer;
-      }
+      var call = { startedAt: Date.now(), sentBefore: transportSends };
+      var promise = origFetch.apply(g, arguments);
       if (!promise || typeof promise.then !== 'function') return promise;
-      var result = promise;
-      if (call.sentXhr) {
-        try { xhrPromises.add(promise); } catch (e) {}
-      } else if (!xhrPromises.has(promise) && (call.nested === null || call.nested.indexOf(promise) === -1)) {
-        // A wrapper that returns the promise of a call it made through the global fetch on this
-        // stack (this function again) made one request, which that call recorded.
-        try { result = observeNativeFetch(input, init, startedAt, promise, call); } catch (e) {}
+      // The app gets a promise that settles like the original, so a rejection it never handles is
+      // still reported as unhandled.
+      return promise.then(function(response) {
+        try { recordLibFetch(call, input, init, response); } catch (e) {}
+        return response;
+      });
+    };
+    var recordLibFetch = function(call, input, init, response) {
+      // A call during which an XHR or Expo request was sent may have run over it (an app wrapper that
+      // builds this Response from React Native's fetch), and that request has its record.
+      if (call.sentBefore !== transportSends || !(response instanceof LibResponse) || recorded.has(response)) return;
+      recorded.add(response);
+      var method = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase();
+      var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
+      call.endedAt = Date.now();
+      for (var i = libCalls.length - 1; i >= 0; i--) {
+        var other = libCalls[i];
+        if (other.method === method && other.url === url && other.startedAt <= call.endedAt && call.startedAt <= other.endedAt) return;
       }
-      if (outer) (outer.nested || (outer.nested = [])).push(result);
-      return result;
+      call.method = method;
+      call.url = url;
+      libCalls.push(call);
+      if (libCalls.length > 50) libCalls.shift();
+      var headers = headersObject(init && init.headers !== undefined ? init.headers : input && input.headers);
+      var rec = createRecord('Fetch', method, url, headers, init && init.body, call.startedAt);
+      setResponse(rec, response.url, response.status, response.statusText, headersObject(response.headers));
+      // The library shares its body stream with every clone when it streams text, so reading a clone
+      // would take the body from the app: the body is never read.
+      rec.entry.durationMs = call.endedAt - call.startedAt;
+      complete(rec, undefined, undefined, false);
     };
   }
 
@@ -672,10 +609,8 @@ export function makeNetworkDetailReadScript(requestId: string): string {
     resourceType: entry.resourceType,
     encodedDataLength: entry.encodedDataLength,
     timestamp: entry.timestamp,
-    wallTime: entry.wallTime,
     durationMs: entry.durationMs,
     errorText: entry.errorText,
-    initiator: entry.initiator,
     responseBody: entry.responseBody,
     bodyTruncated: entry.bodyTruncated
   });
