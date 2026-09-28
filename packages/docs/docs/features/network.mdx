@@ -54,6 +54,13 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the record. 
 
 - Argent starts the capture at one of these three moments: the agent reads the JS runtime record, Argent attaches to the Chromium app, or you activate the native inspection. Argent does not capture the earlier requests. Do the operation again after the capture starts.
 - A reload or a restart of the app clears the JS runtime record. Argent starts the capture again when the agent reads the record.
+- In React Native, Argent records each request one time when the app does not replace `fetch()`. A function of the app that replaces `fetch()` also gives one record for each request when it calls the original `fetch()` immediately and resolves with its response. Other functions can give a wrong number of records in these cases:
+  - The function sends the request on through the global `fetch()` again. The request can have two records until it ends. If the function also changes the URL, the request can keep two records.
+  - The function resolves before it sends the request. Argent can keep two records.
+  - The function gives one request of a native `fetch()` to several callers. The request has one record for each caller until it ends. If each caller gets a copy of the `Response`, Argent keeps these records.
+  - The app uses a native `fetch()` and the `fetch()` of React Native. A request of React Native can have two records until it ends. If the function changes the URL or the method, a request can keep two records. Argent can also lose the record of a native request.
+- If a function of the app that replaces a native `fetch()` resolves a value that is not a `Response`, the record of the request has no response.
+- A function of the app that keeps a reference to the native `fetch()` from before the capture started can send requests through that reference. Argent does not record these requests. API clients that the app creates at startup often keep such a reference. Argent records the requests through the global `fetch()` and through `XMLHttpRequest`.
 - The record keeps the most recent requests only. The limits are 2000 requests for the JS layer and 1000 requests for Chromium. The JS layer also removes the oldest requests when their bodies contain more than 50 MB of text. The JS layer keeps approximately the first 1 MB of each body. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native record holds fewer than 1000 requests.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
 - The `NSURLProtocol` layer is available on iOS only. On Android, use the JS layer.

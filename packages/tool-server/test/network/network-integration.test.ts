@@ -41,7 +41,13 @@ const networkLog: Array<{
   id: number;
   requestId: string;
   state: string;
-  request: { url: string; method: string; headers: Record<string, string> };
+  request: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    postData?: string;
+    postDataTruncated?: boolean;
+  };
   response?: {
     url: string;
     status: number;
@@ -54,6 +60,7 @@ const networkLog: Array<{
   timestamp: number;
   durationMs?: number;
   responseBody?: string;
+  bodyTruncated?: boolean;
 }> = [];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
@@ -498,6 +505,34 @@ describe("NetworkInspector integration (mock server)", () => {
     }
   });
 
+  it("view-network-logs says when a finished request has no captured response", async () => {
+    // The app's fetch wrapper resolved parsed JSON: the interceptor finished the record blind.
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-blind",
+      state: "finished",
+      request: { url: "https://api.example.com/blind", method: "GET", headers: {} },
+      resourceType: "Fetch",
+      timestamp: Date.now() / 1000,
+      durationMs: 12,
+    });
+
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+
+      expect(result).toContain(
+        '{id: rn-net-blind} "GET /blind" finished, response not captured Fetch  12 ms'
+      );
+      expect(result).not.toContain("undefined");
+    } finally {
+      const idx = networkLog.findIndex((e) => e.requestId === "rn-net-blind");
+      if (idx >= 0) networkLog.splice(idx, 1);
+    }
+  });
+
   it("view-network-logs returns page index out-of-range error", async () => {
     const result = (await registry.invokeTool("view-network-logs", {
       port: mockPort,
@@ -645,6 +680,46 @@ describe("NetworkInspector integration (mock server)", () => {
       if (idx >= 0) networkLog.splice(idx, 1);
     }
   });
+
+  it.each([
+    { size: 1500, truncated: false, message: "original size: 1500 chars" },
+    { size: 1_048_576, truncated: true, message: "original size: more than 1048576 chars" },
+  ])(
+    "view-network-request-details cuts a request body of $size chars",
+    async ({ size, truncated, message }) => {
+      const requestId = `rn-net-post-${size}`;
+      networkLog.push({
+        id: networkLog.length,
+        requestId,
+        state: "finished" as const,
+        request: {
+          url: "https://api.example.com/upload",
+          method: "POST",
+          headers: {},
+          postData: "p".repeat(size),
+          ...(truncated ? { postDataTruncated: true } : {}),
+        },
+        resourceType: "XHR",
+        timestamp: Date.now() / 1000,
+        durationMs: 100,
+      });
+
+      try {
+        const result = (await registry.invokeTool("view-network-request-details", {
+          port: mockPort,
+          device_id: "mock-device",
+          requestId,
+        })) as Record<string, unknown>;
+
+        const postData = (result.request as Record<string, unknown>).postData as string;
+        expect(postData).toContain(message);
+        expect(postData.length).toBeLessThan(1200);
+      } finally {
+        const idx = networkLog.findIndex((e) => e.requestId === requestId);
+        if (idx >= 0) networkLog.splice(idx, 1);
+      }
+    }
+  );
 
   it("NetworkInspector cascades teardown when JsRuntimeDebugger is disposed", async () => {
     // Dispose JsRuntimeDebugger — NetworkInspector should also be torn down

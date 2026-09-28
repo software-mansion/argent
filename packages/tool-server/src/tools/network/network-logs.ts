@@ -50,6 +50,9 @@ function formatEntry(entry: LogEntry): string {
     status = entry.errorText ?? "failed";
   } else if (entry.response) {
     status = `${entry.response.status} ${entry.response.statusText}`;
+  } else if (entry.state === "finished") {
+    // The app's fetch wrapper resolved something that is no Response, so nothing of it was read.
+    status = "finished, response not captured";
   } else {
     status = "pending";
   }

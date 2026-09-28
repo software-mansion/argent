@@ -39,8 +39,17 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
   return result;
 }
 
-/** Response body chars kept; the rest is truncated to limit context. */
+/** Body chars kept, of a request or a response; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
+
+/** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
+function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
+  if (postData == null || (postData.length <= MAX_BODY_SIZE && !truncated)) return postData;
+  const originalSize = truncated
+    ? `more than ${postData.length} chars`
+    : `${postData.length} chars`;
+  return `[TRUNCATED — original size: ${originalSize}]\n${postData.slice(0, MAX_BODY_SIZE)}...`;
+}
 
 const zodSchema = z.object({
   port: metroPortField,
@@ -65,6 +74,8 @@ interface RawEntry {
     method: string;
     headers: Record<string, string>;
     postData?: string;
+    /** The interceptor kept only the start of the body. */
+    postDataTruncated?: boolean;
   };
   response?: {
     url: string;
@@ -155,7 +166,7 @@ Returns an error message string if the requestId is not found — use view-netwo
           url: rec.url,
           method: rec.method,
           headers: redactHeaders(rec.requestHeaders),
-          postData: rec.postData,
+          postData: truncatePostData(rec.postData),
         };
       }
       if (rec.status != null) {
@@ -218,7 +229,7 @@ Returns an error message string if the requestId is not found — use view-netwo
         url: entry.request.url,
         method: entry.request.method,
         headers: redactHeaders(entry.request.headers),
-        postData: entry.request.postData,
+        postData: truncatePostData(entry.request.postData, entry.request.postDataTruncated),
       };
     }
 

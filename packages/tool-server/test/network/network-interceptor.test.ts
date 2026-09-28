@@ -1,6 +1,5 @@
 import { isUtf8 } from "node:buffer";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createContext, runInContext, runInNewContext } from "node:vm";
 import { describe, it, expect } from "vitest";
 import {
@@ -19,7 +18,6 @@ interface CapturedRecord {
   state: string;
   via: string;
   resourceType: string;
-  rnRequestId?: number;
   request: {
     url: string;
     method: string;
@@ -91,9 +89,6 @@ class FakeFormData {
 }
 
 interface RuntimeOptions {
-  /** Android assigns RN's request id during send; iOS assigns it once the response arrives. */
-  requestIdAt?: "send" | "response";
-  firstRequestId?: number;
   polyfillFetch?: boolean;
   /** iOS: FileReader.readAsText resolves null for bytes that are not valid UTF-8. */
   readAsTextNullOnInvalidUtf8?: boolean;
@@ -105,19 +100,15 @@ interface RuntimeOptions {
 
 /** A JS context shaped like React Native's: its XHR, FileReader, Blob, FormData and fetch. */
 function createRuntime({
-  requestIdAt = "send",
-  firstRequestId = 1,
   polyfillFetch = false,
   readAsTextNullOnInvalidUtf8 = false,
   liveDispatch = false,
   beforeReadResult,
 }: RuntimeOptions = {}) {
-  let nextRequestId = firstRequestId;
   const sends: FakeXMLHttpRequest[] = [];
   const reads: FakeBlob[] = [];
-  const pushed: Array<Record<string, unknown>> = [];
 
-  /** Models React Native's XMLHttpRequest: event order, request id, responseURL timing and incremental-events flag. */
+  /** Models React Native's XMLHttpRequest: event order, responseURL timing and incremental-events flag. */
   class FakeXMLHttpRequest {
     readyState = 0;
     status = 0;
@@ -130,7 +121,6 @@ function createRuntime({
     declare ontimeout: Listener | null;
     declare onabort: Listener | null;
     declare onreadystatechange: Listener | null;
-    _requestId: number | null = null;
     _incrementalEvents = false;
 
     method = "";
@@ -145,7 +135,6 @@ function createRuntime({
     _aborted = false;
     _hasError = false;
     _timedOut = false;
-    private lateRequestId: number | null = null;
     private responseHeaders: Record<string, string> | undefined;
     private raw: unknown = "";
 
@@ -188,8 +177,6 @@ function createRuntime({
       this.sent = true;
       this.body = body;
       this.incrementalAtSend.push(this._incrementalEvents || !!this.onreadystatechange);
-      if (requestIdAt === "send") this._requestId = nextRequestId++;
-      else this.lateRequestId = nextRequestId++;
       sends.push(this);
     }
 
@@ -246,10 +233,6 @@ function createRuntime({
 
     /** Native side: the response headers arrive. */
     receiveHeaders(status: number, headers: Record<string, string>, responseURL = this.url): void {
-      if (this.lateRequestId !== null) {
-        this._requestId = this.lateRequestId;
-        this.lateRequestId = null;
-      }
       this.status = status;
       this.responseHeaders = headers;
       this.setReadyState(2);
@@ -267,7 +250,6 @@ function createRuntime({
       this.receiveHeaders(status, headers, responseURL);
       this.raw = this.responseType === "blob" ? new FakeBlob([body as string | Uint8Array]) : body;
       this.setReadyState(3);
-      this._requestId = null;
       this.setReadyState(4);
     }
 
@@ -276,15 +258,21 @@ function createRuntime({
       if (this.responseType === "" || this.responseType === "text") this.raw = error;
       this._hasError = true;
       this._timedOut = timedOut;
-      this._requestId = null;
       this.setReadyState(4);
     }
 
     dispatch(type: string): void {
       const list = this.listeners.get(type) ?? [];
       if (liveDispatch) {
-        // event-target-shim walks the live list: a listener added now runs for this event too.
-        for (let i = 0; i < list.length; i++) list[i]!.call(this);
+        // event-target-shim walks the live list: a listener added now runs for this event too,
+        // and removing one does not skip the listener after it.
+        const called = new Set<Listener>();
+        let next: Listener | undefined = list[0];
+        while (next) {
+          called.add(next);
+          next.call(this);
+          next = list.find((listener) => !called.has(listener));
+        }
         return;
       }
       // RN 0.81+ dispatches over a snapshot and skips listeners removed during dispatch.
@@ -306,7 +294,6 @@ function createRuntime({
       this.status = 0;
       this.responseHeaders = undefined;
       this.responseURL = undefined;
-      this._requestId = null;
       this.raw = "";
       this.responseType = "";
       this.sent = false;
@@ -347,14 +334,8 @@ function createRuntime({
     context,
     sends,
     reads,
-    pushed,
     run,
     install: () => JSON.parse(run(NETWORK_INTERCEPTOR_SCRIPT) as string) as unknown,
-    bindPush: () => {
-      context.__argent_network = (payload: string) => {
-        pushed.push(JSON.parse(payload) as Record<string, unknown>);
-      };
-    },
     records: () => JSON.parse(JSON.stringify(context.__argent_network_log)) as CapturedRecord[],
     last: () => sends[sends.length - 1]!,
   };
@@ -431,6 +412,20 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         expect(rt.records()[0]!.encodedDataLength).toBe(encodedDataLength);
       }
     );
+
+    it.each([
+      { counter: "TextEncoder", textEncoder: true },
+      { counter: "the fallback loop", textEncoder: false },
+    ])("counts the UTF-8 bytes of a text body with $counter", ({ textEncoder }) => {
+      const rt = createRuntime();
+      if (textEncoder) rt.context.TextEncoder = TextEncoder;
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/u'); x.send();`);
+      const body = "ascii é ✓ 👋 \ud800";
+      rt.last().respond(200, {}, body);
+
+      expect(rt.records()[0]!.encodedDataLength).toBe(Buffer.byteLength(body));
+    });
 
     it("records only the byte length of an arraybuffer response", () => {
       const rt = createRuntime();
@@ -692,7 +687,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
     });
 
     it("ignores events that reach an XHR after its abort", () => {
-      const rt = createRuntime({ requestIdAt: "response" });
+      const rt = createRuntime();
       rt.install();
       rt.run(
         `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/slow'); x.send(); x.abort();`
@@ -829,6 +824,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         status: 200,
         statusText: "OK",
         headers: new Map([["content-type", "text/plain"]]),
+        body: { getReader: () => undefined },
         clone: () => ({ text: async () => "native", blob: async () => ({ size: 6 }) }),
       });
       rt.install();
@@ -853,7 +849,6 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         responseBody: "native",
         encodedDataLength: 6,
       });
-      expect(rt.records()[0].rnRequestId).toBeUndefined();
     });
 
     it("records a failed native fetch and still rejects the app's promise", async () => {
@@ -909,110 +904,1014 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         });
       }
     );
-  });
 
-  describe("React Native request id", () => {
-    it("records the id Android assigns during send, in the start message", () => {
-      const rt = createRuntime({ requestIdAt: "send" });
-      rt.install();
-      rt.bindPush();
-      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/a'); x.send();`);
-      rt.last().respond(200, {}, "ok");
+    describe("through a wrapper that awaits before it calls fetch", () => {
+      const ASYNC_WRAP = `var inner = fetch; fetch = async function(input, init) { await new Promise(function(r) { setTimeout(r, 0); }); return inner(input, init); };`;
 
-      expect(rt.records()[0]!.rnRequestId).toBe(1);
-      expect(rt.pushed[0]).toMatchObject({ type: "start", rnRequestId: 1 });
-      expect(rt.pushed[1]).toMatchObject({ type: "headers" });
-      expect(rt.pushed[1]).not.toHaveProperty("rnRequestId");
-    });
+      async function sent(rt: ReturnType<typeof createRuntime>, count: number): Promise<void> {
+        for (let i = 0; i < 20 && rt.sends.length < count; i++) await settle();
+        expect(rt.sends).toHaveLength(count);
+      }
 
-    it("records the id iOS assigns only with the response, in the headers message", () => {
-      const rt = createRuntime({ requestIdAt: "response" });
-      rt.install();
-      rt.bindPush();
-      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/i'); x.send();`);
-      rt.last().respond(200, {}, "ok");
+      it("records the request once, through its XHR", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(ASYNC_WRAP);
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://api.test/wrapped', { method: 'POST', body: 'q' })`
+        ) as Promise<unknown>;
+        expect(rt.records()).toMatchObject([{ via: "fetch-native", state: "pending" }]);
+        await sent(rt, 1);
 
-      expect(rt.records()[0]!.rnRequestId).toBe(1);
-      expect(rt.pushed[0]).toMatchObject({ type: "start" });
-      expect(rt.pushed[0]).not.toHaveProperty("rnRequestId");
-      expect(rt.pushed[1]).toMatchObject({ type: "headers", rnRequestId: 1 });
-    });
-
-    it("keeps an id of 0", () => {
-      const rt = createRuntime({ requestIdAt: "response", firstRequestId: 0 });
-      rt.install();
-      rt.bindPush();
-      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/zero'); x.send();`);
-      rt.last().respond(200, {}, "ok");
-
-      expect(rt.records()[0]!.rnRequestId).toBe(0);
-      expect(rt.pushed[1]).toMatchObject({ type: "headers", rnRequestId: 0 });
-    });
-
-    it("takes the id from the response when a reused XHR still holds an aborted request's id", () => {
-      const rt = createRuntime({ requestIdAt: "response" });
-      rt.install();
-      rt.bindPush();
-      rt.run(
-        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/first'); x.send(); x.abort();`
-      );
-      // iOS: the aborted request's id arrives after the abort and stays on the reset XHR.
-      rt.last()._requestId = 1;
-      rt.run(`x.open('GET', 'https://api.test/second'); x.send();`);
-      rt.last().respond(200, {}, "ok");
-
-      expect(rt.records()[1]!.rnRequestId).toBe(2);
-      expect(rt.pushed.find((m) => m.type === "start" && m.id === "rn-net-2")).toMatchObject({
-        rnRequestId: 1,
+        // Matched at send: the fetch record went before the XHR record started.
+        expect(rt.records()).toMatchObject([
+          { requestId: "rn-net-2", via: "xhr", state: "pending" },
+        ]);
+        rt.last().respond(200, {}, "ok");
+        await pending;
+        await settle();
+        expect(rt.records()).toHaveLength(1);
+        expect(rt.records()[0]).toMatchObject({
+          requestId: "rn-net-2",
+          via: "xhr",
+          resourceType: "Fetch",
+          state: "finished",
+          request: { method: "POST", url: "https://api.test/wrapped", postData: "q" },
+          responseBody: "ok",
+        });
+        expect(rt.run("__argent_network_by_id['rn-net-1']")).toBeUndefined();
       });
-      expect(rt.pushed.find((m) => m.type === "headers" && m.id === "rn-net-2")).toMatchObject({
-        rnRequestId: 2,
+
+      it("records the request once when the wrapper changes the URL", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(
+          `var inner = fetch; fetch = async function(path, init) { var token = await Promise.resolve('t1'); return inner('https://api.test' + path + '?token=' + token, init); };`
+        );
+        rt.install();
+        const pending = rt.run(`fetch('/me')`) as Promise<unknown>;
+        await sent(rt, 1);
+        rt.last().respond(200, {}, "ok");
+        await pending;
+        await settle();
+
+        expect(rt.records()).toHaveLength(1);
+        expect(rt.records()[0]).toMatchObject({
+          via: "xhr",
+          resourceType: "Fetch",
+          request: { url: "https://api.test/me?token=t1" },
+        });
+      });
+
+      it("records a failed request once", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(ASYNC_WRAP);
+        rt.install();
+        const pending = rt.run(`fetch('https://api.test/offline')`) as Promise<unknown>;
+        await sent(rt, 1);
+        rt.last().fail("Unable to resolve host");
+
+        await expect(pending).rejects.toThrow("Network request failed");
+        await settle();
+        expect(rt.records()).toHaveLength(1);
+        expect(rt.records()[0]).toMatchObject({ via: "xhr", state: "failed" });
+      });
+
+      it("matches the URL React Native's fetch adds a cache buster to", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(ASYNC_WRAP);
+        rt.install();
+        const pending = rt.run(`Promise.all([
+          fetch('https://api.test/nc', { cache: 'no-store' }),
+          fetch('https://api.test/nc?a=1&_=5', { method: 'HEAD', cache: 'no-cache' })
+        ])`) as Promise<unknown>;
+        await sent(rt, 2);
+        for (const xhr of rt.sends) xhr.respond(200, {}, "");
+        await pending;
+        await settle();
+
+        expect(rt.records().map((r) => r.request.url)).toEqual([
+          expect.stringMatching(/^https:\/\/api\.test\/nc\?_=\d+$/),
+          expect.stringMatching(/^https:\/\/api\.test\/nc\?a=1&_=\d+$/),
+        ]);
+      });
+
+      it("records each of several concurrent requests to one URL once", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        // Awaits only for the first call, as a wrapper that refreshes an expired token does.
+        rt.run(
+          `var inner = fetch; var calls = 0; fetch = function(input, init) { if (calls++ > 0) return inner(input, init); return Promise.resolve().then(function() { return inner(input, init); }); };`
+        );
+        rt.install();
+        const pending = rt.run(
+          `Promise.all([fetch('https://api.test/same'), fetch('https://api.test/same'), fetch('https://api.test/same')])`
+        ) as Promise<unknown>;
+        await sent(rt, 3);
+        for (const xhr of rt.sends) xhr.respond(200, {}, "ok");
+        await pending;
+        await settle();
+
+        expect(rt.records()).toHaveLength(3);
+        for (const record of rt.records()) {
+          expect(record).toMatchObject({ via: "xhr", state: "finished" });
+        }
+      });
+
+      it("keeps both records when a queue sends one request's XHR inside the next call", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch; var queued = null;
+          fetch = function(input, init) {
+            var previous = queued;
+            queued = null;
+            if (previous) previous();
+            return new Promise(function(resolve, reject) {
+              queued = function() { inner(input, init).then(resolve, reject); };
+            });
+          };`);
+        rt.install();
+        const first = rt.run(`fetch('https://api.test/a')`) as Promise<unknown>;
+        const second = rt.run(`fetch('https://api.test/b')`) as Promise<unknown>;
+        rt.run(`fetch('https://api.test/c')`);
+        expect(rt.sends).toHaveLength(2);
+        for (const xhr of rt.sends) xhr.respond(200, {}, "ok");
+        await Promise.all([first, second]);
+        await settle();
+
+        // c is still queued: it sent nothing, and b's XHR ran on its stack.
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+          "xhr finished https://api.test/a",
+          "xhr finished https://api.test/b",
+        ]);
       });
     });
-  });
 
-  describe("push messages", () => {
-    it("pushes each lifecycle step and leaves a body over 8 KB in the buffer", () => {
-      const rt = createRuntime();
-      rt.install();
-      rt.bindPush();
+    it.each([
+      {
+        sender: "axios",
+        xhr: `x.responseType = 'blob'; x.onloadend = x.onabort = x.onerror = x.ontimeout = function() {};`,
+        settledFirst: false,
+      },
+      {
+        sender: "a blob XHR after a native response",
+        xhr: `x.responseType = 'blob'; x.onload = x.onabort = x.onerror = x.ontimeout = function() {};`,
+        settledFirst: true,
+      },
+    ])(
+      "keeps a pending native fetch when $sender requests the same URL",
+      async ({ xhr, settledFirst }) => {
+        const rt = createRuntime();
+        // Each call gets a Response of its own, as from a native fetch.
+        const nativeResponse = (url: string) => ({
+          url,
+          status: 200,
+          statusText: "OK",
+          headers: new Map(),
+          body: { getReader: () => undefined },
+          clone: () => ({ text: async () => "native", blob: async () => ({ size: 6 }) }),
+        });
+        let finish: () => void = () => {};
+        rt.context.fetch = (input: string) =>
+          input.endsWith("/first")
+            ? Promise.resolve(nativeResponse(input))
+            : new Promise((resolve) => (finish = () => resolve(nativeResponse(input))));
+        rt.install();
+        if (settledFirst) await (rt.run(`fetch('https://api.test/first')`) as Promise<unknown>);
+        const pending = rt.run(`fetch('https://api.test/same')`) as Promise<unknown>;
+        rt.run(
+          `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/same'); ${xhr} x.send();`
+        );
+        rt.last().respond(200, {}, "xhr");
+        finish();
+        await pending;
+        await settle();
+
+        expect(
+          rt
+            .records()
+            .filter((r) => r.request.url.endsWith("/same"))
+            .map((r) => `${r.via} ${r.state} ${r.responseBody}`)
+        ).toEqual(["fetch-native finished native", "xhr finished xhr"]);
+      }
+    );
+
+    it("keeps a settled native fetch when an XHR requests the same URL later", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
       rt.run(
-        `var a = new XMLHttpRequest(); a.open('POST', 'https://api.test/small'); a.send('hi');`
+        `var inner = fetch; fetch = function(input, init) { return Promise.resolve(new Response('cached', { status: 200 })); }; var real = inner;`
       );
-      rt.last().respond(200, { "content-type": "text/plain" }, "ok");
-      rt.run(`var b = new XMLHttpRequest(); b.open('GET', 'https://api.test/large'); b.send();`);
-      rt.last().respond(200, {}, "y".repeat(9000));
-      rt.run(`var c = new XMLHttpRequest(); c.open('GET', 'https://api.test/down'); c.send();`);
-      rt.last().fail("offline");
+      rt.install();
+      await (rt.run(`fetch('https://api.test/cached')`) as Promise<unknown>);
+      const pending = rt.run(`real('https://api.test/cached')`) as Promise<unknown>;
+      rt.last().respond(200, {}, "fresh");
+      await pending;
+      await settle();
 
-      expect(rt.pushed.map((m) => `${String(m.type)} ${String(m.id)}`)).toEqual([
-        "start rn-net-1",
-        "headers rn-net-1",
-        "end rn-net-1",
-        "start rn-net-2",
-        "headers rn-net-2",
-        "end rn-net-2",
-        "start rn-net-3",
-        "error rn-net-3",
+      expect(rt.records().map((r) => `${r.via} ${r.responseBody}`)).toEqual([
+        "fetch-native cached",
+        "xhr fresh",
       ]);
-      expect(rt.pushed[0]).toMatchObject({
-        via: "xhr",
-        resourceType: "XHR",
-        method: "POST",
-        url: "https://api.test/small",
-        postData: "hi",
-        startedAt: expect.any(Number),
+    });
+
+    describe("when its XHR was not matched at send", () => {
+      const AWAIT_THEN = `await new Promise(function(r) { setTimeout(r, 0); });`;
+      // A Response that React Native's fetch did not build (it streams its body): it marks fetch as native.
+      const NATIVE_LIKE = `{ url: 'https://api.test/native', status: 200, statusText: 'OK', headers: new Map(), body: { getReader: function() {} }, clone: function() { return { text: async function() { return 'native'; }, blob: async function() { return { size: 6 }; } }; } }`;
+
+      async function sent(rt: ReturnType<typeof createRuntime>, count: number): Promise<void> {
+        for (let i = 0; i < 20 && rt.sends.length < count; i++) await settle();
+        expect(rt.sends).toHaveLength(count);
+      }
+
+      it.each([
+        // The first call sends its XHR on its own stack, so only the second call has a fetch record.
+        { shape: "returns the in-flight request", awaits: "", xhrId: "rn-net-1" },
+        // Both calls await first, so both have a fetch record; the XHR takes the first at send.
+        {
+          shape: "awaits, then returns the in-flight request",
+          awaits: AWAIT_THEN,
+          xhrId: "rn-net-3",
+        },
+      ])(
+        "records a request a wrapper shares with a second caller once ($shape)",
+        async ({ awaits, xhrId }) => {
+          const rt = createRuntime({ polyfillFetch: true });
+          rt.run(`var inner = fetch; var inflight = {};
+          fetch = async function(u, init) { ${awaits}
+            if (!inflight[u]) inflight[u] = inner(u, init).finally(function() { delete inflight[u]; });
+            return inflight[u];
+          };`);
+          rt.install();
+          const pending = rt.run(
+            `Promise.all([fetch('https://api.test/shared'), fetch('https://api.test/shared')])`
+          ) as Promise<unknown>;
+          await sent(rt, 1);
+          rt.last().respond(200, {}, "once");
+          await pending;
+          await settle();
+
+          expect(rt.records()).toHaveLength(1);
+          expect(rt.records()[0]).toMatchObject({
+            requestId: xhrId,
+            via: "xhr",
+            resourceType: "Fetch",
+            state: "finished",
+            responseBody: "once",
+          });
+          expect(rt.run(`Object.keys(__argent_network_by_id)`)).toEqual([xhrId]);
+        }
+      );
+
+      it("records a request a wrapper shares by returning one promise once, in flight too", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch; var inflight = {};
+          fetch = function(u, init) {
+            if (!inflight[u]) inflight[u] = inner(u, init).finally(function() { delete inflight[u]; });
+            return inflight[u];
+          };`);
+        rt.install();
+        const pending = rt.run(
+          `Promise.all([fetch('https://api.test/shared'), fetch('https://api.test/shared')])`
+        ) as Promise<unknown>;
+        expect(rt.records().map((r) => `${r.via} ${r.state}`)).toEqual(["xhr pending"]);
+        rt.last().respond(200, {}, "once");
+        await pending;
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state}`)).toEqual(["xhr finished"]);
       });
-      expect(rt.pushed[1]).toMatchObject({ status: 200, mimeType: "text/plain" });
-      expect(rt.pushed[2]).toMatchObject({
-        body: "ok",
-        encodedDataLength: 2,
-        durationMs: expect.any(Number),
+
+      it.each([
+        {
+          outcome: "resolves",
+          end: (x: ReturnType<ReturnType<typeof createRuntime>["last"]>) =>
+            x.respond(200, {}, "ok"),
+          state: "finished",
+        },
+        {
+          outcome: "fails",
+          end: (x: ReturnType<ReturnType<typeof createRuntime>["last"]>) => x.fail("offline"),
+          state: "failed",
+        },
+      ])(
+        "records a request once after the wrapper resolved a Response it did not get from React Native, when the request $outcome",
+        async ({ end, state }) => {
+          const rt = createRuntime({ polyfillFetch: true });
+          rt.run(`var inner = fetch; var calls = 0;
+            fetch = async function(u, init) { ${AWAIT_THEN} if (calls++ === 0) return ${NATIVE_LIKE}; return inner(u, init); };`);
+          rt.install();
+          await (rt.run(`fetch('https://api.test/native')`) as Promise<unknown>);
+          await settle();
+          const pending = rt.run(`fetch('https://api.test/then')`) as Promise<unknown>;
+          await sent(rt, 1);
+          // Its record was not matched at send: a native Response has been seen.
+          expect(rt.records().filter((r) => r.request.url.endsWith("/then"))).toHaveLength(2);
+          end(rt.last());
+          await pending.catch(() => undefined);
+          await settle();
+
+          expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+            "fetch-native finished https://api.test/native",
+            `xhr ${state} https://api.test/then`,
+          ]);
+          expect(rt.records()[1]!.resourceType).toBe("Fetch");
+        }
+      );
+
+      it("does not take a plain object the wrapper resolved for a native Response", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch; var calls = 0;
+          fetch = async function(u, init) { ${AWAIT_THEN} if (calls++ === 0) return { ok: true, status: 200 }; return inner(u, init); };`);
+        rt.install();
+        await (rt.run(`fetch('https://api.test/plain')`) as Promise<unknown>);
+        await settle();
+        const pending = rt.run(`fetch('https://api.test/then')`) as Promise<unknown>;
+        await sent(rt, 1);
+        // Matched at send: the fetch record went before the XHR record started.
+        expect(rt.records().filter((r) => r.request.url.endsWith("/then"))).toHaveLength(1);
+        rt.last().respond(200, {}, "ok");
+        await pending;
+        await settle();
+
+        expect(rt.records().map((r) => `${r.requestId} ${r.via} ${r.state}`)).toEqual([
+          "rn-net-1 fetch-native finished",
+          "rn-net-3 xhr finished",
+        ]);
       });
-      expect(rt.pushed[5]).toMatchObject({ bodyDeferred: true, encodedDataLength: 9000 });
-      expect(rt.pushed[5]).not.toHaveProperty("body");
-      expect(rt.records()[1]!.responseBody).toHaveLength(9000);
-      expect(rt.pushed[7]).toMatchObject({ errorText: "offline" });
+
+      it("matches the XHR of a fetch that reads an arraybuffer where Blob is unavailable", async () => {
+        const rt = createRuntime();
+        rt.run("delete globalThis.Blob");
+        rt.run(WHATWG_FETCH);
+        rt.run(
+          `var inner = fetch; fetch = async function(u, init) { ${AWAIT_THEN} return inner(u, init); };`
+        );
+        rt.install();
+        const pending = rt.run(`fetch('https://api.test/ab')`) as Promise<unknown>;
+        await sent(rt, 1);
+        expect(rt.last().responseType).toBe("arraybuffer");
+        expect(rt.records()).toHaveLength(1);
+        rt.last().respond(200, {}, new TextEncoder().encode("bytes"));
+        await pending;
+        await settle();
+
+        expect(rt.records()).toHaveLength(1);
+        expect(rt.records()[0]).toMatchObject({
+          via: "xhr",
+          state: "finished",
+          encodedDataLength: 5,
+        });
+      });
+
+      it("keeps a Response the wrapper built itself while an XHR to another URL is in flight", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch;
+          fetch = async function(u, init) { ${AWAIT_THEN} return u.indexOf('/mocked') !== -1 ? new Response('mock', { status: 200 }) : inner(u, init); };`);
+        rt.install();
+        const pending = rt.run(
+          `Promise.all([fetch('https://api.test/real'), fetch('https://api.test/mocked')])`
+        ) as Promise<unknown>;
+        await sent(rt, 1);
+        await settle();
+        rt.last().respond(200, {}, "real");
+        await pending;
+        await settle();
+
+        // The mocked call's fetch record came before the real call's XHR record.
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.responseBody}`)).toEqual([
+          "fetch-native finished mock",
+          "xhr finished real",
+        ]);
+      });
+
+      it.each([
+        { shape: "returns the in-flight request", awaits: "" },
+        { shape: "awaits, then returns the in-flight request", awaits: AWAIT_THEN },
+      ])(
+        "records a request a wrapper shares as parsed JSON with a second caller once ($shape)",
+        async ({ awaits }) => {
+          const rt = createRuntime({ polyfillFetch: true });
+          rt.run(`var inner = fetch; var inflight = {};
+            fetch = async function(u, init) { ${awaits}
+              if (!inflight[u]) inflight[u] = inner(u, init).then(function(r) { return r.json(); }).finally(function() { delete inflight[u]; });
+              return inflight[u];
+            };`);
+          rt.install();
+          const pending = rt.run(
+            `Promise.all([fetch('https://api.test/shared'), fetch('https://api.test/shared')])`
+          ) as Promise<unknown>;
+          await sent(rt, 1);
+          rt.last().respond(200, { "content-type": "application/json" }, '{"a":1}');
+          await pending;
+          await settle();
+
+          expect(rt.records().map((r) => `${r.via} ${r.state} ${r.responseBody}`)).toEqual([
+            'xhr finished {"a":1}',
+          ]);
+        }
+      );
+
+      it("records a request once after the wrapper resolved a value that is no Response, after a native Response was seen", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch;
+          fetch = async function(u, init) { ${AWAIT_THEN}
+            if (u.indexOf('/stream') !== -1) return ${NATIVE_LIKE};
+            inner(u, init).then(null, function() {});
+            return undefined;
+          };`);
+        rt.install();
+        await (rt.run(`fetch('https://api.test/stream')`) as Promise<unknown>);
+        await settle();
+        await (rt.run(
+          `fetch('https://api.test/beacon', { method: 'POST', body: 'b' })`
+        ) as Promise<unknown>);
+        await sent(rt, 1);
+        rt.last().respond(204, {}, "");
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+          "fetch-native finished https://api.test/stream",
+          "xhr finished https://api.test/beacon",
+        ]);
+      });
+
+      it("records each request once through a wrapper that returns its own Response class", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch;
+          function ApiResponse(r) { this.raw = r; this.status = r.status; this.url = r.url; this.headers = r.headers; this.ok = r.ok; }
+          ApiResponse.prototype.clone = function() { return new ApiResponse(this.raw.clone()); };
+          ApiResponse.prototype.text = function() { return this.raw.text(); };
+          fetch = async function(u, init) { ${AWAIT_THEN} var r = await inner(u, init); return new ApiResponse(r); };`);
+        rt.install();
+        for (const path of ["one", "two"]) {
+          const pending = rt.run(`fetch('https://api.test/${path}')`) as Promise<unknown>;
+          await sent(rt, path === "one" ? 1 : 2);
+          rt.last().respond(200, {}, path);
+          await pending;
+          await settle();
+        }
+
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.responseBody}`)).toEqual([
+          "xhr finished one",
+          "xhr finished two",
+        ]);
+      });
+
+      it("keeps a pending native fetch when a React Native fetch to its URL is sent inside a fetch call", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        let finish: () => void = () => {};
+        rt.context.nativeFetch = () =>
+          new Promise((_, reject) => (finish = () => reject(new TypeError("stream closed"))));
+        // A router that awaits nothing: React Native's fetch sends its XHR inside the wrapped call.
+        rt.run(`var inner = fetch;
+          fetch = function(u, init) { if (init && init.headers && init.headers['x-stream']) return nativeFetch(u); return inner(u, init); };`);
+        rt.install();
+        const stream = rt.run(
+          `fetch('https://api.test/graphql', { method: 'POST', body: 'subscription', headers: { 'x-stream': '1' } })`
+        ) as Promise<unknown>;
+        const query = rt.run(
+          `fetch('https://api.test/graphql', { method: 'POST', body: 'query' })`
+        ) as Promise<unknown>;
+        expect(rt.records()).toHaveLength(2);
+        rt.last().respond(200, {}, "data");
+        await query;
+        finish();
+        await stream.catch(() => undefined);
+        await settle();
+
+        expect(
+          rt
+            .records()
+            .map(
+              (r) => `${r.via} ${r.state} ${r.request.postData} ${r.responseBody ?? r.errorText}`
+            )
+        ).toEqual(["fetch-native failed subscription stream closed", "xhr finished query data"]);
+      });
+
+      it("tells a native Response by its body stream without reading the body", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        // Expo SDK 55: reading `body` starts the native stream, and clone() is not implemented.
+        rt.run(`var inner = fetch;
+          function NativeResponse(url) { this.url = url; this.status = 200; this.statusText = 'OK'; this.headers = new Map(); }
+          Object.defineProperty(NativeResponse.prototype, 'body', { get: function() { globalThis.bodyRead = true; return {}; } });
+          NativeResponse.prototype.clone = function() { throw new Error('Not implemented'); };
+          fetch = async function(u, init) { ${AWAIT_THEN} return u.indexOf('/native') !== -1 ? new NativeResponse(u) : inner(u, init); };`);
+        rt.install();
+        const native = rt.run(`fetch('https://api.test/native')`) as Promise<unknown>;
+        await settle();
+        // A fetch-shaped XHR of the app takes the pending record; the native Response brings it back.
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://cdn.test/file.bin');
+          x.responseType = 'blob'; x.onload = x.onerror = x.ontimeout = x.onabort = function() {}; x.send();`);
+        rt.last().respond(200, {}, "bytes");
+        await native;
+        await settle();
+
+        expect(rt.run("globalThis.bodyRead")).toBeUndefined();
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+          "fetch-native finished https://api.test/native",
+          "xhr finished https://cdn.test/file.bin",
+        ]);
+        // A native Response was seen: a later fetch-shaped XHR takes no pending record.
+        const later = rt.run(`fetch('https://api.test/native-2')`) as Promise<unknown>;
+        await settle();
+        rt.run(`var y = new XMLHttpRequest(); y.open('GET', 'https://cdn.test/other.bin');
+          y.responseType = 'blob'; y.onload = y.onerror = y.ontimeout = y.onabort = function() {}; y.send();`);
+        expect(rt.records()).toHaveLength(4);
+        rt.last().respond(200, {}, "more");
+        await later;
+        await settle();
+        expect(rt.records()).toHaveLength(4);
+      });
+
+      it("keeps a native fetch record when the wrapper sends a log XHR on the same stack", async () => {
+        const rt = createRuntime();
+        rt.context.nativeFetch = () =>
+          Promise.resolve(
+            rt.run(`(${NATIVE_LIKE.replace("'https://api.test/native'", "'https://api.test/n1'")})`)
+          );
+        rt.run(`fetch = function(u, init) {
+          var x = new XMLHttpRequest(); x.open('POST', 'https://log.test/event'); x.responseType = 'json';
+          x.onloadend = function() {}; x.send('e');
+          return nativeFetch(u, init);
+        };`);
+        rt.install();
+        const pending = rt.run(`fetch('https://api.test/n1')`) as Promise<unknown>;
+        rt.last().respond(204, {}, "");
+        await pending;
+        await settle();
+
+        expect(
+          rt.records().map((r) => `${r.via} ${r.resourceType} ${r.state} ${r.request.url}`)
+        ).toEqual([
+          "xhr XHR finished https://log.test/event",
+          "fetch-native Fetch finished https://api.test/n1",
+        ]);
+      });
+
+      it.each([
+        { below: "React Native's fetch", native: false, end: "fails", records: ["xhr failed"] },
+        {
+          below: "a native fetch",
+          native: true,
+          end: "resolves",
+          records: ["fetch-native finished"],
+        },
+      ])(
+        "records a request once through a wrapper that calls the global fetch again, over $below",
+        async ({ native, records }) => {
+          const rt = createRuntime({ polyfillFetch: !native });
+          if (native) {
+            rt.context.fetch = (url: string) =>
+              Promise.resolve(
+                rt.run(`(${NATIVE_LIKE.replace("'https://api.test/native'", JSON.stringify(url))})`)
+              );
+          }
+          // Written with the global name: after the install, the inner call runs the interceptor again.
+          rt.run(`var inner = fetch;
+            fetch = function(u, init) { if (u.charAt(0) === '/') return fetch('https://api.test' + u, init); return inner(u, init); };`);
+          rt.install();
+          const pending = rt.run(`fetch('/users')`) as Promise<unknown>;
+          if (!native) rt.last().fail("offline");
+          await pending.catch(() => undefined);
+          await settle();
+
+          expect(rt.records().map((r) => `${r.via} ${r.state}`)).toEqual(records);
+          expect(rt.records()[0]!.request.url).toBe("https://api.test/users");
+        }
+      );
+
+      it("records a request once through a wrapper that changes the method", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch;
+          fetch = async function(u, init) { ${AWAIT_THEN}
+            var method = String((init && init.method) || 'GET').toUpperCase();
+            if (method !== 'PATCH') return inner(u, init);
+            return inner(u, Object.assign({}, init, { method: 'POST', headers: { 'X-HTTP-Method-Override': 'PATCH' } }));
+          };`);
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://api.test/items/1', { method: 'PATCH', body: '{"a":1}' })`
+        ) as Promise<unknown>;
+        await sent(rt, 1);
+        rt.last().respond(200, {}, "patched");
+        await pending;
+        await settle();
+
+        expect(rt.records()).toHaveLength(1);
+        expect(rt.records()[0]).toMatchObject({
+          via: "xhr",
+          resourceType: "Fetch",
+          request: { method: "POST", headers: { "x-http-method-override": "PATCH" } },
+          responseBody: "patched",
+        });
+      });
+
+      // A failed request through this wrapper keeps two records: a rejection carries no body to
+      // match, and a native Response seen earlier stops the match at send.
+      it("records a request once through a wrapper that changes the URL after a native Response was seen", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch;
+          fetch = async function(path, init) { ${AWAIT_THEN}
+            if (path === '/stream') return ${NATIVE_LIKE};
+            return inner('https://api.test' + path, init);
+          };`);
+        rt.install();
+        await (rt.run(`fetch('/stream')`) as Promise<unknown>);
+        await settle();
+        const pending = rt.run(`fetch('/users')`) as Promise<unknown>;
+        await sent(rt, 1);
+        rt.last().respond(200, {}, "[]");
+        await pending;
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+          "fetch-native finished /stream",
+          "xhr finished https://api.test/users",
+        ]);
+      });
+
+      it("records a request once when a queue sends it inside the next call and the wrapper changes the URL", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch; var queued = null;
+          fetch = function(path, init) {
+            var previous = queued; queued = null; if (previous) previous();
+            return new Promise(function(resolve, reject) {
+              queued = function() { inner('https://api.test' + path, init).then(resolve, reject); };
+            });
+          };`);
+        rt.install();
+        const first = rt.run(`fetch('/a')`) as Promise<unknown>;
+        rt.run(`fetch('/b')`);
+        expect(rt.sends).toHaveLength(1);
+        rt.last().respond(200, {}, "a-body");
+        await first;
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+          "xhr finished https://api.test/a",
+        ]);
+      });
+
+      describe("puts a native fetch record back", () => {
+        // A wrapper that serves some calls from a native fetch and the rest from React Native's.
+        function mixed(routeNative: string): ReturnType<typeof createRuntime> {
+          const rt = createRuntime({ polyfillFetch: true });
+          rt.context.finishers = [] as Array<() => void>;
+          rt.run(`var inner = fetch;
+            function nativeLike(url) { return ${NATIVE_LIKE.replace("'https://api.test/native'", "url")}; }
+            function nativeFetch(url) { return new Promise(function(resolve) { finishers.push(function() { resolve(nativeLike(url)); }); }); }
+            fetch = async function(u, init) { ${AWAIT_THEN} if (${routeNative}) return nativeFetch(u); return inner(u, init); };`);
+          rt.install();
+          return rt;
+        }
+        const finish = (rt: ReturnType<typeof createRuntime>) =>
+          (rt.context.finishers as Array<() => void>).shift()!();
+
+        it("when a React Native fetch to the same URL took it", async () => {
+          const rt = mixed("init && init.headers && init.headers['x-stream']");
+          const stream = rt.run(
+            `fetch('https://api.test/graphql', { method: 'POST', body: 'subscription', headers: { 'x-stream': '1' } })`
+          ) as Promise<unknown>;
+          await settle();
+          const query = rt.run(
+            `fetch('https://api.test/graphql', { method: 'POST', body: 'query' })`
+          ) as Promise<unknown>;
+          await sent(rt, 1);
+          // The XHR took the older, native record.
+          expect(rt.records().map((r) => r.request.postData)).toEqual(["query", "query"]);
+          rt.last().respond(200, {}, "data");
+          await query;
+          finish(rt);
+          await stream;
+          await settle();
+
+          expect(
+            rt.records().map((r) => `${r.via} ${r.state} ${r.request.postData} ${r.responseBody}`)
+          ).toEqual(["fetch-native finished subscription native", "xhr finished query data"]);
+        });
+
+        it("when a React Native fetch to another URL took it", async () => {
+          const rt = mixed("u.indexOf('/stream') !== -1");
+          const stream = rt.run(`fetch('https://api.test/stream')`) as Promise<unknown>;
+          await settle();
+          const users = rt.run(`fetch('https://api.test/users')`) as Promise<unknown>;
+          await sent(rt, 1);
+          rt.last().respond(200, {}, "[]");
+          await users;
+          finish(rt);
+          await stream;
+          await settle();
+
+          expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+            "fetch-native finished https://api.test/stream",
+            "xhr finished https://api.test/users",
+          ]);
+        });
+
+        it("when an XHR of the app took it before any native Response was seen", async () => {
+          const rt = mixed("true");
+          const pending = rt.run(`fetch('https://api.test/native-first')`) as Promise<unknown>;
+          await settle();
+          rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://cdn.test/file.bin');
+            x.responseType = 'blob'; x.onload = x.onerror = x.ontimeout = x.onabort = function() {}; x.send();`);
+          expect(rt.records()).toHaveLength(1);
+          rt.last().respond(200, {}, "bytes");
+          finish(rt);
+          await pending;
+          await settle();
+
+          expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+            "fetch-native finished https://api.test/native-first",
+            "xhr finished https://cdn.test/file.bin",
+          ]);
+        });
+      });
+
+      it.each([
+        {
+          outcome: "succeeded",
+          end: (x: ReturnType<ReturnType<typeof createRuntime>["last"]>) =>
+            x.respond(200, {}, '{"data":1}'),
+          state: "finished",
+        },
+        {
+          outcome: "failed",
+          end: (x: ReturnType<ReturnType<typeof createRuntime>["last"]>) => x.fail("offline"),
+          state: "failed",
+        },
+      ])(
+        "keeps a failed native fetch when an axios request to its URL $outcome meanwhile",
+        async ({ end, state }) => {
+          const rt = createRuntime();
+          let finish: () => void = () => {};
+          rt.context.fetch = () =>
+            new Promise(
+              (_, reject) => (finish = () => reject(new TypeError("Network request failed")))
+            );
+          rt.install();
+          const pending = rt.run(
+            `fetch('https://api.test/graphql', { method: 'POST', body: '{}' })`
+          ) as Promise<unknown>;
+          rt.run(`var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/graphql');
+          x.responseType = 'json'; x.onloadend = function() {}; x.send('{}');`);
+          end(rt.last());
+          finish();
+          await pending.catch(() => undefined);
+          await settle();
+
+          expect(rt.records().map((r) => `${r.via} ${r.resourceType} ${r.state}`)).toEqual([
+            "fetch-native Fetch failed",
+            `xhr XHR ${state}`,
+          ]);
+        }
+      );
+
+      it("keeps a native fetch the wrapper resolves as parsed JSON next to an axios request to its URL", async () => {
+        const rt = createRuntime();
+        rt.context.nativeFetch = () =>
+          Promise.resolve(
+            rt.run(`(${NATIVE_LIKE.replace("'https://api.test/native'", "'https://api.test/me'")})`)
+          );
+        rt.run(
+          `fetch = async function(u, init) { ${AWAIT_THEN} await nativeFetch(u, init); return { parsed: true }; };`
+        );
+        rt.install();
+        const pending = rt.run(`fetch('https://api.test/me')`) as Promise<unknown>;
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/me');
+          x.responseType = 'json'; x.onloadend = function() {}; x.send();`);
+        await pending;
+        rt.last().respond(200, {}, "{}");
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state}`)).toEqual([
+          "fetch-native finished",
+          "xhr finished",
+        ]);
+      });
+
+      it.each([
+        { shape: "on its own stack", awaits: "", outcome: "resolves", state: "finished" },
+        { shape: "after an await", awaits: AWAIT_THEN, outcome: "resolves", state: "finished" },
+        { shape: "on its own stack", awaits: "", outcome: "rejects", state: "failed" },
+        { shape: "after an await", awaits: AWAIT_THEN, outcome: "rejects", state: "failed" },
+      ])(
+        "records a native request once when the wrapper sends it on through the global fetch under another URL ($shape, $outcome)",
+        async ({ awaits, outcome, state }) => {
+          const rt = createRuntime();
+          let finish: () => void = () => {};
+          rt.context.nativeFetch = (url: string) =>
+            new Promise((resolve, reject) => {
+              finish =
+                outcome === "resolves"
+                  ? () =>
+                      resolve(
+                        rt.run(
+                          `(${NATIVE_LIKE.replace("'https://api.test/native'", JSON.stringify(url))})`
+                        )
+                      )
+                  : () => reject(new TypeError("Network request failed"));
+            });
+          // fetch below resolves to the wrapped global fetch at call time, as in the app.
+          rt.run(`fetch = async function(u, init) { ${awaits}
+            if (u[0] === '/') return fetch('https://api.test' + u, init);
+            return nativeFetch(u, init);
+          };`);
+          rt.install();
+          const pending = rt.run(`fetch('/users')`) as Promise<unknown>;
+          pending.catch(() => undefined);
+          for (let i = 0; i < 5; i++) await settle();
+          finish();
+          await pending.catch(() => undefined);
+          await settle();
+
+          expect(rt.records().map((r) => `${r.via} ${r.state} ${r.request.url}`)).toEqual([
+            `fetch-native ${state} https://api.test/users`,
+          ]);
+        }
+      );
+
+      it("records each native request of a wrapper that answers from its last promise and still sends", async () => {
+        const rt = createRuntime();
+        let sent = 0;
+        rt.context.nativeFetch = (url: string) => {
+          sent++;
+          return Promise.resolve(
+            rt.run(`(${NATIVE_LIKE.replace("'https://api.test/native'", JSON.stringify(url))})`)
+          );
+        };
+        // Stale-while-revalidate: every call sends, a repeated call gets the earlier promise.
+        rt.run(`var memo = {};
+          fetch = function(u) { var fresh = nativeFetch(u); if (memo[u]) return memo[u]; memo[u] = fresh; return fresh; };`);
+        rt.install();
+        await (rt.run(`fetch('https://api.test/swr')`) as Promise<unknown>);
+        await settle();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await (rt.run(`fetch('https://api.test/swr')`) as Promise<unknown>);
+        await settle();
+
+        expect(sent).toBe(2);
+        expect(rt.records().map((r) => `${r.via} ${r.state}`)).toEqual([
+          "fetch-native finished",
+          "fetch-native finished",
+        ]);
+      });
+
+      it("hands back what a fetch below returns that is a thenable with no chained promise", () => {
+        const rt = createRuntime();
+        rt.run(
+          `fetch = function() { return { then: function(resolve) { resolve({ status: 200 }); } }; };`
+        );
+        rt.install();
+
+        expect(rt.run(`fetch('https://api.test/odd')`)).toBeUndefined();
+      });
+
+      it("forgets a pending fetch record once the log evicted it", async () => {
+        const rt = createRuntime();
+        rt.context.fetch = () => new Promise(() => undefined);
+        rt.install();
+        rt.run(`for (var i = 0; i < 2001; i++) fetch('https://api.test/hung/' + i);`);
+        expect(rt.run("__argent_network_by_id['rn-net-1']")).toBeUndefined();
+        // A fetch-shaped XHR takes the oldest pending record that is still in the log.
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/other');
+          x.responseType = 'blob'; x.onload = x.onerror = x.ontimeout = x.onabort = function() {}; x.send();`);
+
+        expect(rt.run("__argent_network_by_id['rn-net-2']")).toBeUndefined();
+        expect(rt.run("__argent_network_by_id['rn-net-3']")).toBeDefined();
+      });
+
+      it("keeps a Response served from a cache after an earlier request to its URL ended", async () => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.run(`var inner = fetch; var cache = null;
+          fetch = async function(u, init) { ${AWAIT_THEN} if (cache) return cache.clone(); var r = await inner(u, init); cache = r.clone(); return r; };`);
+        rt.install();
+        const first = rt.run(`fetch('https://api.test/poll')`) as Promise<unknown>;
+        await sent(rt, 1);
+        rt.last().respond(200, {}, "fresh");
+        await first;
+        await settle();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await (rt.run(`fetch('https://api.test/poll')`) as Promise<unknown>);
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state} ${r.responseBody}`)).toEqual([
+          "xhr finished fresh",
+          "fetch-native finished fresh",
+        ]);
+      });
+
+      it.each([
+        { resolves: "the Response", resolve: "return r;", body: "shared" },
+        { resolves: "parsed JSON", resolve: "return { a: 1 };", body: undefined },
+      ])(
+        "records a native request a wrapper shares with three callers once, when it resolves $resolves",
+        async ({ resolve, body }) => {
+          const rt = createRuntime();
+          rt.run(`var shared = ${NATIVE_LIKE.replace("'native'", "'shared'")};
+          var native = function() { return new Promise(function(done) { setTimeout(function() { done(shared); }, 5); }); };
+          var inflight = null;
+          fetch = async function(u, init) { ${AWAIT_THEN}
+            if (!inflight) inflight = native(u, init).then(function(r) { ${resolve} }).finally(function() { inflight = null; });
+            return inflight;
+          };`);
+          rt.install();
+          const values = (await (rt.run(
+            `Promise.all([fetch('https://api.test/shared'), fetch('https://api.test/shared'), fetch('https://api.test/shared')])`
+          ) as Promise<unknown[]>)) as unknown[];
+          await settle();
+
+          expect(values[0]).toBe(values[1]);
+          expect(values[1]).toBe(values[2]);
+          expect(rt.records()).toHaveLength(1);
+          expect(rt.records()[0]).toMatchObject({
+            requestId: "rn-net-1",
+            via: "fetch-native",
+            state: "finished",
+          });
+          expect(rt.records()[0]!.responseBody).toBe(body);
+          expect(rt.run(`Object.keys(__argent_network_by_id)`)).toEqual(["rn-net-1"]);
+        }
+      );
+
+      it("keeps a record for a Response the wrapper serves again from its cache", async () => {
+        const rt = createRuntime();
+        rt.run(`var shared = ${NATIVE_LIKE};
+          var cached = null;
+          fetch = async function(u, init) { ${AWAIT_THEN} if (cached) return cached; cached = shared; return cached; };`);
+        rt.install();
+        await (rt.run(`fetch('https://api.test/cached')`) as Promise<unknown>);
+        await settle();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await (rt.run(`fetch('https://api.test/cached')`) as Promise<unknown>);
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state}`)).toEqual([
+          "fetch-native finished",
+          "fetch-native finished",
+        ]);
+      });
+
+      it.each([
+        {
+          resolves: "parsed JSON",
+          value: "{ message: 'parsed' }",
+          expected: { message: "parsed" },
+        },
+        { resolves: "undefined", value: "undefined", expected: undefined },
+      ])(
+        "finishes a native fetch record without a response when the wrapper resolves $resolves",
+        async ({ value, expected }) => {
+          const rt = createRuntime();
+          rt.run(`var native = function() { return Promise.resolve(${NATIVE_LIKE}); };
+          fetch = async function(u, init) { ${AWAIT_THEN} await native(u, init); return ${value}; };`);
+          rt.install();
+          const resolved = await (rt.run(`fetch('https://api.test/json')`) as Promise<unknown>);
+          await settle();
+
+          expect(resolved).toEqual(expected);
+          expect(rt.records()).toHaveLength(1);
+          expect(rt.records()[0]).toMatchObject({ via: "fetch-native", state: "finished" });
+          expect(rt.records()[0]!.response).toBeUndefined();
+          expect(rt.records()[0]!.durationMs).toBeTypeOf("number");
+        }
+      );
+    });
+
+    describe("when the global fetch is Expo's own", () => {
+      // expo/fetch as Expo installs it: marked, and one native request per call.
+      function expoRuntime() {
+        const rt = createRuntime();
+        rt.run(`var calls = [];
+          fetch = function(u, init) { return new Promise(function(resolve, reject) { calls.push({ resolve: resolve, reject: reject }); }); };
+          Object.defineProperty(fetch, Symbol.for('expo.builtin'), { value: true });`);
+        return rt;
+      }
+
+      it.each([
+        {
+          sender: "axios",
+          xhr: `x.open('POST', 'https://api.test/graphql'); x.responseType = 'json'; x.onloadend = function() {};`,
+        },
+        {
+          sender: "React Native's fetch",
+          xhr: `x.open('GET', 'https://cdn.test/file'); x.responseType = 'blob'; x.onload = x.onerror = x.ontimeout = x.onabort = function() {};`,
+        },
+      ])("keeps a failed request when $sender fails at the same time", async ({ xhr }) => {
+        const rt = expoRuntime();
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://api.test/graphql', { method: 'POST', body: 'q' })`
+        ) as Promise<unknown>;
+        rt.run(`var x = new XMLHttpRequest(); ${xhr} x.send();`);
+        expect(rt.records()).toHaveLength(2);
+        rt.last().fail("offline");
+        rt.run(`calls[0].reject(new TypeError('Network request failed'))`);
+        await pending.catch(() => undefined);
+        await settle();
+
+        expect(rt.records().map((r) => `${r.via} ${r.state}`)).toEqual([
+          "fetch-native failed",
+          "xhr failed",
+        ]);
+      });
     });
   });
 
@@ -1214,7 +2113,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       ],
     });
     const detail = JSON.parse(rt.run(makeNetworkDetailReadScript("rn-net-2")) as string) as unknown;
-    expect(detail).toMatchObject({ via: "xhr", rnRequestId: 2, responseBody: '{"id":7}' });
+    expect(detail).toMatchObject({ requestId: "rn-net-2", responseBody: '{"id":7}' });
   });
 });
 
@@ -1446,19 +2345,5 @@ describe("makeNetworkDetailReadScript", () => {
     const script = makeNetworkDetailReadScript("rn-net-1");
     expect(script.trim()).toMatch(/^\(function\(\)/);
     expect(script.trim()).toMatch(/\)\(\)$/);
-  });
-});
-
-describe("pull read scripts", () => {
-  // Vega reads captured traffic only through these scripts, and knip cannot
-  // tell a module used by production code from one only this test imports.
-  it("stay in use by the network tools", () => {
-    const tools = join(__dirname, "../../src/tools/network");
-    expect(readFileSync(join(tools, "network-logs.ts"), "utf8")).toMatch(
-      /makeNetworkLogReadScript\(/
-    );
-    expect(readFileSync(join(tools, "network-request.ts"), "utf8")).toMatch(
-      /makeNetworkDetailReadScript\(/
-    );
   });
 });
