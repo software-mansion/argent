@@ -838,12 +838,14 @@ describe("what a failing bash step says", () => {
     const value = await runBash(ws, "node-value", `${node} -e 'throw "seed failed"'`);
     expect(value.failure?.message).toMatch(/\)\. seed failed$/);
 
+    // No shell between Node and the failing command: on Windows `execSync`
+    // runs it under cmd.exe, which does not read `;` as a separator.
+    const cli = ws.write(
+      "seed-cli.cjs",
+      `require("child_process").execFileSync(process.execPath, ["-e", "console.error('seed-cli: 401'); process.exit(3)"], { stdio: ["ignore", "pipe", "pipe"] });`
+    );
     const shapes: [string, string, RegExp][] = [
-      [
-        "node-exec",
-        `${node} -e 'require("child_process").execSync("echo seed-cli: 401 >&2; exit 3", { stdio: ["ignore", "pipe", "pipe"] })'`,
-        /\)\. seed-cli: 401$/,
-      ],
+      ["node-exec", `${node} ${JSON.stringify(cli.replace(/\\/g, "/"))}`, /\)\. seed-cli: 401$/],
       ["node-assert", `${node} -e 'require("assert").strictEqual(1, 2)'`, /\)\. 1 !== 2$/],
       [
         "node-deep",
