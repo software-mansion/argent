@@ -16,12 +16,13 @@
  * loop, a heap exhaustion or a `process.exit` cannot take the server down.
  */
 
-import { fork, spawn, type ChildProcess, type ForkOptions } from "node:child_process";
+import { execFile, fork, spawn, type ChildProcess, type ForkOptions } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
+import { promisify, stripVTControlCharacters } from "node:util";
 import {
   configFilePath,
   getAtPath,
@@ -61,6 +62,20 @@ const DEFAULT_SCRIPT_TIMEOUT_MS = 30_000;
 export const SCRIPT_STEP_LOG_LIMIT_BYTES = 64 * 1024;
 const SCRIPT_RUN_LOG_LIMIT_BYTES = 256 * 1024;
 const STDERR_REASON_LINE_CHARS = 1_000;
+/**
+ * How many of the newest stderr lines the reason can look back over, a run of
+ * blank lines counted once: room for an uncaught Node error with its frames, a
+ * `[cause]` and its properties, or npm's usage text, which runs to 98 lines.
+ */
+const STDERR_RECENT_LINES = 256;
+const STACK_FRAME_RE = /^\s+at\s+\S/;
+const SOURCE_CARET_RE = /^\s*\^+\s*$/;
+/** Node's line between the two frame runs of an unhandled `'error'` event. */
+const EMITTED_AT_RE = /^Emitted '.+' event on .+ instance at:$/;
+const RUNTIME_TRAILER_RE = /^(?:Node\.js|Bun) v\d+\.\d+\.\d+\S*(?: \([^)]*\))?$/;
+const NPM_LINE_RE = /^npm (?:error|ERR!)(?:\s|$)/;
+const NPM_LOG_HINT_RE = /^npm (?:error|ERR!) A complete log of this run can be found in:/;
+const NPM_DETAIL_RE = /^npm (?:error|ERR!)(?:\s+(?:(?:code|errno|syscall|path)\s.*|\d{3}))?$/;
 const SETTLE_TIMEOUT_MS = 500;
 /**
  * How long after the child exits the settle keeps waiting for a process that
@@ -762,10 +777,10 @@ export class FlowScriptExecutor {
       if (interruptionSealed) return;
       terminal = message;
       // Where stderr stood when the runner answered, which in bash mode is when
-      // bash exited: the reason falls back to it when a job the script left
-      // running is still writing when the settle below gives up. Read on the
-      // next turn, so that what bash wrote before it exited, already in the
-      // pipe, is read first.
+      // bash exited: the reason takes it when a job the script left running
+      // still holds the streams as the settle below ends. Read on the next
+      // turn, so that what bash wrote before it exited, already in the pipe,
+      // is read first.
       setImmediate(() => (stderrLineAtVerdict = capture.stderrLineSoFar));
     });
 
@@ -835,7 +850,7 @@ export class FlowScriptExecutor {
     // waited for as any other is.
     //
     // Beside it, the line stderr stood on when it first went quiet for a settle
-    // after the script's process exited, which the reason takes: see below.
+    // after the script's process exited, which the reason can take: see below.
     const exitedAt = Date.now();
     const stderrQuietFor = () => Date.now() - Math.max(exitedAt, lastStderrAt);
     let stderrLineAtQuiet: string | undefined;
@@ -857,12 +872,6 @@ export class FlowScriptExecutor {
     const settled = await settleStreams(closed, () => lastOutputAt, settleSignal);
     watchingStderr = false;
     clearTimeout(stderrQuietTimer);
-    if (
-      stderrLineAtQuiet === undefined &&
-      (settleSignal?.aborted === true || stderrQuietFor() >= SETTLE_TIMEOUT_MS)
-    ) {
-      stderrLineAtQuiet = capture.stderrLineSoFar;
-    }
     await stop();
     capture.end();
     if (settled === "cut") {
@@ -893,22 +902,18 @@ export class FlowScriptExecutor {
       heapFatalSeen: capture.heapFatalSeen,
       heapLimitMb: bounds.heapLimitMb,
     });
-    // After bash exits, stderr carries two kinds of line: the script's own,
-    // late - a consumer in front of stderr still working through its backlog -
-    // and those of a job the script left running. The first come as one run
-    // from the moment bash exits; a job writes whenever it writes. So the line
+    // After bash exits, stderr carries the script's own lines late - a consumer
+    // in front of stderr still working through its backlog - and the lines of a
+    // job the script left running, and nothing in the stream tells them apart.
+    // Streams that closed mean every such process finished, and then the line
     // is the one stderr stood on when it first went quiet for a settle after
-    // bash exited: that run counts, a later line does not, and neither does a
-    // job's answer to the stop. Streams that closed while stderr was still
-    // running on count in full. Stderr that never went quiet is a job still
-    // writing, and then the line is the one bash exited on.
-    let stderrLine = stderrLineAtQuiet;
-    if (stderrLine === undefined) {
-      stderrLine =
-        settled === "closed"
-          ? capture.lastStderrLine
-          : (stderrLineAtVerdict ?? capture.lastStderrLine);
-    }
+    // bash exited, or its last one. Streams still held mean a job is running
+    // and may have written at any moment since, so the line is the one bash
+    // exited on.
+    const stderrLine =
+      settled === "closed"
+        ? (stderrLineAtQuiet ?? capture.lastStderrLine)
+        : (stderrLineAtVerdict ?? capture.lastStderrLine);
     const verdict = redactSecrets(
       run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
       request.secrets ?? []
@@ -2008,12 +2013,16 @@ const ARGENT_ENV_PREFIX = "ARGENT_";
 
 /**
  * POSIX names the runner's process group, which outlives the runner and holds
- * every descendant that did not deliberately leave it; an empty group is the
- * proof that the tree is gone. Windows has no such group, so `taskkill /T`
- * walks the live parent-child tree instead: a re-parented grandchild escapes
- * it, and once the child is gone there is nothing left to walk from. A
- * deliberately detached descendant is out of reach on either, which is how a
- * script outlives its step.
+ * every descendant that did not leave it; an empty group is the proof that the
+ * tree is gone. A descendant in a group of its own - GNU `timeout` and its
+ * command, a job under `set -m` - is found through the tree and its group is
+ * stopped beside the runner's, which works only while the runner still leads
+ * to it. Windows has no such group, so `taskkill /T` walks the live
+ * parent-child tree instead: a re-parented grandchild escapes it, and once the
+ * child is gone there is nothing left to walk from. A descendant that started
+ * a session of its own - `setsid`, a daemon such as the adb server, Node's
+ * `detached` - is left alone on POSIX, and so is one that left the group and
+ * whose parent is gone: that is how a script outlives its step.
  */
 async function stopProcessTree(child: ChildProcess, graceMs: number): Promise<void> {
   const pid = child.pid;
@@ -2033,30 +2042,90 @@ async function stopProcessTree(child: ChildProcess, graceMs: number): Promise<vo
       killer.on("error", () => {});
       killer.unref();
     });
-    await waitForGroupToEmpty(child, pid, graceMs);
+    await waitForGroupsToEmpty(child, [pid], graceMs);
     if (!hasExited(child)) tryKill(() => child.kill());
     return;
   }
 
   if (!groupHasMembers(pid)) return;
-  killGroup(child, pid, "SIGTERM");
-  await waitForGroupToEmpty(child, pid, graceMs);
-  if (!groupHasMembers(pid)) return;
-  killGroup(child, pid, "SIGKILL");
+  const groups = [pid, ...(hasExited(child) ? [] : await descendantGroups(pid))];
+  signalGroups(child, groups, "SIGTERM");
+  await waitForGroupsToEmpty(child, groups, graceMs);
+  const left = groups.filter(groupHasMembers);
+  if (left.length === 0) return;
+  signalGroups(child, left, "SIGKILL");
   // A SIGKILL is delivered at once but the kernel still has to tear the process
   // down, so the step would otherwise return a moment before the tree is
   // actually gone — and "stopped" is what the verdict claims.
-  await waitForGroupToEmpty(child, pid, FORCE_GRACE_MS);
+  await waitForGroupsToEmpty(child, left, FORCE_GRACE_MS);
 }
 
-async function waitForGroupToEmpty(
+const execFileAsync = promisify(execFile);
+
+/** Absolute where it can be: a tool server started from launchd has no `/bin` on its PATH. */
+const PS_BIN = ["/bin/ps", "/usr/bin/ps"].find((file) => fs.existsSync(file)) ?? "ps";
+
+/**
+ * The groups of `root`'s descendants other than its own, short of a session
+ * leader and all below it; none when `ps` cannot answer.
+ */
+async function descendantGroups(root: number): Promise<number[]> {
+  let table: string;
+  try {
+    ({ stdout: table } = await execFileAsync(PS_BIN, ["-A", "-o", "pid=,ppid=,pgid=,stat="], {
+      timeout: 1_500,
+      maxBuffer: 16 * 1024 * 1024,
+    }));
+  } catch {
+    return [];
+  }
+  const children = new Map<number, number[]>();
+  const groupOf = new Map<number, number>();
+  const sessionLeaders = new Set<number>();
+  for (const line of table.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!match) continue;
+    const [pid, ppid, pgid] = match.slice(1, 4).map(Number) as [number, number, number];
+    groupOf.set(pid, pgid);
+    if (match[4]!.includes("s")) sessionLeaders.add(pid);
+    const siblings = children.get(ppid);
+    if (siblings) siblings.push(pid);
+    else children.set(ppid, [pid]);
+  }
+  const groups = new Set<number>();
+  const pending = [root];
+  const seen = new Set(pending);
+  while (pending.length > 0) {
+    for (const child of children.get(pending.pop()!) ?? []) {
+      if (seen.has(child) || sessionLeaders.has(child)) continue;
+      seen.add(child);
+      pending.push(child);
+      groups.add(groupOf.get(child)!);
+    }
+  }
+  groups.delete(root);
+  return [...groups].filter((group) => group > 1);
+}
+
+function signalGroups(
   child: ChildProcess,
-  pid: number,
+  groups: readonly number[],
+  signal: NodeJS.Signals
+): void {
+  for (const group of groups) {
+    if (group === child.pid) killGroup(child, group, signal);
+    else tryKill(() => process.kill(-group, signal));
+  }
+}
+
+async function waitForGroupsToEmpty(
+  child: ChildProcess,
+  groups: readonly number[],
   graceMs: number
 ): Promise<void> {
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
-    if (process.platform === "win32" ? hasExited(child) : !groupHasMembers(pid)) return;
+    if (process.platform === "win32" ? hasExited(child) : !groups.some(groupHasMembers)) return;
     await sleep(GROUP_POLL_MS);
   }
 }
@@ -2296,10 +2365,11 @@ function withoutPartialMarker(buffer: Buffer, taken: number): number {
 }
 
 /**
- * The last line a stream carried that was not blank: where a bash step that
- * exited non-zero says why, whether that is its own `echo … >&2` or the error of
- * the command `set -e` stopped on. Fed the text as the script wrote it, because
- * what this returns joins the failure message and is redacted with it.
+ * The line a bash step that exited non-zero ends its reason with: the last line
+ * a stream carried that was not blank, whether that is the script's own
+ * `echo … >&2` or the error of the command `set -e` stopped on. Fed the text as
+ * the script wrote it, because what this returns joins the failure message and
+ * is redacted with it.
  *
  * Only the head of each line is kept, so a long line is cut at its end: that is
  * where `redactTruncated` looks for the half of a value a cut leaves, and a cut
@@ -2309,7 +2379,8 @@ class LastLineTracker {
   private head = "";
   private length = 0;
   private blank = true;
-  private last = "";
+  private readonly heads: string[] = [];
+  private readonly lengths: number[] = [];
 
   write(text: string): void {
     let from = 0;
@@ -2323,12 +2394,13 @@ class LastLineTracker {
 
   end(): string {
     this.close();
-    return this.last;
+    return this.peek();
   }
 
   peek(): string {
-    if (this.blank) return this.last;
-    return this.length > this.head.length ? this.cut() : this.head.trim();
+    const lines = this.heads.map((head, i) => stderrLine(head, this.lengths[i]!));
+    if (!this.blank) lines.push(stderrLine(this.head, this.length));
+    return reasonLine(lines);
   }
 
   snapshot(secrets: readonly FlowScriptSecret[]): string {
@@ -2345,18 +2417,130 @@ class LastLineTracker {
     if (this.blank && /\S/.test(segment)) this.blank = false;
   }
 
+  /** Kept as heads and judged only when read: a flood of lines costs a push each. */
   private close(): void {
-    this.last = this.peek();
+    const previous = this.heads[this.heads.length - 1];
+    if (!this.blank) this.remember(this.head, this.length);
+    else if (previous !== undefined && previous !== "") this.remember("", 0);
     this.head = "";
     this.length = 0;
     this.blank = true;
   }
 
-  private cut(): string {
-    const final = this.head.charCodeAt(this.head.length - 1);
-    const kept = final >= 0xd800 && final <= 0xdbff ? this.head.slice(0, -1) : this.head;
-    return `${kept.trimStart()}${omissionMarker(this.length - kept.length)}`;
+  private remember(head: string, length: number): void {
+    this.heads.push(head);
+    this.lengths.push(length);
+    if (this.heads.length > 2 * STDERR_RECENT_LINES) {
+      this.heads.splice(0, STDERR_RECENT_LINES);
+      this.lengths.splice(0, STDERR_RECENT_LINES);
+    }
   }
+}
+
+interface StderrLine {
+  raw: string;
+  shown: string;
+}
+
+/** A blank line is `""` in both. */
+function stderrLine(head: string, length: number): StderrLine {
+  if (!head) return { raw: "", shown: "" };
+  if (length <= head.length) return { raw: head, shown: head.trim() };
+  const final = head.charCodeAt(head.length - 1);
+  const kept = final >= 0xd800 && final <= 0xdbff ? head.slice(0, -1) : head;
+  return { raw: head, shown: `${kept.trimStart()}${omissionMarker(length - kept.length)}` };
+}
+
+/**
+ * The newest line that is not blank, except where a tool ends its output on a
+ * line about itself rather than on its error: Node.js and Bun after an uncaught
+ * error print their version last, and npm the path of its debug log.
+ */
+function reasonLine(lines: readonly StderrLine[]): string {
+  const end = newestShown(lines, lines.length - 1);
+  if (end < 0) return "";
+  const newest = lines[end]!.shown;
+  if (RUNTIME_TRAILER_RE.test(newest)) return uncaughtErrorLine(lines, end) ?? newest;
+  let hint = end;
+  if (!NPM_LOG_HINT_RE.test(newest)) {
+    // Older npm puts the log's path on a line of its own, under the hint.
+    const above = newestShown(lines, end - 1);
+    const hintAbove = above >= 0 ? lines[above]!.shown : "";
+    if (!NPM_LINE_RE.test(newest) || !hintAbove.endsWith(":") || !NPM_LOG_HINT_RE.test(hintAbove)) {
+      return newest;
+    }
+    hint = above;
+  }
+  return npmErrorLine(lines, hint) ?? newest;
+}
+
+/**
+ * The error above a runtime's version line, found walking up from it. A run of
+ * stack frames leads to the line above it, across blank lines: the error, its
+ * `[cause]`, or the stderr of the command a Node `execSync` ran. A message that
+ * ends on a line with no letter or digit - the `]` of a zod error, the `^` of a
+ * YAML one - gives its first line instead, the one under the caret that marks
+ * the source. A caret met before any frame marks an error without frames, which
+ * is the line under it, and Bun starts one without a caret with `error:`.
+ * Failing those, the newest line not indented and not a lone bracket. The walk
+ * stops at an earlier version line.
+ */
+function uncaughtErrorLine(lines: readonly StderrLine[], trailerAt: number): string | undefined {
+  let fallback: string | undefined;
+  for (let i = trailerAt - 1; i >= 0; i--) {
+    const { raw, shown } = lines[i]!;
+    if (!shown) continue;
+    if (RUNTIME_TRAILER_RE.test(shown)) break;
+    // Node colours the frames of its own modules when `FORCE_COLOR` is set.
+    const bare = stripVTControlCharacters(raw);
+    if (STACK_FRAME_RE.test(bare)) {
+      let above = i - 1;
+      while (above >= 0 && (!lines[above]!.shown || isFrame(lines[above]!))) above--;
+      if (above < 0) return fallback;
+      const line = lines[above]!.shown;
+      return /[\p{L}\p{N}]/u.test(line) ? line : (firstLineUnderCaret(lines, above) ?? line);
+    }
+    if (SOURCE_CARET_RE.test(bare)) {
+      const under = lines.slice(i + 1, trailerAt).find((line) => line.shown);
+      return under?.shown ?? fallback;
+    }
+    if (bare.startsWith("error: ")) return shown;
+    if (fallback === undefined && !/^\s/.test(bare) && !/^[\]})]+[,;]?$/.test(shown)) {
+      fallback = shown;
+    }
+  }
+  return fallback;
+}
+
+function firstLineUnderCaret(lines: readonly StderrLine[], below: number): string | undefined {
+  for (let i = below - 1; i >= 0 && !RUNTIME_TRAILER_RE.test(lines[i]!.shown); i--) {
+    if (SOURCE_CARET_RE.test(stripVTControlCharacters(lines[i]!.raw))) {
+      return lines.slice(i + 1, below).find((line) => line.shown)?.shown;
+    }
+  }
+  return undefined;
+}
+
+function isFrame(line: StderrLine): boolean {
+  return STACK_FRAME_RE.test(stripVTControlCharacters(line.raw)) || EMITTED_AT_RE.test(line.shown);
+}
+
+/** The first line of npm's error block above its log hint that says more than a code. */
+function npmErrorLine(lines: readonly StderrLine[], hintAt: number): string | undefined {
+  const last = newestShown(lines, hintAt - 1);
+  if (last < 0 || !NPM_LINE_RE.test(lines[last]!.shown)) return undefined;
+  let first = last;
+  while (first > 0 && NPM_LINE_RE.test(lines[first - 1]!.shown)) first--;
+  for (let i = first; i <= last; i++) {
+    if (!NPM_DETAIL_RE.test(lines[i]!.shown)) return lines[i]!.shown;
+  }
+  return undefined;
+}
+
+function newestShown(lines: readonly StderrLine[], from: number): number {
+  let i = from;
+  while (i >= 0 && !lines[i]!.shown) i--;
+  return i;
 }
 
 function partialSecretTail(text: string, secrets: readonly FlowScriptSecret[]): number {

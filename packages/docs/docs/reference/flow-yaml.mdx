@@ -386,6 +386,10 @@ Stop each background job by its process ID before the script exits. Do not use `
 
 A nonzero exit code fails the step. The failure reason includes the exit code and the last non-blank line from stderr. Argent includes stdout only in the log, not in the reason.
 
+After an error, Node.js and Bun write their version, and npm writes the path of its log. Argent uses the error line above that line.
+
+A background job can write to stderr after Bash exits. If a job still runs after Bash exits, Argent uses the last line from stderr before the exit. The log contains the later lines.
+
 To report a failure, write the explanation to stderr. Then exit with a nonzero code:
 
 ```bash

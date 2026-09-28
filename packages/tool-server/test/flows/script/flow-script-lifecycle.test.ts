@@ -724,6 +724,40 @@ describe("flow script executor — process cleanup", () => {
     expect(await waitForExit(descendant, 8_000)).toBe(true);
   }, 30_000);
 
+  it.skipIf(process.platform === "win32")(
+    "stops a descendant in a group of its own at the time limit, and leaves a session leader",
+    async () => {
+      const ws = workspace();
+      const groupFile = ws.resolve("own-group.pid");
+      const sessionFile = ws.resolve("own-session.pid");
+      const job = `set -m; sleep 300 & echo $! > '${groupFile}'; wait`;
+      const script = ws.write(
+        "own-group.mjs",
+        `import { spawn } from "node:child_process";
+         import fs from "node:fs";
+         spawn("bash", ["-c", ${JSON.stringify(job)}], { stdio: "ignore" });
+         const daemon = spawn("sleep", ["300"], { stdio: "ignore", detached: true });
+         fs.writeFileSync(${JSON.stringify(sessionFile)}, String(daemon.pid));
+         await new Promise(() => {});`
+      );
+      const pending = executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        timeoutMs: 1_500,
+      });
+      const inGroup = await readPidFile(groupFile);
+      const inSession = await readPidFile(sessionFile);
+      strays.push(inGroup, inSession);
+      expect(isAlive(inGroup)).toBe(true);
+
+      const result = await pending;
+      expect(result.failure?.kind).toBe("timeout");
+      expect(await waitForExit(inGroup, 8_000)).toBe(true);
+      expect(isAlive(inSession)).toBe(true);
+    },
+    30_000
+  );
+
   it("stops a descendant that ignores SIGTERM when the step is cancelled", async () => {
     const ws = workspace();
     const pidFile = ws.resolve("stubborn.pid");

@@ -525,20 +525,19 @@ describe("what a failing bash step says", () => {
   );
 
   onPosix(
-    "keeps a stderr consumer's last line when a quiet job holds the streams",
+    "keeps out a stderr line a running job writes soon after bash exits",
     async () => {
       const ws = workspace();
       const result = await runBash(
         ws,
-        "consumer-and-job",
-        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
-         echo "step 1: seeding" >&2
-         echo "FATAL: the real error" >&2
+        "early-job-line",
+        `( sleep 0.3; echo "mock-server: listening on :8080" >&2; sleep 30 ) &
+         echo "seed failed: orders API answered 503" >&2
          exit 1`
       );
       expect(result.failure?.kind).toBe("exit");
-      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+      expect(result.failure?.message).toMatch(/\)\. seed failed: orders API answered 503$/);
+      expect(result.log).toContain("mock-server: listening on :8080\n");
     },
     30_000
   );
@@ -583,24 +582,6 @@ describe("what a failing bash step says", () => {
   );
 
   onPosix(
-    "keeps a stderr consumer's last line when a job keeps writing to stdout",
-    async () => {
-      const ws = workspace();
-      const result = await runBash(
-        ws,
-        "consumer-and-chatty-stdout",
-        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
-         ( while true; do echo "[mock] GET /health 200"; sleep 0.1; done ) &
-         echo "FATAL: the real error" >&2
-         exit 1`
-      );
-      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
-      expect(result.logTruncated).toBe(true);
-    },
-    30_000
-  );
-
-  onPosix(
     "leaves out a stderr line a job writes after stderr went quiet",
     async () => {
       const ws = workspace();
@@ -627,7 +608,6 @@ describe("what a failing bash step says", () => {
       const script = ws.write(
         "stall.sh",
         `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
          echo "step 1: seeding" >&2
          echo "FATAL: the real error" >&2
          touch ${JSON.stringify(exited)}
@@ -660,39 +640,6 @@ describe("what a failing bash step says", () => {
   );
 
   onPosix(
-    "keeps a consumer's late line when a cancel ends the wait",
-    async () => {
-      const ws = workspace();
-      const exited = ws.resolve("exited");
-      const script = ws.write(
-        "cancel-late.sh",
-        `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
-         echo "step 1: seeding" >&2
-         echo "FATAL: the real error" >&2
-         touch ${JSON.stringify(exited)}
-         exit 1`
-      );
-      const cancel = new AbortController();
-      const pending = executor().execute({
-        scriptPath: script,
-        interpreter: "bash",
-        projectRoot: ws.dir,
-        signal: cancel.signal,
-      });
-      const deadline = Date.now() + 10_000;
-      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(10);
-      await delay(500);
-      cancel.abort();
-      const result = await pending;
-
-      expect(result.failure?.kind).toBe("exit");
-      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
-    },
-    30_000
-  );
-
-  onPosix(
     "keeps a consumer's late line when a cancel lands before it is written",
     async () => {
       const ws = workspace();
@@ -700,7 +647,6 @@ describe("what a failing bash step says", () => {
       const script = ws.write(
         "cancel-early.sh",
         `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
          echo "step 1: seeding" >&2
          echo "FATAL: the real error" >&2
          touch ${JSON.stringify(exited)}
@@ -765,8 +711,8 @@ describe("what a failing bash step says", () => {
       const script = ws.write(
         "cancel-midscript.sh",
         `set -m
-         ( while true; do echo tick >&2; sleep 0.05; done ) &
-         echo $! > ${JSON.stringify(pidFile)}
+         ( ( while true; do echo tick >&2; sleep 0.05; done ) &
+           echo $! > ${JSON.stringify(pidFile)} )
          sleep 30`
       );
       const cancel = new AbortController();
@@ -866,6 +812,131 @@ describe("what a failing bash step says", () => {
       /\)\. cat: \.\/no-such-fixture\.json: No such file or directory$/
     );
     expect(result.failure?.message).not.toContain("never reached");
+  }, 30_000);
+
+  it("takes an uncaught Node error, not the version line Node ends on", async () => {
+    const ws = workspace();
+    const node = JSON.stringify(process.execPath.replace(/\\/g, "/"));
+    const plain = await runBash(
+      ws,
+      "node-throws",
+      `set -euo pipefail
+       ${node} -e 'throw new Error("seed API returned 401")'`
+    );
+    expect(plain.failure?.message).toMatch(/\)\. Error: seed API returned 401$/);
+    expect(plain.log).toMatch(/Node\.js v\d+/);
+
+    const caused = await runBash(
+      ws,
+      "node-cause",
+      `${node} -e 'throw new Error("fetch failed", { cause: new Error("connect ECONNREFUSED 127.0.0.1:1") })'`
+    );
+    expect(caused.failure?.message).toMatch(
+      /\)\. \[cause\]: Error: connect ECONNREFUSED 127\.0\.0\.1:1$/
+    );
+
+    const value = await runBash(ws, "node-value", `${node} -e 'throw "seed failed"'`);
+    expect(value.failure?.message).toMatch(/\)\. seed failed$/);
+
+    // No shell between Node and the failing command: on Windows `execSync`
+    // runs it under cmd.exe, which does not read `;` as a separator.
+    const cli = ws.write(
+      "seed-cli.cjs",
+      `require("child_process").execFileSync(process.execPath, ["-e", "console.error('seed-cli: 401'); process.exit(3)"], { stdio: ["ignore", "pipe", "pipe"] });`
+    );
+    const shapes: [string, string, RegExp][] = [
+      ["node-exec", `${node} ${JSON.stringify(cli.replace(/\\/g, "/"))}`, /\)\. seed-cli: 401$/],
+      ["node-assert", `${node} -e 'require("assert").strictEqual(1, 2)'`, /\)\. 1 !== 2$/],
+      [
+        "node-deep",
+        `${node} -e 'require("assert").deepStrictEqual({ a: 1, b: [1, 2] }, { a: 2, b: [1, 2] })'`,
+        /\)\. AssertionError \[ERR_ASSERTION\]: Expected values to be strictly deep-equal:$/,
+      ],
+      [
+        "node-dump",
+        `${node} -e 'const e = new Error("[\\n  { \\"path\\": [\\"PORT\\"] }\\n]"); e.name = "ZodError"; throw e'`,
+        /\)\. ZodError: \[$/,
+      ],
+      [
+        "node-event",
+        `${node} -e 'require("child_process").spawn("no-such-cmd-xyz")'`,
+        /\)\. Error: spawn no-such-cmd-xyz ENOENT$/,
+      ],
+      [
+        "node-pointer",
+        `${node} -e 'throw new Error("bad indent at line 4:\\n\\n d: 3\\n^")'`,
+        /\)\. Error: bad indent at line 4:$/,
+      ],
+      [
+        "node-props",
+        `${node} -e 'const e = new Error("seed API returned 401"); for (let i = 0; i < 200; i++) e["p" + i] = i; throw e'`,
+        /\)\. Error: seed API returned 401$/,
+      ],
+      [
+        "node-color",
+        `FORCE_COLOR=1 ${node} -e 'throw new Error("seed API returned 401")'`,
+        /\)\. Error: seed API returned 401$/,
+      ],
+    ];
+    for (const [name, source, reason] of shapes) {
+      const result = await runBash(ws, name, source);
+      expect(result.failure?.message).toMatch(reason);
+    }
+  }, 60_000);
+
+  it("takes Bun's error, not the version line Bun ends on", async () => {
+    const ws = workspace();
+    const framed = await runBash(
+      ws,
+      "bun-framed",
+      `printf '1 | throw new Error("x")\\n    ^\\nerror: seed API returned 401\\n      at /p/seed.mjs:1:7\\n\\nBun v1.3.14 (macOS arm64)\\n' >&2
+       exit 1`
+    );
+    expect(framed.failure?.message).toMatch(/\)\. error: seed API returned 401$/);
+
+    const bare = await runBash(
+      ws,
+      "bun-bare",
+      `printf 'seeding\\nerror: Unable to connect\\n  code: "ConnectionRefused"\\n\\n\\nBun v1.3.14 (Linux x64 baseline)\\n' >&2
+       exit 1`
+    );
+    expect(bare.failure?.message).toMatch(/\)\. error: Unable to connect$/);
+  }, 30_000);
+
+  it("takes npm's error, not the line naming its debug log", async () => {
+    const ws = workspace();
+    const cases: [string, string][] = [
+      [
+        'npm error code EUSAGE\\nnpm error\\nnpm error The npm ci command needs a package-lock.json\\nnpm error Run "npm help ci" for more info\\nnpm error A complete log of this run can be found in: /h/.npm/_logs/1-debug-0.log\\n',
+        "npm error The npm ci command needs a package-lock.json",
+      ],
+      [
+        "npm ERR! code E404\\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/nope\\nnpm ERR! 404\\n\\nnpm ERR! A complete log of this run can be found in: /h/.npm/_logs/1-debug-0.log\\n",
+        "npm ERR! 404 Not Found - GET https://registry.npmjs.org/nope",
+      ],
+      [
+        "npm ERR! code ENOENT\\nnpm ERR! syscall open\\nnpm ERR! path /p/package.json\\nnpm ERR! enoent Could not read package.json\\nnpm ERR! A complete log of this run can be found in:\\nnpm ERR!     /h/.npm/_logs/1-debug.log\\n",
+        "npm ERR! enoent Could not read package.json",
+      ],
+    ];
+    const long = await runBash(
+      ws,
+      "npm-usage",
+      `for i in $(seq 1 40); do echo "progress $i" >&2; done
+       printf 'npm error code EUSAGE\\nnpm error\\nnpm error The npm ci command needs a package-lock.json\\n' >&2
+       for i in $(seq 1 95); do echo "npm error   --option-$i" >&2; done
+       echo "npm error A complete log of this run can be found in: /h/1-debug-0.log" >&2
+       exit 1`
+    );
+    expect(long.failure?.message).toMatch(
+      /\)\. npm error The npm ci command needs a package-lock\.json$/
+    );
+    for (const [i, [stderr, line]] of cases.entries()) {
+      const result = await runBash(ws, `npm-${i}`, `printf '${stderr}' >&2\nexit 1`);
+      expect(result.failure?.message).toMatch(
+        new RegExp(`\\)\\. ${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`)
+      );
+    }
   }, 30_000);
 
   it("joins a stderr line that arrived in two pieces", async () => {
@@ -1839,6 +1910,67 @@ describe("limits and stopping", () => {
     expect(result.failure).toMatchObject({ kind: "timeout" });
   }, 60_000);
 
+  // GNU `timeout` and every job under `set -m` leave the runner's group, so the
+  // group stop alone missed them and they ran on under init. A daemon that
+  // starts a session of its own, as the adb server does under the client that
+  // launched it, is left alone.
+  onPosix(
+    "stops a job in a group of its own at the time limit, on a cancel and past a stall",
+    async () => {
+      const ws = workspace();
+      const node = JSON.stringify(process.execPath);
+      const run = async (name: string, interrupt: (cancel: AbortController) => void) => {
+        const pidFile = ws.resolve(`${name}.pid`);
+        const daemonFile = ws.resolve(`${name}-daemon.pid`);
+        const launcher = `const d = require("child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }); require("fs").writeFileSync(${JSON.stringify(daemonFile)}, String(d.pid)); setInterval(() => {}, 1000);`;
+        const script = ws.write(
+          `${name}.sh`,
+          `${node} -e '${launcher}' &
+           set -m
+           sleep 300 &
+           echo $! > ${JSON.stringify(pidFile)}
+           set +m
+           while true; do sleep 1; done`
+        );
+        const cancel = new AbortController();
+        const pending = executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          timeoutMs: 2_000,
+          signal: cancel.signal,
+        });
+        const job = await readPidFile(pidFile);
+        const daemon = await readPidFile(daemonFile);
+        strays.push(job, daemon);
+        expect(isAlive(job)).toBe(true);
+        interrupt(cancel);
+        const result = await pending;
+        const gone = await waitForExit(job, 10_000);
+        expect(isAlive(daemon)).toBe(true);
+        return { result, gone };
+      };
+
+      const timedOut = await run("timeout", () => {});
+      expect(timedOut.result.failure?.kind).toBe("timeout");
+      expect(timedOut.gone).toBe(true);
+
+      const cancelled = await run("cancel", (cancel) => cancel.abort());
+      expect(cancelled.result.failure?.kind).toBe("cancelled");
+      expect(cancelled.gone).toBe(true);
+
+      // The tool server's loop held past the child's own deadline, so the
+      // deadline watchdog is what stops the tree.
+      const stalled = await run("stall", () => {
+        const until = Date.now() + 5_000;
+        while (Date.now() < until) {}
+      });
+      expect(stalled.result.failure?.kind).toBe("timeout");
+      expect(stalled.gone).toBe(true);
+    },
+    90_000
+  );
+
   onPosix(
     "returns the document of a script that exits 0 with a job still running",
     async () => {
@@ -2066,10 +2198,15 @@ describe("a tool server that dies mid-step", () => {
       fs.writeFileSync(outputFile, "{}");
       const bashFile = ws.resolve("bash.pid");
       const childFile = ws.resolve("bash-child.pid");
+      const ownGroupFile = ws.resolve("own-group.pid");
       const script = ws.write(
         "disconnect.sh",
         `sleep 300 &
        echo $! > ${JSON.stringify(childFile)}
+       set -m
+       sleep 300 &
+       echo $! > ${JSON.stringify(ownGroupFile)}
+       set +m
        echo $$ > ${JSON.stringify(bashFile)}
        while true; do sleep 1; done`
       );
@@ -2098,13 +2235,15 @@ describe("a tool server that dies mid-step", () => {
 
         const bashPid = await readPidFile(bashFile, 40_000);
         const grandchild = await readPidFile(childFile, 40_000);
-        strays.push(bashPid, grandchild);
+        const ownGroup = await readPidFile(ownGroupFile, 40_000);
+        strays.push(bashPid, grandchild, ownGroup);
         expect(isAlive(bashPid)).toBe(true);
 
         runner.disconnect();
 
         expect(await waitForExit(bashPid, 20_000)).toBe(true);
         expect(await waitForExit(grandchild, 20_000)).toBe(true);
+        expect(await waitForExit(ownGroup, 20_000)).toBe(true);
         await runnerExited;
       } finally {
         runner.kill("SIGKILL");
@@ -2173,10 +2312,15 @@ describe("a tool server that dies mid-step", () => {
       const bashFile = ws.resolve("bash.pid");
       const childFile = ws.resolve("bash-child.pid");
       const runnerFile = ws.resolve("runner.pid");
+      const ownGroupFile = ws.resolve("own-group.pid");
       const script = ws.write(
         "orphan.sh",
         `sleep 300 &
        echo $! > ${JSON.stringify(childFile)}
+       set -m
+       sleep 300 &
+       echo $! > ${JSON.stringify(ownGroupFile)}
+       set +m
        echo $PPID > ${JSON.stringify(runnerFile)}
        echo $$ > ${JSON.stringify(bashFile)}
        while true; do sleep 1; done`
@@ -2206,17 +2350,19 @@ describe("a tool server that dies mid-step", () => {
         const bashPid = await readPidFile(bashFile, 40_000, () => driverStderr);
         const grandchild = await readPidFile(childFile, 40_000, () => driverStderr);
         const runnerPid = await readPidFile(runnerFile, 40_000, () => driverStderr);
-        strays.push(bashPid, grandchild, runnerPid);
+        const ownGroup = await readPidFile(ownGroupFile, 40_000, () => driverStderr);
+        strays.push(bashPid, grandchild, runnerPid, ownGroup);
         expect(isAlive(bashPid)).toBe(true);
         expect(isAlive(grandchild)).toBe(true);
 
         parent.kill("SIGKILL");
         expect(await waitForExit(bashPid, 20_000)).toBe(true);
         expect(await waitForExit(grandchild, 20_000)).toBe(true);
+        expect(await waitForExit(ownGroup, 20_000)).toBe(true);
         expect(await waitForExit(runnerPid, 20_000)).toBe(true);
       } finally {
         parent.kill("SIGKILL");
-        for (const file of [bashFile, childFile, runnerFile]) {
+        for (const file of [bashFile, childFile, runnerFile, ownGroupFile]) {
           try {
             const written = Number(fs.readFileSync(file, "utf8").trim());
             if (Number.isInteger(written)) strays.push(written);

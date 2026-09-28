@@ -1,10 +1,11 @@
 // Imports nothing from the tool-server, so it needs no build step: it is copied
 // next to the compiled executor and resolves its watchdogs against its own URL.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { isMainThread, Worker } from "node:worker_threads";
+import { stopOwnGroup } from "./flow-script-watchdog-deadline.mjs";
 
 const LIFELINE_WATCHDOG = "flow-script-watchdog-lifeline.mjs";
 const DEADLINE_WATCHDOG = "flow-script-watchdog-deadline.mjs";
@@ -784,25 +785,6 @@ function exitOnParentDisconnect() {
   }
   stopOwnGroup();
   process.kill(process.pid, "SIGKILL");
-}
-
-function stopOwnGroup() {
-  try {
-    process.kill(-process.pid, "SIGKILL");
-  } catch {
-    // No process group to name (Windows, or a runner that never led one).
-  }
-  if (process.platform === "win32") {
-    try {
-      spawnSync("taskkill", ["/pid", String(process.pid), "/t", "/f"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-    } catch {
-      // taskkill is absent or could not be launched; the self-kill is what is
-      // left, and it is the outcome this call never returns from anyway.
-    }
-  }
 }
 
 function nextRequest() {
