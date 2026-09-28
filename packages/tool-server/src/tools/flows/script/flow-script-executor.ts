@@ -38,7 +38,7 @@ import {
   SCRIPT_ENV_NAME_PATTERN,
   type ConfigDefinition,
 } from "@argent/configuration-core";
-import { makeSensitiveBank } from "@zapier/secret-scrubber/lib/utils";
+import { isLongEnoughToBeSecret, makeSensitiveBank } from "@zapier/secret-scrubber/lib/utils";
 import { isElectronHostedEnv } from "../../../utils/electron-env";
 import { formatErrorForAgent } from "../../../utils/format-error";
 import {
@@ -712,7 +712,7 @@ export class FlowScriptExecutor {
 
     let startedSeen = false;
     let terminal: ScriptTerminalResponse | null = null;
-    let stderrLineAtVerdict: string | undefined;
+    let stderrLineAtVerdict: StderrLine | undefined;
     let protocolProblem: string | null = null;
     let spawnProblem: string | null = null;
     let interrupted: "timeout" | "cancelled" | null = null;
@@ -853,7 +853,7 @@ export class FlowScriptExecutor {
     // after the script's process exited, which the reason can take: see below.
     const exitedAt = Date.now();
     const stderrQuietFor = () => Date.now() - Math.max(exitedAt, lastStderrAt);
-    let stderrLineAtQuiet: string | undefined;
+    let stderrLineAtQuiet: StderrLine | undefined;
     let stderrQuietTimer: NodeJS.Timeout | undefined;
     let watchingStderr = true;
     const watchStderr = () => {
@@ -914,10 +914,13 @@ export class FlowScriptExecutor {
       settled === "closed"
         ? (stderrLineAtQuiet ?? capture.lastStderrLine)
         : (stderrLineAtVerdict ?? capture.lastStderrLine);
-    const verdict = redactSecrets(
-      run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
-      request.secrets ?? []
-    );
+    // The line is redacted on its own, before it is trimmed, and joins the
+    // message after the message is redacted.
+    const redacted = redactSecrets(outcome, request.secrets ?? []);
+    const verdict =
+      run.interpreter === "bash"
+        ? withStderrLine(redacted, stderrLine, request.secrets ?? [])
+        : redacted;
 
     if (!startedSeen && !interrupted && environmentBytes(env) >= LARGE_ENVIRONMENT_BYTES) {
       notes.push(
@@ -1091,14 +1094,16 @@ function redactSecrets(
 
 function withStderrLine(
   verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
-  line: string
+  line: StderrLine,
+  secrets: readonly FlowScriptSecret[]
 ): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
-  if (!line || verdict.failure?.kind !== "exit") return verdict;
+  if (!line.raw || verdict.failure?.kind !== "exit") return verdict;
+  const shown = redactedStderrLine(line, secrets);
   return {
     ...verdict,
     failure: {
       ...verdict.failure,
-      message: clampText(`${verdict.failure.message} ${line}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
+      message: clampText(`${verdict.failure.message} ${shown}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
     },
   };
 }
@@ -2194,7 +2199,7 @@ class ScriptLogCapture {
   private cut = false;
   private heapFatalFlag = false;
   private heapFatalTail = "";
-  private stderrLastLine = "";
+  private stderrLastLine = NO_STDERR_LINE;
 
   constructor(
     private readonly secrets: () => readonly FlowScriptSecret[],
@@ -2238,7 +2243,7 @@ class ScriptLogCapture {
     return this.heapFatalFlag;
   }
 
-  get lastStderrLine(): string {
+  get lastStderrLine(): StderrLine {
     return this.stderrLastLine;
   }
 
@@ -2248,9 +2253,9 @@ class ScriptLogCapture {
     return Math.min(this.stepRemaining, runRemaining) <= 0;
   }
 
-  get stderrLineSoFar(): string {
+  get stderrLineSoFar(): StderrLine {
     const lastLine = this.streams.get("stderr")?.lastLine;
-    return lastLine ? lastLine.snapshot(secretForms(this.secrets())) : this.stderrLastLine;
+    return lastLine ? lastLine.snapshot() : this.stderrLastLine;
   }
 
   private watchForHeapFatal(text: string): void {
@@ -2368,12 +2373,12 @@ function withoutPartialMarker(buffer: Buffer, taken: number): number {
  * The line a bash step that exited non-zero ends its reason with: the last line
  * a stream carried that was not blank, whether that is the script's own
  * `echo … >&2` or the error of the command `set -e` stopped on. Fed the text as
- * the script wrote it, because what this returns joins the failure message and
- * is redacted with it.
+ * the script wrote it: the line it picks is redacted by
+ * {@link redactedStderrLine} when the verdict is made.
  *
  * Only the head of each line is kept, so a long line is cut at its end: that is
- * where `redactTruncated` looks for the half of a value a cut leaves, and a cut
- * at the start would leave the other half where nothing looks.
+ * where `redactedStderrLine` looks for the half of a value a cut leaves, and a
+ * cut at the start would leave the other half where nothing looks.
  */
 class LastLineTracker {
   private head = "";
@@ -2392,22 +2397,20 @@ class LastLineTracker {
     this.extend(text.slice(from));
   }
 
-  end(): string {
+  end(): StderrLine {
     this.close();
-    return this.snapshot([]);
+    return this.snapshot();
   }
 
-  snapshot(secrets: readonly FlowScriptSecret[]): string {
+  snapshot(): StderrLine {
     const lines = this.heads.map((head, i) => stderrLine(head, this.lengths[i]!));
-    if (this.blank) return reasonLine(lines);
+    if (this.blank) return reasonLine(lines) ?? NO_STDERR_LINE;
     const open = stderrLine(this.head, this.length);
-    const reason = reasonLine([...lines, open]);
-    // The line still being written ends where Argent read it, so the front of a
-    // value it had only begun to write is dropped and counted, as the head's
-    // own cut already does.
-    if (reason !== open.shown || this.length > this.head.length) return reason;
-    const partial = partialSecretTail(reason, secrets);
-    return partial > 0 ? `${reason.slice(0, -partial)}${omissionMarker(partial)}` : reason;
+    const reason = reasonLine([...lines, open]) ?? NO_STDERR_LINE;
+    // The line still being written ends where Argent read it, so it is flagged:
+    // `redactedStderrLine` drops and counts the front of a value it had only
+    // begun to write, as it does at the head's own cut.
+    return reason === open && this.length <= this.head.length ? { ...open, open: true } : reason;
   }
 
   private extend(segment: string): void {
@@ -2440,15 +2443,98 @@ class LastLineTracker {
 interface StderrLine {
   raw: string;
   shown: string;
+  length: number;
+  /** Still being written when it was read. */
+  open?: true;
 }
+
+const NO_STDERR_LINE: StderrLine = { raw: "", shown: "", length: 0 };
 
 /** A blank line is `""` in both. */
 function stderrLine(head: string, length: number): StderrLine {
-  if (!head) return { raw: "", shown: "" };
-  if (length <= head.length) return { raw: head, shown: head.trim() };
+  if (!head) return NO_STDERR_LINE;
+  if (length <= head.length) return { raw: head, shown: head.trim(), length };
   const final = head.charCodeAt(head.length - 1);
   const kept = final >= 0xd800 && final <= 0xdbff ? head.slice(0, -1) : head;
-  return { raw: head, shown: `${kept.trimStart()}${omissionMarker(length - kept.length)}` };
+  return {
+    raw: head,
+    shown: `${kept.trimStart()}${omissionMarker(length - kept.length)}`,
+    length,
+  };
+}
+
+/**
+ * The line as the reason shows it, with the values in it hidden before it is
+ * trimmed: a value's leading or trailing whitespace is part of it. The tracker
+ * keeps lines, not the text, so each line of a multi-line value counts as a
+ * value here too, from six characters that are not whitespace. Every character
+ * an occurrence covers is hidden, and occurrences that overlap become one
+ * marker, so neither of two secrets that share text keeps a part the other
+ * took. Where the line was cut at its end, or was still being written, the
+ * front of a value it ends on is dropped and counted.
+ */
+function redactedStderrLine(line: StderrLine, secrets: readonly FlowScriptSecret[]): string {
+  if (!line.raw || secrets.length === 0) return line.shown;
+  const forms = secretForms(secrets).concat(secrets.flatMap(valueLines));
+  const cut = line.length - line.raw.length;
+  const final = line.raw.charCodeAt(line.raw.length - 1);
+  const split = cut > 0 && final >= 0xd800 && final <= 0xdbff ? 1 : 0;
+  const head = line.raw.slice(0, line.raw.length - split);
+  const runs = coveredRuns(head, forms);
+  let keep = head.length;
+  if (cut > 0 || line.open) {
+    const partial = partialSecretTail(head, forms);
+    const last = runs[runs.length - 1];
+    const inside = last !== undefined && last.to === head.length && last.from <= keep - partial;
+    if (!inside) keep -= partial;
+    for (const run of runs) if (run.from < keep && run.to > keep) keep = run.from;
+  }
+  let shown = "";
+  let at = 0;
+  for (const run of runs) {
+    if (run.to > keep) break;
+    shown += `${head.slice(at, run.from)}${SECRET_PLACEHOLDER_MARKER}${run.name}}}`;
+    at = run.to;
+  }
+  shown += head.slice(at, keep);
+  const omitted = cut + split + head.length - keep;
+  return omitted > 0 ? `${shown.trimStart()}${omissionMarker(omitted)}` : shown.trim();
+}
+
+/** Each occurrence of each form in `text`, overlapping ones merged, named for the first. */
+function coveredRuns(
+  text: string,
+  forms: readonly FlowScriptSecret[]
+): Array<{ from: number; to: number; name: string }> {
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  for (const { name, value } of forms) {
+    if (!value) continue;
+    for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) {
+      spans.push({ from: at, to: at + value.length, name });
+    }
+  }
+  spans.sort((a, b) => a.from - b.from || b.to - a.to);
+  const runs: typeof spans = [];
+  for (const span of spans) {
+    const last = runs[runs.length - 1];
+    if (last && span.from < last.to) last.to = Math.max(last.to, span.to);
+    else runs.push({ ...span });
+  }
+  return runs;
+}
+
+/** Each line of a multi-line value, as written and as bash quotes it. */
+function valueLines({ name, value }: FlowScriptSecret): FlowScriptSecret[] {
+  if (!value.includes("\n")) return [];
+  const lines = value
+    .split("\n")
+    .filter((line) => isLongEnoughToBeSecret(line.replace(/\s/g, "")))
+    .flatMap((line) => [
+      line.trim(),
+      line.trim().replaceAll("'", "'\\''"),
+      line.trim().replace(/[\\"$`]/g, "\\$&"),
+    ]);
+  return [...new Set(lines)].map((line) => ({ name, value: line }));
 }
 
 /**
@@ -2456,17 +2542,21 @@ function stderrLine(head: string, length: number): StderrLine {
  * line about itself rather than on its error: Node.js and Bun after an uncaught
  * error print their version last, and npm the path of its debug log.
  */
-function reasonLine(lines: readonly StderrLine[]): string {
+function reasonLine(lines: readonly StderrLine[]): StderrLine | undefined {
   const end = newestShown(lines, lines.length - 1);
-  if (end < 0) return "";
-  const newest = lines[end]!.shown;
-  if (RUNTIME_TRAILER_RE.test(newest)) return uncaughtErrorLine(lines, end) ?? newest;
+  if (end < 0) return undefined;
+  const newest = lines[end]!;
+  if (RUNTIME_TRAILER_RE.test(newest.shown)) return uncaughtErrorLine(lines, end) ?? newest;
   let hint = end;
-  if (!NPM_LOG_HINT_RE.test(newest)) {
+  if (!NPM_LOG_HINT_RE.test(newest.shown)) {
     // Older npm puts the log's path on a line of its own, under the hint.
     const above = newestShown(lines, end - 1);
     const hintAbove = above >= 0 ? lines[above]!.shown : "";
-    if (!NPM_LINE_RE.test(newest) || !hintAbove.endsWith(":") || !NPM_LOG_HINT_RE.test(hintAbove)) {
+    if (
+      !NPM_LINE_RE.test(newest.shown) ||
+      !hintAbove.endsWith(":") ||
+      !NPM_LOG_HINT_RE.test(hintAbove)
+    ) {
       return newest;
     }
     hint = above;
@@ -2485,8 +2575,11 @@ function reasonLine(lines: readonly StderrLine[]): string {
  * Failing those, the newest line not indented and not a lone bracket. The walk
  * stops at an earlier version line.
  */
-function uncaughtErrorLine(lines: readonly StderrLine[], trailerAt: number): string | undefined {
-  let fallback: string | undefined;
+function uncaughtErrorLine(
+  lines: readonly StderrLine[],
+  trailerAt: number
+): StderrLine | undefined {
+  let fallback: StderrLine | undefined;
   for (let i = trailerAt - 1; i >= 0; i--) {
     const { raw, shown } = lines[i]!;
     if (!shown) continue;
@@ -2497,25 +2590,24 @@ function uncaughtErrorLine(lines: readonly StderrLine[], trailerAt: number): str
       let above = i - 1;
       while (above >= 0 && (!lines[above]!.shown || isFrame(lines[above]!))) above--;
       if (above < 0) return fallback;
-      const line = lines[above]!.shown;
-      return /[\p{L}\p{N}]/u.test(line) ? line : (firstLineUnderCaret(lines, above) ?? line);
+      const line = lines[above]!;
+      return /[\p{L}\p{N}]/u.test(line.shown) ? line : (firstLineUnderCaret(lines, above) ?? line);
     }
     if (SOURCE_CARET_RE.test(bare)) {
-      const under = lines.slice(i + 1, trailerAt).find((line) => line.shown);
-      return under?.shown ?? fallback;
+      return lines.slice(i + 1, trailerAt).find((line) => line.shown) ?? fallback;
     }
-    if (bare.startsWith("error: ")) return shown;
+    if (bare.startsWith("error: ")) return lines[i];
     if (fallback === undefined && !/^\s/.test(bare) && !/^[\]})]+[,;]?$/.test(shown)) {
-      fallback = shown;
+      fallback = lines[i];
     }
   }
   return fallback;
 }
 
-function firstLineUnderCaret(lines: readonly StderrLine[], below: number): string | undefined {
+function firstLineUnderCaret(lines: readonly StderrLine[], below: number): StderrLine | undefined {
   for (let i = below - 1; i >= 0 && !RUNTIME_TRAILER_RE.test(lines[i]!.shown); i--) {
     if (SOURCE_CARET_RE.test(stripVTControlCharacters(lines[i]!.raw))) {
-      return lines.slice(i + 1, below).find((line) => line.shown)?.shown;
+      return lines.slice(i + 1, below).find((line) => line.shown);
     }
   }
   return undefined;
@@ -2526,13 +2618,13 @@ function isFrame(line: StderrLine): boolean {
 }
 
 /** The first line of npm's error block above its log hint that says more than a code. */
-function npmErrorLine(lines: readonly StderrLine[], hintAt: number): string | undefined {
+function npmErrorLine(lines: readonly StderrLine[], hintAt: number): StderrLine | undefined {
   const last = newestShown(lines, hintAt - 1);
   if (last < 0 || !NPM_LINE_RE.test(lines[last]!.shown)) return undefined;
   let first = last;
   while (first > 0 && NPM_LINE_RE.test(lines[first - 1]!.shown)) first--;
   for (let i = first; i <= last; i++) {
-    if (!NPM_DETAIL_RE.test(lines[i]!.shown)) return lines[i]!.shown;
+    if (!NPM_DETAIL_RE.test(lines[i]!.shown)) return lines[i];
   }
   return undefined;
 }
