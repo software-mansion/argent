@@ -206,10 +206,7 @@ export async function queryAndroidFullHierarchy(
     devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `the android devtools helper is unavailable (${msg}) — flows resolve testID selectors against the full hierarchy it serves; confirm the device is unlocked and the helper can be installed (\`adb install -t\`)`,
-      { cause: err }
-    );
+    throw new Error(`the argent android helper is unavailable: ${msg}`, { cause: err });
   }
   const [{ xml }, size] = await Promise.all([
     // clearCache: await/assert polls must see text changes, not cached reads.

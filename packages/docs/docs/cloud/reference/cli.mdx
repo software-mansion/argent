@@ -1,0 +1,83 @@
+---
+sidebar_position: 1
+sidebar_label: CLI
+title: CLI reference
+sidebar_custom_props:
+  icon: terminal
+---
+
+```
+sim-remote [OPTIONS] <COMMAND>
+```
+
+## Global options
+
+| Option           | Environment variable | Description                                                                                                                                                                                    |
+| ---------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--server <URL>` | `SIM_ROUTER_URL`     | The URL of the Argent Cloud server. The release binary contains the default. Pass it only if we give you another URL                                                                           |
+| -                | `SIM_REMOTE_SESSION` | The name of the session. Each name has its own daemon, so several sessions can run on one computer. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer) |
+
+## Session commands
+
+| Command                          | Description                                                                                                                                                                                                |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sim-remote login`               | Authenticate and reserve a machine. See the options below                                                                                                                                                  |
+| `sim-remote logout`              | Release the machine and end the session. Prints `Logged out.` and never fails                                                                                                                              |
+| `sim-remote acquire`             | Reserve a machine for the current session. Does nothing if the session already holds one. Accepts `--timeout <SECS>` and `--no-wait`                                                                       |
+| `sim-remote release`             | Release the machine and keep the session. Prints `Released.`                                                                                                                                               |
+| `sim-remote attach <MACHINE_ID>` | Point the session at a machine that you already hold. Prints `Attached to <MACHINE_ID>.`                                                                                                                   |
+| `sim-remote list-machines`       | Print one line per machine that you hold. `*` marks the current machine. Prints `No machines.` when you hold none                                                                                          |
+| `sim-remote keepalive [TIME]`    | Reset the idle clock of the daemon. Without `TIME`, ping one time and exit. With `TIME` (`90s`, `30m`, `2h`, or a number of seconds), ping every 5 seconds for that long. `0` and other units are rejected |
+| `sim-remote daemon stop`         | Stop the background daemon. This releases the machine and ends the session. Prints `Daemon stopped.`                                                                                                       |
+
+`login` accepts these options:
+
+| Option             | Description                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| `--api-key <KEY>`  | The API key. Without the option, `login` reads `SIM_ROUTER_API_KEY`                           |
+| `--timeout <SECS>` | The maximum wait for a free machine. The default is `1800`. The server caps the value at 3600 |
+| `--no-wait`        | Fail at once when no machine is free                                                          |
+| `--no-acquire`     | Log in without a machine                                                                      |
+
+`--timeout`, `--no-wait` and `--no-acquire` exclude each other.
+
+`login` and `acquire` print `Waiting for an available machine...` while they wait. `login` prints `Logged in. Acquired machine <MACHINE_ID>.` on success, or `Logged in.` with `--no-acquire`.
+
+## Simulator commands
+
+| Command                               | Description                                                                                                                                                                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sim-remote simctl [ARGS...]`         | Run `xcrun simctl` on the machine with the same arguments. `sim-remote` reproduces the stdout, the stderr and the exit code of `simctl`. Without arguments, `simctl` prints its own usage. See [simctl passthrough](/docs/cloud/reference/simctl) for the subcommands that use local files |
+| `sim-remote input tap <UDID> <X> <Y>` | Tap the screen at a point. `X` and `Y` are fractions of the screen size from `0.0` to `1.0`. `0.5 0.5` is the centre of the screen                                                                                                                                                         |
+
+## Tunnel commands
+
+| Command                                          | Description                                                                                                                                                                                                 |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sim-remote reverse start <UDID> <PORT>`         | Let the simulator reach `localhost:<PORT>` on your computer. Prints `Tunnel active, forwarding port <PORT> for <UDID>.`                                                                                     |
+| `sim-remote reverse stop <UDID> <PORT>`          | Close the reverse tunnel. Prints `Tunnel closed for <UDID> port <PORT>.`                                                                                                                                    |
+| `sim-remote reverse status`                      | Print a table with the columns `UDID` and `PORT`, or `No active tunnels.`                                                                                                                                   |
+| `sim-remote forward start <UDID> <LOCAL:REMOTE>` | Bind `127.0.0.1:<LOCAL>` on your computer and send the traffic to `127.0.0.1:<REMOTE>` on the machine. A single port, for example `8000`, uses the same number on both sides. Ports must be from 1 to 65535 |
+| `sim-remote forward stop <LOCAL_PORT>`           | Close the forward tunnel that is bound to the local port. Prints `Forward tunnel on local port <LOCAL_PORT> closed.`                                                                                        |
+| `sim-remote forward status`                      | Print a table with the columns `UDID`, `LOCAL PORT` and `REMOTE PORT`, or `No active forward tunnels.`                                                                                                      |
+
+A forward tunnel reaches only the servers that your own session started on the machine. Both tunnel types close when the session moves to another machine through `attach`, `acquire`, `release` or a new `login`.
+
+## Test driver commands
+
+| Command                                                        | Description                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sim-remote install-shims [--shell posix\|fish] [--dir <DIR>]` | Write the Maestro and Appium stand-ins and print the shell code that puts them on `PATH`. `--shell` selects the dialect; the default comes from `$SHELL`. `--dir` selects the directory. See [Test driver shims](/docs/cloud/reference/shims) |
+
+## Exit codes
+
+| Code              | Meaning                                                                                                  |
+| ----------------- | -------------------------------------------------------------------------------------------------------- |
+| `0`               | Success                                                                                                  |
+| `1`               | A client error. `sim-remote` prints `error: <message>` and, when available, `  hint: <advice>` on stderr |
+| `2`               | `login` has no server URL. Pass `--server <URL>` or set `SIM_ROUTER_URL`                                 |
+| The `simctl` code | Under `sim-remote simctl`, the exit code of `simctl` on the machine                                      |
+
+When the consumer of the output closes the pipe, for example `| head`, `sim-remote` stops the remote command too.
+
+Run `sim-remote --help` for the full set of options. The `sim-remote` binary has no `help` subcommand.
