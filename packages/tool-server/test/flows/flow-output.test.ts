@@ -801,7 +801,7 @@ describe("resolveOutputField — `?? ''` and the field's own rules", () => {
     ["text", "selector text must contain at least one visible character"],
     ["identifier", "a selector identifier cannot be empty"],
     ["role", "a selector role cannot be empty"],
-    ["expected", "expected text cannot be empty — empty text is found in every element"],
+    ["expected", "expected text cannot be empty"],
     ["typed", "type needs a non-empty text"],
   ] as const)("rejects `?? ''` alone in a %s field", (kind, rule) => {
     expect(reject("{{output:missing ?? ''}}", kind, document)).toContain(

@@ -530,9 +530,7 @@ function resolvedTextProblem(
     case "role":
       return value.length > 0 ? undefined : "a selector role cannot be empty";
     case "expected":
-      return value.length > 0
-        ? undefined
-        : "expected text cannot be empty — empty text is found in every element";
+      return value.length > 0 ? undefined : "expected text cannot be empty";
     case "typed":
       return value.length > 0 ? undefined : "type needs a non-empty text";
     case "env": {
