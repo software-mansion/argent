@@ -201,6 +201,59 @@ describe("script log redaction - a value an encoder rewrote", () => {
     expectRedacted(`${result.log}${result.failure?.stack ?? ""}`, FORM);
   }, 30_000);
 
+  const SIGNING_KEY: FlowScriptSecret = {
+    name: "SIGNING_KEY",
+    value:
+      "-----BEGIN PRIVATE KEY-----\n" +
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n" +
+      "VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu\n" +
+      "-----END PRIVATE KEY-----",
+  };
+
+  it("replaces a multi-line value console.log printed inside an object", async () => {
+    const QUOTED: FlowScriptSecret = {
+      name: "QUOTED_KEY",
+      value: `line-one 'single' "double"\nline-two`,
+    };
+    const CHAIN: FlowScriptSecret = {
+      name: "CHAIN",
+      value: Buffer.from("chain-".repeat(1500))
+        .toString("base64")
+        .match(/.{1,64}/g)!
+        .join("\n"),
+    };
+    const result = await runScript(
+      "inspect.mjs",
+      `console.log("config:", { key: process.env.SIGNING_KEY });
+       console.log("short:", { q: process.env.QUOTED_KEY });
+       console.dir({ a: { b: { c: { d: { key: process.env.SIGNING_KEY } } } } }, { depth: null });
+       console.log({ chain: process.env.CHAIN });
+       console.dir({ whole: process.env.CHAIN }, { maxStringLength: Infinity });`,
+      [SIGNING_KEY, QUOTED, CHAIN]
+    );
+
+    expect(result.log).toMatch(
+      /^config: \{\n {2}key: '\{\{secret:SIGNING_KEY}}'\n}\nshort: \{ q: `\{\{secret:QUOTED_KEY}}` }\n/
+    );
+    expect(result.log).toContain("\n          key: '{{secret:SIGNING_KEY}}'\n");
+    expect(result.log).toMatch(/chain: '\{\{secret:CHAIN}}'\.\.\. \d+ more characters\n/);
+    expect(result.log).toContain("whole: '{{secret:CHAIN}}'\n");
+    for (const secret of [SIGNING_KEY, QUOTED, CHAIN]) expectNoRun(result.log, secret);
+  }, 30_000);
+
+  it("leaves another key alone that shares lines with a multi-line value", async () => {
+    const other = SIGNING_KEY.value.replace(/\n[^-][^\n]*/g, `\n${"A".repeat(52)}`);
+    const result = await runScript(
+      "other-key.mjs",
+      `console.log({ other: ${JSON.stringify(other)} });`,
+      [SIGNING_KEY]
+    );
+
+    expect(result.log).toContain("'-----BEGIN PRIVATE KEY-----\\n' +");
+    expect(result.log).toContain("'-----END PRIVATE KEY-----'");
+    expect(result.log).not.toContain("{{secret:");
+  }, 30_000);
+
   it("replaces a value printed as base64", async () => {
     const result = await runScript(
       "base64.mjs",

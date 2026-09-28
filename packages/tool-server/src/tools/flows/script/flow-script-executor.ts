@@ -22,7 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
-import { promisify, stripVTControlCharacters } from "node:util";
+import { inspect, promisify, stripVTControlCharacters } from "node:util";
 import {
   configFilePath,
   getAtPath,
@@ -1338,7 +1338,34 @@ function printedSpellings(value: string): string[] {
     ansiCQuoted(value).replace(/[\u{80}-\u{10ffff}]/gu, (char) =>
       [...Buffer.from(char)].map((byte) => `\\${byte.toString(8)}`).join("")
     ),
+    // util.inspect, as console.log prints an object: the string quoted and
+    // escaped, by default to its first 10,000 characters and then a count of
+    // the rest.
+    ...[...new Set([value, value.slice(0, INSPECT_MAX_STRING)])].flatMap((shown) => [
+      inspect(shown, INSPECT_WHOLE).slice(1, -1),
+      ...inspectedSplits(shown),
+    ]),
   ];
+}
+
+/** util.inspect's default `maxStringLength`. */
+const INSPECT_MAX_STRING = 10_000;
+
+/** One quoted string, however long: no split into lines, no cut. */
+const INSPECT_WHOLE = { breakLength: Infinity, maxStringLength: Infinity };
+
+/**
+ * util.inspect writes a long multi-line string as quoted pieces, one per line,
+ * joined by `+` and a line break indented two past the string's own level, two
+ * for each level it is nested at. Ten levels are covered. The quotes at the two
+ * ends are left out, so the form starts and ends with the value's own text.
+ */
+function inspectedSplits(value: string): string[] {
+  const pieces = value.split(/(?<=\n)/).map((line) => inspect(line, INSPECT_WHOLE));
+  if (pieces.length < 2) return [];
+  return Array.from({ length: 11 }, (_, level) =>
+    pieces.join(` +\n${" ".repeat(2 * level + 2)}`).slice(1, -1)
+  );
 }
 
 const ANSI_C_ESCAPES: Readonly<Record<string, string>> = {
