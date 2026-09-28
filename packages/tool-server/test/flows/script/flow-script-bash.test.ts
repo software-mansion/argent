@@ -711,8 +711,8 @@ describe("what a failing bash step says", () => {
       const script = ws.write(
         "cancel-midscript.sh",
         `set -m
-         ( while true; do echo tick >&2; sleep 0.05; done ) &
-         echo $! > ${JSON.stringify(pidFile)}
+         ( ( while true; do echo tick >&2; sleep 0.05; done ) &
+           echo $! > ${JSON.stringify(pidFile)} )
          sleep 30`
       );
       const cancel = new AbortController();
@@ -1889,6 +1889,67 @@ describe("limits and stopping", () => {
     expect(result.failure).toMatchObject({ kind: "timeout" });
   }, 60_000);
 
+  // GNU `timeout` and every job under `set -m` leave the runner's group, so the
+  // group stop alone missed them and they ran on under init. A daemon that
+  // starts a session of its own, as the adb server does under the client that
+  // launched it, is left alone.
+  onPosix(
+    "stops a job in a group of its own at the time limit, on a cancel and past a stall",
+    async () => {
+      const ws = workspace();
+      const node = JSON.stringify(process.execPath);
+      const run = async (name: string, interrupt: (cancel: AbortController) => void) => {
+        const pidFile = ws.resolve(`${name}.pid`);
+        const daemonFile = ws.resolve(`${name}-daemon.pid`);
+        const launcher = `const d = require("child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }); require("fs").writeFileSync(${JSON.stringify(daemonFile)}, String(d.pid)); setInterval(() => {}, 1000);`;
+        const script = ws.write(
+          `${name}.sh`,
+          `${node} -e '${launcher}' &
+           set -m
+           sleep 300 &
+           echo $! > ${JSON.stringify(pidFile)}
+           set +m
+           while true; do sleep 1; done`
+        );
+        const cancel = new AbortController();
+        const pending = executor().execute({
+          scriptPath: script,
+          interpreter: "bash",
+          projectRoot: ws.dir,
+          timeoutMs: 2_000,
+          signal: cancel.signal,
+        });
+        const job = await readPidFile(pidFile);
+        const daemon = await readPidFile(daemonFile);
+        strays.push(job, daemon);
+        expect(isAlive(job)).toBe(true);
+        interrupt(cancel);
+        const result = await pending;
+        const gone = await waitForExit(job, 10_000);
+        expect(isAlive(daemon)).toBe(true);
+        return { result, gone };
+      };
+
+      const timedOut = await run("timeout", () => {});
+      expect(timedOut.result.failure?.kind).toBe("timeout");
+      expect(timedOut.gone).toBe(true);
+
+      const cancelled = await run("cancel", (cancel) => cancel.abort());
+      expect(cancelled.result.failure?.kind).toBe("cancelled");
+      expect(cancelled.gone).toBe(true);
+
+      // The tool server's loop held past the child's own deadline, so the
+      // deadline watchdog is what stops the tree.
+      const stalled = await run("stall", () => {
+        const until = Date.now() + 5_000;
+        while (Date.now() < until) {}
+      });
+      expect(stalled.result.failure?.kind).toBe("timeout");
+      expect(stalled.gone).toBe(true);
+    },
+    90_000
+  );
+
   onPosix(
     "returns the document of a script that exits 0 with a job still running",
     async () => {
@@ -2116,10 +2177,15 @@ describe("a tool server that dies mid-step", () => {
       fs.writeFileSync(outputFile, "{}");
       const bashFile = ws.resolve("bash.pid");
       const childFile = ws.resolve("bash-child.pid");
+      const ownGroupFile = ws.resolve("own-group.pid");
       const script = ws.write(
         "disconnect.sh",
         `sleep 300 &
        echo $! > ${JSON.stringify(childFile)}
+       set -m
+       sleep 300 &
+       echo $! > ${JSON.stringify(ownGroupFile)}
+       set +m
        echo $$ > ${JSON.stringify(bashFile)}
        while true; do sleep 1; done`
       );
@@ -2148,13 +2214,15 @@ describe("a tool server that dies mid-step", () => {
 
         const bashPid = await readPidFile(bashFile, 40_000);
         const grandchild = await readPidFile(childFile, 40_000);
-        strays.push(bashPid, grandchild);
+        const ownGroup = await readPidFile(ownGroupFile, 40_000);
+        strays.push(bashPid, grandchild, ownGroup);
         expect(isAlive(bashPid)).toBe(true);
 
         runner.disconnect();
 
         expect(await waitForExit(bashPid, 20_000)).toBe(true);
         expect(await waitForExit(grandchild, 20_000)).toBe(true);
+        expect(await waitForExit(ownGroup, 20_000)).toBe(true);
         await runnerExited;
       } finally {
         runner.kill("SIGKILL");
@@ -2223,10 +2291,15 @@ describe("a tool server that dies mid-step", () => {
       const bashFile = ws.resolve("bash.pid");
       const childFile = ws.resolve("bash-child.pid");
       const runnerFile = ws.resolve("runner.pid");
+      const ownGroupFile = ws.resolve("own-group.pid");
       const script = ws.write(
         "orphan.sh",
         `sleep 300 &
        echo $! > ${JSON.stringify(childFile)}
+       set -m
+       sleep 300 &
+       echo $! > ${JSON.stringify(ownGroupFile)}
+       set +m
        echo $PPID > ${JSON.stringify(runnerFile)}
        echo $$ > ${JSON.stringify(bashFile)}
        while true; do sleep 1; done`
@@ -2256,17 +2329,19 @@ describe("a tool server that dies mid-step", () => {
         const bashPid = await readPidFile(bashFile, 40_000, () => driverStderr);
         const grandchild = await readPidFile(childFile, 40_000, () => driverStderr);
         const runnerPid = await readPidFile(runnerFile, 40_000, () => driverStderr);
-        strays.push(bashPid, grandchild, runnerPid);
+        const ownGroup = await readPidFile(ownGroupFile, 40_000, () => driverStderr);
+        strays.push(bashPid, grandchild, runnerPid, ownGroup);
         expect(isAlive(bashPid)).toBe(true);
         expect(isAlive(grandchild)).toBe(true);
 
         parent.kill("SIGKILL");
         expect(await waitForExit(bashPid, 20_000)).toBe(true);
         expect(await waitForExit(grandchild, 20_000)).toBe(true);
+        expect(await waitForExit(ownGroup, 20_000)).toBe(true);
         expect(await waitForExit(runnerPid, 20_000)).toBe(true);
       } finally {
         parent.kill("SIGKILL");
-        for (const file of [bashFile, childFile, runnerFile]) {
+        for (const file of [bashFile, childFile, runnerFile, ownGroupFile]) {
           try {
             const written = Number(fs.readFileSync(file, "utf8").trim());
             if (Number.isInteger(written)) strays.push(written);

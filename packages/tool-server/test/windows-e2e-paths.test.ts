@@ -91,13 +91,18 @@ describe("the Windows job's path filter", () => {
   });
 
   it("names the three files that carry the Windows tree kill", () => {
-    for (const file of [
-      "packages/tool-server/src/tools/flows/script/flow-script-runner.mjs",
-      "packages/tool-server/src/tools/flows/script/flow-script-watchdog-deadline.mjs",
-      "packages/tool-server/src/tools/flows/script/flow-script-watchdog-lifeline.mjs",
+    const dir = "packages/tool-server/src/tools/flows/script";
+    const read = (name: string) => fs.readFileSync(path.join(WORKSPACE_ROOT, dir, name), "utf8");
+    expect(read("flow-script-watchdog-deadline.mjs")).toContain("taskkill");
+    for (const name of ["flow-script-runner.mjs", "flow-script-watchdog-lifeline.mjs"]) {
+      expect(read(name)).toContain('from "./flow-script-watchdog-deadline.mjs"');
+    }
+    for (const name of [
+      "flow-script-runner.mjs",
+      "flow-script-watchdog-deadline.mjs",
+      "flow-script-watchdog-lifeline.mjs",
     ]) {
-      expect(fs.readFileSync(path.join(WORKSPACE_ROOT, file), "utf8")).toContain("taskkill");
-      expect(covers(file)).toBe(true);
+      expect(covers(`${dir}/${name}`)).toBe(true);
     }
   });
 });

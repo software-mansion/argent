@@ -16,13 +16,13 @@
  * loop, a heap exhaustion or a `process.exit` cannot take the server down.
  */
 
-import { fork, spawn, type ChildProcess, type ForkOptions } from "node:child_process";
+import { execFile, fork, spawn, type ChildProcess, type ForkOptions } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
-import { stripVTControlCharacters } from "node:util";
+import { promisify, stripVTControlCharacters } from "node:util";
 import {
   getConfigDefinition,
   getConfigValue,
@@ -1815,12 +1815,16 @@ function configuredNumber(key: string): number | undefined {
 
 /**
  * POSIX names the runner's process group, which outlives the runner and holds
- * every descendant that did not deliberately leave it; an empty group is the
- * proof that the tree is gone. Windows has no such group, so `taskkill /T`
- * walks the live parent-child tree instead: a re-parented grandchild escapes
- * it, and once the child is gone there is nothing left to walk from. A
- * deliberately detached descendant is out of reach on either, which is how a
- * script outlives its step.
+ * every descendant that did not leave it; an empty group is the proof that the
+ * tree is gone. A descendant in a group of its own - GNU `timeout` and its
+ * command, a job under `set -m` - is found through the tree and its group is
+ * stopped beside the runner's, which works only while the runner still leads
+ * to it. Windows has no such group, so `taskkill /T` walks the live
+ * parent-child tree instead: a re-parented grandchild escapes it, and once the
+ * child is gone there is nothing left to walk from. A descendant that started
+ * a session of its own - `setsid`, a daemon such as the adb server, Node's
+ * `detached` - is left alone on POSIX, and so is one that left the group and
+ * whose parent is gone: that is how a script outlives its step.
  */
 async function stopProcessTree(child: ChildProcess, graceMs: number): Promise<void> {
   const pid = child.pid;
@@ -1840,30 +1844,90 @@ async function stopProcessTree(child: ChildProcess, graceMs: number): Promise<vo
       killer.on("error", () => {});
       killer.unref();
     });
-    await waitForGroupToEmpty(child, pid, graceMs);
+    await waitForGroupsToEmpty(child, [pid], graceMs);
     if (!hasExited(child)) tryKill(() => child.kill());
     return;
   }
 
   if (!groupHasMembers(pid)) return;
-  killGroup(child, pid, "SIGTERM");
-  await waitForGroupToEmpty(child, pid, graceMs);
-  if (!groupHasMembers(pid)) return;
-  killGroup(child, pid, "SIGKILL");
+  const groups = [pid, ...(hasExited(child) ? [] : await descendantGroups(pid))];
+  signalGroups(child, groups, "SIGTERM");
+  await waitForGroupsToEmpty(child, groups, graceMs);
+  const left = groups.filter(groupHasMembers);
+  if (left.length === 0) return;
+  signalGroups(child, left, "SIGKILL");
   // A SIGKILL is delivered at once but the kernel still has to tear the process
   // down, so the step would otherwise return a moment before the tree is
   // actually gone — and "stopped" is what the verdict claims.
-  await waitForGroupToEmpty(child, pid, FORCE_GRACE_MS);
+  await waitForGroupsToEmpty(child, left, FORCE_GRACE_MS);
 }
 
-async function waitForGroupToEmpty(
+const execFileAsync = promisify(execFile);
+
+/** Absolute where it can be: a tool server started from launchd has no `/bin` on its PATH. */
+const PS_BIN = ["/bin/ps", "/usr/bin/ps"].find((file) => fs.existsSync(file)) ?? "ps";
+
+/**
+ * The groups of `root`'s descendants other than its own, short of a session
+ * leader and all below it; none when `ps` cannot answer.
+ */
+async function descendantGroups(root: number): Promise<number[]> {
+  let table: string;
+  try {
+    ({ stdout: table } = await execFileAsync(PS_BIN, ["-A", "-o", "pid=,ppid=,pgid=,stat="], {
+      timeout: 1_500,
+      maxBuffer: 16 * 1024 * 1024,
+    }));
+  } catch {
+    return [];
+  }
+  const children = new Map<number, number[]>();
+  const groupOf = new Map<number, number>();
+  const sessionLeaders = new Set<number>();
+  for (const line of table.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!match) continue;
+    const [pid, ppid, pgid] = match.slice(1, 4).map(Number) as [number, number, number];
+    groupOf.set(pid, pgid);
+    if (match[4]!.includes("s")) sessionLeaders.add(pid);
+    const siblings = children.get(ppid);
+    if (siblings) siblings.push(pid);
+    else children.set(ppid, [pid]);
+  }
+  const groups = new Set<number>();
+  const pending = [root];
+  const seen = new Set(pending);
+  while (pending.length > 0) {
+    for (const child of children.get(pending.pop()!) ?? []) {
+      if (seen.has(child) || sessionLeaders.has(child)) continue;
+      seen.add(child);
+      pending.push(child);
+      groups.add(groupOf.get(child)!);
+    }
+  }
+  groups.delete(root);
+  return [...groups].filter((group) => group > 1);
+}
+
+function signalGroups(
   child: ChildProcess,
-  pid: number,
+  groups: readonly number[],
+  signal: NodeJS.Signals
+): void {
+  for (const group of groups) {
+    if (group === child.pid) killGroup(child, group, signal);
+    else tryKill(() => process.kill(-group, signal));
+  }
+}
+
+async function waitForGroupsToEmpty(
+  child: ChildProcess,
+  groups: readonly number[],
   graceMs: number
 ): Promise<void> {
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
-    if (process.platform === "win32" ? hasExited(child) : !groupHasMembers(pid)) return;
+    if (process.platform === "win32" ? hasExited(child) : !groups.some(groupHasMembers)) return;
     await sleep(GROUP_POLL_MS);
   }
 }
