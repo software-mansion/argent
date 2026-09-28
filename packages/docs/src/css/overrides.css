@@ -76,11 +76,6 @@ button[class*="DocSearch-Button"] {
   margin: 0 !important;
 }
 
-/*
- * The search button in the mobile sidebar is full width with side padding. The shared
- * theme sizes it as border-box only up to 768px, so from there to the 996px breakpoint
- * the padding pushes it past the sidebar edge.
- */
 .navbar-sidebar button[class*="DocSearch-Button"] {
   box-sizing: border-box;
 }
@@ -380,31 +375,15 @@ article [class*="llmDropdownItem"]:hover {
   mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
 }
 
-/*
- * In the mobile sidebar the shared theme pads the items panel on the left, but Infima
- * gives the menu inside it the full width of the sidebar, so the menu overflows on the
- * right. The menu fills the padded panel instead, and its right padding lines the
- * switcher up with the search box above it.
- */
 .navbar-sidebar__items > .navbar-sidebar__item.menu {
   width: 100%;
   padding-right: 20px;
 }
 
-/*
- * The search box above has a 20px margin on each side. The menu starts at 1rem of panel
- * padding plus the 0.5rem item padding of Infima, so the switcher moves left by the
- * difference to line up with the search box.
- */
 .navbar-sidebar .menu__list > div:first-child:has(> .product-switcher) {
   margin-left: calc(20px - 1.5rem);
 }
 
-/*
- * The site is unversioned, so the version links in the mobile sidebar footer only ever
- * show "Next". The footer holds nothing else, so it goes, and the items panel takes back
- * the 4em the theme reserves for it.
- */
 .navbar-sidebar [class*="sidebarFooter"] {
   display: none;
 }
