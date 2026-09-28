@@ -6,7 +6,7 @@ import { createRestartAppTool } from "../src/tools/restart-app";
 import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../src/tools/debugger/debugger-status";
 import { debuggerReloadMetroTool } from "../src/tools/debugger/debugger-reload-metro";
-import { debuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
 import { createDebuggerLogRegistryTool } from "../src/tools/debugger/debugger-log-registry";
 import { debuggerEvaluateTool } from "../src/tools/debugger/debugger-evaluate";
@@ -21,7 +21,7 @@ const OVERVIEW_TOOLS: ToolDefinition<any, any>[] = [
   createDebuggerStatusTool(registry),
   debuggerReloadMetroTool,
   createRestartAppTool(registry),
-  debuggerComponentTreeTool,
+  createDebuggerComponentTreeTool(registry),
   debuggerInspectElementTool,
   createDebuggerLogRegistryTool(registry),
   debuggerEvaluateTool,
