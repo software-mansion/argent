@@ -386,7 +386,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   // blob() and bytes() go through them), or the chunks of its body stream. A body the app never
   // reads is not recorded. The native side announces the end of every request with
   // readyForJSFinalization, a failed one too, and that event can come before start rejects: the
-  // record ends only once start resolved.
+  // record ends only once start resolved. The body can be complete before JS gets that event: a
+  // whole body the app reads, or didComplete after the chunks it streams, ends the record too. So an
+  // app that aborts once it has the body (urql, graphql-sse) does not make the request fail.
   function observeExpoResponse(rec, response, started) {
     var chunks = [];
     var kept = 0;
@@ -418,21 +420,33 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       for (var i = 0, at = 0; i < chunks.length; at += chunks[i].byteLength, i++) bytes.set(chunks[i], at);
       complete(rec, utf8Text(bytes), streamed, streamed > BODY_CAP);
     };
+    var ended = function() {
+      if (!endedAt) endedAt = Date.now();
+      finish();
+    };
     var onEnd = function() {
       try { response.removeListener('readyForJSFinalization', onEnd); } catch (e) {}
-      endedAt = Date.now();
-      finish();
+      ended();
     };
     // Expo drops the stream listeners itself when the request ends.
     response.addListener('didReceiveResponseData', onData);
+    response.addListener('didComplete', ended);
     response.addListener('didFailWithError', onFail);
     response.addListener('readyForJSFinalization', onEnd);
     // startStreaming returns the whole body when it completed before the app opened its stream (on
     // iOS, SDK 55 resolves fetch only then), else null and the chunks follow as events.
-    tapMethod(response, 'startStreaming', takeWhole);
-    tapMethod(response, 'arrayBuffer', takeWhole);
+    tapMethod(response, 'startStreaming', function(data) {
+      if (data == null) return;
+      takeWhole(data);
+      ended();
+    });
+    tapMethod(response, 'arrayBuffer', function(data) {
+      takeWhole(data);
+      ended();
+    });
     tapMethod(response, 'text', function(text) {
       if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, utf8Length(text), false);
+      ended();
     });
     started.then(function() {
       if (rec.entry.state === 'failed') return;

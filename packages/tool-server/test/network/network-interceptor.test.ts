@@ -560,6 +560,8 @@ interface NativeRequestControl {
   response: {
     addListener(event: string, listener: () => void): void;
     _native: { state: string };
+    /** Changes the native state without sending the events that come with it. */
+    _set(state: string): void;
   };
   /** The response head arrives: start resolves. */
   head(status: number, headers?: Record<string, string>): void;
@@ -2324,6 +2326,103 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         expect(rt.records()[0]!.errorText).toBeUndefined();
       }
     );
+
+    it.each<{ sdk: string; options: RuntimeOptions }>([
+      { sdk: "SDK 57", options: EXPO_57 },
+      { sdk: "SDK 55", options: { polyfillFetch: true, expo: { sdk: 55 } } },
+    ])(
+      "keeps a request finished when the app aborts it once it streamed the body to the end ($sdk)",
+      async ({ options }) => {
+        const rt = createRuntime(options);
+        rt.install();
+        // urql and graphql-sse abort as cleanup, before JS gets the end of the request.
+        const text = rt.run(
+          `var controller = new AbortController();
+          expoFetch('https://api.test/stream', { signal: controller.signal }).then(function(r) {
+            return readStream(r).then(function(text) { controller.abort(); return text; });
+          })`
+        ) as Promise<string>;
+        await untilSent(rt, 1);
+        const request = rt.native[0]!;
+        request.head(200, { "Content-Type": "text/plain" });
+        await untilNativeState(request, "bodyStreamingStarted");
+        request.chunk("start ");
+        request.chunk("end");
+        request.done();
+
+        expect(await text).toBe("start end");
+        await settle();
+        expect(request.cancelled).toBe(true);
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          response: { status: 200 },
+          responseBody: "start end",
+          encodedDataLength: 9,
+        });
+        expect(rt.records()[0]!.errorText).toBeUndefined();
+      }
+    );
+
+    it.each([
+      { read: "arrayBuffer()", code: "r.arrayBuffer().then(function(b) { return b.byteLength; })" },
+      { read: "blob()", code: "r.blob().then(function(b) { return b.size; })" },
+    ])(
+      "keeps a request finished when the app aborts it once $read resolved, before JS got the end of the request",
+      async ({ code }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.install();
+        const size = rt.run(
+          `var controller = new AbortController();
+          expoFetch('https://api.test/file', { signal: controller.signal }).then(function(r) {
+            return ${code}.then(function(value) { controller.abort(); return value; });
+          })`
+        ) as Promise<number>;
+        await untilSent(rt, 1);
+        const request = rt.native[0]!;
+        request.head(200, { "Content-Type": "application/octet-stream" });
+        await settle();
+        request.chunk("12345");
+        request.response._set("bodyCompleted");
+
+        expect(await size).toBe(5);
+        await settle();
+        expect(request.cancelled).toBe(true);
+        expect(rt.records()[0]).toMatchObject({ state: "finished", encodedDataLength: 5 });
+        expect(rt.records()[0]!.errorText).toBeUndefined();
+      }
+    );
+
+    it("keeps a request finished when the app aborts it once json() resolved, before JS got the end of the request", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const json = rt.run(
+        `var controller = new AbortController();
+        expoFetch('https://api.test/me', { signal: controller.signal }).then(function(r) {
+          return r.json().then(function(value) { controller.abort(); return value; });
+        })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "application/json" });
+      await settle();
+      // On iOS the result of a body read can reach JS before the end of the request: the body
+      // completes here, and the end of the request does not follow.
+      request.chunk('{"id":7}');
+      request.response._set("bodyCompleted");
+
+      expect(await json).toEqual({ id: 7 });
+      await settle();
+      expect(request.cancelled).toBe(true);
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        response: { status: 200 },
+        responseBody: '{"id":7}',
+        encodedDataLength: 8,
+      });
+      expect(rt.records()[0]!.errorText).toBeUndefined();
+    });
 
     it.each([
       { read: "text()", code: "r.text()", value: TEXT_BODY },
