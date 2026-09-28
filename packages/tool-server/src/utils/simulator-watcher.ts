@@ -7,6 +7,7 @@ import {
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
+import { externalClaimForNativeId } from "./external-devices";
 import {
   configuredAdditionalDeviceSets,
   rememberDeviceSet,
@@ -79,15 +80,123 @@ export function startSimulatorWatcher(registry: Registry): {
   ready: Promise<void>;
 } {
   const trackedServices = new Map<string, NativeDevtoolsApi>();
+  /**
+   * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
+   */
+  const reportedSkips = new Set<string>();
+
+  /**
+   * Split the booted set into the simulators the watcher may drive and the ones
+   * a provider claims.
+   *
+   * `ours` drops the claimed simulators whose provider withheld
+   * `native-devtools`. The capability gate would refuse them anyway, but
+   * resolving a service that throws on every tick would fill the registry with
+   * error entries. This way the watcher never asks.
+   *
+   * `claimed` holds every claim, granted or not, because what a claim changes
+   * is who owns the injection; and that is true of a granted one too. A granted
+   * claim stays in `ours` as well, the watcher still resolves a service for it,
+   * just one that attaches to the provider's agent instead of arming its own.
+   */
+  function withoutForeignSimulators(booted: Set<string>): {
+    ours: Set<string>;
+    claimed: Set<string>;
+  } {
+    const ours = new Set<string>();
+    const claimed = new Set<string>();
+
+    for (const udid of booted) {
+      const claim = externalClaimForNativeId(udid);
+
+      if (!claim) {
+        reportedSkips.delete(udid);
+        ours.add(udid);
+        continue;
+      }
+
+      claimed.add(udid);
+
+      if (claim.capabilities.has("native-devtools")) {
+        reportedSkips.delete(udid);
+        ours.add(udid);
+        continue;
+      }
+
+      if (!reportedSkips.has(udid)) {
+        reportedSkips.add(udid);
+        process.stderr.write(
+          `[simulator-watcher] skipping ${udid}: ${claim.provider.name} offers it without the ` +
+            `'native-devtools' capability, so argent leaves its devtools environment alone\n`
+        );
+      }
+    }
+
+    for (const udid of reportedSkips) {
+      if (!booted.has(udid)) reportedSkips.delete(udid);
+    }
+
+    return { ours, claimed };
+  }
+
+  /**
+   * Give a newly claimed simulator's devtools environment back to its provider.
+   *
+   * A provider that boots a simulator arms its own injection and then publishes
+   * the descriptor, so a tick landing in between finds an unclaimed simulator
+   * and arms over it. Once the claim appears the environment is the provider's
+   * business, whatever it granted/ `NATIVE_DEVTOOLS_IOS_CDP_SOCKET` names our
+   * socket and launchd holds it for the rest of the boot, so the provider's own
+   * agent would dial us rather than the provider.
+   *
+   * Letting go of the service is not enough on its own, hence the withdrawal.
+   * Dropping it afterwards is what makes the grant's own answer apply. A
+   * granted claim re-resolves on the pass below into attach mode, where the
+   * provider owns the injection and we borrow its agent and an ungranted one is
+   * simply not ours to hold any more.
+   *
+   * Best-effort and one attempt. The UDID leaves `trackedServices` either way,
+   * so there is nothing to retry against and a failure only leaves what was
+   * already there.
+   */
+  async function handBackClaimed(claimed: Set<string>): Promise<void> {
+    for (const udid of claimed) {
+      const service = trackedServices.get(udid);
+      /*
+       * `armsEnv` is false for a service that already attaches to a provider,
+       * which is every service resolved after the claim was published. Only one
+       * resolved before it has anything of ours on the device.
+       */
+      if (!service?.armsEnv) continue;
+
+      trackedServices.delete(udid);
+
+      await service.withdrawEnv().catch((err: unknown) => {
+        process.stderr.write(
+          `[simulator-watcher] could not hand ${udid}'s devtools environment back to its ` +
+            `provider: ${String(err)}\n`
+        );
+      });
+
+      await registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
+    }
+  }
 
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
     let booted: Set<string>;
+    let claimed: Set<string>;
     try {
-      booted = await getBootedUdids();
+      ({ ours: booted, claimed } = withoutForeignSimulators(await getBootedUdids()));
     } catch {
       // xcrun unavailable or transient error — skip this tick
       return;
     }
+
+    /**
+     * Before the init pass, so a granted claim re-resolves into attach mode on
+     * the same tick rather than staying armed for another ten seconds.
+     */
+    await handBackClaimed(claimed);
 
     const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
     const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
@@ -105,11 +214,15 @@ export function startSimulatorWatcher(registry: Registry): {
     if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
     else pendingAttempts.forEach((p) => p.catch(() => {}));
 
+    /**
+     * Shut down, so there is no environment left to hand anywhere, launchd took
+     * it with the boot. A simulator that is merely claimed left `booted` via
+     * `handBackClaimed` above, which withdraws first.
+     */
     for (const udid of [...trackedServices.keys()]) {
-      if (!booted.has(udid)) {
-        trackedServices.delete(udid);
-        registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
-      }
+      if (booted.has(udid)) continue;
+      trackedServices.delete(udid);
+      registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
     }
   }
 

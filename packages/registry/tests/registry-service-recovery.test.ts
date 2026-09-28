@@ -134,4 +134,73 @@ describe("Registry -- service self-recovery on recoverable tool failure", () => 
     expect(dead.stats()).toEqual({ created: 2, disposed: 1 });
     expect(healthy.stats()).toEqual({ created: 1, disposed: 0 });
   });
+
+  /**
+   * Most tools declare nothing in `services()` and call `resolveService`
+   * inside `execute` instead. A service reached that way can be holding just
+   * as dead a handle as a declared one and before this it was invisible to the
+   * self-heal. leaving the tool failing against it for the rest of the
+   * session, recoverable only by hand.
+   */
+  it("recovers a service the tool resolved lazily rather than declared", async () => {
+    const registry = new Registry();
+    const dead = makeRecoverableBlueprint("lazy");
+    registry.registerBlueprint(dead.blueprint);
+
+    registry.registerTool({
+      id: "probe",
+      services: () => ({}),
+      async execute(): Promise<{ epoch: number }> {
+        const svc = await registry.resolveService<{ epoch: number }>(dead.urn);
+        if (svc.epoch < 1) throw new Error("DEAD_SERVER: connect ECONNREFUSED");
+        return { epoch: svc.epoch };
+      },
+    } as ToolDefinition<unknown, { epoch: number }>);
+
+    const result = await registry.invokeTool<{ epoch: number }>("probe");
+
+    expect(result.epoch).toBe(1);
+    expect(dead.stats()).toEqual({ created: 2, disposed: 1 });
+  });
+
+  /** Concurrent invocations must not dispose each other's services. */
+  it("keeps one invocation's resolutions out of another's recovery", async () => {
+    const registry = new Registry();
+    const dead = makeRecoverableBlueprint("shared-dead");
+    const bystander = makeRecoverableBlueprint("bystander");
+    registry.registerBlueprint(dead.blueprint);
+    registry.registerBlueprint(bystander.blueprint);
+
+    registry.registerTool({
+      id: "failing",
+      services: () => ({}),
+      async execute(): Promise<{ epoch: number }> {
+        const svc = await registry.resolveService<{ epoch: number }>(dead.urn);
+        if (svc.epoch < 1) throw new Error("DEAD_SERVER: connect ECONNREFUSED");
+        return { epoch: svc.epoch };
+      },
+    } as ToolDefinition<unknown, { epoch: number }>);
+
+    registry.registerTool({
+      id: "bystander",
+      services: () => ({}),
+      async execute(): Promise<{ epoch: number }> {
+        const svc = await registry.resolveService<{ epoch: number }>(bystander.urn);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { epoch: svc.epoch };
+      },
+    } as ToolDefinition<unknown, { epoch: number }>);
+
+    const [failing, quiet] = await Promise.all([
+      registry.invokeTool<{ epoch: number }>("failing"),
+      registry.invokeTool<{ epoch: number }>("bystander"),
+    ]);
+
+    expect(failing.epoch).toBe(1);
+    expect(quiet.epoch).toBe(0);
+    /**
+     * The bystander was resolved in a different invocation, so it survived.
+     */
+    expect(bystander.stats()).toEqual({ created: 1, disposed: 0 });
+  });
 });
