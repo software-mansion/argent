@@ -3139,7 +3139,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       return { rt, touched, LibResponse };
     }
 
-    it("records a call once it resolves, with its status and headers but never its body", async () => {
+    it("records a call when the app makes it, and its status and headers once it resolves", async () => {
       const { rt, touched, LibResponse } = libRuntime();
       let resolve: (response: unknown) => void = () => {};
       rt.context.fetch = () => new Promise((r) => (resolve = r));
@@ -3147,7 +3147,12 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       const pending = rt.run(
         `fetch('https://api.test/native', { method: 'post', headers: { 'X-Id': '1' }, body: 'q' })`
       ) as Promise<unknown>;
-      expect(rt.records()).toHaveLength(0);
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "pending",
+        request: { method: "POST", url: "https://api.test/native", postData: "q" },
+      });
+      expect(rt.records()[0]!.response).toBeUndefined();
       const response = new LibResponse("https://api.test/native");
       resolve(response);
       expect(await pending).toBe(response);
@@ -3486,7 +3491,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         rt.install();
         const pending = rt.run(`fetch('https://api.test/native')`) as Promise<unknown>;
         rt.run(send.replace("URL", "native"));
-        await untilSent(rt, 1);
+        await settle();
         resolve();
         await pending;
         await settle();
@@ -3521,14 +3526,15 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       rt.install();
       const pending = rt.run(`fetch('https://api.test/native')`) as Promise<unknown>;
       rt.run(send);
-      await untilSent(rt, 1);
+      await settle();
       resolve();
       await pending;
       await settle();
 
       expect(rt.records()).toHaveLength(2);
-      expect(rt.records()[1]).toMatchObject({
+      expect(rt.records()[0]).toMatchObject({
         resourceType: "Fetch",
+        state: "finished",
         request: { method: "GET", url: "https://api.test/native" },
       });
     });
@@ -3546,14 +3552,14 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       rt.run(
         `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/graphql'); x.send('{"query":"axios"}');`
       );
-      await untilSent(rt, 1);
+      await settle();
       resolve();
       await pending;
       await settle();
 
       expect(rt.records().map((r) => `${r.resourceType} ${r.request.postData}`)).toEqual([
-        'XHR {"query":"axios"}',
         'Fetch {"query":"lib"}',
+        'XHR {"query":"axios"}',
       ]);
     });
 
@@ -3583,9 +3589,11 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       }
     );
 
-    it("records no rejected call, and rejects the app's promise with the same error", async () => {
+    it("records a rejected call as failed, and rejects the app's promise with the same error", async () => {
       const { rt } = libRuntime();
-      const error = new Error("offline");
+      const error = new TypeError(
+        "Network request failed: Failed to connect to localhost/127.0.0.1:1"
+      );
       const original = Promise.reject(error);
       original.catch(() => {});
       rt.context.fetch = () => original;
@@ -3596,6 +3604,192 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(returned).not.toBe(original);
       await expect(returned).rejects.toBe(error);
       await settle();
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "Network request failed: Failed to connect to localhost/127.0.0.1:1",
+        request: { url: "https://api.test/down" },
+      });
+      expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
+    });
+
+    it("records a call the app aborts as failed, and a call in flight as pending", async () => {
+      const { rt } = libRuntime();
+      // react-native-fetch-api rejects an aborted call with its own AbortError.
+      rt.run(`fetch = function(u, init) {
+        return new Promise(function(resolve, reject) {
+          if (init && init.signal) init.signal.addEventListener('abort', function() {
+            var error = new Error('Aborted'); error.name = 'AbortError'; reject(error);
+          });
+        });
+      };`);
+      rt.install();
+      const aborted = rt.run(
+        `var controller = new AbortController(); fetch('https://api.test/slow', { signal: controller.signal })`
+      ) as Promise<unknown>;
+      rt.run(`fetch('https://api.test/pending')`);
+      rt.run("controller.abort()");
+
+      expect(await rejectionName(aborted)).toBe("AbortError");
+      await settle();
+      expect(rt.records().map((r) => `${r.request.url} ${r.state} ${r.errorText ?? "-"}`)).toEqual([
+        "https://api.test/slow failed Aborted",
+        "https://api.test/pending pending -",
+      ]);
+    });
+
+    it("keeps no record of a call that throws before it sends", () => {
+      const { rt } = libRuntime();
+      rt.run(`fetch = function() { throw new Error('Aborted'); };`);
+      rt.install();
+
+      expect(() => rt.run(`fetch('https://api.test/never')`)).toThrow("Aborted");
+      expect(rt.records()).toHaveLength(0);
+    });
+
+    it("records one failure for three callers of a wrapper that shares one rejected request", async () => {
+      const { rt } = libRuntime();
+      let reject: (error: unknown) => void = () => {};
+      rt.context.libFetch = () => new Promise((_, r) => (reject = r));
+      rt.run(`var inflight = null;
+        fetch = function(u) {
+          if (!inflight) inflight = libFetch(u).finally(function() { inflight = null; });
+          return inflight;
+        };`);
+      rt.install();
+      const all = rt.run(
+        `Promise.allSettled([fetch('https://api.test/me'), fetch('https://api.test/me'), fetch('https://api.test/me')])`
+      ) as Promise<unknown>;
+      reject(new TypeError("Network request failed: offline"));
+      await all;
+      await settle();
+
+      expect(rt.records().map((r) => `${r.state} ${r.errorText}`)).toEqual([
+        "failed Network request failed: offline",
+      ]);
+    });
+
+    it("records the body of a blob response, which the app can still read", async () => {
+      const { rt, touched, LibResponse } = libRuntime();
+      // react-native-fetch-api's default Response holds the body as a React Native Blob.
+      class BlobResponse extends LibResponse {
+        _body = { _bodyBlob: new FakeBlob(['{"error":"email taken"}']) };
+      }
+      const response = new BlobResponse("https://api.test/signup", 422);
+      rt.context.fetch = () => Promise.resolve(response);
+      rt.install();
+      await (rt.run(
+        `fetch('https://api.test/signup', { method: 'POST', body: '{}' })`
+      ) as Promise<unknown>);
+      await settle();
+
+      expect(touched).toEqual([]);
+      expect(response._body._bodyBlob.closed).toBe(false);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        response: { status: 422 },
+        responseBody: '{"error":"email taken"}',
+        encodedDataLength: 23,
+      });
+    });
+
+    it("records no body of a response that streams text, which shares its stream with the app", async () => {
+      const { rt, touched, LibResponse } = libRuntime();
+      class TextStreamingResponse extends LibResponse {
+        _body = { _bodyReadableStream: {} };
+      }
+      rt.context.fetch = () => Promise.resolve(new TextStreamingResponse("https://api.test/sse"));
+      rt.install();
+      await (rt.run(
+        `fetch('https://api.test/sse', { reactNative: { textStreaming: true } })`
+      ) as Promise<unknown>);
+      await settle();
+
+      expect(touched).toEqual([]);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 200 } });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+    });
+
+    it("records both calls when the app aborts a call and makes it again at once", async () => {
+      const { rt } = libRuntime();
+      // react-native-fetch-api rejects an aborted call inside abort(), before the app's next line.
+      rt.run(`fetch = function(u, init) {
+        return new Promise(function(resolve, reject) {
+          if (init && init.signal) init.signal.addEventListener('abort', function() {
+            var error = new Error('Aborted'); error.name = 'AbortError'; reject(error);
+          });
+          if (!init || !init.signal) setTimeout(function() { resolve(new LibResponse(u)); }, 0);
+        });
+      };`);
+      rt.install();
+      // TanStack Query's refetch: abort the query in flight, then fetch it again.
+      const first = rt.run(
+        `var controller = new AbortController(); fetch('https://api.test/todos', { signal: controller.signal })`
+      ) as Promise<unknown>;
+      const second = rt.run(
+        `controller.abort(); fetch('https://api.test/todos')`
+      ) as Promise<unknown>;
+
+      expect(await rejectionName(first)).toBe("AbortError");
+      await second;
+      await settle();
+      expect(rt.records().map((r) => `${r.state} ${r.errorText ?? r.response?.status}`)).toEqual([
+        "failed Aborted",
+        "finished 200",
+      ]);
+    });
+
+    it("records one request when a cache hands out the Response of a call that shared its record", async () => {
+      const { rt, LibResponse } = libRuntime();
+      const resolves: Array<() => void> = [];
+      let requests = 0;
+      rt.context.libFetch = (url: string) => {
+        requests++;
+        return new Promise((r) => resolves.push(() => r(new LibResponse(url))));
+      };
+      // Two misses at once send two requests; the cache keeps the second Response.
+      rt.run(`var cache = {};
+        fetch = function(u) {
+          if (cache[u]) return Promise.resolve(cache[u]);
+          return libFetch(u).then(function(r) { cache[u] = r; return r; });
+        };`);
+      rt.install();
+      const misses = rt.run(
+        `Promise.all([fetch('https://api.test/config'), fetch('https://api.test/config')])`
+      ) as Promise<unknown>;
+      for (const resolve of resolves) resolve();
+      await misses;
+      await settle();
+      await (rt.run(`fetch('https://api.test/config')`) as Promise<unknown>);
+      await settle();
+
+      expect(requests).toBe(2);
+      expect(rt.records()).toHaveLength(1);
+    });
+
+    it("keeps the records of other requests when a call it no longer holds turns out to be no request", async () => {
+      const { rt } = libRuntime();
+      let resolve: (value: unknown) => void = () => {};
+      rt.context.fetch = () => new Promise((r) => (resolve = r));
+      rt.install();
+      rt.run(`fetch('https://api.test/cached')`);
+      // 2000 later requests push the call's record out of the log.
+      rt.run(
+        `for (var i = 0; i < 2000; i++) { var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/x' + i); x.send(); }`
+      );
+      resolve({ ok: true });
+      await settle();
+
+      expect(rt.records()).toHaveLength(2000);
+      expect(rt.records()[1999]!.request.url).toBe("https://api.test/x1999");
+    });
+
+    it("keeps no record of a call that returns no promise", () => {
+      const { rt } = libRuntime();
+      rt.run(`fetch = function() { return 'not a promise'; };`);
+      rt.install();
+
+      expect(rt.run(`fetch('https://api.test/odd')`)).toBe("not a promise");
       expect(rt.records()).toHaveLength(0);
     });
 

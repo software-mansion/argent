@@ -9,7 +9,8 @@
  *   through a `NativeRequest` of its native module, which is patched too.
  * - A fetch library that calls React Native's native network module itself (react-native-fetch-api)
  *   sends neither. It also installs its own global Response class, and only then is
- *   `globalThis.fetch` wrapped: a call is recorded once it resolves with that Response.
+ *   `globalThis.fetch` wrapped: each call is recorded, and the record goes again when the call
+ *   turns out to be no request of its own.
  * - Records stay in `__argent_network_log` / `__argent_network_by_id`, which the read scripts
  *   below serve.
  *
@@ -682,8 +683,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   // react-native-fetch-api (installed by react-native-polyfill-globals) calls React Native's native
   // network module itself, so it sends neither an XHR nor an Expo request. It replaces the global
   // Response class too, while React Native and Expo keep whatwg-fetch's (it has _initBody). Only then
-  // is the global fetch wrapped, and only a Response of that class gets a record: an app's own class
-  // around the Response of React Native's or Expo's fetch never does.
+  // is the global fetch wrapped. Each call gets a record when the app makes it. The record goes again
+  // when the call turns out to be no request of its own: it resolves with no Response of that class
+  // (an app's cache, or its own class around the Response of React Native's or Expo's fetch), or it
+  // settles with what another call already got.
   var LibResponse = g.Response;
   var origFetch = g.fetch;
   var libFetch = false;
@@ -716,72 +719,98 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var firstSent = inFlight.length ? inFlight[0].sentBefore : transportSends;
       while (lastSends.length && lastSends[0].n <= firstSent) lastSends.shift();
     };
+    var dropRecord = function(entry) {
+      var at = log.lastIndexOf(entry);
+      if (at === -1) return;
+      log.splice(at, 1);
+      delete byId[entry.requestId];
+      bufferedChars -= bodyChars(entry);
+    };
     g.fetch = function fetch(input, init) {
-      var call = { startedAt: Date.now(), start: ++libSteps, sentBefore: transportSends };
-      // In flight before the library runs: a wrapper over React Native's fetch sends its XHR at once,
-      // inside the call.
-      inFlight.push(call);
-      var promise;
+      var call, rec, promise;
+      try {
+        var method = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase();
+        var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
+        // A Request the app passes holds its own body.
+        var body = init && init.body !== undefined ? init.body : input && typeof input === 'object' && input._body ? input._body._bodyInit : undefined;
+        call = { startedAt: Date.now(), start: ++libSteps, sentBefore: transportSends, method: method, url: url, body: bodyKey(body) };
+        rec = createRecord('Fetch', method, url, headersObject(init && init.headers !== undefined ? init.headers : input && input.headers),
+          body, call.startedAt);
+        // In flight before the library runs: a wrapper over React Native's fetch sends its XHR at once,
+        // inside the call.
+        inFlight.push(call);
+      } catch (e) {}
       try {
         promise = origFetch.apply(g, arguments);
       } catch (e) {
-        settled(call);
+        // A call that throws (an aborted signal) sent nothing.
+        if (rec) {
+          dropRecord(rec.entry);
+          settled(call);
+        }
         throw e;
       }
-      if (!promise || typeof promise.then !== 'function') {
-        settled(call);
+      if (!rec || !promise || typeof promise.then !== 'function') {
+        if (rec) {
+          dropRecord(rec.entry);
+          settled(call);
+        }
         return promise;
       }
       // The app gets a promise that settles like the original, so a rejection it never handles is
       // still reported as unhandled.
       return promise.then(function(response) {
-        try { recordLibFetch(call, input, init, response); } catch (e) {}
+        try { settleLibFetch(call, rec, response, false); } catch (e) {}
         settled(call);
         return response;
       }, function(error) {
+        try { settleLibFetch(call, rec, error, true); } catch (e) {}
         settled(call);
         throw error;
       });
     };
-    var recordLibFetch = function(call, input, init, response) {
-      if (!(response instanceof LibResponse) || recorded.has(response)) return;
-      var source = sourceOf(response);
-      if (source && recorded.has(source)) return;
-      recorded.add(response);
+    var settleLibFetch = function(call, rec, outcome, failed) {
+      if (!failed && !(outcome instanceof LibResponse)) return dropRecord(rec.entry);
+      var shared = !!outcome && typeof outcome === 'object';
+      var source = failed ? null : sourceOf(outcome);
+      if ((shared && recorded.has(outcome)) || (source && recorded.has(source))) return dropRecord(rec.entry);
+      if (shared) recorded.add(outcome);
       if (source) recorded.add(source);
-      var method = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase();
-      var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
-      // A Request the app passes holds its own body.
-      var body = init && init.body !== undefined ? init.body : input && typeof input === 'object' && input._body ? input._body._bodyInit : undefined;
       // An XHR or Expo request with the same method and URL, sent during the call, may be the request
       // of the call (an app wrapper that builds this Response from React Native's fetch), and that
       // request has its record. Text bodies that differ tell two requests apart. Other requests the
       // app sends meanwhile do not matter.
-      var key = bodyKey(body);
       for (var j = lastSends.length - 1; j >= 0 && lastSends[j].n > call.sentBefore; j--) {
         var send = lastSends[j];
-        if (send.method === method && send.url === url &&
-          !(typeof send.body === 'string' && typeof key === 'string' && send.body !== key)) return;
+        if (send.method === call.method && send.url === call.url &&
+          !(typeof send.body === 'string' && typeof call.body === 'string' && send.body !== call.body)) return dropRecord(rec.entry);
       }
       call.endedAt = Date.now();
       call.end = ++libSteps;
+      // A failure is its own: callers that share one failure got the same error, above. It does not
+      // take the place of a call that starts after it, such as the call an app makes again right after
+      // it aborted one.
+      if (failed) return fail(rec, outcome && outcome.message ? String(outcome.message) : String(outcome));
       if (!source) {
-        call.method = method;
-        call.url = url;
-        call.body = key;
         for (var i = libCalls.length - 1; i >= 0; i--) {
           var other = libCalls[i];
-          if (other.method === method && other.url === url && other.body === call.body && other.start < call.end && call.start < other.end) return;
+          if (other.method === call.method && other.url === call.url && other.body === call.body && other.start < call.end && call.start < other.end) {
+            return dropRecord(rec.entry);
+          }
         }
         libCalls.push(call);
         if (libCalls.length > 50) libCalls.shift();
       }
-      var headers = headersObject(init && init.headers !== undefined ? init.headers : input && input.headers);
-      var rec = createRecord('Fetch', method, url, headers, body, call.startedAt);
-      setResponse(rec, response.url, response.status, response.statusText, headersObject(response.headers));
-      // The library shares its body stream with every clone when it streams text, so reading a clone
-      // would take the body from the app: the body is never read.
+      setResponse(rec, outcome.url, outcome.status, outcome.statusText, headersObject(outcome.headers));
       rec.entry.durationMs = call.endedAt - call.startedAt;
+      // The library's default Response holds the body as a blob, which a read leaves to the app as
+      // well. A Response that streams text shares its stream with every clone, and a read would take
+      // it from the app: that body is not read.
+      var blob = outcome._body && outcome._body._bodyBlob;
+      if (typeof Blob === 'function' && blob instanceof Blob && typeof readBlob === 'function' && typeof FileReader === 'function') {
+        var size = blob.size;
+        return readBlob(rec, blob, size, Math.min(size, BODY_CAP));
+      }
       complete(rec, undefined, undefined, false);
     };
   }

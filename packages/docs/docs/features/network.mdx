@@ -79,10 +79,10 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - A `fetch()` call that fails before it sends the request has no record. An example is a call with a signal that is already aborted.
 - If the app does not read the body of a successful Expo `fetch()` response, the record has no body and no size. A response that cannot have a body, for example the response to a `HEAD` request, has the size 0.
 - If a library sets its own `fetch()` and `Response` as the global ones, Argent records its requests with less data:
-  - Argent makes the record when the response arrives. A pending request and a failed request have no record.
-  - The record contains the status and the headers, but not the body. Such a library can share one body stream with the app.
-  - Callers that get one response, or copies of one response, have one record. Examples are a cache and a function of the app that shares one request between callers. Thus a request of such a library can have no record, but never two records.
+  - The record does not contain the body of a response that streams text. Such a response shares one body stream with the app.
+  - Callers that get one response, or copies of one response, have one record. Examples are a cache and a function of the app that shares one request between callers. While the calls run, the network log can show one record for each call.
   - An `XMLHttpRequest` or Expo request can have the same method and URL as a call, and start during the call. Argent then records only that request, unless the two requests send different text bodies.
+  - A function of the app can wrap `fetch()` and fail before the library sends the request. The call then has a failed record.
 - The network log keeps the most recent records only. The limits are 2000 records for the JS runtime layer and 1000 records for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native log holds fewer than 1000 requests.
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
