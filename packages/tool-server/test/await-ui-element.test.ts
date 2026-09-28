@@ -48,6 +48,7 @@ function makeSequencedAXService(
     degraded: opts.degraded ?? false,
     describe: async () => responses[Math.min(i++, responses.length - 1)],
     alertCheck: async () => false,
+    livePanel: async () => null,
     ping: async () => true,
   };
   return { api, calls: () => i };
@@ -62,6 +63,7 @@ function makeFailingAXService(): AXServiceApi {
       throw new Error("ax service unreachable");
     },
     alertCheck: async () => false,
+    livePanel: async () => null,
     ping: async () => false,
   };
 }
@@ -909,6 +911,7 @@ describe("await-ui-element tool", () => {
           ? Promise.resolve(axResponse([{ label: "Header", frame: FRAME, traits: [] }]))
           : new Promise(() => {}),
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
   }
@@ -1120,6 +1123,7 @@ describe("await-ui-element tool", () => {
       degraded: false,
       describe: () => new Promise(() => {}), // never resolves
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitUiElementTool(iosRegistry(slowApi));
@@ -1155,6 +1159,7 @@ describe("await-ui-element tool", () => {
           ? Promise.resolve(axResponse([{ label: "Header", frame: FRAME, traits: [] }]))
           : new Promise(() => {}),
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitUiElementTool(iosRegistry(api));
@@ -1183,6 +1188,7 @@ describe("await-ui-element tool", () => {
       degraded: false,
       describe: () => new Promise(() => {}), // never resolves
       alertCheck: async () => false,
+      livePanel: async () => null,
       ping: async () => true,
     };
     const tool = createAwaitUiElementTool(iosRegistry(slowApi));

@@ -90,7 +90,7 @@ A selector can scope its matches by the frames of other elements:
 - tap: { role: Switch, next: { text: Wi-Fi } }
 ```
 
-`within` uses the visual frame, not the source tree. Reading order is top to bottom, left to right. Scopes nest, with at most six scope keys in one selector. The `await-ui-element` tool does not support scopes.
+`within` uses the visual frame, not the source tree. Reading order is top to bottom, left to right, as the user sees the UI. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. `after`, `next`, `any: true` and a `text` condition use this reading order. Scopes nest, with at most six scope keys in one selector. The `await-ui-element` tool does not support scopes.
 
 ### Runner tree and discovery tree
 
@@ -120,6 +120,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
 | `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
 | `rotate`     | `{ on: <selector>, by }`                                           | Two-finger rotation in degrees, clockwise positive. This is a gesture, not the device orientation |
+| `fold`       | `<posture>`, `<angle>` or `{ posture }` / `{ angle }`              | Fold or unfold a foldable iOS simulator. See [Foldable simulators](#foldable-simulators)          |
 | `await`      | `{ <condition>, timeout }` or `{ idle: true, stableFor, timeout }` | Wait for a condition. Default `timeout` 7500 ms                                                   |
 | `assert`     | `{ <condition> }`                                                  | Check a condition now, with a fixed 1000 ms grace. Rejects `timeout`                              |
 | `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                            |
@@ -131,6 +132,8 @@ Each step contains one directive. A failed directive stops the flow.
 | `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                     |
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
+
+A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
 
@@ -160,7 +163,7 @@ An Android app that starts from a non-launcher activity has no `launch:` form. R
 - swipe: { from: { id: drag-handle }, to: { id: drop-zone }, momentum: false }
 ```
 
-A swipe moves one finger across the screen. `direction` is the travel of the finger, not the travel of the content. To bring an element on screen use `scroll-to` not `swipe`.
+A swipe moves one finger across the screen. `direction` is the travel of the finger as the user sees it, not the travel of the content. To bring an element on screen use `scroll-to` not `swipe`.
 
 | Option      | Value                                                                                                                                      |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -174,6 +177,23 @@ A swipe moves one finger across the screen. `direction` is the travel of the fin
 A step takes exactly one of `direction`, `to` and `by`. Each travel must cover at least 0.03 of the screen. Parsing rejects a shorter `by`. A shorter `to` fails the step during the run.
 
 On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like the other touch directives.
+
+### Foldable simulators
+
+```yaml
+- fold: open
+- fold: 120
+- fold: { posture: closed }
+```
+
+A `fold` step moves the hinge of a foldable iOS simulator, for example the iPhone Duo. The step takes a posture (`closed`, `half-open` or `open`) or an angle from 0 to 180 degrees. The step waits until the device accepts input again. When you record a flow, Argent saves a call to the `fold` tool as a `fold` step.
+
+After a `fold` step:
+
+- The screen size and the coordinates change with the panel. Later selectors resolve against a new UI tree.
+- A `snapshot` baseline is valid only for the posture that made it. Use a different snapshot name for each posture.
+- Unfolded, the UI is landscape. Directions and reading order follow the UI, as on a rotated device.
+- A fold between two angles that are not 0 or 180 can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
 ## Conditions
 
