@@ -525,20 +525,19 @@ describe("what a failing bash step says", () => {
   );
 
   onPosix(
-    "keeps a stderr consumer's last line when a quiet job holds the streams",
+    "keeps out a stderr line a running job writes soon after bash exits",
     async () => {
       const ws = workspace();
       const result = await runBash(
         ws,
-        "consumer-and-job",
-        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
-         echo "step 1: seeding" >&2
-         echo "FATAL: the real error" >&2
+        "early-job-line",
+        `( sleep 0.3; echo "mock-server: listening on :8080" >&2; sleep 30 ) &
+         echo "seed failed: orders API answered 503" >&2
          exit 1`
       );
       expect(result.failure?.kind).toBe("exit");
-      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
+      expect(result.failure?.message).toMatch(/\)\. seed failed: orders API answered 503$/);
+      expect(result.log).toContain("mock-server: listening on :8080\n");
     },
     30_000
   );
@@ -583,24 +582,6 @@ describe("what a failing bash step says", () => {
   );
 
   onPosix(
-    "keeps a stderr consumer's last line when a job keeps writing to stdout",
-    async () => {
-      const ws = workspace();
-      const result = await runBash(
-        ws,
-        "consumer-and-chatty-stdout",
-        `exec 2> >(while IFS= read -r l; do sleep 0.02; printf '%s\\n' "$l"; done >&2)
-         ( while true; do echo "[mock] GET /health 200"; sleep 0.1; done ) &
-         echo "FATAL: the real error" >&2
-         exit 1`
-      );
-      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
-      expect(result.logTruncated).toBe(true);
-    },
-    30_000
-  );
-
-  onPosix(
     "leaves out a stderr line a job writes after stderr went quiet",
     async () => {
       const ws = workspace();
@@ -627,7 +608,6 @@ describe("what a failing bash step says", () => {
       const script = ws.write(
         "stall.sh",
         `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
          echo "step 1: seeding" >&2
          echo "FATAL: the real error" >&2
          touch ${JSON.stringify(exited)}
@@ -660,39 +640,6 @@ describe("what a failing bash step says", () => {
   );
 
   onPosix(
-    "keeps a consumer's late line when a cancel ends the wait",
-    async () => {
-      const ws = workspace();
-      const exited = ws.resolve("exited");
-      const script = ws.write(
-        "cancel-late.sh",
-        `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
-         echo "step 1: seeding" >&2
-         echo "FATAL: the real error" >&2
-         touch ${JSON.stringify(exited)}
-         exit 1`
-      );
-      const cancel = new AbortController();
-      const pending = executor().execute({
-        scriptPath: script,
-        interpreter: "bash",
-        projectRoot: ws.dir,
-        signal: cancel.signal,
-      });
-      const deadline = Date.now() + 10_000;
-      while (!fs.existsSync(exited) && Date.now() < deadline) await delay(10);
-      await delay(500);
-      cancel.abort();
-      const result = await pending;
-
-      expect(result.failure?.kind).toBe("exit");
-      expect(result.failure?.message).toMatch(/\)\. FATAL: the real error$/);
-    },
-    30_000
-  );
-
-  onPosix(
     "keeps a consumer's late line when a cancel lands before it is written",
     async () => {
       const ws = workspace();
@@ -700,7 +647,6 @@ describe("what a failing bash step says", () => {
       const script = ws.write(
         "cancel-early.sh",
         `exec 2> >(while IFS= read -r l; do sleep 0.1; printf '%s\\n' "$l"; done >&2)
-         sleep 30 &
          echo "step 1: seeding" >&2
          echo "FATAL: the real error" >&2
          touch ${JSON.stringify(exited)}

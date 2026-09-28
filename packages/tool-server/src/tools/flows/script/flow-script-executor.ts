@@ -772,10 +772,10 @@ export class FlowScriptExecutor {
       if (interruptionSealed) return;
       terminal = message;
       // Where stderr stood when the runner answered, which in bash mode is when
-      // bash exited: the reason falls back to it when a job the script left
-      // running is still writing when the settle below gives up. Read on the
-      // next turn, so that what bash wrote before it exited, already in the
-      // pipe, is read first.
+      // bash exited: the reason takes it when a job the script left running
+      // still holds the streams as the settle below ends. Read on the next
+      // turn, so that what bash wrote before it exited, already in the pipe,
+      // is read first.
       setImmediate(() => (stderrLineAtVerdict = capture.stderrLineSoFar));
     });
 
@@ -845,7 +845,7 @@ export class FlowScriptExecutor {
     // waited for as any other is.
     //
     // Beside it, the line stderr stood on when it first went quiet for a settle
-    // after the script's process exited, which the reason takes: see below.
+    // after the script's process exited, which the reason can take: see below.
     const exitedAt = Date.now();
     const stderrQuietFor = () => Date.now() - Math.max(exitedAt, lastStderrAt);
     let stderrLineAtQuiet: string | undefined;
@@ -867,12 +867,6 @@ export class FlowScriptExecutor {
     const settled = await settleStreams(closed, () => lastOutputAt, settleSignal);
     watchingStderr = false;
     clearTimeout(stderrQuietTimer);
-    if (
-      stderrLineAtQuiet === undefined &&
-      (settleSignal?.aborted === true || stderrQuietFor() >= SETTLE_TIMEOUT_MS)
-    ) {
-      stderrLineAtQuiet = capture.stderrLineSoFar;
-    }
     await stop();
     capture.end();
     if (settled === "cut") {
@@ -903,22 +897,18 @@ export class FlowScriptExecutor {
       heapFatalSeen: capture.heapFatalSeen,
       heapLimitMb: bounds.heapLimitMb,
     });
-    // After bash exits, stderr carries two kinds of line: the script's own,
-    // late - a consumer in front of stderr still working through its backlog -
-    // and those of a job the script left running. The first come as one run
-    // from the moment bash exits; a job writes whenever it writes. So the line
+    // After bash exits, stderr carries the script's own lines late - a consumer
+    // in front of stderr still working through its backlog - and the lines of a
+    // job the script left running, and nothing in the stream tells them apart.
+    // Streams that closed mean every such process finished, and then the line
     // is the one stderr stood on when it first went quiet for a settle after
-    // bash exited: that run counts, a later line does not, and neither does a
-    // job's answer to the stop. Streams that closed while stderr was still
-    // running on count in full. Stderr that never went quiet is a job still
-    // writing, and then the line is the one bash exited on.
-    let stderrLine = stderrLineAtQuiet;
-    if (stderrLine === undefined) {
-      stderrLine =
-        settled === "closed"
-          ? capture.lastStderrLine
-          : (stderrLineAtVerdict ?? capture.lastStderrLine);
-    }
+    // bash exited, or its last one. Streams still held mean a job is running
+    // and may have written at any moment since, so the line is the one bash
+    // exited on.
+    const stderrLine =
+      settled === "closed"
+        ? (stderrLineAtQuiet ?? capture.lastStderrLine)
+        : (stderrLineAtVerdict ?? capture.lastStderrLine);
     const verdict = redactSecrets(
       run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
       request.secrets ?? []
