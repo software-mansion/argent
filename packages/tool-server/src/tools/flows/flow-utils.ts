@@ -646,7 +646,8 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
  * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
- * drift (flow-device's `FlowPlatform` aliases it).
+ * drift. Narrower than {@link SelectablePlatform}, which a RUN is selected
+ * with: a guard is authored text, and `ios-remote` is not writable.
  */
 export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
 
@@ -713,8 +714,20 @@ export type FlowStep =
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
+  /**
+   * Fold or unfold a foldable simulator: exactly one of `posture` and `angle`.
+   * The `fold` tool's own contract; the runner dispatches it to that tool.
+   */
+  | { kind: "fold"; posture?: FoldPosture; angle?: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
   | { kind: "script"; path: string; timeout?: number };
+
+const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
+export type FoldPosture = (typeof FOLD_POSTURES)[number];
+
+function isFoldPosture(value: unknown): value is FoldPosture {
+  return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
+}
 
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
@@ -777,6 +790,7 @@ export function precedesLeadingLaunch(step: FlowStep): boolean {
     case "scroll-to":
     case "pinch":
     case "rotate":
+    case "fold":
     case "snapshot":
       return false;
     default: {
@@ -803,6 +817,9 @@ function isE2eFlow(flow: FlowFile): boolean {
  * ios/android/vega a specific key wins, else the shared `native` id. For
  * chromium this returns the app *path* (never `native`) — chromium booters want
  * {@link chromiumLaunchSpec}, which also carries the CLI args.
+ *
+ * The platform is read as an authoring key ({@link authoringPlatform}), so a
+ * remote simulator uses the flow's `ios` entry.
  */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
   if (launch === undefined) return null;
@@ -812,7 +829,7 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
     if (c === undefined) return null;
     return typeof c === "string" ? c : c.path;
   }
-  const v = (launch as Record<string, string | undefined>)[platform];
+  const v = (launch as Record<string, string | undefined>)[authoringPlatform(platform)];
   return v ?? launch.native ?? null;
 }
 
@@ -968,8 +985,11 @@ type YamlStep =
   | { "scroll-to": YamlScrollBody }
   | { pinch: { on?: YamlSelector; scale: number } }
   | { rotate: { on?: YamlSelector; by: number } }
+  | { fold: YamlFoldBody }
   | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
   | { script: { path: string; timeout?: number } };
+
+type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
@@ -1568,6 +1588,17 @@ function toYamlStep(step: FlowStep): YamlStep {
           ? { on: selectorToYaml(step.selector), by: step.by }
           : { by: step.by },
       };
+    case "fold": {
+      // The bare form: parseFold takes exactly one of posture and angle (and
+      // accepts the map spelling), so every parsed step comes back bare; the
+      // map is only for a step that breaks that invariant.
+      if (step.posture !== undefined && step.angle === undefined) return { fold: step.posture };
+      if (step.angle !== undefined && step.posture === undefined) return { fold: step.angle };
+      const body: Exclude<YamlFoldBody, FoldPosture | number> = {};
+      if (step.posture !== undefined) body.posture = step.posture;
+      if (step.angle !== undefined) body.angle = step.angle;
+      return { fold: body };
+    }
     case "snapshot": {
       // A name-only snapshot sugars to a bare string.
       if (step.maxMismatch === undefined && step.cropOn === undefined) {
@@ -2188,11 +2219,36 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
 }
 
 /**
- * The platform set, spelled once: launch maps, `when: { platform }` guards
- * ({@link WhenPlatform}), flow-device's `FlowPlatform`, and flow-run's
- * `platform` param enum all derive from this tuple.
+ * The platforms an AUTHOR can name in a flow file: launch-map keys and
+ * `when: { platform }` guards ({@link WhenPlatform}).
  */
-export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+
+/**
+ * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
+ * flow-run's `platform` param. `ios-remote` is selectable but deliberately not
+ * writable: a flow says what it drives, not which machine hosts the simulator,
+ * so `when:` and launch maps stay on {@link LAUNCH_PLATFORMS}.
+ */
+export const SELECTABLE_PLATFORMS = [...LAUNCH_PLATFORMS, "ios-remote"] as const;
+export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
+
+/**
+ * The platform a flow AUTHOR names, for a device the runner resolved.
+ *
+ * `ios-remote` is an iOS simulator reached over the sim-remote tunnel: same OS,
+ * same app, same UI. Only the host differs, and a flow file names neither host
+ * nor device — so every surface that reads what the author wrote folds it to
+ * `ios`, which is why `ios-remote` stays out of {@link LAUNCH_PLATFORMS}.
+ *
+ * Deliberately NOT applied where the question is "which machine am I driving?":
+ * device selection ({@link SELECTABLE_PLATFORMS}, `resolveFlowDevice`, the
+ * `platform` run param) and service refs / transports all keep the real
+ * platform.
+ */
+export function authoringPlatform(platform: string): string {
+  return platform === "ios-remote" ? "ios" : platform;
+}
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
@@ -2276,6 +2332,7 @@ export const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "scroll-to",
   "pinch",
   "rotate",
+  "fold",
   "snapshot",
   "script",
 ];
@@ -2568,6 +2625,64 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
   const step: FlowStep = { kind: "rotate", by: obj.by };
   if (obj.on !== undefined) step.selector = parseSelector(obj.on, "rotate.on");
   return step;
+}
+
+const FOLD_SHAPE_HINT =
+  `fold takes a posture (${FOLD_POSTURES.join(", ")}), an angle in degrees (0-180), or an ` +
+  `options map — e.g. fold: open, fold: 120, fold: { angle: 120 }`;
+
+function parseFoldAngle(value: unknown, entry: unknown, what: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 180) {
+    badEntry(entry, `${what} must be a number of degrees between 0 (closed) and 180 (open)`);
+  }
+  return value;
+}
+
+/**
+ * Parse a `fold` body: a bare posture (`fold: open`), a bare angle
+ * (`fold: 120`), or an options map with exactly one of `posture` and `angle`.
+ * The same contract as the `fold` tool the step dispatches to.
+ */
+function parseFold(body: unknown, entry: unknown): FlowStep {
+  if (typeof body === "string") {
+    if (!isFoldPosture(body)) badEntry(entry, FOLD_SHAPE_HINT);
+    return { kind: "fold", posture: body };
+  }
+  if (typeof body === "number") {
+    return { kind: "fold", angle: parseFoldAngle(body, entry, "fold") };
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    badEntry(entry, FOLD_SHAPE_HINT);
+  }
+  const obj = body as Record<string, unknown>;
+  rejectUnknownKeys(entry, obj, ["posture", "angle"], "fold");
+  const hasPosture = obj.posture !== undefined;
+  const hasAngle = obj.angle !== undefined;
+  if (hasPosture === hasAngle) {
+    badEntry(entry, "fold takes exactly one of posture and angle");
+  }
+  const step: FlowStep = { kind: "fold" };
+  if (hasPosture) {
+    if (!isFoldPosture(obj.posture)) {
+      badEntry(entry, `fold.posture must be one of ${FOLD_POSTURES.join(", ")}`);
+    }
+    step.posture = obj.posture;
+  }
+  if (hasAngle) step.angle = parseFoldAngle(obj.angle, entry, "fold.angle");
+  return step;
+}
+
+/**
+ * The `fold:` step a recorded `fold` tool call becomes, or undefined when the
+ * call's args are not the directive's (the recorder then keeps a raw
+ * `tool: fold` step, as it does for any call it cannot rewrite).
+ */
+export function foldStepFromArgs(args: Record<string, unknown>): FlowStep | undefined {
+  try {
+    return parseFold(args, { fold: args });
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -3092,6 +3207,7 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
     case "run":
     case "idle":
     case "wait":
+    case "fold":
       return;
     default: {
       const unclassified: never = step;
@@ -3452,6 +3568,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   if ("pinch" in raw) return parsePinch((raw as { pinch: unknown }).pinch, raw);
 
   if ("rotate" in raw) return parseRotate((raw as { rotate: unknown }).rotate, raw);
+
+  if ("fold" in raw) return parseFold((raw as { fold: unknown }).fold, raw);
 
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;

@@ -333,3 +333,31 @@ describe("flow-execute cross-app snapshot collision", () => {
     expect(result.steps[2]!.reason).toContain("baseline updated");
   });
 });
+
+describe("one snapshot key reported from two hosts", () => {
+  it("marks the step a remote simulator captured, and not a local one", async () => {
+    // The key folds `ios-remote` to `ios`, so a cloud run and a local run of one
+    // flow report the same key. A client exporting files by it (the CLI's
+    // --output) reads this marker to keep the two runs' files apart.
+    const flowFile = await writeFlow("hosts", "steps:\n  - snapshot: shot\n");
+    const run = (device: string) =>
+      runFlow(makeRegistry(), {
+        name: "hosts",
+        project_root: PROJECT_ROOT,
+        flow_file: flowFile,
+        device,
+      });
+
+    const remote = await run("remote:00000000-0000-0000-0000-0000000000ab");
+    const local = await run("00000000-0000-0000-0000-0000000000ab");
+
+    // No baseline, so both fail and carry the key the export names files by.
+    expect(remote.steps[0]).toMatchObject({
+      status: "fail",
+      snapshotKey: "shot__ios-600x372",
+      snapshotRemote: true,
+    });
+    expect(local.steps[0]).toMatchObject({ status: "fail", snapshotKey: "shot__ios-600x372" });
+    expect(local.steps[0]).not.toHaveProperty("snapshotRemote");
+  });
+});

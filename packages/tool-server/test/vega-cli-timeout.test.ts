@@ -89,6 +89,10 @@ const awaitGate = () => {
   const idle = new Int32Array(new SharedArrayBuffer(4));
   while (!existsSync(gate) && Date.now() < deadline) Atomics.wait(idle, 0, 0, 20);
 };
+// The flood is multi-byte on purpose: 60 characters but 180 UTF-8 bytes, so against the
+// overflow tests' \`maxOutputBytes: 100\` it only trips the cap under a byte reading. An
+// ASCII flood trips under a \`chunk.length\` reading just as well, and so pins nothing.
+const FLOOD = "✓".repeat(60);
 if (cmd === "hang") {
   // A worker that ESCAPES the launcher's process group (detached → its own session/
   // pgid, like the real CLI's setsid'd worker), so the group-only SIGKILL can't reach
@@ -118,7 +122,7 @@ if (cmd === "flood") {
   // Emit more than the test's maxOutputBytes, then hang on a second sentinel sleep so the
   // OVERFLOW reap — not a natural exit — is what settles runVega. The reap must clear
   // both. \`secs\` is the per-test sentinel.
-  process.stdout.write("x".repeat(4096));
+  process.stdout.write(FLOOD);
   spawnSync("sleep", [secs]);
   process.exit(0);
 }
@@ -129,7 +133,7 @@ if (cmd === "flood-err") {
   const worker = spawn("sleep", [secs], { stdio: "ignore" });
   worker.unref();
   awaitGate();
-  process.stderr.write("x".repeat(4096));
+  process.stderr.write(FLOOD);
   spawnSync("sleep", [secs]);
   process.exit(0);
 }

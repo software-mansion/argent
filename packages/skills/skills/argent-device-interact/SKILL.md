@@ -67,6 +67,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Type text         | `keyboard`          | Every platform. Text or one named key per call, never both        |
 | Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only |
 | Rotate device     | `rotate`            | Orientation changes                                               |
+| Fold device       | `fold`              | Foldable iOS simulator: closed / half-open / open, or an angle    |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
 | Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
@@ -198,6 +199,29 @@ Tap the field first so it has focus; pasting with no focused field is a silent n
 
 Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
+On an unfolded foldable simulator, the value sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI. `LandscapeLeft` gives a portrait UI.
+
+### fold — Fold or unfold a foldable simulator
+
+```json
+{ "udid": "<UDID>", "posture": "open" }
+```
+
+Give `posture` (`closed`, `half-open` or `open`) or `angle` (0–180). Do not give both.
+
+Use `fold` only on a foldable iOS simulator. `list-devices` marks it with `foldable: true`, for example the iPhone Duo. Other devices reject the call.
+
+Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. All tools use the active panel (the panel that shows the UI), also after a fold made outside argent. `fold` returns when the device accepts input again, so the next tap lands. This is also true for the next step in `run-sequence`.
+
+Rules:
+
+- The coordinates change with the panel. Before you tap, read the element tree in the `fold` result, or run `describe` again. Do not use frames from before the fold.
+- The screenshot size changes with the panel. Keep one screenshot-diff baseline for each posture.
+- Unfolded, the UI is landscape. The screenshot shows the UI turned 90 degrees, and the `describe` frames use the same axes, as on a rotated iPhone.
+- A fold between two angles that are not 0 or 180 can keep the current panel. The result names the active panel. To change panels, fold to `closed` or `open`.
+- Fold between gestures, not during a gesture. A gesture stays on the panel where it started.
+- If argent cannot find the active panel, it uses the cover panel. The tool result then has a `warning`, and a screenshot-diff summary has a `panel:` line. Take a screenshot to see what the device shows, then do the check that the warning gives.
+
 ### await-ui-element — Block until a UI element reaches a state
 
 **Never poll `screenshot`/`describe` in a loop to wait for something.** Use `await-ui-element`: it blocks server-side on the same tree `describe` reads. It has no bare-timer mode by design — for a plain pause, use your own harness sleep.
@@ -284,7 +308,7 @@ Do **not** use `run-sequence` when any step depends on observing the result of a
 
 ### Allowed tools inside `run-sequence`
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `paste`, `rotate`, `shake`, `tv-remote`, `await-ui-element`
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `paste`, `rotate`, `shake`, `fold`, `tv-remote`, `await-ui-element`
 
 The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 
