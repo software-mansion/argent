@@ -150,13 +150,13 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "only lacks a window. Ask the user to bring one back — chromium-tabs cannot open one — " +
     "and do not relaunch onto a live app: it comes up as a second copy with a window of its " +
     "own on a different port, or dies on the single-instance lock, and neither gives this id " +
-    "a page. If that detail closes by asking about --remote-debugging-port, ignore it: this " +
-    "port answered, so the flag was passed. " +
+    "a page. " +
     "'Chromium CDP discovery: GET': the discovery request itself. 'could not connect' means " +
     "nothing answered that port — consistent with an exit, not proof of one. 'failed (HTTP " +
     "<status>)', 'returned a body that is not valid JSON' or 'did not return a target list' " +
-    "means something that is not CDP holds the port, which no relaunch on that port clears: " +
-    "pass that on, and relaunch onto a free one. " +
+    "means something that is not CDP holds the port, and 'timed out' that something holds it " +
+    "without answering; no relaunch on that port clears either: pass that on, and relaunch " +
+    "onto a free one. " +
     "Neither phrase: the socket failed after discovery had answered, so the app was up " +
     "moments ago and may have lost only the page it was driving. Have the user check it. " +
     CHROMIUM_RELAUNCH,

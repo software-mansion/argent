@@ -957,7 +957,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       // Wire the reverse tunnel (no-op on local) before ensureEnv, so the
       // dylib's first dial — which can happen as soon as the env is written —
       // lands on our listener.
-      await host.startProxy(udid, endpoint.port!);
+      try {
+        await host.startProxy(udid, endpoint.port!);
+      } catch (err) {
+        // dispose never runs: the registry sets `node.instance` only after
+        // factory() resolves.
+        server!.close();
+        throw err;
+      }
     } else {
       await bindNativeDevtoolsUnixSocket(server!, socketPath);
     }

@@ -21,7 +21,7 @@ import { DEBUGGER_NOT_CONNECTED_REASONS } from "@argent/telemetry";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
 import { debuggerReloadMetroTool } from "../src/tools/debugger/debugger-reload-metro";
-import { debuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
 import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 import { chromiumTabsTool } from "../src/tools/chromium-tabs";
@@ -73,6 +73,7 @@ const CHROMIUM_REFERENCE = path.join(SKILLS, "argent-device-interact/references/
 const restartAppTool = createRestartAppTool({} as unknown as Registry);
 const debuggerStatusTool = createDebuggerStatusTool({} as unknown as Registry);
 const logRegistryTool = createDebuggerLogRegistryTool({} as unknown as Registry);
+const debuggerComponentTreeTool = createDebuggerComponentTreeTool({} as unknown as Registry);
 const bootDeviceParams = createBootDeviceTool({} as unknown as Registry).zodSchema as unknown as {
   shape: Record<
     string,

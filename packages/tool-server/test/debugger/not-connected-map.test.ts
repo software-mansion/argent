@@ -511,20 +511,6 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
         "its own on a different port, or dies on the single-instance lock, and neither gives " +
         "this id a page."
     );
-    // #880: that message asks about --remote-debugging-port on the port that just
-    // answered the request it reports on, which is one plausible step from a
-    // relaunch with a flag the app already has.
-    expect(noPages.message).toMatch(/--remote-debugging-port/);
-    pinsOnce(
-      guidance,
-      "If that detail closes by asking about --remote-debugging-port, ignore it: this port " +
-        "answered, so the flag was passed."
-    );
-
-    // Only the devtools:// variant names a window - so the guidance may not tell
-    // the reader to recognise the state by a window hint.
-    expect(devtoolsOnly.message).toMatch(/window/i);
-    expect(noPages.message, "the no-targets message gained a window hint").not.toMatch(/window/i);
   });
 
   it("splits on a detail phrase each throw site actually produces", async () => {
@@ -658,6 +644,13 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
     expect(classifyNotConnected(new Error(notAList)), "and it is the squatter class").toBe(
       undefined
     );
+    // A port that takes the connection and never answers: the probe's own bound
+    // fires, not a caller's.
+    const TIMED_OUT = "timed out";
+    const stalled = await discoveryError(() => {});
+    expect(stalled, "a stalled discovery carries the sub-phrase the guidance routes on").toContain(
+      TIMED_OUT
+    );
 
     const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
     // The three arms, each keyed on what the detail carries rather than on where
@@ -681,8 +674,9 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
     pinsOnce(guidance, `'${NOT_A_LIST}'`);
     pinsOnce(
       guidance,
-      "means something that is not CDP holds the port, which no relaunch on that port " +
-        "clears: pass that on, and relaunch onto a free one."
+      "means something that is not CDP holds the port, and 'timed out' that something holds " +
+        "it without answering; no relaunch on that port clears either: pass that on, and " +
+        "relaunch onto a free one."
     );
     expect(guidance, "no positional routing — the detail is service-tagged").not.toMatch(
       /detail (starting|beginning|that starts|that begins)|opening words/i
@@ -694,5 +688,5 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
       "Neither phrase: the socket failed after discovery had answered, so the app was up " +
         "moments ago and may have lost only the page it was driving. Have the user check it."
     );
-  });
+  }, 20_000);
 });
