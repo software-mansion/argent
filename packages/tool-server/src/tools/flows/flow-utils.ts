@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+import { stringify as yamlStringify, parseDocument, isMap, isNode, isSeq, LineCounter } from "yaml";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
@@ -3663,6 +3663,41 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
+/**
+ * The line each parsed step starts on in the file it was read from. A side
+ * table rather than a field, so a step stays exactly what
+ * {@link serializeFlow} writes and what two parses of one file compare equal on.
+ */
+const stepLines = new WeakMap<FlowStep, number>();
+
+/** The 1-based line `step` starts on in its flow file; undefined for a step not parsed from one. */
+export function flowStepLine(step: FlowStep): number | undefined {
+  return stepLines.get(step);
+}
+
+/**
+ * Record the line of each step in `steps` and of its block's children, read
+ * off the YAML sequence the steps were parsed from. A list the file spells as
+ * an alias has no items of its own, so its steps get no line.
+ */
+function recordStepLines(
+  steps: FlowStep[],
+  seq: unknown,
+  lineCounter: LineCounter,
+  lineOffset: number
+): void {
+  if (!isSeq(seq)) return;
+  steps.forEach((step, i) => {
+    const item = seq.items[i];
+    if (!isNode(item) || !item.range) return;
+    stepLines.set(step, lineCounter.linePos(item.range[0]).line + lineOffset);
+    const inner = blockSteps(step);
+    if (inner && isMap(item)) {
+      recordStepLines(inner, item.get("steps", true), lineCounter, lineOffset);
+    }
+  });
+}
+
 /** Parse a YAML flow file into a FlowFile. */
 export function parseFlow(content: string): FlowFile {
   const trimmed = content.trim();
@@ -3673,8 +3708,14 @@ export function parseFlow(content: string): FlowFile {
   // A raw YAMLParseError carries no failure signal, so a syntax error would
   // abort a whole batch run instead of failing this file alone.
   let parsed: YamlFlowFile;
+  const lineCounter = new LineCounter();
+  let doc: ReturnType<typeof parseDocument>;
   try {
-    parsed = yamlParse(trimmed) as YamlFlowFile;
+    doc = parseDocument(trimmed, { lineCounter });
+    // What the yaml package's `parse` does with the document.
+    for (const warning of doc.warnings) process.emitWarning(warning);
+    if (doc.errors.length > 0) throw doc.errors[0];
+    parsed = doc.toJS() as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
       `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
@@ -3729,6 +3770,11 @@ export function parseFlow(content: string): FlowFile {
     steps,
   };
   validateFlow(flow);
+  // The trim above dropped the file's leading blank lines, which the lines
+  // counted in `trimmed` must add back.
+  const leading = content.slice(0, content.length - content.trimStart().length);
+  const leadingLines = leading.split("\n").length - 1;
+  recordStepLines(steps, doc.get("steps", true), lineCounter, leadingLines);
   return flow;
 }
 

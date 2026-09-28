@@ -68,6 +68,18 @@ export function createFlowTestHarness(options: {
     await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(flow), "utf8");
   }
 
+  /**
+   * Write `yaml` as-is to `relativePath` under the flows directory, for a test
+   * that depends on the file's exact text. Returns the file's resolved path,
+   * which is how the runner names a flow file in its reports.
+   */
+  async function writeFlowYaml(relativePath: string, yaml: string): Promise<string> {
+    const file = path.join(tmpDir, ".argent", "flows", relativePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, yaml, "utf8");
+    return fs.realpath(file);
+  }
+
   async function execute(
     name: string,
     calls?: ToolCall[],
@@ -86,5 +98,5 @@ export function createFlowTestHarness(options: {
     return Object.assign(await execute(name, calls, device), { calls });
   };
 
-  return { writeFlow, run, runWithCalls };
+  return { writeFlow, writeFlowYaml, run, runWithCalls };
 }

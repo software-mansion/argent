@@ -27,6 +27,7 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
+  flowStepLine,
   getFlowPath,
   isBlockStep,
   parseFlow,
@@ -259,6 +260,17 @@ export interface StepReport extends StepDetails {
    * expand time themselves.
    */
   durationMs?: number;
+  /**
+   * The 1-based line the step starts on in the flow file it is written in:
+   * the flow the report is for, or the fragment in `file`.
+   */
+  line?: number;
+  /**
+   * Set beside `line` when the step is written in a fragment a `run:` step
+   * loaded: that file's resolved absolute path. A `run:` step itself is
+   * written in the file that composes the fragment.
+   */
+  file?: string;
 }
 
 export interface FlowRunResult {
@@ -1824,9 +1836,17 @@ function summarize(
 /**
  * Append a report to the run and hand it to any live progress consumer. The
  * single choke point for every report — a push site that bypasses it would
- * silently drop steps from the progress stream.
+ * silently drop steps from the progress stream. Also stamps where `step` is
+ * written, which `scope` knows: its `run:` chain ends at the file the step
+ * was parsed from.
  */
-function pushReport(state: ExecState, report: StepReport): void {
+function pushReport(state: ExecState, step: FlowStep, scope: StepScope, report: StepReport): void {
+  const line = flowStepLine(step);
+  if (line !== undefined) {
+    report.line = line;
+    const writtenIn = scope.runStack[scope.runStack.length - 1]!;
+    if (writtenIn !== scope.runStack[0]) report.file = writtenIn.canonical;
+  }
   state.reports.push(report);
   state.onStepReport?.(report);
 }
@@ -1941,7 +1961,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       // while the same cancellation during any other step reports "run
       // aborted" on each of them.
       const stopReason = state.signal?.aborted ? "run aborted" : undefined;
-      pushReport(state, {
+      pushReport(state, step, scope, {
         index,
         kind: step.kind,
         status: "skip",
@@ -1967,7 +1987,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     // blockSteps, so no nesting hides a step.
     if (!state.device && stepRequiresDevice(state.registry, step)) {
       state.stopped = true;
-      pushReport(state, {
+      pushReport(state, step, scope, {
         index,
         kind: step.kind,
         status: "error",
@@ -1982,7 +2002,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     }
     if (state.signal?.aborted) {
       state.stopped = true;
-      pushReport(state, {
+      pushReport(state, step, scope, {
         index,
         kind: step.kind,
         status: "skip",
@@ -2013,7 +2033,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     }
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
-    pushReport(state, report);
+    pushReport(state, step, scope, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
 }
@@ -2035,7 +2055,7 @@ function reportBlockSkipped(
   reason?: string
 ): void {
   for (const step of steps) {
-    pushReport(state, {
+    pushReport(state, step, scope, {
       index: state.reports.length,
       kind: step.kind,
       status: "skip",
@@ -2109,12 +2129,12 @@ async function execWhenStep(
   } else {
     const probe = await probeWhenCondition(deviceEnv(state), step.condition);
     if (probe.aborted) {
-      pushReport(state, { ...marker, status: "skip", reason: "run aborted" });
+      pushReport(state, step, scope, { ...marker, status: "skip", reason: "run aborted" });
       reportBlockSkipped(state, step.steps, inner, "run aborted");
       return;
     }
     if (!probe.ok && probe.indeterminate) {
-      pushReport(state, {
+      pushReport(state, step, scope, {
         ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
@@ -2130,7 +2150,7 @@ async function execWhenStep(
 
   if (!met) {
     const n = step.steps.length;
-    pushReport(state, {
+    pushReport(state, step, scope, {
       ...marker,
       status: "skip",
       reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
@@ -2142,7 +2162,7 @@ async function execWhenStep(
 
   // Marker for the block, then the guarded steps inline — same fragment
   // attribution, one level deeper, failures hard-stop as anywhere else.
-  pushReport(state, {
+  pushReport(state, step, scope, {
     ...marker,
     status: "pass",
     reason: `condition met (${label})`,
@@ -2197,7 +2217,7 @@ async function execRunStep(
   const startedAt = Date.now();
 
   const fail = (reason: string): void => {
-    pushReport(state, {
+    pushReport(state, step, scope, {
       index,
       kind: "run",
       status: "error",
@@ -2283,7 +2303,7 @@ async function execRunStep(
   // one level deeper, attributed to the fragment. The fragment's own directory
   // becomes the anchor for `run:` paths inside it; baselines stay anchored to
   // the root flow (state.flowsDir / state.baselineKey).
-  pushReport(state, {
+  pushReport(state, step, scope, {
     index,
     kind: "run",
     status: "pass",
