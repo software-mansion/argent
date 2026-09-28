@@ -76,6 +76,15 @@ button[class*="DocSearch-Button"] {
   margin: 0 !important;
 }
 
+/*
+ * The search button in the mobile sidebar is full width with side padding. The shared
+ * theme sizes it as border-box only up to 768px, so from there to the 996px breakpoint
+ * the padding pushes it past the sidebar edge.
+ */
+.navbar-sidebar button[class*="DocSearch-Button"] {
+  box-sizing: border-box;
+}
+
 /* Center logo vertically in navbar items */
 .navbar__items a[href="/argent/"] img,
 .navbar__brand a[href="/argent/"] img,
