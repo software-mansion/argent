@@ -55,7 +55,7 @@ The file is plain text. You can commit the file, review the file in a pull reque
 
 You ask the agent to run a flow by its name. The agent replays each step in order on the connected device. When a step fails, Argent stops the flow. Argent reports the later steps as skipped. At the end, the agent receives a report with the result of each step.
 
-A flow also runs without an agent. The `argent flow run` command replays a flow from the terminal. The command prints the result of each step and exits with a status code. Thus a flow runs in a CI job or in a script. The command runs one flow, a flow file in a different location, or all flows in a directory.
+A flow also runs without an agent. The `argent flow run` command replays a flow from the terminal. The command prints the result of each step and exits with a status code. Thus a flow runs in a CI job or in a script. The command runs one flow, a flow file in a different location, or all flows in a directory. When the command runs all flows in a directory, the command prints the failed flows at the end. For each failed flow, the command also prints the reason and a command that runs only that flow.
 
 ## Example instructions
 
@@ -72,6 +72,7 @@ A flow also runs without an agent. The `argent flow run` command replays a flow 
 - A recorded tap with coordinates breaks when the layout changes. Give the element a stable text or identifier, then record the step again.
 - A flow does not reset the data of the app. When a step creates data, for example a new item, each replay creates the data again. Start the flow with a launch of the app or with a step that restores a known state.
 - The agent records a launch step for iOS, Android and Vega apps. For a Chromium or Electron app, add the launch step to the file by hand.
+- On Android, a flow resolves each selector with the Argent Android helper, an instrumentation app that Argent installs over `adb`. Argent installs the helper again when the device reports that the helper is absent, for example after a wipe. When the helper still does not start, the error message contains the error that the device reports.
 - A replay needs the same connected instrumentation as the recording. When the agent cannot read the UI tree, a step that still uses coordinates sends the tap anyway and adds a warning. A step that uses a stable identifier fails instead, because it has no coordinates to fall back on.
 
 Argent does this with the `flow-start-recording`, `flow-add-step`, `flow-add-echo`, `flow-add-script`, `flow-finish-recording`, `flow-read-prerequisite` and `flow-execute` tools, and with the `argent flow` command. The [tools reference](/docs/reference/tools) contains all tools. The [Flow YAML reference](/docs/reference/flow-yaml) contains the file format and the command options.

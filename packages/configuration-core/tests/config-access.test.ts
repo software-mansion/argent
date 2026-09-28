@@ -12,6 +12,7 @@ import {
   listConfig,
   coerceCliValue,
   getAdditionalIosDeviceSets,
+  getAndroidSdkRoot,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,
@@ -250,6 +251,24 @@ describe("coerceCliValue", () => {
     expect(coerceCliValue('["a","b"]')).toEqual(["a", "b"]);
     expect(coerceCliValue("/tmp/device-set")).toBe("/tmp/device-set");
     expect(coerceCliValue("claude")).toBe("claude");
+  });
+});
+
+describe("android.sdkRoot — project wins, ~ expands", () => {
+  it("reads as null when unset and rejects a relative path", () => {
+    expect(getAndroidSdkRoot(opts())).toBeNull();
+    for (const relative of ["sdk", "~sdk", "./sdk"]) {
+      expect(() => setConfigValue("android.sdkRoot", relative, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+    }
+  });
+
+  it("returns the project value over the global one, with ~ expanded to home", () => {
+    setConfigValue("android.sdkRoot", "/opt/global-sdk", "global", opts());
+    expect(getAndroidSdkRoot(opts())).toBe(path.resolve("/opt/global-sdk"));
+    setConfigValue("android.sdkRoot", "~/Android/Sdk", "project", opts());
+    expect(getAndroidSdkRoot(opts())).toBe(path.join(homeDir, "Android/Sdk"));
   });
 });
 

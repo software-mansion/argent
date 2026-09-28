@@ -1,0 +1,43 @@
+---
+sidebar_position: 3
+sidebar_label: Manage machines
+title: Manage machines
+sidebar_custom_props:
+  icon: key-round
+---
+
+A machine is a hosted Mac that Argent Cloud reserves for your session. See [How it works](/docs/cloud/fundamentals/how-it-works). This guide reserves, shares and returns machines.
+
+## Log in and reserve a machine
+
+`sim-remote login` authenticates you with your API key and reserves a machine. If all machines of your team are busy, the command waits for a free one. The command prints the name of the machine that you got.
+
+```
+Logged in. Acquired machine acme.runner-03.
+```
+
+You can also log in without a machine and reserve one later with `sim-remote acquire`.
+
+## Hold more than one machine
+
+One user can hold several machines at the same time. `sim-remote list-machines` shows the machines that you hold and marks the current one. `sim-remote attach` points your session at another machine that you hold. A session started in a different client, for example the Argent agent, can share a machine in this way.
+
+To use several machines at the same time from one computer, run one session per machine. Set `SIM_REMOTE_SESSION` to a different name in each shell or agent before you run `sim-remote login`. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer).
+
+## Keep a machine during a long run
+
+The daemon releases the machine after 15 minutes without a `sim-remote` command. During a long test run that does not go through `sim-remote`, run `sim-remote keepalive 30m` to keep the machine for 30 minutes. A session holds a machine for at most 24 hours.
+
+## Give a machine back
+
+`sim-remote release` returns the machine and keeps you logged in. `sim-remote logout` returns the machine and ends the session. Log out when you are done. A machine that you hold is a machine that nobody else on your team can use.
+
+When a machine is returned, Argent Cloud erases every simulator on it and rebuilds the session volume from a clean image. See [Security and data](/docs/cloud/reference/security-and-data).
+
+## Example instructions
+
+- "Log in to Argent Cloud and reserve a machine."
+- "Show which cloud machines I hold."
+- "Release the cloud machine when the tests complete."
+
+The [sessions and limits reference](/docs/cloud/reference/sessions) lists the timeouts. The [CLI reference](/docs/cloud/reference/cli) lists all commands.

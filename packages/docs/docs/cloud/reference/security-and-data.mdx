@@ -1,0 +1,29 @@
+---
+sidebar_position: 5
+sidebar_label: Security and data
+title: Security and data
+sidebar_custom_props:
+  icon: shield-check
+---
+
+## Isolation
+
+We assign each physical machine to one customer. Each session runs in its own operating system account on its own disk volume. A forward tunnel reaches only the servers that your own session started on the machine.
+
+## What survives a session
+
+Nothing survives a session. When a machine returns to your team, Argent Cloud revokes the credentials of the session, closes the live connections, erases every simulator, and rebuilds the session volume from a clean image. Your app binaries, simulator state and files do not survive the session.
+
+## What Argent Cloud records
+
+Argent Cloud does not record the screen video, the keystrokes or the app content. Argent Cloud keeps the operational logs of the machine for 14 days.
+
+## The API key
+
+We issue one API key per user. Treat the key like a password and do not commit it to a repository.
+
+`sim-remote login` reads the key from the `SIM_ROUTER_API_KEY` environment variable or from the `--api-key` option. Export the variable in your shell profile, in a `.envrc` file or in a secret manager. In CI, supply the variable as a secret.
+
+`sim-remote` keeps the session token in the memory of the daemon. `sim-remote` writes no session token, API key or configuration file to disk. The [log files](/docs/cloud/reference/sessions#log-files) are the only files that `sim-remote` writes.
+
+[GitHub Actions](/docs/cloud/integrations/github-actions#the-api-key) describes how the actions handle the key in a job.

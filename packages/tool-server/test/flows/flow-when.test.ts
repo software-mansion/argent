@@ -1200,6 +1200,7 @@ describe("when: run cancellation", () => {
     ]);
     expect(result.steps[0].reason).toBe("run aborted");
     expect(result.steps[0].reason).not.toMatch(/condition not met/);
+    expect(result.steps[0].durationMs).toBeUndefined();
     expect(result.steps[1].reason).toBe("run aborted");
     expect(result.taps).toHaveLength(0);
     expect(result.ok).toBe(false);
