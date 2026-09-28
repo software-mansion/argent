@@ -979,13 +979,34 @@ function createRuntime({
     /** The requests that left JavaScript: XHR sends and Expo native starts. */
     sent: () => sends.length + expoNative.requests.length,
     install: () => JSON.parse(run(NETWORK_INTERCEPTOR_SCRIPT) as string) as unknown,
-    records: () => JSON.parse(JSON.stringify(context.__argent_network_log)) as CapturedRecord[],
+    /** The records, as the agent reads each one with view-network-request-details. */
+    records: () =>
+      (context.__argent_network_log as Array<{ requestId: string }>).map(
+        (entry) =>
+          JSON.parse(run(makeNetworkDetailReadScript(entry.requestId)) as string) as CapturedRecord
+      ),
     last: () => sends[sends.length - 1]!,
   };
 }
 
 type Runtime = ReturnType<typeof createRuntime>;
 type FakeXhr = ReturnType<Runtime["last"]>;
+
+/**
+ * Notes the size of the buffer behind each decode of the interceptor, from now on. It decodes with
+ * `fatal`, to tell text from binary; the app's own decodes do not count.
+ */
+function noteDecodes(rt: Runtime): number[] {
+  const decoded: number[] = [];
+  rt.context.TextDecoder = class extends TextDecoder {
+    decode(...args: Parameters<TextDecoder["decode"]>): string {
+      const [input] = args;
+      if (this.fatal && input && ArrayBuffer.isView(input)) decoded.push(input.buffer.byteLength);
+      return super.decode(...args);
+    }
+  };
+  return decoded;
+}
 
 /** A runtime whose app replaced the global fetch with `wrapper` at startup, before the install. */
 function appWrapped(wrapper: string, options: RuntimeOptions = { polyfillFetch: true }): Runtime {
@@ -1117,6 +1138,20 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       rt.last().respond(200, {}, body);
 
       expect(rt.records()[0]!.encodedDataLength).toBe(Buffer.byteLength(body));
+    });
+
+    it("keeps a copy of a Uint8Array body whose slice() returns a view, as the buffer package's Buffer does", () => {
+      const rt = createRuntime();
+      // Expo installs a TextDecoder, which shows a UTF-8 body as its text.
+      rt.context.TextDecoder = TextDecoder;
+      rt.install();
+      rt.run(`class ViewSlice extends Uint8Array { slice(start, end) { return this.subarray(start, end); } }
+        var sent = new ViewSlice([123, 125]);
+        var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/upload'); x.send(sent);
+        sent[0] = 0;`);
+
+      // The app changed its buffer after the send: the record keeps what was sent.
+      expect(rt.records()[0]!.request.postData).toBe("{}");
     });
 
     it("records only the byte length of an arraybuffer response", () => {
@@ -2266,15 +2301,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
 
     it("keeps at most 1 MiB of a 5 MiB stream for the record", async () => {
       const rt = createRuntime(EXPO_57);
-      // The interceptor decodes the bytes it kept once the request ends: note what it hands over.
-      const decoded: number[] = [];
-      rt.context.TextDecoder = class extends TextDecoder {
-        decode(...args: Parameters<TextDecoder["decode"]>): string {
-          const [input] = args;
-          if (input && ArrayBuffer.isView(input)) decoded.push(input.buffer.byteLength);
-          return super.decode(...args);
-        }
-      };
+      const decoded = noteDecodes(rt);
       rt.install();
       const size = rt.run(
         `expoFetch('https://api.test/feed').then(function(r) { return countStream(r); })`
@@ -2292,13 +2319,47 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
 
       expect(await size).toBe(5 * BODY_CAP);
       await settle();
-      expect(decoded).toEqual([BODY_CAP + 3]);
       expect(rt.records()[0]).toMatchObject({
         state: "finished",
         responseBody: "a".repeat(BODY_CAP),
         bodyTruncated: true,
         encodedDataLength: 5 * BODY_CAP,
       });
+      expect(decoded).toEqual([BODY_CAP + 3]);
+    });
+
+    it("decodes no body while the app sends and reads, only when the agent reads the record", async () => {
+      const rt = createRuntime(EXPO_57);
+      const decoded = noteDecodes(rt);
+      rt.install();
+      // Expo's own fetch encodes the string body, before the interceptor sees it.
+      const pending = rt.run(`Promise.all([
+        expoFetch('https://api.test/upload', { method: 'POST', body: '{"name":"Zoë"}' }).then(function(r) { return r.arrayBuffer(); }),
+        expoFetch('https://api.test/feed').then(function(r) { return readStream(r); })
+      ])`) as Promise<[ArrayBuffer, string]>;
+      // Without reading the records, which decodes them.
+      for (let i = 0; i < 20 && rt.native.length < 2; i++) await settle();
+      const [upload, feed] = rt.native;
+      upload!.respond(201, {}, '{"id":7}');
+      feed!.head(200, {});
+      await untilNativeState(feed!, "bodyStreamingStarted");
+      feed!.chunk("data: 1\n\n");
+      feed!.done();
+      const [buffer, text] = await pending;
+      await settle();
+      const before = decoded.length;
+
+      expect(buffer.byteLength).toBe(8);
+      expect(text).toBe("data: 1\n\n");
+      expect(before).toBe(0);
+      expect(rt.records().map((r) => [r.request.postData, r.responseBody])).toEqual([
+        ['{"name":"Zoë"}', '{"id":7}'],
+        [undefined, "data: 1\n\n"],
+      ]);
+      expect(decoded.length).toBe(3);
+      // A record is decoded once.
+      rt.records();
+      expect(decoded.length).toBe(3);
     });
 
     it.each(["text", "json", "arrayBuffer"])(

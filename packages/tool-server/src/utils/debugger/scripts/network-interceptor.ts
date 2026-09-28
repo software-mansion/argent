@@ -39,7 +39,8 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
 
   function bodyChars(entry) {
     return (entry.responseBody ? entry.responseBody.length : 0) +
-      (entry.request.postData ? entry.request.postData.length : 0);
+      (entry.request.postData ? entry.request.postData.length : 0) +
+      (entry.bodyBytes ? entry.bodyBytes.byteLength : 0) + (entry.postBytes ? entry.postBytes.byteLength : 0);
   }
 
   function evict() {
@@ -124,11 +125,37 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, end)); } catch (e) { return undefined; }
   }
 
-  // Expo hands its native request the body as bytes: they show as text when they are UTF-8.
-  function describeBytes(bytes) {
-    var text = utf8Text(bytes);
-    return text === undefined ? { text: '[binary ' + bytes.byteLength + ' bytes]', cut: false } : { text: text, cut: bytes.byteLength > BODY_CAP };
+  // Bodies of bytes are kept as bytes, 3 past the cap to let utf8Text step back to a character
+  // boundary, and decoded only when the agent reads the record: Expo SDK 54 and 55 install a
+  // TextDecoder written in JS, which would stop the app's JS thread for each request.
+  // A copy even of a subclass whose slice() returns a view (the Buffer of the buffer package).
+  function keepBytes(bytes) {
+    return Uint8Array.prototype.slice.call(bytes, 0, BODY_CAP + 3);
   }
+
+  function decodeBodies(entry) {
+    if (!entry.postBytes && !entry.bodyBytes) return;
+    var before = bodyChars(entry);
+    if (entry.postBytes) {
+      // Expo hands its native request the body as bytes: they show as text when they are UTF-8.
+      var post = utf8Text(entry.postBytes);
+      entry.request.postData = post === undefined ? '[binary ' + entry.postSize + ' bytes]' : post;
+      if (post !== undefined && entry.postSize > BODY_CAP) entry.request.postDataTruncated = true;
+      delete entry.postBytes;
+      delete entry.postSize;
+    }
+    if (entry.bodyBytes) {
+      var body = utf8Text(entry.bodyBytes);
+      if (body !== undefined) {
+        entry.responseBody = body;
+        if (entry.encodedDataLength > BODY_CAP) entry.bodyTruncated = true;
+      }
+      delete entry.bodyBytes;
+    }
+    bufferedChars += bodyChars(entry) - before;
+    evict();
+  }
+  g.__argent_network_decode = decodeBodies;
 
   // What a request body shows, and whether that is only its start.
   function describeBody(body) {
@@ -138,7 +165,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       if (typeof body === 'string') text = body;
       else if (typeof FormData === 'function' && body instanceof FormData) text = describeFormData(body);
       else if (typeof Blob === 'function' && body instanceof Blob) text = '[Blob ' + body.size + ' bytes]';
-      else if (typeof Uint8Array === 'function' && body instanceof Uint8Array) return describeBytes(body);
+      else if (typeof Uint8Array === 'function' && body instanceof Uint8Array) return { bytes: keepBytes(body), size: body.byteLength };
       else if (typeof ArrayBuffer === 'function' && (body instanceof ArrayBuffer || ArrayBuffer.isView(body))) {
         text = '[binary ' + body.byteLength + ' bytes]';
       }
@@ -158,7 +185,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       timestamp: startedAt / 1000
     };
     var postData = describeBody(body);
-    if (postData) {
+    if (postData && postData.bytes) {
+      entry.postBytes = postData.bytes;
+      entry.postSize = postData.size;
+    } else if (postData) {
       entry.request.postData = postData.text;
       if (postData.cut) entry.request.postDataTruncated = true;
     }
@@ -174,12 +204,15 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     e.response = { url: url || e.request.url, status: status, statusText: statusText || '', headers: headers, mimeType: mimeTypeOf(headers) };
   }
 
-  // Stores the body of a response, once.
+  // Stores the body of a response, once: text, or bytes that keepBytes cut.
   function storeBody(rec, body, byteLength, truncated) {
     var e = rec.entry;
     if (e.responseBody !== undefined || e.encodedDataLength !== undefined) return;
     if (typeof byteLength === 'number') e.encodedDataLength = byteLength;
-    if (typeof body === 'string') {
+    if (body instanceof Uint8Array) {
+      e.bodyBytes = body;
+      if (byId[e.requestId] === e) { bufferedChars += body.byteLength; evict(); }
+    } else if (typeof body === 'string') {
       if (body.length > BODY_CAP) { body = body.slice(0, BODY_CAP); truncated = true; }
       e.responseBody = body;
       if (truncated) e.bodyTruncated = true;
@@ -415,7 +448,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var finalized = false;
     var stalled = false;
     var completed = false;
-    // 3 bytes past the cap let utf8Text step back to a character boundary.
+    // Keeps as many bytes of the chunks as keepBytes keeps of a whole body.
     var take = function(data) {
       if (!data || typeof data.byteLength !== 'number') return;
       var view = ArrayBuffer.isView(data) ? data : new Uint8Array(data);
@@ -428,7 +461,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var takeWhole = function(data) {
       if (!data || typeof data.byteLength !== 'number' || rec.entry.state === 'failed') return;
       var bytes = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
-      storeBody(rec, utf8Text(bytes), bytes.byteLength, bytes.byteLength > BODY_CAP);
+      storeBody(rec, keepBytes(bytes), bytes.byteLength);
     };
     var onData = function(data) { take(data); };
     var onFail = function(error) { if (rec.entry.state === 'pending') fail(rec, String(error)); };
@@ -468,7 +501,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       if (!streamed) return complete(rec, undefined, undefined, false);
       var bytes = new Uint8Array(kept);
       for (var i = 0, at = 0; i < chunks.length; at += chunks[i].byteLength, i++) bytes.set(chunks[i], at);
-      complete(rec, utf8Text(bytes), streamed, streamed > BODY_CAP);
+      complete(rec, bytes, streamed);
     };
     var bodyEnded = function() {
       if (!endedAt) endedAt = Date.now();
@@ -726,6 +759,7 @@ export function makeNetworkDetailReadScript(requestId: string): string {
   if (!byId) return JSON.stringify({ error: 'Network interceptor not installed' });
   var entry = byId[${JSON.stringify(requestId)}];
   if (!entry) return JSON.stringify({ error: 'Request not found' });
+  if (typeof globalThis.__argent_network_decode === 'function') globalThis.__argent_network_decode(entry);
 
   return JSON.stringify({
     id: entry.id,
