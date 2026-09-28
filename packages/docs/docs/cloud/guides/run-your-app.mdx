@@ -1,0 +1,60 @@
+---
+sidebar_position: 1
+sidebar_label: Run your app
+title: Run your app
+sidebar_custom_props:
+  icon: smartphone
+---
+
+You control a hosted simulator with `sim-remote simctl`. The command runs `xcrun simctl` on the hosted machine with the same arguments. See [How it works](/docs/cloud/fundamentals/how-it-works). This guide runs an app from a local build.
+
+## Boot a simulator
+
+List the simulators on your machine. Copy the UDID of one of them. Boot the simulator and wait until the boot completes. The `-b` option boots the simulator if it is not booted yet.
+
+```bash
+sim-remote simctl list devices available
+sim-remote simctl bootstatus <UDID> -b
+```
+
+## Install and launch the app
+
+The path of the `.app` bundle is a path on your computer. `sim-remote` uploads the bundle for you. The `--console` option streams the output of the app to your terminal.
+
+```bash
+sim-remote simctl install <UDID> ./build/MyApp.app
+sim-remote simctl launch --console <UDID> com.example.MyApp
+```
+
+## See the screen
+
+`sim-remote` downloads screenshots and recordings to your computer. A recording runs until you press Ctrl-C.
+
+```bash
+sim-remote simctl io <UDID> screenshot shot.png
+sim-remote simctl io <UDID> recordVideo demo.mp4
+```
+
+## Send a push or open a deep link
+
+`push` reads the payload from a local file or from stdin. `openurl` goes to the machine without changes.
+
+```bash
+sim-remote simctl push <UDID> com.example.MyApp ./payload.apns
+sim-remote simctl openurl <UDID> myapp://profile
+```
+
+## Example instructions
+
+- "Boot the hosted iPhone and install the build from `./build/MyApp.app`."
+- "Take a screenshot of the hosted simulator and save it as `shot.png`."
+- "Send the push payload from `./payload.apns` to the app on the hosted simulator."
+- "Open the deep link `myapp://profile` on the hosted simulator."
+
+## Limits
+
+- Argent Cloud hosts iOS simulators only. See [Supported platforms](/docs/cloud/fundamentals/supported-platforms).
+- The hosted simulator has no window on your screen. Use screenshots, screen recordings or Argent to see it.
+- One upload is at most 1 GiB.
+
+The [simctl reference](/docs/cloud/reference/simctl) lists every subcommand that `sim-remote` handles on its own. The [CLI reference](/docs/cloud/reference/cli) lists all commands.

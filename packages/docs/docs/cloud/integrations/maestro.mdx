@@ -1,0 +1,63 @@
+---
+sidebar_position: 2
+sidebar_label: Maestro
+title: Maestro
+sidebar_custom_props:
+  icon: brand-maestro
+---
+
+[Maestro](https://maestro.dev) runs its iOS flows through the Apple tools `xcrun`, `xcodebuild`, `plutil`, `applesimutils`, `xcode-select` and `open`. `sim-remote` provides stand-ins for these tools. With the stand-ins on your `PATH`, the stock `maestro` CLI runs its flows on a hosted simulator. This also works on Linux without Xcode.
+
+## Prerequisites
+
+- `sim-remote` on `PATH` and a session with a machine. See [Installation](/docs/cloud/fundamentals/installation).
+- The stock `maestro` CLI and a JVM.
+- On Linux, `plistutil` from libplist 2.3.0 or newer. Install it with `apt install libplist-utils`. A Mac does not need it.
+
+## Run a flow
+
+Log in, install the stand-ins, and run Maestro with the UDID of a hosted simulator:
+
+```bash
+sim-remote login
+eval "$(sim-remote install-shims)"
+maestro --udid <UDID> test flow.yaml
+```
+
+In fish, pipe the output of `install-shims` to `source`:
+
+```fish
+sim-remote install-shims --shell fish | source
+```
+
+Install the app under test with `sim-remote simctl install`, or with `xcrun simctl install` through the stand-in. Both upload the local `.app` bundle.
+
+## How it works
+
+Maestro starts its test runner with `xcodebuild`. The `xcodebuild` stand-in:
+
+1. uploads the test runner of Maestro to the simulator, unless the test runner is already installed,
+2. launches the test runner on an ephemeral port,
+3. reads the port from the log of the test runner,
+4. opens a forward tunnel from the local port that Maestro polls to that port,
+5. stops the test runner and the tunnel when Maestro ends.
+
+The stand-in installs the test runner one time per session. Set `SIM_REMOTE_FORCE_RUNNER_INSTALL=1` to install it on every run.
+
+The stand-in writes its steps to the `xctest_runner_*.log` file of Maestro. Read this file when the test runner does not start.
+
+## Timeouts
+
+The install of the test runner, the launch, the port discovery and the tunnel must fit in `MAESTRO_DRIVER_STARTUP_TIMEOUT` (default 120 seconds). Increase it on a slow network.
+
+One fetch of the view hierarchy takes about 5 seconds on a large app. A flow step with a short fixed timeout can expire while the UI is correct. Increase the timeouts of flows that you wrote for a local simulator. The `screen-hierarchy/*.json` file of the failed step under `~/.maestro/tests/` shows whether the element arrived.
+
+## Limits
+
+- Permission changes go through `simctl privacy`. Notifications, health and Face ID permissions are not available.
+- `clearState` is best-effort. `get_app_container` downloads a copy of the container.
+- `maestro start-device`, the `setProxy` flow command and crash report artifacts are not supported.
+- Maestro starts a new test runner on the simulator for each `maestro test` invocation. A workflow with one invocation per flow file waits for the launch of the test runner every time.
+- Each `xcrun` call opens a new connection, which costs a few seconds. The test steps share one tunnel and are not affected.
+
+The [test driver shims reference](/docs/cloud/reference/shims) describes the stand-ins. [GitHub Actions](/docs/cloud/integrations/github-actions) runs Maestro flows in a pipeline.

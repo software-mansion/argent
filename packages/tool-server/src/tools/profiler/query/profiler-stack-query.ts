@@ -444,7 +444,7 @@ Fails if native-profiler-analyze has not been run or no parsed trace data is in 
   zodSchema,
   // No chromium entry: it has no native trace capture.
   capability: {
-    apple: { simulator: true, device: true },
+    apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
   },
   services: (params) => ({

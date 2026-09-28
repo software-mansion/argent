@@ -18,6 +18,7 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "keyboard",
   "paste",
   "rotate",
+  "fold",
   "launch-app",
   "restart-app",
   "open-url",
@@ -44,6 +45,9 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "run-sequence": 15000,
   "button": 1500,
   "rotate": 1000,
+  // The fold tool already waits for the panel hand-over; the cap covers the
+  // repaint after it.
+  "fold": 1500,
   "keyboard": 300,
   "paste": 300,
   "describe": 100,
@@ -75,6 +79,7 @@ export const AUTO_DESCRIBE_TOOLS = new Set([
   "keyboard",
   "paste",
   "rotate",
+  "fold",
   "launch-app",
   "restart-app",
   "open-url",

@@ -31,7 +31,7 @@ const zodSchema = z.object({
     .describe(
       "View fields to include. Defaults: className, frame, hidden, alpha, " +
         "identifier, label, nativeID, userInteractionEnabled, depth. " +
-        "Additional: pointer, tag, windowFrame, bounds, center, opaque, " +
+        "Additional: pointer, tag, windowFrame, screenFrame, bounds, center, opaque, " +
         "clipsToBounds, transform, contentMode, backgroundColor, tintColor, layerName"
     ),
 });
@@ -50,7 +50,7 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to search native views in ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, label, tag, or React Native nativeID.
 Use when you need to locate a specific view by its properties without dumping the entire hierarchy.
 Returns { status: "ok", matches } with matching views including their frames, properties, optional ancestors, and optional children. Much more targeted than native-full-hierarchy.
