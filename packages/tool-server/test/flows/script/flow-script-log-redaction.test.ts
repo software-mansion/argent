@@ -181,6 +181,24 @@ describe("script log redaction - a value an encoder rewrote", () => {
     expectRedacted(`${result.log}${result.failure?.stack ?? ""}`, PW);
   }, 30_000);
 
+  it("replaces a value a form body escaped ! ' ( ) ~ in, in the log and in the error", async () => {
+    const FORM: FlowScriptSecret = { name: "FORM_PASS", value: "Tr0ub4dor&3!xyz'(~)" };
+    const result = await runScript(
+      "form-escaped.mjs",
+      `const u = new URL("https://auth.example.com/oauth/token");
+       u.searchParams.set("password", process.env.FORM_PASS);
+       console.log("body:", new URLSearchParams({ grant_type: "password", password: process.env.FORM_PASS }).toString());
+       throw new Error("token request failed: " + u.toString());`,
+      [FORM]
+    );
+
+    expect(result.log).toBe("body: grant_type=password&password={{secret:FORM_PASS}}\n");
+    expect(result.failure?.message).toBe(
+      "token request failed: https://auth.example.com/oauth/token?password={{secret:FORM_PASS}}"
+    );
+    expectRedacted(`${result.log}${result.failure?.stack ?? ""}`, FORM);
+  }, 30_000);
+
   it("replaces a value printed as base64", async () => {
     const result = await runScript(
       "base64.mjs",

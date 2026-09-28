@@ -1324,7 +1324,11 @@ function printedSpellings(value: string): string[] {
   // A URL's user name or password: `@ : / ;` escaped, `$ & + , %` kept.
   const url = new URL("http://host");
   url.password = value;
-  return [url.password];
+  return [
+    url.password,
+    // A form body, `URLSearchParams` or `url.searchParams`: `! ' ( ) ~` escaped too.
+    new URLSearchParams([["", value]]).toString().slice(1),
+  ];
 }
 
 export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret[]): string {
