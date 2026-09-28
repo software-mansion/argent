@@ -54,8 +54,10 @@ interface SimRemoteListDevicesResult {
   devices: Record<string, SimRemoteDevice[]>;
 }
 
-export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
-  const { stdout } = await run(["simctl", "list", "devices", "--json"]);
+export async function simctlListDevices(options?: {
+  timeoutMs?: number;
+}): Promise<SimRemoteListDevicesResult> {
+  const { stdout } = await run(["simctl", "list", "devices", "--json"], options);
   try {
     return JSON.parse(stdout) as SimRemoteListDevicesResult;
   } catch (err) {
@@ -80,14 +82,18 @@ const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
  *
  * A failed lookup resolves to `false` rather than throwing: callers use this
  * to narrow an already-supported device, so it must not turn a working phone
- * simulator into an error.
+ * simulator into an error. `timeoutMs` bounds the list call on a cache miss; a
+ * lookup that times out is a failed one.
  */
-export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
+export async function isRemoteTvOsSimulator(
+  udid: string,
+  options?: { timeoutMs?: number }
+): Promise<boolean> {
   const id = stripRemotePrefix(udid);
   const cached = remoteRuntimeKindCache.get(id);
   if (cached) return cached === "tv";
   try {
-    const { devices } = await simctlListDevices();
+    const { devices } = await simctlListDevices(options);
     for (const [runtime, entries] of Object.entries(devices)) {
       if (!entries.some((d) => d.udid === id)) continue;
       const kind = runtime.includes("tvOS") ? "tv" : "mobile";
@@ -153,6 +159,19 @@ export async function simctlPrivacy(
   bundleId: string
 ): Promise<void> {
   await run(["simctl", "privacy", stripRemotePrefix(udid), action, service, bundleId]);
+}
+
+/**
+ * Remote analogue of `xcrun simctl status_bar <udid> <action> ...` — overrides
+ * or clears the remote simulator's status bar. `sim-remote simctl` forwards its
+ * arguments verbatim, so the argv is the local one minus the udid.
+ */
+export async function simctlStatusBar(
+  udid: string,
+  args: string[],
+  options?: { timeoutMs?: number }
+): Promise<void> {
+  await run(["simctl", "status_bar", stripRemotePrefix(udid), ...args], options);
 }
 
 /** Copy text into the simulator's pasteboard (streamed over stdin). */

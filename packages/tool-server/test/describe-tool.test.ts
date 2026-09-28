@@ -32,6 +32,7 @@ function makeAXServiceApi(
     degraded: options?.degraded ?? false,
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
+    livePanel: async () => null,
     ping: async () => true,
   };
 }
@@ -48,6 +49,8 @@ function makeNativeDevtoolsApi(options: {
     socketPath: "/tmp/test.sock",
     ensureEnvReady: async () => {},
     reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
     getInitFailure: () => null,
     isConnected: (bundleId) => connected.has(bundleId),
     isAppRunning: async () => true,
@@ -1067,6 +1070,7 @@ describe("describe tool — ax-service read failure", () => {
       },
       alertCheck: async () => false,
       ping: async () => true,
+      livePanel: async () => null,
     };
   }
 

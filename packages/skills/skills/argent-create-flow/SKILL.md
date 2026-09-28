@@ -13,6 +13,7 @@ For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-flows
 
 - Before creating or changing a flow, read [Live authoring](references/live-authoring.md) completely.
 - When polishing, composing, or manually reviewing YAML, read [Flow YAML](references/flow-yaml.md). For Vega, read its platform limits before recording remote or keyboard tools.
+- Flows run on physical iPhones (an iOS `list-devices` entry with kind `"device"`), but replay never auto-binds one, even when no simulator is booted: pass the phone's udid as `device` (CLI `--device`), and only a `connected` phone can run. `pinch`/`rotate` steps fail there like the live tools. On hardware the flow tree is the `describe` tree: same ids and roles, no UIView hierarchy. See `argent-ios-device-interact` for the hardware contract.
 - On capture warnings, raw coordinates, unavailable trees, mistimed transitions, overlays, or replay failures, read [Reliability and recovery](references/reliability-and-recovery.md).
 
 ## Non-negotiable rules
@@ -22,7 +23,8 @@ For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-flows
 3. **Use semantic targets.** Prefer a strict id, then stable text or an accessibility label. Use `scroll-to` for off-screen elements. Resolve every raw-point warning immediately through the [coordinate fallback gate](references/reliability-and-recovery.md#coordinate-fallback-gate).
 4. **Prove every screen change.** Record a destination-only identity check. During polish, follow it with `await: { idle: true }`. Stillness does not prove identity, and `idle` can pass with a warning.
 5. **Polish only executed behavior.** Convert recorded steps without changing their meaning. Record any missing action or structural check live. The only unrecorded insertions are a planned `snapshot:`, a navigation `await: { idle: true }`, and the documented Chromium packaging `launch:`.
-6. **Replay the final YAML end to end.** A normal flow needs one uninterrupted full pass. `argent-qa-flows` requires two consecutive passes.
+6. **Use scripts only when the user requests them.** Read [Flow YAML: Local scripts](references/flow-yaml.md#local-scripts), then record each script with `flow-add-script`.
+7. **Replay the final YAML end to end.** A normal flow needs one uninterrupted full pass. `argent-qa-flows` requires two consecutive passes.
 
 ### Stable selectors
 
@@ -35,7 +37,7 @@ During polish, use `within`, `after`, and `next` to disambiguate repeated elemen
 ## Workflow
 
 1. Choose the flow type:
-   - **e2e:** the first non-echo step is `launch:`. The flow controls process start.
+   - **e2e:** the first step that is not `echo:` or `script:` is `launch:`. The flow controls process start.
    - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
 2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
 3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.

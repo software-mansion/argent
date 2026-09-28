@@ -23,6 +23,7 @@ import {
 import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 import type { ArtifactKind, ArtifactStore } from "@argent/registry";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 /**
  * Register a path as a downloadable artifact so the client gets fetchable bytes
@@ -47,7 +48,7 @@ const annotationSchema = z.object({
 });
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -99,7 +100,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
   services: () => ({}),
   async execute(_services, params, ctx) {
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(
-      params.port,
+      metroPort(params),
       params.device_id
     );
 
