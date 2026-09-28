@@ -295,6 +295,7 @@ describe("stepRequiresDevice", () => {
       "scroll-to": true,
       "pinch": true,
       "rotate": true,
+      "fold": true,
       "snapshot": true,
       "script": false,
     };
@@ -315,6 +316,7 @@ describe("stepRequiresDevice", () => {
       "scroll-to": { kind: "scroll-to", target: { text: "f" }, direction: "down" },
       "pinch": { kind: "pinch", scale: 2 },
       "rotate": { kind: "rotate", by: 90 },
+      "fold": { kind: "fold", posture: "open" },
       "snapshot": { kind: "snapshot", name: "s" },
       "script": { kind: "script", path: "seed.mjs" },
     };
