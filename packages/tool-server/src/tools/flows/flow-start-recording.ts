@@ -101,8 +101,9 @@ only where the Android read-back proved the text did not land - a read that
 concluded nothing records quietly. For a self-contained
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
 as the flow's \`launch\` step); for a reusable fragment, skip that and pass
-executionPrerequisite instead. Use flow-add-echo to add labels. Call
-flow-finish-recording when done.
+executionPrerequisite instead. Use flow-add-echo to add labels, and
+flow-add-script to run a local .mjs file and record it as a \`script:\` step.
+Call flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, edit the .yaml file directly to
 remove or reorder steps - after flow-finish-recording, not during the

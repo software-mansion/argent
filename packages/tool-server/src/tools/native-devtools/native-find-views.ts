@@ -31,7 +31,7 @@ const zodSchema = z.object({
     .describe(
       "View fields to include. Defaults: className, frame, hidden, alpha, " +
         "identifier, label, nativeID, userInteractionEnabled, depth. " +
-        "Additional: pointer, tag, windowFrame, bounds, center, opaque, " +
+        "Additional: pointer, tag, windowFrame, screenFrame, bounds, center, opaque, " +
         "clipsToBounds, transform, contentMode, backgroundColor, tintColor, layerName"
     ),
 });

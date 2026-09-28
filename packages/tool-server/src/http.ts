@@ -19,6 +19,7 @@ import {
   AI_CLIENTS,
   type AiTelemetryProps,
   type Platform as TelemetryPlatform,
+  type TelemetryDeviceKind,
 } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
@@ -41,8 +42,14 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { isIosPhysicalDevice, resolveDevice } from "./utils/device-info";
-import { canonicalDeviceId } from "./utils/debugger/device-alias";
-import { refineTvPlatform } from "./utils/telemetry-platform";
+import {
+  enforceExternalDeviceGrant,
+  externalProviderLabel,
+  externalSupportHint,
+  isExternalId,
+} from "./utils/external-devices";
+import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device-alias";
+import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
 import {
@@ -55,6 +62,7 @@ import {
   createChromiumServerRouter,
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
+import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -172,16 +180,23 @@ function targetsIosPhysicalDevice(data: unknown): boolean {
   return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
 }
 
-type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
+type InvocationMeta = {
+  /** Coarse vendor label only — see {@link externalProviderLabel}. */
+  device_provider?: string;
+  platform?: TelemetryPlatform;
+  device_kind?: TelemetryDeviceKind;
+} & AiTelemetryProps;
 // Coarse context only: the raw device id (UDID / serial) infers a platform and is
 // never stored or forwarded; invalid_params carries schema-declared parameter
 // NAMES only (see deriveInvalidParams), never values or user-typed keys.
 type HttpFailureMeta = {
+  device_provider?: string;
   platform?: TelemetryPlatform;
+  device_kind?: TelemetryDeviceKind;
   invalid_params?: string[];
 } & AiTelemetryProps;
 
-function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
+function inferDeviceAttribution(deviceId: string | null): DeviceAttribution | null {
   if (!deviceId) return null;
   try {
     // Telemetry-only: rewrite a forwarded Metro logicalDeviceId back to the id
@@ -189,7 +204,14 @@ function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
     // the same platform for one invocation — the opaque hex handle would
     // otherwise shape-classify as android. Unaliased ids pass through unchanged.
     const canonical = canonicalDeviceId(deviceId) ?? deviceId;
-    return refineTvPlatform(resolveDevice(canonical).platform, canonical);
+    const attribution = attributeDeviceForTelemetry(canonical);
+    // A session addressable only by its logicalDeviceId has no device id to
+    // derive a kind from. The handle's shape already fails the hardware-serial
+    // gate today, but Metro ids are opaque and their shape is not contractual.
+    if (attribution.device_kind && isLogicalKeyedDevice(canonical)) {
+      return { platform: attribution.platform };
+    }
+    return attribution;
   } catch {
     return null;
   }
@@ -219,39 +241,65 @@ function extractInvocationMeta(
 ): InvocationMeta | null {
   const meta: InvocationMeta = { ...aiMeta };
   if (hasCapability && data && typeof data === "object") {
-    const platform = platformFromArgs(data);
-    if (platform) meta.platform = platform;
+    const attribution = deviceAttributionFromArgs(data);
+    if (attribution) Object.assign(meta, attribution);
   }
+  const deviceArg = extractDeviceArg(data);
+  const provider = deviceArg ? externalProviderLabel(deviceArg) : undefined;
+  if (provider) meta.device_provider = provider;
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
 /**
- * Telemetry platform from a tool call's device arg, or null when it carries none.
- * A device id refines to `tvos` / `android-tv` once the runtime-kind cache is warm
- * (coarse `ios` / `android` until then); the `avdName`-only fallback is always
- * coarse.
+ * Telemetry platform and device kind from a tool call's device arg, or null when
+ * it carries none. A device id refines to `tvos` / `android-tv` once the
+ * runtime-kind cache is warm (coarse `ios` / `android` until then); the
+ * `avdName`-only fallback is always coarse and carries no kind.
  * Exported for tests (http-platform-alias.test.ts).
  */
-export function platformFromArgs(data: unknown): TelemetryPlatform | null {
+export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
-  if (deviceArg) return inferPlatform(deviceArg) ?? null;
+  if (deviceArg) return inferDeviceAttribution(deviceArg);
   // An `avdName`-only call (boot-device before the emulator exists) has no serial
   // to resolve a runtime kind from, so it stays coarse `android`; later `udid` /
   // `device_id` calls refine an Android TV AVD once the cache is warm.
-  if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
+  if (typeof (data as Record<string, unknown>).avdName === "string") {
+    return { platform: "android" };
+  }
   return null;
+}
+
+/** Platform half of {@link deviceAttributionFromArgs}. */
+export function platformFromArgs(data: unknown): TelemetryPlatform | null {
+  return deviceAttributionFromArgs(data)?.platform ?? null;
 }
 
 /**
  * Attribution for a sub-tool an orchestrator dispatches: the AI client is
- * inherited, but the platform is re-derived from the child's OWN device arg.
- * Orchestrators like flow-execute carry no platform (and a flow can span several
- * devices), so the parent's platform is only the fallback.
+ * inherited, but platform, device kind and provider label are re-derived from
+ * the child's OWN device arg. Orchestrators like flow-execute carry no platform
+ * (and a flow can span several devices), so the parent's trio is the fallback
+ * only when the child names no device.
  */
 function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknown): InvocationMeta {
-  const childPlatform = platformFromArgs(childArgs);
-  return childPlatform ? { ...parentMeta, platform: childPlatform } : parentMeta;
+  const childAttribution = deviceAttributionFromArgs(childArgs);
+  if (!childAttribution) return parentMeta;
+  const childDeviceArg = extractDeviceArg(childArgs);
+  /**
+   * Re-derived like the platform. A flow can dispatch across several devices,
+   * so inheriting the parent's label would misattribute them.
+   */
+  const childProvider = childDeviceArg ? externalProviderLabel(childDeviceArg) : undefined;
+  // The child named its own device, so its attribution replaces the parent's
+  // wholesale: an `avdName`-only child must not report the parent's kind next
+  // to its own platform, nor an `ext:` parent's label next to a native device.
+  const { platform: _p, device_kind: _k, device_provider: _d, ...inherited } = parentMeta;
+  return {
+    ...inherited,
+    ...(childProvider ? { device_provider: childProvider } : {}),
+    ...childAttribution,
+  };
 }
 
 interface HttpAppOptions {
@@ -357,6 +405,21 @@ const UPLOAD_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 // Bounds the total of unconsumed uploads, so many small ones can't do the same.
 const MAX_PENDING_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
+
+/**
+ * Pull a tool's per-call note off its result so it can ride the response
+ * envelope. Mutates `data` so the reserved key never reaches the client, where
+ * it would otherwise surface in `--json` output and in non-image results. The
+ * key is stripped whatever its value; only a non-empty string becomes a note.
+ */
+function takeToolNote(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const bag = data as Record<string, unknown>;
+  if (!(RESULT_NOTE_KEY in bag)) return undefined;
+  const note = bag[RESULT_NOTE_KEY];
+  delete bag[RESULT_NOTE_KEY];
+  return typeof note === "string" && note.length > 0 ? note : undefined;
+}
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
@@ -645,11 +708,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       ): void => {
         if (!options?.recordFailure) return;
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
-        const platform = inferPlatform(failedDeviceArg);
+        const provider = failedDeviceArg ? externalProviderLabel(failedDeviceArg) : undefined;
+        const attribution = inferDeviceAttribution(failedDeviceArg);
         options.recordFailure(
           name,
           {
-            ...(platform ? { platform } : {}),
+            ...(provider ? { device_provider: provider } : {}),
+            ...attribution,
             ...(extraMeta?.invalid_params?.length
               ? { invalid_params: extraMeta.invalid_params }
               : {}),
@@ -780,6 +845,47 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
+      // Revocation. Factories re-read the provider's declaration, but the
+      // registry caches the resolved service, so a withdrawn or narrowed device
+      // would keep working through a warm handle. Dropping the cached services
+      // here makes the next resolve re-run the gates against the current grant.
+      // Uncached (one small local file read, like the per-request feature-flag
+      // read above) so a change bites on the next call. Not gated on the `ext:`
+      // spelling, a provider's device is reachable by its raw udid or serial
+      // too and that spelling caches its own service. Skipping the check there
+      // let a narrowed or withdrawn grant keep being served from a warm handle.
+      if (deviceArg) {
+        let revocation: { reason?: string; stale: boolean };
+
+        try {
+          revocation = await enforceExternalDeviceGrant(registry, deviceArg);
+        } catch (err) {
+          /**
+           * Fail closed. A handle that would not tear down is a handle that
+           * can still serve the grant the provider just took back and the
+           * next line would hand it the call. Refusing costs a retry, the
+           * alternative spends the revocation.
+           */
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.EXTERNAL_DEVICE_REVOCATION_INCOMPLETE,
+              failure_stage: "external_device_revocation",
+              failure_area: "http",
+              error_kind: "unknown",
+            },
+            parsedData
+          );
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+          return;
+        }
+
+        if (revocation.stale) {
+          process.stderr.write(
+            `[device-providers] dropped cached services for ${deviceArg}: ${revocation.reason}\n`
+          );
+        }
+      }
+
       // Host-binary preflight: `requires: ['xcrun' | 'adb', ...]` yields a 424 with
       // an install hint instead of a deep ENOENT from a child-process call. When
       // the requirement differs per branch, leave `def.requires` empty and let the
@@ -901,6 +1007,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (signingNote) {
           notes.push(signingNote);
         }
+        // A tool can raise a per-call note by returning this reserved key. It
+        // rides the envelope rather than the result body because clients render
+        // image results as image blocks plus a "Saved:" line and drop every
+        // other field — a note inside `data` would never be seen.
+        const toolNote = takeToolNote(data);
+        if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
         if (wantsStream) {
           writeLine({ event: "result", data, ...notePayload });
@@ -909,13 +1021,33 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.json({ data, ...notePayload });
         }
       } catch (err: unknown) {
+        /**
+         * Attribution, applied once here rather than at ~30 throw sites. A
+         * failure on a provider-supplied device names the provider and points
+         * at ITS issue tracker, keeping those reports out of argent's queue.
+         */
+        const attribute = (message: string): string => {
+          if (!deviceArg || !isExternalId(deviceArg)) return message;
+          const hint = externalSupportHint(deviceArg);
+          if (!hint) return message;
+          /**
+           * Not every thrown message ends in punctuation and appending to one
+           * that doesn't runs the two sentences together.
+           */
+          const separator = /[.!?]$/.test(message.trimEnd()) ? " " : ". ";
+          return `${message.trimEnd()}${separator}${hint}`;
+        };
         if (wantsStream) {
-          writeLine({ event: "error", error: streamErrorMessage(err), ...errorSignalFields(err) });
+          writeLine({
+            event: "error",
+            error: attribute(streamErrorMessage(err)),
+            ...errorSignalFields(err),
+          });
           res.end();
           return;
         }
         if (err instanceof ToolNotFoundError) {
-          res.status(404).json({ error: err.message, ...errorSignalFields(err) });
+          res.status(404).json({ error: attribute(err.message), ...errorSignalFields(err) });
           return;
         }
         // Walk the cause chain so a ToolExecutionError wrapping a
@@ -924,9 +1056,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // their fall-back surface.
         const depErr = findDependencyMissing(err);
         if (depErr) {
-          res
-            .status(424)
-            .json({ error: depErr.message, missing: depErr.missing, ...errorSignalFields(err) });
+          res.status(424).json({
+            error: attribute(depErr.message),
+            missing: depErr.missing,
+            ...errorSignalFields(err),
+          });
           return;
         }
         // Unwrap the cause chain: thrown inside execute() / a service factory, these
@@ -934,7 +1068,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // them and fall through to a 500.
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
-          res.status(400).json({ error: unsupportedErr.message, ...errorSignalFields(err) });
+          res
+            .status(400)
+            .json({ error: attribute(unsupportedErr.message), ...errorSignalFields(err) });
           return;
         }
         // A tool rejecting its arguments is a client input error, not an internal
@@ -948,7 +1084,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // http-dep-gate.test.ts.
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
-          res.status(400).json({ error: invalidInputErr.message, ...errorSignalFields(err) });
+          res
+            .status(400)
+            .json({ error: attribute(invalidInputErr.message), ...errorSignalFields(err) });
           return;
         }
         if (getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_INPUT_INVALID) {
@@ -958,7 +1096,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
         if (notImplementedErr) {
           res.status(501).json({
-            error: notImplementedErr.message,
+            error: attribute(notImplementedErr.message),
             toolId: notImplementedErr.toolId,
             platform: notImplementedErr.platform,
             hint: notImplementedErr.hint,
@@ -966,7 +1104,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           });
           return;
         }
-        res.status(500).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
+        res
+          .status(500)
+          .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();

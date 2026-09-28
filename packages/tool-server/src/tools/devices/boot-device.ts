@@ -1,5 +1,5 @@
 import { execFile, spawn, type StdioOptions } from "node:child_process";
-import { openSync, closeSync } from "node:fs";
+import { closeSync, existsSync, openSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -38,6 +38,8 @@ import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
 import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
+import { InvalidToolInputError } from "../../utils/capability";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -95,7 +97,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "iOS only: boot the simulator core WITHOUT opening the Simulator.app GUI window. The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega/Electron, which have no equivalent GUI step."
+      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega/Electron, which have no equivalent GUI step."
     ),
   electronAppPath: z
     .string()
@@ -526,14 +528,35 @@ async function bootIos(
   // simulator-server don't need. ARGENT_SIMULATOR_NO_WINDOW forces the same skip
   // host-wide.
   if (!headless && !iosHeadlessFromEnv() && !deviceSet) {
-    // Xcode 27 replaces Simulator.app with Device Hub.app (com.apple.dt.Devices);
-    // the attach stays best-effort so a missing app never fails a boot whose core
-    // is already up.
-    await execFileAsync("open", ["-a", "Simulator.app"])
-      .catch(() => execFileAsync("open", ["-b", "com.apple.dt.Devices"]))
-      .catch(() => {});
+    // Best-effort: a missing GUI app never fails a boot whose core is already up.
+    await openSimulatorWindow(udid).catch(() => {});
   }
   return { platform: "ios", udid, booted: true };
+}
+
+/**
+ * Shows the booted device in the GUI app of the active Xcode (the one `xcrun`
+ * resolves), never one found elsewhere on the host: `open -a Simulator.app`
+ * alone would launch an older Xcode's Simulator.app on an Xcode 27 host.
+ * Xcode 27 replaces Simulator.app with Device Hub, which opens the device's
+ * own window from a `devices://device/open?id=<udid>` URL; it reports success
+ * even when it cannot show the device, so a missing window goes unnoticed.
+ * Without either app nothing is opened.
+ */
+async function openSimulatorWindow(udid: string): Promise<void> {
+  const timeout = 5_000;
+  const { stdout } = await execFileAsync("xcode-select", ["-p"], { timeout });
+  const developerDir = realpathSync(stdout.trim());
+  const simulatorApp = join(developerDir, "Applications", "Simulator.app");
+  if (existsSync(simulatorApp)) {
+    await execFileAsync("open", ["-a", simulatorApp], { timeout });
+    return;
+  }
+  const deviceHubApp = join(developerDir, "..", "Applications", "DeviceHub.app");
+  if (existsSync(deviceHubApp)) {
+    const url = `devices://device/open?id=${encodeURIComponent(udid)}`;
+    await execFileAsync("open", ["-a", deviceHubApp, url], { timeout });
+  }
 }
 
 /**
@@ -1347,6 +1370,34 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         );
       }
       if (hasUdid) {
+        /**
+         * Argent attaches to a provider's device, it does not own its
+         * lifecycle. `InvalidToolInputError` maps to a 400, so the agent is
+         * told to ask the provider instead of getting a raw `simctl` failure.
+         *
+         * The raw udid is refused too, `bootIos` reboots the simulator and the
+         * spelling the agent used does not change whose device it is.
+         * `additionalDeviceSets` surfaces such a device by its real udid.
+         *
+         * `ext:` failures get the provider named at the HTTP edge, so naming it
+         * here as well would print it twice. A raw udid gets no such
+         * attribution, hence the name inline.
+         */
+        const claim = externalClaimForNativeId(params.udid!);
+
+        if (isExternalId(params.udid!) || claim) {
+          throw new InvalidToolInputError(
+            `'${params.udid}' is supplied by ${claim ? claim.provider.name : "an external provider"}, ` +
+              `which owns its lifecycle — argent cannot boot, reboot or shut it down. ` +
+              `Start the device from that application, then it will appear in list-devices.`,
+            {
+              error_code: FAILURE_CODES.EXTERNAL_DEVICE_LIFECYCLE_REFUSED,
+              error_kind: "unsupported",
+              failure_area: "tool_server",
+              failure_stage: "boot_device_external_refused",
+            }
+          );
+        }
         if (classifyDevice(params.udid!) === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
         }

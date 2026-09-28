@@ -582,7 +582,7 @@ async function injectInChunks(serial: string, text: string, signal?: AbortSignal
 
 // A failing `adb ... input text '<chunk>'` echoes the chunk in its message, and a
 // chunk of a resolved `{{secret:…}}` is a fragment of the credential. This error
-// can ride out as the abort's `cause` below, and the downstream `redactSecrets`
+// can ride out as the abort's `cause` below, and the downstream `scrubSecretValues`
 // matches WHOLE values only — an eight-character fragment survives it. So the
 // quoted argument is elided at the source, the adb stderr that follows it left
 // intact. The primary injection needs no such handling: it sends the whole value

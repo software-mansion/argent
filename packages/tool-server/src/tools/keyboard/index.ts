@@ -268,7 +268,7 @@ One call does one action: pass text OR key, never both. To type and then press a
           ...(result.note === undefined ? {} : { note: SECRET_READ_BACK_WARNING + result.note }),
           // The note is deliberately NOT scrubbed: it is value-free by
           // construction (`keyboard-secrets.test.ts` pins that), and the
-          // substitution is destructive on curated prose — see `redactSecrets`.
+          // substitution is destructive on curated prose — see `scrubSecretValues`.
           // It could not save a leak either: it matches whole values only, and a
           // dropped-character read-back holds a PARTIAL secret. Errors, which
           // quote the `input text` argv verbatim, are still scrubbed below.

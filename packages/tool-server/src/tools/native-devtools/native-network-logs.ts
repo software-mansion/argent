@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeDevtoolsRef,
   precheckNativeDevtools,
@@ -38,7 +38,7 @@ Unlike the JS-level network inspector (view-network-logs), this captures ALL net
 Use when you need to inspect native-level HTTP traffic that is invisible to JS fetch interception. 
 Returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised — follow the message (re-boot the simulator) rather than retrying this tool.
-A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal — never retry it), while a missing host dependency or a udid that is not an Apple device is not.`,
+A not-running app comes back as one of those statuses rather than a failure. An app that is not connected does too, except on a device whose devtools agent argent attached to rather than armed itself — there it fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\`, since no restart of ours can complete a handshake we do not own. Failures are separate: an Apple system app is rejected outright (terminal — never retry it), while a missing host dependency or a udid that is not an Apple device is not.`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
@@ -51,6 +51,23 @@ A not-connected or not-running app comes back as one of those statuses rather th
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
     if (blocked) return blocked;
+
+    /**
+     * `{count: 0}` reads as "the screen made no requests", so say when the
+     * truth is "nothing is capturing them", as the hierarchy tools do.
+     */
+    if (!api.isConnected(params.bundleId)) {
+      throw new FailureError(
+        `Native devtools not connected for bundleId: ${params.bundleId}. ` +
+          `No network log is being captured for it.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+          error_kind: "not_found",
+          failure_area: "tool_server",
+          failure_stage: "native_network_logs_connection",
+        }
+      );
+    }
 
     api.activateNetworkInspection(params.bundleId);
 

@@ -24,9 +24,18 @@ import { FAILURE_CODES } from "./failure-codes";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { z } from "zod";
 
 type ZodIssue = z.core.$ZodIssue;
+
+/**
+ * URNs resolved during a tool invocation, so
+ * {@linkcode Registry._recoverFailedServices} sees the services a tool
+ * resolved itself as well as the ones it declared. Per-invocation, so
+ * concurrent calls cannot dispose each other's services.
+ */
+const resolvedDuringInvocation = new AsyncLocalStorage<Set<URN>>();
 
 export class Registry {
   private services = new Map<string, ServiceNode>();
@@ -71,6 +80,11 @@ export class Registry {
    * `options` reach the blueprint factory only on that first instantiation.
    */
   resolveService<T = unknown>(urn: URN, options?: Record<string, unknown>): Promise<T> {
+    /**
+     * Most tools declare nothing in `services()` and resolve here instead. One
+     * of those can be holding just as dead a handle as a declared one.
+     */
+    resolvedDuringInvocation.getStore()?.add(urn);
     return this._resolve<T>(urn, [], options);
   }
 
@@ -151,22 +165,30 @@ export class Registry {
       // tool register host files without declaring a per-tool service.
       const ctx: ToolContext = { ...options, toolInvocationId, artifacts: this.artifacts };
 
+      let lazilyResolved = new Set<URN>();
+
       const runOnce = async (): Promise<TResult> => {
-        const resolvedServices: Record<string, unknown> = {};
-        for (const { alias, urn, options: resolveOptions } of refs) {
-          resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-        }
-        return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+        lazilyResolved = new Set<URN>();
+
+        return resolvedDuringInvocation.run(lazilyResolved, async () => {
+          const resolvedServices: Record<string, unknown> = {};
+          for (const { alias, urn, options: resolveOptions } of refs) {
+            resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+          }
+          return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+        });
       };
 
       let result: TResult;
       try {
         result = await runOnce();
       } catch (execError) {
-        // Self-heal a cached-but-dead service: dispose the resolved services
-        // that call this error recoverable and retry against fresh ones.
-        // Bounded to a single retry so a genuinely broken service can't spin.
-        const recovered = await this._recoverFailedServices(refs, execError);
+        // Self-heal a cached-but-dead service: dispose the services that call
+        // this error recoverable — the ones the tool declared and the ones it
+        // resolved itself — and retry against fresh ones. Bounded to a single
+        // retry so a genuinely broken service can't spin.
+        const candidates = [...refs, ...[...lazilyResolved].map((urn) => ({ urn }))];
+        const recovered = await this._recoverFailedServices(candidates, execError);
         if (!recovered) throw execError;
         result = await runOnce();
       }
