@@ -1,17 +1,13 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { ReinstallAppResult, ReinstallAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 import { iosDeviceImpl } from "./platforms/ios-device";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { vegaImpl } from "./platforms/vega";
-
-// Mirrors launch-app / restart-app: the restricted head keeps a value like `--user`
-// from masquerading as a flag. Every branch execs via an argv array (no shell), so this
-// is a consistency guard, not an injection fix.
-const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
   udid: z
@@ -20,7 +16,7 @@ const zodSchema = z.object({
     .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z
     .string()
-    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
       "App identifier that matches the bundle at `appPath`. iOS: bundle id (used to uninstall first). Android: package name (used to uninstall first; the install itself identifies the app from the APK). Vega: interactive component app id (e.g. com.example.app.main), used to uninstall first."
     ),

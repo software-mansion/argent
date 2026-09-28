@@ -1,0 +1,77 @@
+---
+sidebar_position: 3
+sidebar_label: Sessions and limits
+title: Sessions and limits
+sidebar_custom_props:
+  icon: timer
+---
+
+## Lifecycle
+
+| Event        | Trigger                                      | Effect                                                                                          |
+| ------------ | -------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Login        | `sim-remote login`                           | The server checks the API key and returns a session token. The daemon holds the token in memory |
+| Acquire      | `login` without `--no-acquire`, or `acquire` | The server reserves a free machine of your team for the session                                 |
+| Attach       | `attach <MACHINE_ID>`                        | The session points at a machine that you already hold. Open tunnels close                       |
+| Release      | `release`                                    | The machine returns to your team. The session stays logged in                                   |
+| Logout       | `logout` or `daemon stop`                    | The machine returns to your team and the daemon forgets the token                               |
+| Idle release | No command for the idle timeout              | The daemon releases the machine on its own. The session stays logged in                         |
+| Lifetime cap | The machine is held for the maximum lifetime | The server releases the machine                                                                 |
+
+When a machine returns to your team, Argent Cloud revokes the credentials of the session, closes the live connections, erases the simulators, and rebuilds the session volume from a clean image.
+
+## Limits
+
+| Limit                       | Value                                         | Notes                                                                                            |
+| --------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Idle release                | 900 seconds (15 minutes)                      | Set `SIM_REMOTE_IDLE_TIMEOUT_SECS` to change it. The server has its own idle limit of 16 minutes |
+| Maximum time on one machine | 24 hours                                      | Enforced by the server                                                                           |
+| Session token               | 24 hours                                      | Run `sim-remote login` again after it expires                                                    |
+| Wait for a free machine     | 1800 seconds by default, 3600 seconds maximum | `--timeout` sets the client value. The server caps it                                            |
+| Upload size                 | 1 GiB                                         | Applies to every file that `sim-remote` uploads                                                  |
+| Machines per user           | More than one                                 | Each `acquire` reserves one more machine                                                         |
+
+## The daemon
+
+`sim-remote` runs a small background daemon on your computer. The daemon holds the session token, sends a heartbeat to the server every 60 seconds, and owns the tunnels. Any command that needs a session starts the daemon. The daemon is the same binary as the CLI.
+
+| Item             | Value                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| Socket           | `$HOME/.sim-remote-daemon.sock`, or `$HOME/.sim-remote-daemon-<NAME>.sock` for a named session        |
+| Idle check       | Every 60 seconds                                                                                      |
+| Stop             | `sim-remote daemon stop`. This releases the machine and ends the session                              |
+| Version mismatch | After an update, the old daemon refuses the new client. Run `sim-remote daemon stop` and log in again |
+
+The daemon keeps the session token in memory. `sim-remote` writes no session token, API key or configuration file to disk. The log files below are the only files that `sim-remote` writes.
+
+## Several sessions on one computer
+
+One daemon holds one session. Set `SIM_REMOTE_SESSION` to a name to run several sessions on one computer, each with its own daemon.
+
+```bash
+export SIM_REMOTE_SESSION=agent-1
+sim-remote login
+```
+
+All `sim-remote` commands that run with the same value share one session. A different value is a different session. Commands that run without the variable use the default session.
+
+| Rule       | Value                                                                  |
+| ---------- | ---------------------------------------------------------------------- |
+| Characters | Lowercase letters, digits, `.`, `_` and `-`. No leading `.`            |
+| Length     | 1 to 32 characters                                                     |
+| Socket     | `$HOME/.sim-remote-daemon-<NAME>.sock`                                 |
+| Log file   | `sim-remote-daemon-<NAME>`                                             |
+| Scope      | `daemon stop` and `logout` act only on the daemon of the named session |
+
+Every process reads the variable from its own environment. Set `SIM_REMOTE_SESSION` in the shell or agent that runs the commands. Every shim and tool that it starts inherits the same value.
+
+## Log files
+
+`sim-remote` writes its log to a file and echoes only errors to stderr.
+
+| Platform | Directory                                                    |
+| -------- | ------------------------------------------------------------ |
+| macOS    | `~/Library/Logs/radon/`                                      |
+| Linux    | `$XDG_STATE_HOME/radon/logs`, or `~/.local/state/radon/logs` |
+
+`sim-remote` rotates the log file daily and keeps 7 days. Set `RUST_LOG` to change the filter. The daemon of a named session writes to `sim-remote-daemon-<NAME>`.

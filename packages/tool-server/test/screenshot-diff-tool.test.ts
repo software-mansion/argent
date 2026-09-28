@@ -4,6 +4,14 @@ import path from "path";
 import { PNG } from "pngjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactStore } from "@argent/registry";
+import type { LivePanel } from "../src/utils/foldable";
+
+const resolveLivePanelMock = vi.fn<(udid: string) => Promise<LivePanel>>();
+vi.mock("../src/utils/foldable", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/foldable")>()),
+  resolveLivePanel: (udid: string) => resolveLivePanelMock(udid),
+}));
+
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
 import { createScreenshotTool } from "../src/tools/screenshot";
 import { getScreenshotScale } from "../src/utils/simulator-client";
@@ -11,6 +19,7 @@ import { createRegistry } from "../src/utils/setup-registry";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 import { definitionsById } from "./helpers/catalog";
 import { agentFacingText, sentencesClaimingSize } from "./helpers/size-claims";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 // The live-capture tests use an android-shaped udid, so every capture runs the
 // real rotation probe against the host's adb server before the mocked HTTP
@@ -20,6 +29,18 @@ vi.mock("../src/utils/device-orientation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/device-orientation")>()),
   readAndroidSurfaceRotation: vi.fn(async () => null),
 }));
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+});
+
+async function makeTempDir(prefix: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 describe("screenshotDiffTool", () => {
   afterEach(() => {
@@ -259,7 +280,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("returns only the summary and diff artifact paths", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-tool-"));
+    const dir = await makeTempDir("argent-screenshot-diff-tool-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -295,7 +316,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("returns the summary alone when the aspect ratios differ, and writes no diff images", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-mismatch-"));
+    const dir = await makeTempDir("argent-screenshot-diff-mismatch-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 4, 2, { r: 10, g: 20, b: 30 });
@@ -324,7 +345,7 @@ describe("screenshotDiffTool", () => {
     // being able to *reach* the directory. A path it reaches and cannot use is
     // not covered by it, and the call ends with no artifacts at all — so the
     // clause has to stop short of promising the images come back either way.
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-outdir-"));
+    const dir = await makeTempDir("argent-screenshot-diff-outdir-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 4, 4, { r: 0, g: 0, b: 0 });
@@ -355,7 +376,7 @@ describe("screenshotDiffTool", () => {
     // the suite green. Against a 100x200 baseline, 101x200 is 0.99% off in
     // aspect and 102x200 is 1.96%: the pair straddles ASPECT_RATIO_TOLERANCE,
     // so halving or doubling the constant moves one of these two rows.
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-tolerance-"));
+    const dir = await makeTempDir("argent-screenshot-diff-tolerance-");
     const run = async (name: string, width: number): Promise<string> => {
       const baselinePath = path.join(dir, `${name}-baseline.png`);
       const currentPath = path.join(dir, `${name}-current.png`);
@@ -381,7 +402,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("captures one live side at full resolution and copies it into outputDir", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-live-"));
+    const dir = await makeTempDir("argent-screenshot-diff-live-");
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -425,7 +446,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("falls back to the tool-server's screenshot scale when the full-resolution capture fails (Android framebuffer mismatch)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-fallback-"));
+    const dir = await makeTempDir("argent-screenshot-diff-fallback-");
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -468,7 +489,7 @@ describe("screenshotDiffTool", () => {
     "sends the scale the tool-server resolves on the retry (env $env)",
     async ({ env, expected }) => {
       vi.stubEnv("ARGENT_SCREENSHOT_SCALE", env);
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-wire-"));
+      const dir = await makeTempDir("argent-screenshot-diff-wire-");
       const baselinePath = path.join(dir, "baseline.png");
       const capturedPath = path.join(dir, "captured.png");
       await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -517,7 +538,7 @@ describe("screenshotDiffTool", () => {
     // which sips applies below 1, best-effort), Chromium is handed
     // `params.scale` alone.
     expect(scaleDescription).toContain(
-      `On iOS, Android, Apple TV and Vega, defaults to ARGENT_SCREENSHOT_SCALE env var, or ${fallback} whenever that is unset or outside (0,1]`
+      `On iOS, Android, Apple TV and Vega, defaults to ARGENT_SCREENSHOT_SCALE env var, or ${fallback} whenever that is unset or outside [0.01, 1]`
     );
     expect(scaleDescription).toContain("On Chromium the default is 1.0 (no downscale)");
     // The hazard the rest of that paragraph exists for, on the one surface an
@@ -631,7 +652,7 @@ describe("screenshotDiffTool", () => {
 
   it("has nothing lower to retry when ARGENT_SCREENSHOT_SCALE is 1.0, so the capture fails", async () => {
     vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "1.0");
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-env1-"));
+    const dir = await makeTempDir("argent-screenshot-diff-env1-");
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -653,7 +674,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("captures the baseline live against a saved current, naming that side's file", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-baseline-"));
+    const dir = await makeTempDir("argent-screenshot-diff-baseline-");
     const currentPath = path.join(dir, "current.png");
     const capturedPath = path.join(dir, "captured.png");
     // Deliberately different sizes, same aspect: the summary labels the two
@@ -688,7 +709,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("propagates the error when both the full-res capture and the fallback fail", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-bothfail-"));
+    const dir = await makeTempDir("argent-screenshot-diff-bothfail-");
     const baselinePath = path.join(dir, "baseline.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
     const captureScreenshot = vi.fn(
@@ -709,7 +730,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("uses a fresh hashed filename for each live capture so concurrent diffs do not collide", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-unique-"));
+    const dir = await makeTempDir("argent-screenshot-diff-unique-");
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
@@ -759,7 +780,7 @@ describe("screenshotDiffTool", () => {
   // exactly like a remote client's own directory and was silently redirected to
   // a temp dir. A directory we can create next to an existing parent is ours.
   it("creates and honors an outputDir that does not exist yet on this host", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-fresh-"));
+    const parent = await makeTempDir("argent-screenshot-diff-fresh-");
     const baselinePath = path.join(parent, "baseline.png");
     const currentPath = path.join(parent, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -789,7 +810,7 @@ describe("screenshotDiffTool", () => {
   // reaches mkdir as EEXIST. That is the directory the caller asked for, not a
   // reason to redirect them to a temp dir.
   it("honors an outputDir that raced into existence after the probe", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-race-"));
+    const parent = await makeTempDir("argent-screenshot-diff-race-");
     const baselinePath = path.join(parent, "baseline.png");
     const currentPath = path.join(parent, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -843,7 +864,7 @@ describe("screenshotDiffTool", () => {
   });
 
   it("captures the live side through the runner on a physical iPhone and ignores rotation", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-device-"));
+    const dir = await makeTempDir("argent-screenshot-diff-device-");
     const baselinePath = path.join(dir, "baseline.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
     const run = vi.fn(async () => ({
@@ -879,10 +900,18 @@ describe("screenshotDiffTool", () => {
   });
 
   it("demands the runner service when a direct caller requests a device live capture", async () => {
+    // outputDir is resolved before the service check, so omitting it would mint
+    // a fallback dir under argent-screenshot-diff that the throw then strands.
+    const outputDir = await makeTempDir("argent-screenshot-diff-norunner-");
     await expect(
       executeScreenshotDiffTool(
         {},
-        { baselinePath: "/tmp/baseline.png", captureCurrent: true, udid: PHYSICAL_UDID }
+        {
+          baselinePath: "/tmp/baseline.png",
+          captureCurrent: true,
+          udid: PHYSICAL_UDID,
+          outputDir,
+        }
       )
     ).rejects.toThrow("requires an iosDeviceRunner service");
   });
@@ -890,7 +919,7 @@ describe("screenshotDiffTool", () => {
   // The remote case must still fall back: a client-side path whose parent does
   // not exist here cannot be created, so diffs go to a temp dir as before.
   it("falls back to a temp dir when outputDir is not creatable on this host", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-remote-"));
+    const dir = await makeTempDir("argent-screenshot-diff-remote-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -899,16 +928,28 @@ describe("screenshotDiffTool", () => {
     // Parent does not exist on this host — a remote client's own directory.
     const outputDir = path.join(dir, "no-such-parent", "nested", "diff-out");
 
-    const result = await executeScreenshotDiffTool(
-      {},
-      { baselinePath, currentPath, udid: "ABC", outputDir },
-      {
-        artifacts: new ArtifactStore(),
-        fileInputs: {
-          outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
-        },
-      }
-    );
+    // resolveOutputDir mints the fallback under os.tmpdir() before anything
+    // validates the call, so a throw downstream would strand it with the path
+    // known only to the code that threw. Point os.tmpdir() at the dir already
+    // registered for removal and the sweep takes it either way — never the
+    // shared argent-screenshot-diff root, which belongs to any tool-server
+    // running alongside.
+    const restoreTmpdir = redirectTmpdir(dir);
+    let result;
+    try {
+      result = await executeScreenshotDiffTool(
+        {},
+        { baselinePath, currentPath, udid: "ABC", outputDir },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            outputDir: { clientPath: outputDir, presentOnHost: false, viaUpload: false },
+          },
+        }
+      );
+    } finally {
+      restoreTmpdir();
+    }
 
     const diffHostPath = (result.diffPath as { hostPath: string }).hostPath;
     expect(diffHostPath.startsWith(outputDir)).toBe(false);
@@ -941,6 +982,70 @@ function stubEmulatorRejectingFullRes(capturedPath: string): Record<string, unkn
   );
   return bodies;
 }
+
+describe("a live capture of a foldable", () => {
+  const DUO = "B6C52FD4-5408-402B-9369-EF7C66B98E6F";
+  const PANELS = [
+    { screenId: 1, width: 1398, height: 2034 },
+    { screenId: 3, width: 2007, height: 2853 },
+  ];
+  const foldable = {
+    apiUrl: "http://localhost:4949",
+    deviceId: DUO,
+    display: { foldable: true, panels: PANELS, hingeAngle: null },
+  };
+
+  async function diffLive(api: Record<string, unknown>) {
+    resolveLivePanelMock.mockClear();
+    const dir = await makeTempDir("argent-screenshot-diff-foldable-");
+    const baselinePath = path.join(dir, "baseline.png");
+    const capturedPath = path.join(dir, "captured.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(capturedPath, 2, 2, { r: 10, g: 20, b: 30 });
+    const captureScreenshot = vi.fn(async () => ({
+      url: "http://localhost/current.png",
+      path: capturedPath,
+    }));
+    const result = await executeScreenshotDiffTool(
+      { simulatorServer: api },
+      { baselinePath, captureCurrent: true, udid: DUO, outputDir: dir },
+      { artifacts: new ArtifactStore() },
+      captureScreenshot as never
+    );
+    return { result, captureScreenshot };
+  }
+
+  it("is of the resolved panel, with nothing added to the summary", async () => {
+    resolveLivePanelMock.mockResolvedValue({ screen: 3, source: "ax-service" });
+    const { result, captureScreenshot } = await diffLive(foldable);
+    expect(captureScreenshot).toHaveBeenCalledWith(foldable, undefined, undefined, 1.0, 3);
+    expect(result.summary).not.toContain("- panel:");
+  });
+
+  it("says in the summary when nothing resolved the panel, so it is of the cover panel", async () => {
+    resolveLivePanelMock.mockResolvedValue({
+      screen: 1,
+      source: "unknown",
+      reason: "the accessibility service failed (no); CoreDevice failed (no)",
+    });
+    const { result, captureScreenshot } = await diffLive(foldable);
+    expect(captureScreenshot).toHaveBeenCalledWith(foldable, undefined, undefined, 1.0, 1);
+    expect(result.summary).toContain(
+      "- panel: The panel this foldable simulator renders to could not be resolved"
+    );
+    expect(result.summary).toContain("this capture is of screen 1 (cover panel, 1398x2034)");
+    // Once, even though the diff reads the summary line per warning.
+    expect(result.summary.split("- panel:")).toHaveLength(2);
+  });
+
+  it("asks nothing and adds nothing for a device that is not foldable", async () => {
+    const plain = { apiUrl: "http://localhost:4949", deviceId: DUO };
+    const { result, captureScreenshot } = await diffLive(plain);
+    expect(captureScreenshot).toHaveBeenCalledWith(plain, undefined, undefined, 1.0);
+    expect(result.summary).not.toContain("- panel:");
+    expect(resolveLivePanelMock).not.toHaveBeenCalled();
+  });
+});
 
 function pngBytes(
   width: number,

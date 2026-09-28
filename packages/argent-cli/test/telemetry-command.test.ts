@@ -125,14 +125,17 @@ describe("argent telemetry — scopes", () => {
 
   // `argent <command> --help` is what the top-level help tells the user to run,
   // and every other subcommand honours it after its own subcommand too.
+  // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
+  // takes only argv[0], which renders the two `status` rows identically and reads the rest
+  // as claims about a bare `enable` / `disable`.
   it.each([
-    ["--help"],
-    ["-h"],
-    ["status", "--help"],
-    ["status", "-h"],
-    ["enable", "--help"],
-    ["disable", "-h"],
-  ])("prints usage for %s and writes nothing", async (...args) => {
+    [["--help"]],
+    [["-h"]],
+    [["status", "--help"]],
+    [["status", "-h"]],
+    [["enable", "--help"]],
+    [["disable", "-h"]],
+  ])("prints usage for %j and writes nothing", async (args) => {
     await telemetry(args);
     expect(output()).toContain("argent telemetry status");
     expect(errSpy).not.toHaveBeenCalled();

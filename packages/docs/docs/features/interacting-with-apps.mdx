@@ -52,7 +52,7 @@ The agent grants, denies or resets a runtime permission such as location, camera
 
 ## Device state and hardware
 
-The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
+The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent folds and unfolds a foldable iOS simulator. Screenshots, element trees and taps use the panel that shows the UI. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
 
 <Video
   src="/video/shake.mp4"
@@ -81,6 +81,6 @@ If the agent knows several actions before the start, and there is nothing to exa
 - Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
 - Shake and paste work on simulators and emulators only.
 - On Chromium, each action goes to the active tab.
-- On Chromium, Argent uses the optional `sharp` package to scale and to rotate a screenshot. Install `sharp` in the environment of the tool-server before you use `scale` or `rotation` there. Without `sharp`, Argent returns the capture unchanged and reports no error.
+- On Chromium, Argent uses the optional `sharp` package to scale and to rotate a screenshot. Install `sharp` in the environment of the tool-server before you use `scale` or `rotation` there. Without `sharp`, Argent returns the capture unchanged, with a note that says so.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

@@ -217,6 +217,7 @@ export type FlowStepResult = {
   artifacts?: Record<string, unknown>;
   scriptLog?: string;
   scriptLogTruncated?: boolean;
+  durationMs?: number;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
 };
@@ -231,6 +232,8 @@ export type FlowExecuteResult = {
   skipped?: number;
   errored?: number;
   steps: FlowStepResult[];
+  startedAt?: number;
+  durationMs?: number;
 };
 
 const STATUS_GLYPH: Record<string, string> = {
@@ -252,6 +255,14 @@ const MAX_RENDER_DEPTH = 20;
 function stepIndent(depth: unknown): string {
   if (typeof depth !== "number" || !Number.isInteger(depth) || depth <= 0) return "";
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
+}
+
+function durationSuffix(ms: unknown): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "";
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return ` (${(tenths / 10).toFixed(1)}s)`;
+  const seconds = Math.round(ms / 1000);
+  return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
 function stepLabel(step: FlowStepResult): string {
@@ -295,9 +306,10 @@ export async function flowRunToMcpContent(
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    const timing = step.kind === "echo" ? "" : durationSuffix(step.durationMs);
     blocks.push({
       type: "text",
-      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
+      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${timing}${suffix}${warning}`,
     });
 
     const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
@@ -327,7 +339,7 @@ export async function flowRunToMcpContent(
     const note = result.ok && counted === 0 ? " (no test steps)" : "";
     blocks.push({
       type: "text",
-      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}`,
+      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
     });
   } else {
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
