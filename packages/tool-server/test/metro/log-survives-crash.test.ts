@@ -1167,7 +1167,7 @@ describe("console logs across an app crash", () => {
   });
 
   it("says there is no file at that path rather than sending a reader to grep it", async (ctx) => {
-    // `open()` swallows its failure and buffers, so the counts and clusters are
+    // `open()` swallows its failure and `write` goes on counting, so the counts and clusters are
     // real while `file` names a path that has never existed — and the documented
     // next step is to grep exactly that path.
     const logs = logDir();

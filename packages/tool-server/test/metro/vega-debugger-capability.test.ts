@@ -17,7 +17,7 @@ import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
 import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
-import { debuggerComponentTreeTool } from "../../src/tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../../src/tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../../src/tools/debugger/debugger-inspect-element";
 import { debuggerReloadMetroTool } from "../../src/tools/debugger/debugger-reload-metro";
 import { networkLogsTool } from "../../src/tools/network/network-logs";
@@ -45,7 +45,7 @@ const ANDROID_EMU_ID = "emulator-5554";
 
 const vegaVvd = resolveDevice(VEGA_VVD_ID);
 
-// react-profiler-{start,stop,status} and debugger-{status,log-registry} are
+// react-profiler-{start,stop,status} and debugger-{status,log-registry,component-tree} are
 // factory-built (they close over the registry to reach their services), so they
 // can only be inspected by constructing them the way setup-registry.ts does.
 // Their capability does not depend on the registry instance.
@@ -84,7 +84,7 @@ const VEGA_ENABLED_TOOLS = [
  * Either way the gate turns a hang or an unknown into an immediate 400.
  */
 const VEGA_GATED_TOOLS = [
-  debuggerComponentTreeTool,
+  createDebuggerComponentTreeTool(registry),
   debuggerInspectElementTool,
   debuggerReloadMetroTool,
   createReactProfilerStartTool(registry),

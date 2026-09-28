@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The version gate decides reuse-vs-respawn from the CURRENT on-disk bundle
 // version (the package.json above the bundle), not the caller's import-time
@@ -9,6 +10,7 @@ import { join, resolve } from "node:path";
 // cover downgrades, prerelease bumps, and a stale caller vs. a current server.
 let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
+let restoreHome: () => void;
 
 const FIXTURE_BUNDLE = resolve(__dirname, "fixtures/fake-tool-server.cjs");
 
@@ -28,11 +30,7 @@ const paths = (callerVersion: string): import("../src/launcher.js").ToolsServerP
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-version-gate-test-"));
-  // os.homedir() — which STATE_DIR and the link file are built from — reads
-  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
-  // is inert there and these tests operate on the real ~/.argent.
-  process.env.HOME = TEST_HOME;
-  process.env.USERPROFILE = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   // Same assertion launcher-sweep and launcher-state make: the afterEach below
@@ -46,6 +44,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 

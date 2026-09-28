@@ -333,7 +333,7 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
 
   it("names no file when the renderer dies and the writer never got one", async (ctx) => {
     // `keptAt` is a conjunction with `hasFile()`: `open()` swallows its failure
-    // and buffers, so a death in an unwritable ~/.argent/tmp has entries to
+    // and `write` goes on counting, so a death in an unwritable ~/.argent/tmp has entries to
     // report and no file to point at. Without that half the breadcrumb names a
     // path that never existed, and — since it is gone by the time anyone reads
     // it — blames the pruner for the loss.

@@ -39,7 +39,7 @@ interface LogRegistryResponse extends LogStats {
    *   teardown left it on disk, which a runtime death does unless its writer
    *   never opened one, or something removed it since.
    * - {@link LogStats.file} names a path that is not there: `open()` failed and
-   *   the writer buffered instead, or something removed the file after it was
+   *   the writer only counted, or something removed the file after it was
    *   written. The counts are real and the clusters a capped, truncated view of
    *   them; the file is not there at all. Only a new session gets one: `open()`
    *   runs once, and `debugger-connect` hands back the live session.
@@ -170,7 +170,7 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
         }
         if (!api.logWriter.hasFile()) {
           // Whatever the counts say, `file` names nothing: `open()` swallows its
-          // failure and buffers, and the documented next step is to grep that
+          // failure and `write` goes on counting, and the documented next step is to grep that
           // path. Checked on an empty registry too — a session that has not
           // logged yet is where an unwritable directory shows up first, and
           // saying so beats letting the caller find out by grepping. `hasFile`

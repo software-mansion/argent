@@ -293,7 +293,10 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   try {
     child = spawn(launcher.command, args, {
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      // stdout is discarded, not piped: nothing reads it, and an unread pipe
+      // blocks the child's writes once the OS buffer fills. The
+      // ELECTRON_ENABLE_LOGGING below is what keeps it writing.
+      stdio: ["ignore", "ignore", "pipe"],
       // Strip ELECTRON_RUN_AS_NODE (see electronGuiChildEnv): inherited from an
       // Electron-based MCP host it would boot the binary in Node mode with no
       // CDP endpoint, failing boot-device instead of bringing the app up.

@@ -50,14 +50,6 @@ const MAX_ENTRIES = 50_000;
 const CLUSTER_KEY_LENGTH = 80;
 const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
-const LEVEL_DISPLAY: Record<string, string> = {
-  log: "LOG  ",
-  warn: "WARN ",
-  error: "ERROR",
-  info: "INFO ",
-  debug: "DEBUG",
-};
-
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 
@@ -66,7 +58,6 @@ let nextWriterSeq = 0;
 export class LogFileWriter {
   private filePath: string;
   private fd: number | null = null;
-  private writeBuffer: string[] = [];
   private bytesWritten = 0;
   private entryCount = 0;
   private levelCounts: Record<string, number> = {};
@@ -97,7 +88,6 @@ export class LogFileWriter {
     try {
       this.fd = fs.openSync(this.filePath, "w");
       this.ready = true;
-      this.flushBuffer();
       // What makes `pruneStaleLogs`' age test a liveness test. mtime otherwise
       // only moves when an entry is written, so a session that has captured
       // nothing for a day — or one past MAX_ENTRIES, where `write` stops
@@ -107,8 +97,8 @@ export class LogFileWriter {
       this.keepalive = setInterval(() => this.touch(), KEEPALIVE_MS);
       this.keepalive.unref();
     } catch {
-      // Nothing reopens the file: `write` buffers instead, and `hasFile` is how
-      // a caller finds out there is nothing on disk to read.
+      // Nothing reopens the file: `write` keeps only counts and clusters, and
+      // `hasFile` is how a caller finds out there is nothing on disk to read.
     }
   }
 
@@ -125,15 +115,6 @@ export class LogFileWriter {
     } catch {
       // unlinked, or a filesystem that refuses — the writer keeps working
     }
-  }
-
-  private flushBuffer(): void {
-    if (!this.ready || this.fd === null) return;
-    for (const line of this.writeBuffer) {
-      const buf = Buffer.from(line);
-      fs.writeSync(this.fd, buf);
-    }
-    this.writeBuffer = [];
   }
 
   write(entry: Omit<RichLogEntry, "marker">): RichLogEntry {
@@ -157,14 +138,14 @@ export class LogFileWriter {
     const flatMessage = entry.message.replace(/\n/g, " ");
     // Pad for alignment but never truncate: CDP types such as "warning" and
     // "assert" exceed 5 chars and must round-trip back through parseFlatLine.
-    const levelDisplay = LEVEL_DISPLAY[entry.level] ?? entry.level.toUpperCase().padEnd(5);
+    const levelDisplay = entry.level.toUpperCase().padEnd(5);
     const line = `[L:${entry.id}] ${entry.timestamp} ${levelDisplay} ${source} | ${flatMessage}\n`;
 
+    // Nothing reopens the file, and readAll() serves it alone, so a line with
+    // no file has no reader: the entry lives on only in the counts and clusters.
     if (this.ready && this.fd !== null) {
       const buf = Buffer.from(line);
       fs.writeSync(this.fd, buf);
-    } else {
-      this.writeBuffer.push(line);
     }
 
     this.bytesWritten += Buffer.byteLength(line);
@@ -199,7 +180,7 @@ export class LogFileWriter {
 
   /**
    * Whether {@link getFilePath} names something a reader can open. `open()`
-   * swallows its failure and buffers instead, so entries can be counted for a
+   * swallows its failure and `write` goes on counting, so entries can be counted for a
    * file that was never created — and a breadcrumb built from the count alone
    * would send the reader at a path that has never existed.
    */
@@ -231,7 +212,6 @@ export class LogFileWriter {
 
   readAll(): RichLogEntry[] {
     if (this.closed || !this.ready) return [];
-    this.flushBuffer();
     try {
       const content = fs.readFileSync(this.filePath, "utf-8");
       return content
@@ -259,8 +239,7 @@ export class LogFileWriter {
 
   /**
    * Close the handle. There is nothing to flush — writes reach the fd as they
-   * arrive, and the buffer only ever holds what an `open()` failure left with
-   * nowhere to go. `keepFile` leaves the log on disk: the caller is shutting
+   * arrive. `keepFile` leaves the log on disk: the caller is shutting
    * the writer down because the JS runtime died, and the entries captured
    * before it died are the reason a developer would look. Two things reclaim
    * it: the breadcrumb store, when a later crash under the same ids AND the same

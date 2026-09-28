@@ -113,6 +113,37 @@ describe("exportFailureArtifacts", () => {
     }
   });
 
+  it("keeps a remote run's files apart from a local run's of the same key", async () => {
+    // The key names a device class, not a host, so a cloud run and a local run
+    // of one flow report the same key. Exported into one --output, the second
+    // export must not overwrite the first host's evidence.
+    const local: StepReport = {
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      artifacts: { current: await writeFile("local.png", "local-bytes") },
+    };
+    const remote: StepReport = {
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      snapshotRemote: true,
+      artifacts: { current: await writeFile("remote.png", "remote-bytes") },
+    };
+
+    await exportFailureArtifacts(mkReport([local]), outDir, flowFile, ctx);
+    await exportFailureArtifacts(mkReport([remote]), outDir, flowFile, ctx);
+
+    const localDest = path.join(outDir, "checkout", "home__ios-390x844-current.png");
+    const remoteDest = path.join(outDir, "checkout", "home__ios-390x844-remote-current.png");
+    expect(local.artifacts?.current).toBe(localDest);
+    expect(remote.artifacts?.current).toBe(remoteDest);
+    expect(await fs.readFile(localDest, "utf8")).toBe("local-bytes");
+    expect(await fs.readFile(remoteDest, "utf8")).toBe("remote-bytes");
+  });
+
   it("leaves passed and baseline-seeded snapshots alone (failure-only)", async () => {
     const baseline = await writeFile("b.png", "baseline-bytes");
     const seeded: StepReport = {
