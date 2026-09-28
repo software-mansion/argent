@@ -2394,20 +2394,20 @@ class LastLineTracker {
 
   end(): string {
     this.close();
-    return this.peek();
-  }
-
-  peek(): string {
-    const lines = this.heads.map((head, i) => stderrLine(head, this.lengths[i]!));
-    if (!this.blank) lines.push(stderrLine(this.head, this.length));
-    return reasonLine(lines);
+    return this.snapshot([]);
   }
 
   snapshot(secrets: readonly FlowScriptSecret[]): string {
-    if (this.blank || this.length > this.head.length) return this.peek();
-    const line = this.head.trim();
-    const partial = partialSecretTail(line, secrets);
-    return partial > 0 ? `${line.slice(0, line.length - partial)}${omissionMarker(partial)}` : line;
+    const lines = this.heads.map((head, i) => stderrLine(head, this.lengths[i]!));
+    if (this.blank) return reasonLine(lines);
+    const open = stderrLine(this.head, this.length);
+    const reason = reasonLine([...lines, open]);
+    // The line still being written ends where Argent read it, so the front of a
+    // value it had only begun to write is dropped and counted, as the head's
+    // own cut already does.
+    if (reason !== open.shown || this.length > this.head.length) return reason;
+    const partial = partialSecretTail(reason, secrets);
+    return partial > 0 ? `${reason.slice(0, -partial)}${omissionMarker(partial)}` : reason;
   }
 
   private extend(segment: string): void {

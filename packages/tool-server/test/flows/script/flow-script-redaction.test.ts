@@ -396,6 +396,34 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(result.log).toContain("{{secret:API_KEY}}");
   }, 30_000);
 
+  it("walks up from a runtime's version line the stderr line was still being written on", async () => {
+    // Starts with the version's last character, the front of a value the
+    // half-written line could be ending on.
+    const secret: FlowScriptSecret = { name: "API_KEY", value: "0bad-token-value" };
+    const ws = workspace();
+    const script = ws.write(
+      "half-trailer.sh",
+      `(
+         printf 'Error: bad token %s\\n    at main (/app/seed.js:3:9)\\n\\nNode.js v26.7.0' "$API_KEY" >&2
+         sleep 2
+       ) &
+       sleep 0.1
+       exit 3`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      interpreter: "bash",
+      projectRoot: ws.dir,
+      env: { API_KEY: secret.value },
+      secrets: [secret],
+    });
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    expect(message).toMatch(/\. Error: bad token \{\{secret:API_KEY}}$/);
+    expect(message).not.toContain(secret.value);
+  }, 30_000);
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "replaces a secret in the name of an entry the cleanup could not remove",
     async () => {
