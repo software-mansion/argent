@@ -382,6 +382,19 @@ article [class*="llmDropdownItem"]:hover {
   padding-right: 20px;
 }
 
+/*
+ * The site is unversioned, so the version links in the mobile sidebar footer only ever
+ * show "Next". The footer holds nothing else, so it goes, and the items panel takes back
+ * the 4em the theme reserves for it.
+ */
+.navbar-sidebar [class*="sidebarFooter"] {
+  display: none;
+}
+
+.navbar-sidebar [class*="navbar-sidebar__items"] {
+  height: calc(100% - var(--ifm-navbar-height) - var(--swm-navbar-sidebar-items-height) + 4em);
+}
+
 .product-switcher {
   flex: 1;
   max-width: 100%;
