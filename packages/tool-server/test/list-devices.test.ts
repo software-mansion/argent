@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const execFileMock = vi.fn();
 
@@ -97,8 +97,17 @@ vi.mock("../src/utils/ios-device/devicectl", async () => {
   };
 });
 
+import * as fs from "node:fs";
+import * as http from "node:http";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { AddressInfo } from "node:net";
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
+import {
+  __resetExternalDeviceCacheForTesting,
+  __resetProviderWarningsForTesting,
+} from "../src/utils/external-devices";
 import { __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 import { listVvdImages } from "../src/utils/vega-sdk";
 
@@ -210,6 +219,29 @@ describe("list-devices", () => {
 
     // AVDs list comes from `emulator -list-avds`.
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
+  });
+
+  /**
+   * The common case, which the suite-wide setup already models. No provider
+   * registered, so the result must not carry a word about them.
+   */
+  it("says nothing about external devices when no provider is registered", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.length).toBeGreaterThan(0);
+    expect(result).not.toHaveProperty("hint");
   });
 
   it("readAvdName prefers the modern avd_name prop over the legacy one (now probed concurrently)", async () => {
@@ -567,5 +599,152 @@ describe("list-devices", () => {
     // included; flow auto-bind keys on state "connected" and skips it.
     expect(byName("Desk iPhone")).toBeLessThan(byName("Office iPhone"));
     expect(byName("iPhone 16")).toBeLessThan(byName("Office iPhone"));
+  });
+});
+
+/**
+ * A provider's device can reach this tool twice: once as an `ext:` entry, and
+ * once through the platform's own discovery. `adb devices` always sees a
+ * provider's emulator, and `simctl` sees its simulators as soon as the
+ * provider's device set is listed in `ios.additionalDeviceSets`. Only the
+ * external entry carries the attribution and the capability grants, and
+ * driving the bare id would spawn a second simulator-server against a device
+ * already in use, so the plain row is the one that goes.
+ */
+describe("list-devices — external provider shadows", () => {
+  const CLAIMED_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+  let temporaryDirectory: string;
+  let simulatorServer: http.Server;
+  let descriptorPath: string;
+
+  beforeEach(async () => {
+    temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-list-providers-"));
+    /**
+     * Discovery probes `apiUrl` for liveness, so the device needs something
+     * actually listening or it is dropped before dedup is even reached.
+     */
+    simulatorServer = http.createServer((_request, response) => {
+      response.statusCode = 404;
+      response.end();
+    });
+
+    await new Promise<void>((resolve) => simulatorServer.listen(0, "127.0.0.1", resolve));
+
+    const { port } = simulatorServer.address() as AddressInfo;
+
+    descriptorPath = path.join(temporaryDirectory, "acme.json");
+
+    fs.writeFileSync(
+      descriptorPath,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["ax-service", "simctl", "simulator-server"],
+            deviceSet: "/tmp/acme/Devices/iOS",
+            kind: "simulator",
+            name: "iPhone 16",
+            nativeId: CLAIMED_UDID,
+            platform: "ios",
+            simulatorServer: {
+              apiUrl: `http://127.0.0.1:${port}`,
+              streamUrl: `http://127.0.0.1:${port}/stream.mjpeg`,
+            },
+            state: "Booted",
+          },
+        ],
+        id: "acme-3f2a9c",
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+
+    /** Opt back into discovery, which the suite-wide setup switches off. */
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
+    __resetExternalDeviceCacheForTesting();
+    __resetProviderWarningsForTesting();
+  });
+
+  afterEach(async () => {
+    delete process.env.ARGENT_DEVICE_PROVIDERS;
+    process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+    await new Promise<void>((resolve) => simulatorServer.close(() => resolve()));
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  it("lists a claimed simulator once, as the external entry", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      /**
+       * `simctl` sees the provider's simulator because its device set is
+       * configured.
+       */
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const claimed = result.devices.filter(
+      (device) => "udid" in device && (device.udid as string).includes(CLAIMED_UDID)
+    );
+
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]).toMatchObject({
+      external: true,
+      udid: `ext:acme-3f2a9c:${CLAIMED_UDID}`,
+    });
+  });
+
+  it("leaves an unclaimed simulator in the plain listing", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const iPad = result.devices.filter(
+      (device) => "udid" in device && device.udid === "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+    );
+
+    expect(iPad).toHaveLength(1);
+    expect(iPad[0]).not.toHaveProperty("external");
+  });
+
+  /** The rules ride on the result, so they cost nothing until one is listed. */
+  it("explains the provider rules in the result once an external device is listed", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.hint).toBeDefined();
+    /** The two rules that differ from a device argent booted itself. */
+    expect(result.hint).toContain("boot-device");
+    expect(result.hint).toContain("provider.workspace.path");
   });
 });

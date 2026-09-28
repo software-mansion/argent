@@ -42,9 +42,12 @@ const output = () => (logSpy.mock.calls as unknown[][]).map((c) => String(c[0] ?
 const invoke = (argv: string[]) => tools(argv, { paths: {} as never });
 
 describe("argent tools --help", () => {
-  it.each([["--help"], ["-h"], ["--help", "--json"], ["--json", "--help"]])(
+  // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
+  // takes only argv[0], which duplicates the two-flag rows' names and reads as a claim about
+  // a bare `--json` — which prints no usage and does hit the server.
+  it.each([[["--help"]], [["-h"]], [["--help", "--json"]], [["--json", "--help"]]])(
     "prints usage for %j without contacting the tool-server",
-    async (...argv) => {
+    async (argv) => {
       await invoke(argv);
 
       expect(output()).toContain("argent tools describe <name>");

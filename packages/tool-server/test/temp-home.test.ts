@@ -5,7 +5,7 @@ import { scopeTempHome } from "./helpers/temp-home";
 // os.homedir() reads USERPROFILE on Windows and HOME elsewhere, so a helper that
 // pins only one of them is inert on the other platform and the suites relying on
 // it write into the developer's real home there. Nothing else asserts this: with
-// the USERPROFILE line deleted the twelve files that call scopeTempHome stay
+// the USERPROFILE line deleted every file that calls scopeTempHome stays
 // green, which is what these tests exist to stop.
 describe("scopeTempHome", () => {
   const seen: string[] = [];

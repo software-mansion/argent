@@ -63,6 +63,11 @@ function yamlTextConditionLabel(
       : `text ${selector} contains ${JSON.stringify(expected)}`;
 }
 
+/** `open`, `120°`. */
+function foldLabel(step: Extract<FlowStep, { kind: "fold" }>): string {
+  return step.posture ?? `${step.angle}°`;
+}
+
 /** A UI condition in the summary's spelling, for every step kind that carries one. */
 function yamlConditionLabel(cond: UiCondition): string {
   return cond.condition === "text"
@@ -404,6 +409,20 @@ const FLOW_STEP_DEFINITIONS: {
       const by = `by ${step.by}°`;
       return step.selector ? `${selectorLabel(step.selector)} (${by})` : by;
     },
+  },
+  "fold": {
+    summary: foldLabel,
+    target: foldLabel,
+  },
+  "script": {
+    // `path` is the as-written, flow-relative spelling (parseScriptPath rejects
+    // absolute and drive-relative forms), so both surfaces name the file the
+    // author would open. `timeout` rides the summary alone: it changes what
+    // replays, the way tap's `times` does, while a report target names only
+    // what the step acts on.
+    summary: (step) =>
+      `${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
+    target: (step) => step.path,
   },
   "snapshot": {
     // `name` interpolates raw on both surfaces. It becomes a baseline filename,

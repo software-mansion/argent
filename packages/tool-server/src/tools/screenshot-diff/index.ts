@@ -18,7 +18,8 @@ import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/io
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
-import { httpScreenshot } from "../../utils/simulator-client";
+import { httpScreenshot, resolveCapturePanel } from "../../utils/simulator-client";
+import { foldablePostureHint } from "../../utils/foldable";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import type { RotationPeek } from "../../utils/device-orientation";
@@ -173,22 +174,22 @@ export async function executeScreenshotDiffTool(
   const outputDir = await resolveOutputDir(params, options);
 
   if (classifyInputSources(params) === "stage-baseline") {
-    const staged = stageBaseline(
-      params.udid,
-      await captureLiveSide(
-        "baseline",
-        services,
-        params,
-        outputDir,
-        options,
-        captureScreenshot,
-        peekFor
-      )
+    const captured = await captureLiveSide(
+      "baseline",
+      services,
+      params,
+      outputDir,
+      options,
+      captureScreenshot,
+      peekFor
     );
-    return { summary: formatStagedBaselineSummary(params.udid, staged) };
+    const staged = stageBaseline(params.udid, captured.path);
+    return {
+      summary: withPanelWarning(formatStagedBaselineSummary(params.udid, staged), captured.warning),
+    };
   }
 
-  const { baselinePath, currentPath, staged } = await resolveInputPaths(
+  const { baselinePath, currentPath, staged, warning } = await resolveInputPaths(
     services,
     params,
     outputDir,
@@ -203,11 +204,23 @@ export async function executeScreenshotDiffTool(
     outputDir,
   });
 
+  let summary = withPanelWarning(result.summary, warning);
+  // On a foldable an aspect mismatch is usually a posture mismatch: the two
+  // panels differ in size, and a baseline belongs to the posture that produced
+  // it. Name the posture behind each size; every other device is unchanged.
+  if (result.dimensionMismatch) {
+    const posture = await foldablePostureHint(
+      params.udid,
+      result.dimensionMismatch.expected,
+      result.dimensionMismatch.actual
+    );
+    if (posture) summary = `${summary}\n- posture: ${posture}`;
+  }
+  if (staged) summary = `${formatStagedBaselineProvenance(params.udid, staged)}\n\n${summary}`;
+
   const artifacts = requireArtifacts(options);
   return {
-    summary: staged
-      ? `${formatStagedBaselineProvenance(params.udid, staged)}\n\n${result.summary}`
-      : result.summary,
+    summary,
     ...(result.diffPath
       ? {
           diffPath: await artifacts.register({
@@ -270,11 +283,15 @@ async function resolveInputPaths(
   options: Partial<ToolContext> | undefined,
   captureScreenshot: CaptureScreenshot,
   peekFor?: (device: DeviceInfo) => RotationPeek
-): Promise<{ baselinePath: string; currentPath: string; staged?: StagedBaseline }> {
+): Promise<{
+  baselinePath: string;
+  currentPath: string;
+  staged?: StagedBaseline;
+  warning?: string;
+}> {
   const staged =
     params.captureBaseline || params.baselinePath ? undefined : await requireStaged(params.udid);
-
-  const baselinePath = params.captureBaseline
+  const baseline = params.captureBaseline
     ? await captureLiveSide(
         "baseline",
         services,
@@ -284,8 +301,8 @@ async function resolveInputPaths(
         captureScreenshot,
         peekFor
       )
-    : (staged?.path ?? params.baselinePath!);
-  const currentPath = params.captureCurrent
+    : undefined;
+  const current = params.captureCurrent
     ? await captureLiveSide(
         "current",
         services,
@@ -295,9 +312,15 @@ async function resolveInputPaths(
         captureScreenshot,
         peekFor
       )
-    : params.currentPath!;
+    : undefined;
 
-  return { baselinePath, currentPath, ...(staged && { staged }) };
+  return {
+    baselinePath: baseline?.path ?? staged?.path ?? params.baselinePath!,
+    currentPath: current?.path ?? params.currentPath!,
+    ...(staged && { staged }),
+    // classifyInputSources allows at most one live side.
+    warning: baseline?.warning ?? current?.warning,
+  };
 }
 
 /**
@@ -306,7 +329,7 @@ async function resolveInputPaths(
  * Android. Shared by the staging branch and the two-sided comparison so both
  * reach the same backend for a given udid.
  */
-function captureLiveSide(
+async function captureLiveSide(
   name: "baseline" | "current",
   services: Record<string, unknown>,
   params: Params,
@@ -314,14 +337,16 @@ function captureLiveSide(
   options: Partial<ToolContext> | undefined,
   captureScreenshot: CaptureScreenshot,
   peekFor?: (device: DeviceInfo) => RotationPeek
-): Promise<string> {
+): Promise<{ path: string; warning?: string }> {
   const device = resolveDevice(params.udid);
   if (isIosPhysicalDevice(device)) {
-    return captureIosDeviceLiveInput({
-      runner: requireIosDeviceRunner(services),
-      outputDir,
-      name,
-    });
+    return {
+      path: await captureIosDeviceLiveInput({
+        runner: requireIosDeviceRunner(services),
+        outputDir,
+        name,
+      }),
+    };
   }
   return captureLiveInput({
     api: requireSimulatorServer(services),
@@ -333,6 +358,14 @@ function captureLiveSide(
     signal: options?.signal,
     captureScreenshot,
   });
+}
+
+/**
+ * A live capture of a foldable whose panel could not be resolved is of the cover
+ * panel; the summary is the one channel this result has, so it says so there.
+ */
+function withPanelWarning(summary: string, warning: string | undefined): string {
+  return warning === undefined ? summary : `${summary}\n- panel: ${warning}`;
 }
 
 function invalidInput(message: string, stage: string): FailureError {
@@ -490,12 +523,18 @@ async function captureLiveInput(params: {
   rotation?: Params["rotation"];
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
-}): Promise<string> {
+}): Promise<{ path: string; warning?: string }> {
   // Full-res gives the best diff fidelity, but some Android emulators reject a
   // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
   // baselinePath + captureCurrent flow there. The server's default scale captures
   // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
   // comparable to a baseline saved at any scale.
+  // On a foldable the panel is resolved now, whoever moved the hinge, and
+  // handed to both attempts, so the retry is of the same panel.
+  const panel = await resolveCapturePanel(params.api);
+  const captureScreenshot: CaptureScreenshot = panel
+    ? (a, r, s, sc) => params.captureScreenshot(a, r, s, sc, panel.screen)
+    : params.captureScreenshot;
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
     capture = await captureScreenshotUpright(
@@ -504,7 +543,7 @@ async function captureLiveInput(params: {
       params.rotation,
       params.signal,
       1.0,
-      params.captureScreenshot,
+      captureScreenshot,
       params.peekFor?.(params.device)
     );
   } catch {
@@ -514,7 +553,7 @@ async function captureLiveInput(params: {
       params.rotation,
       params.signal,
       undefined,
-      params.captureScreenshot,
+      captureScreenshot,
       params.peekFor?.(params.device)
     );
   }
@@ -522,5 +561,8 @@ async function captureLiveInput(params: {
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
   await fs.mkdir(params.outputDir, { recursive: true });
   await fs.copyFile(capture.path, destination);
-  return destination;
+  return {
+    path: destination,
+    ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
+  };
 }

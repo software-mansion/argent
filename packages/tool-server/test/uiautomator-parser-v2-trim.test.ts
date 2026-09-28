@@ -92,20 +92,73 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(flatten(tree).map((n) => n.label)).toContain("[password]");
   });
 
-  it("treats WebView as an opaque single leaf", () => {
+  it("keeps the web DOM under a WebView and folds the doubled in-app pair into one node", () => {
+    // An in-app WebView dumps twice: the app's view (resource-id, clickable),
+    // then Chromium's root web area under the same class with the page <title>
+    // as text, a few pixels apart. A `<ul>` arrives as a non-scrolling ListView;
+    // a text run as a labelled leaf View; a link as a clickable View.
     const xml = `<?xml version='1.0' encoding='UTF-8'?>
 <hierarchy>
-  <node class="android.webkit.WebView" bounds="[0,0][100,100]" content-desc="checkout">
-    <node class="android.view.View" bounds="[10,10][50,50]" content-desc="leaked-from-dom"/>
+  <node class="android.webkit.WebView" resource-id="app:id/webview" clickable="true" bounds="[0,0][100,100]">
+    <node class="android.webkit.WebView" text="Checkout" scrollable="true" bounds="[0,0][102,102]">
+      <node class="android.widget.TextView" text="Checkout" bounds="[10,10][90,20]"/>
+      <node class="android.view.View" text="Email" bounds="[10,22][40,30]"/>
+      <node class="android.widget.EditText" clickable="true" bounds="[10,30][90,40]"/>
+      <node class="android.view.View" content-desc="Terms" clickable="true" bounds="[10,42][60,50]">
+        <node class="android.widget.TextView" text="Terms" bounds="[10,42][60,50]"/>
+      </node>
+      <node class="android.widget.ListView" scrollable="false" bounds="[10,52][90,60]">
+        <node class="android.widget.TextView" text="Item A" bounds="[10,52][40,60]"/>
+        <node class="android.widget.TextView" text="Item B" bounds="[10,70][40,78]"/>
+      </node>
+    </node>
   </node>
 </hierarchy>`;
     const tree = parseUiAutomatorDump(xml, 100, 100);
-    const webview = flatten(tree).find((n) => n.role === "WebView");
-    expect(webview).toBeDefined();
+    const webviews = flatten(tree).filter((n) => n.role === "WebView");
+    expect(webviews).toHaveLength(1);
+    const [webview] = webviews;
+    expect(webview?.label).toBe("Checkout");
+    expect(webview?.identifier).toBe("app:id/webview");
+    expect(webview?.clickable).toBe(true);
+    expect(webview?.scrollable).toBe(true);
+    const rows = webview!.children.map((n) => [n.role, n.label ?? ""]);
+    expect(rows).toEqual([
+      ["StaticText", "Checkout"],
+      ["StaticText", "Email"],
+      ["TextField", ""],
+      ["View", "Terms"],
+      ["List", ""],
+    ]);
+    // The web list does not scroll, so its box must not clip an item laid out
+    // outside it.
+    const list = webview!.children[4]!;
+    expect(list.children.map((n) => n.label)).toEqual(["Item A", "Item B"]);
+    expect(list.scrollHidden).toBeUndefined();
+  });
+
+  it("keeps a WebView with no published DOM as a labelled leaf", () => {
+    // Chromium builds the tree on the first request; `describeAndroid` re-reads
+    // once on this shape, and an app that never loads a page stays here.
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.widget.FrameLayout" bounds="[0,0][100,100]">
+    <node class="android.webkit.WebView" resource-id="app:id/webview" bounds="[0,0][100,100]"/>
+  </node>
+</hierarchy>`;
+    const webview = flatten(parseUiAutomatorDump(xml, 100, 100)).find((n) => n.role === "WebView");
     expect(webview?.children).toHaveLength(0);
-    expect(webview?.label).toContain("[web-view]");
-    // The DOM-side content-desc must NOT bleed through as a sibling node.
-    expect(flatten(tree).some((n) => n.label === "leaked-from-dom")).toBe(false);
+    expect(webview?.label).toBe("(no web content exposed)");
+    expect(webview?.identifier).toBe("app:id/webview");
+  });
+
+  it("does not remap a bare View outside a WebView", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<hierarchy>
+  <node class="android.view.View" text="Compose text" bounds="[10,10][90,20]"/>
+</hierarchy>`;
+    const node = parseUiAutomatorDump(xml, 100, 100).children[0]!;
+    expect(node.role).toBe("View");
   });
 
   it("aggregates descendant labels into a clickable container with no own label", () => {

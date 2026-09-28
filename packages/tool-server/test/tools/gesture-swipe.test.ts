@@ -15,9 +15,10 @@ const sent: TouchCmd[] = [];
 // an exact event index rather than racing the 16ms frame timer.
 let afterSend: ((count: number) => void) | undefined;
 vi.mock("../../src/utils/simulator-client", () => ({
-  sendCommand: (_api: unknown, cmd: TouchCmd) => {
+  sendCommand: async (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);
     afterSend?.(sent.length);
+    return {};
   },
 }));
 
