@@ -74,6 +74,8 @@ function spellingsOf(value: string): string[] {
     new URLSearchParams([["", value]]).toString().slice(1),
     Buffer.from(value, "utf8").toString("base64"),
     url.password,
+    value.replaceAll("'", "'\\''"),
+    value.replace(/[\\"$`]/g, "\\$&"),
   ];
 }
 
@@ -356,6 +358,48 @@ describe("script log redaction - a bash step's xtrace", () => {
     expectRedacted(result.log, PASS);
     expect(message.endsWith(traced)).toBe(true);
     expectRedacted(message, PASS);
+  }, 30_000);
+
+  it("replaces a secret the xtrace line quoted and declare -p escaped", async (ctx) => {
+    skipWithoutBash(ctx);
+    const QUOTED: FlowScriptSecret = { name: "QUOTED_PASS", value: "Tr0ub'4dor$x`yz9\"" };
+    const KEY: FlowScriptSecret = { name: "KEY", value: "line-one-9d3f\nli'ne\\twö\tend" };
+    const result = await runScript(
+      "quoted.sh",
+      `declare -p QUOTED_PASS KEY
+       set -euxo pipefail
+       test "$QUOTED_PASS" = "expected-password"`,
+      [QUOTED, KEY],
+      { env: { QUOTED_PASS: QUOTED.value, KEY: KEY.value, LC_ALL: "C.UTF-8" } }
+    );
+
+    const message = result.failure?.message ?? "";
+    expect(result.failure?.kind).toBe("exit");
+    expect(message).toMatch(/\. \+ test '\{\{secret:QUOTED_PASS}}' = expected-password$/);
+    expect(result.log).toContain('declare -x QUOTED_PASS="{{secret:QUOTED_PASS}}"\n');
+    // bash 5.2 writes $'…' for a value with a control character, earlier bash "…".
+    expect(result.log).toMatch(/declare -x KEY=\$?(["'])\{\{secret:KEY}}\1\n/);
+    for (const secret of [QUOTED, KEY]) expectNoRun(`${result.log}\n${message}`, secret);
+  }, 30_000);
+
+  it("replaces a secret bash wrote as octal bytes without a UTF-8 locale", async (ctx) => {
+    skipWithoutBash(ctx);
+    const PASS: FlowScriptSecret = { name: "PASS", value: "pässword-99" };
+    const result = await runScript(
+      "c-locale.sh",
+      `declare -p PASS
+       set -x
+       test "$PASS" = expected`,
+      [PASS],
+      { env: { PASS: PASS.value, LC_ALL: "C" } }
+    );
+
+    const message = result.failure?.message ?? "";
+    expect(message).toMatch(/\. \+ test \$'\{\{secret:PASS}}' = expected$/);
+    // bash 5.2 writes $'…' here too, earlier bash "…".
+    expect(result.log).toMatch(/declare -x PASS=\$?(["'])\{\{secret:PASS}}\1\n/);
+    expect(result.log).not.toContain("\\303\\244");
+    expectNoRun(`${result.log}\n${message}`, PASS);
   }, 30_000);
 });
 

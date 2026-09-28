@@ -1328,7 +1328,41 @@ function printedSpellings(value: string): string[] {
     url.password,
     // A form body, `URLSearchParams` or `url.searchParams`: `! ' ( ) ~` escaped too.
     new URLSearchParams([["", value]]).toString().slice(1),
+    // bash: `set -x` single-quotes a word, `declare -p` double-quotes a value,
+    // and from 5.2 writes one that holds a control character as `$'…'`. With
+    // no UTF-8 locale, `$'…'` holds each byte past ASCII in octal, and both
+    // write any value with such a byte that way.
+    value.replaceAll("'", "'\\''"),
+    value.replace(/[\\"$`]/g, "\\$&"),
+    ansiCQuoted(value),
+    ansiCQuoted(value).replace(/[\u{80}-\u{10ffff}]/gu, (char) =>
+      [...Buffer.from(char)].map((byte) => `\\${byte.toString(8)}`).join("")
+    ),
   ];
+}
+
+const ANSI_C_ESCAPES: Readonly<Record<string, string>> = {
+  "\x07": "\\a",
+  "\b": "\\b",
+  "\t": "\\t",
+  "\n": "\\n",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\r": "\\r",
+  "\x1b": "\\E",
+  "'": "\\'",
+  "\\": "\\\\",
+};
+
+// eslint-disable-next-line no-control-regex
+const ANSI_C_ESCAPED_RE = /[\x00-\x1f\x7f'\\]/g;
+
+/** The body of bash's `$'…'`: a control character by its name or in octal. */
+function ansiCQuoted(value: string): string {
+  return value.replace(
+    ANSI_C_ESCAPED_RE,
+    (char) => ANSI_C_ESCAPES[char] ?? `\\${char.charCodeAt(0).toString(8).padStart(3, "0")}`
+  );
 }
 
 export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret[]): string {
