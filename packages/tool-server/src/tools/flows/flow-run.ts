@@ -1927,19 +1927,58 @@ function appendResolvedValues(
   return reason ? `${reason} ${values.join(" ")}` : values.join(" ");
 }
 
+const WHOLE_FIELD_TYPE_ADVICE =
+  "write the value in the script with the type the tool expects, or, for text entry, use a " +
+  "`type:` step";
+
 /**
  * A whole-field reference keeps the JSON type the script wrote, and a tool can
  * refuse that type where a `type:` step would have made text of it — `tool:
  * keyboard` refuses a number in `text`. The tool's own message names the
  * argument, not where its value came from.
+ *
+ * Only the references the tool's schema refused are named: a refused literal
+ * beside them says nothing about their types. A tool that refused its
+ * arguments inside `execute`, after they parsed, does not say which one, so
+ * there the note can only say "if".
  */
-function wholeFieldTypeNote(err: unknown, wholeFields: readonly WholeFieldReference[]): string {
+function wholeFieldTypeNote(
+  err: unknown,
+  wholeFields: readonly WholeFieldReference[],
+  registry: Registry,
+  toolId: string,
+  args: unknown
+): string {
   if (wholeFields.length === 0) return "";
   if (getFailureSignal(err)?.error_code !== FAILURE_CODES.TOOL_INPUT_INVALID) return "";
+  const refused = refusedArgPaths(registry, toolId, args);
+  if (refused === undefined) return conditionalWholeFieldNote(wholeFields);
+  const blamed = wholeFields.filter((field) =>
+    refused.some(
+      (at) =>
+        at === field.where || at.startsWith(`${field.where}.`) || at.startsWith(`${field.where}[`)
+    )
+  );
+  if (blamed.length === 0) return "";
   return (
-    ` — ${describeWholeFields(wholeFields)}. A reference that is the whole argument keeps the ` +
-    "JSON type the script wrote: write the value in the script with the type the tool expects, " +
-    "or, for text entry, use a `type:` step"
+    ` — ${describeWholeFields(blamed)}. A reference that is the whole argument keeps the ` +
+    `JSON type the script wrote: ${WHOLE_FIELD_TYPE_ADVICE}`
+  );
+}
+
+/**
+ * The `args` paths the tool's schema refuses, spelled the way a
+ * {@link WholeFieldReference} spells them, or undefined when the args parse or
+ * the tool has no schema.
+ */
+function refusedArgPaths(registry: Registry, toolId: string, args: unknown): string[] | undefined {
+  const parsed = registry.getTool(toolId)?.zodSchema?.safeParse(args ?? {});
+  if (!parsed || parsed.success) return undefined;
+  return parsed.error.issues.map((issue) =>
+    issue.path.reduce<string>(
+      (at, key) => (typeof key === "number" ? `${at}[${key}]` : `${at}.${String(key)}`),
+      "args"
+    )
   );
 }
 
@@ -1953,9 +1992,13 @@ function nestedWholeFieldNote(
   wholeFields: readonly WholeFieldReference[]
 ): string {
   if (wholeFields.length === 0 || (status !== "fail" && status !== "error")) return "";
+  return conditionalWholeFieldNote(wholeFields);
+}
+
+function conditionalWholeFieldNote(wholeFields: readonly WholeFieldReference[]): string {
   return (
-    ` — ${describeWholeFields(wholeFields)}. If a tool refused that type, write the value in ` +
-    "the script with the type the tool expects, or, for text entry, use a `type:` step"
+    ` — ${describeWholeFields(wholeFields)}. If a tool refused that type, ` +
+    WHOLE_FIELD_TYPE_ADVICE
   );
 }
 
@@ -2203,7 +2246,9 @@ async function execLeafStep(
           ...base,
           status: "error",
           tool: step.name,
-          reason: `${reframed ?? errMsg(err)}${wholeFieldTypeNote(err, resolution.wholeFields)}`,
+          reason:
+            `${reframed ?? errMsg(err)}` +
+            wholeFieldTypeNote(err, resolution.wholeFields, registry, step.name, args),
         };
       }
     }

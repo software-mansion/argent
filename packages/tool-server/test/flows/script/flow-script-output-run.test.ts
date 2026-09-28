@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { z } from "zod";
 import type { Registry } from "@argent/registry";
 import {
   createRunFlowTool,
@@ -35,7 +36,14 @@ const DEVICE = "00000000-0000-0000-0000-0000000000ac";
 
 type InvokeHook = (id: string, params: unknown) => unknown;
 
-function mockRegistry(opts: { booted?: boolean; invoke?: InvokeHook } = {}) {
+interface RunOptions {
+  booted?: boolean;
+  invoke?: InvokeHook;
+  /** A tool's input schema, for the tests that need the runner to parse its args. */
+  schemas?: Record<string, z.ZodType>;
+}
+
+function mockRegistry(opts: RunOptions = {}) {
   const invokeTool = vi.fn(async (id: string, params?: unknown) => {
     if (id === "list-devices") {
       return {
@@ -46,8 +54,9 @@ function mockRegistry(opts: { booted?: boolean; invoke?: InvokeHook } = {}) {
   });
   const registry = {
     invokeTool,
-    getTool: vi.fn(() => ({
+    getTool: vi.fn((id: string) => ({
       inputSchema: { properties: { udid: {}, name: {}, project_root: {}, env: {} } },
+      ...(opts.schemas?.[id] ? { zodSchema: opts.schemas[id] } : {}),
     })),
     resolveService: vi.fn(async () => ({
       isConnected: () => true,
@@ -107,7 +116,7 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 
 function startRun(
   name: string,
-  opts: { booted?: boolean; invoke?: InvokeHook } = {}
+  opts: RunOptions = {}
 ): { run: Promise<FlowRunResult>; invokeTool: InvokeMock } {
   const { registry, invokeTool } = mockRegistry(opts);
   const run = createRunFlowTool(registry)
@@ -118,7 +127,7 @@ function startRun(
 
 async function runFlow(
   name: string,
-  opts: { booted?: boolean; invoke?: InvokeHook } = {}
+  opts: RunOptions = {}
 ): Promise<{ result: FlowRunResult; invokeTool: InvokeMock }> {
   const { run, invokeTool } = startRun(name, opts);
   return { result: await run, invokeTool };
@@ -656,6 +665,63 @@ describe("output references in steps", () => {
       '`args.text` is "{{output:code}}" alone, so it received a number'
     );
     expect(report.reason).toContain("for text entry, use a `type:` step");
+  });
+
+  it("names a whole-field reference the tool's schema refused", async () => {
+    await write("scripts/code.mjs", `output.code = 123456;\n`);
+    await flow(
+      "typed-reject-parsed",
+      "steps:",
+      `  - script: { path: ${script("code.mjs")} }`,
+      "  - tool: keyboard",
+      `    args: { text: "{{output:code}}" }`
+    );
+
+    const { result } = await runFlow("typed-reject-parsed", {
+      booted: true,
+      schemas: { keyboard: z.object({ udid: z.string(), text: z.string() }) },
+      invoke: (id, params) => {
+        if (id === "keyboard" && typeof (params as { text?: unknown }).text !== "string") {
+          throw new InvalidToolInputError("keyboard needs `text` to be a string");
+        }
+        return { ok: true };
+      },
+    });
+
+    const report = result.steps[1];
+    expect(report.status).toBe("error");
+    expect(report.reason).toContain(
+      '`args.text` is "{{output:code}}" alone, so it received a number. A reference that is ' +
+        "the whole argument keeps the JSON type the script wrote"
+    );
+    expect(report.reason).not.toContain("If a tool refused that type");
+  });
+
+  it("does not blame a whole-field reference when the tool refused a literal beside it", async () => {
+    await write("scripts/y.mjs", `output.y = 0.262;\n`);
+    await flow(
+      "literal-reject",
+      "steps:",
+      `  - script: { path: ${script("y.mjs")} }`,
+      "  - tool: gesture-tap",
+      `    args: { x: "left", y: "{{output:y}}" }`
+    );
+
+    const { result } = await runFlow("literal-reject", {
+      booted: true,
+      schemas: { "gesture-tap": z.object({ udid: z.string(), x: z.number(), y: z.number() }) },
+      invoke: (id, params) => {
+        if (id === "gesture-tap" && typeof (params as { x?: unknown }).x !== "number") {
+          throw new InvalidToolInputError("gesture-tap needs `x` to be a number");
+        }
+        return { ok: true };
+      },
+    });
+
+    const report = result.steps[1];
+    expect(report.status).toBe("error");
+    expect(report.reason).toContain("`x`: Invalid input: expected number, received string");
+    expect(report.reason).not.toContain("alone, so it received");
   });
 
   it("does not tell the author to write a string when a tool wants another type", async () => {
