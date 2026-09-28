@@ -25,6 +25,7 @@ import { createRegistry } from "../src/utils/setup-registry";
 const EXPECTED_ALLOWED_TOOLS = [
   "await-ui-element",
   "button",
+  "fold",
   "gesture-custom",
   "gesture-drag",
   "gesture-pinch",

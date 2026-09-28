@@ -69,7 +69,22 @@ export interface AXServiceApi {
   describe(): Promise<AXDescribeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
+  /**
+   * The display id of the panel the guest renders to (1 the cover panel, 3
+   * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
+   * Null when the daemon names none, as on a device with one panel. Answered
+   * in a few milliseconds; every touch of a foldable asks it
+   * (`utils/foldable.ts`), so its budget is short. A daemon build that
+   * predates the command answers an error.
+   */
+  livePanel(): Promise<number | null>;
 }
+
+/**
+ * How long `live_panel` gets: a healthy daemon answers in a few milliseconds,
+ * and a caller that asks before every touch must not wait on one that hangs.
+ */
+const LIVE_PANEL_TIMEOUT_MS = 2_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -438,6 +453,24 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
         };
+      },
+
+      async livePanel(): Promise<number | null> {
+        const result = (await query("live_panel", LIVE_PANEL_TIMEOUT_MS)) as {
+          displayId?: number | null;
+          error?: string;
+        };
+        if (result.error) {
+          throw new FailureError(`ax-service live_panel error: ${result.error}`, {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_live_panel",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return typeof result.displayId === "number" && result.displayId > 0
+          ? result.displayId
+          : null;
       },
 
       async alertCheck(): Promise<boolean> {

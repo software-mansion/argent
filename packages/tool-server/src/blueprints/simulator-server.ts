@@ -15,11 +15,16 @@ import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native
 import { getAndroidSdkRoot } from "@argent/configuration-core";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
-import { isTvOsSimulator } from "../utils/ios-devices";
+import { isFoldableSimulator, isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
-import { createMoqTransport, sendCommand } from "../utils/simulator-client";
+import {
+  createMoqTransport,
+  fetchDisplayState,
+  sendCommand,
+  type SimulatorDisplayState,
+} from "../utils/simulator-client";
 import {
   assertExternalCapability,
   externalClaimForAnyId,
@@ -56,6 +61,31 @@ const getPaths = () => {
 
 const READY_TIMEOUT_MS = 30_000;
 
+// `exit` can fire before the child's stderr is drained, and the last stderr
+// line is usually the reason it exited. Wait this long for the stream to end.
+const STDERR_DRAIN_MS = 250;
+const STDERR_TAIL_LINES = 10;
+const STDERR_MAX_LINE_CHARS = 500;
+
+// env_logger's routine lines ("[<ts> INFO  simulator_server::…] …") say nothing
+// about why the binary stopped; its errors are printed without that prefix.
+const ROUTINE_LOG_LINE = /^\[\S+\s+(?:INFO|DEBUG|TRACE)\s/;
+
+function exitedBeforeReadyMessage(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderrTail: readonly string[]
+): string {
+  const how =
+    typeof code === "number"
+      ? `exited with code ${code}`
+      : signal
+        ? `was killed by ${signal}`
+        : "exited";
+  const reason = stderrTail.join("\n");
+  return `simulator-server ${how} before becoming ready${reason ? `:\n${reason}` : ""}`;
+}
+
 export interface SimulatorServerApi {
   apiUrl: string;
   streamUrl: string;
@@ -83,6 +113,53 @@ export interface SimulatorServerApi {
    * build serves, so attaching never becomes consuming a provider's extras.
    */
   external?: boolean;
+  /**
+   * The device this server drives, as the tools name it. Read by
+   * `simulator-client.ts` to look up per-device state that lives outside the
+   * server — the active panel of a foldable.
+   */
+  deviceId?: string;
+  /**
+   * Set for a foldable simulator whose server reported its panels: the server
+   * captures every panel and follows none, so every touch, wheel, screenshot
+   * and stream then names the panel the guest renders to, resolved at that
+   * moment (`utils/foldable.ts`). Undefined for every other device, and for a
+   * foldable driven by a server build that predates panels, which stays on
+   * screen 1 as before.
+   */
+  display?: SimulatorDisplayState;
+}
+
+/** Bound on the `GET /api/display` probe a foldable's server gets at attach time. */
+const DISPLAY_PROBE_TIMEOUT_MS = 3_000;
+
+/**
+ * Give a foldable simulator's server its panel list, so the commands that
+ * follow name a panel. Which panel is live is not read here: every command
+ * resolves it when it runs.
+ *
+ * Only a device whose profile is foldable is probed at all, so the common case
+ * pays nothing. A foldable whose server answers with no panels — a build that
+ * predates them, or a provider's — is left without `display`: nothing names a
+ * screen and the device is driven on its cover panel, exactly as before.
+ */
+async function attachFoldableDisplay(api: SimulatorServerApi, device: DeviceInfo): Promise<void> {
+  if (device.platform !== "ios" || api.transport) return;
+  if (!(await isFoldableSimulator(device.id))) return;
+  const tag = `[sim ${device.id.slice(0, 8)}]`;
+  const display = await fetchDisplayState(api, AbortSignal.timeout(DISPLAY_PROBE_TIMEOUT_MS));
+  if (!display?.foldable) {
+    process.stderr.write(
+      `${tag} this simulator is foldable, but its simulator-server reports no panels; ` +
+        `it will be driven on screen 1 (the cover panel) only.\n`
+    );
+    return;
+  }
+  api.display = display;
+  const panels = display.panels.map((p) => `${p.screenId} (${p.width}x${p.height})`).join(", ");
+  process.stderr.write(
+    `${tag} foldable simulator with screens ${panels}; every command names the live panel\n`
+  );
 }
 
 /**
@@ -122,7 +199,9 @@ async function buildRemoteInstance(
     // Through `sendCommand`, as the attached instance below does, so a key the
     // session refuses reports the same failure as a refused touch instead of a
     // bare SDK error the caller cannot classify.
-    pressKey: (direction, keyCode) => sendCommand(api, { cmd: "key", code: keyCode, direction }),
+    pressKey: async (direction, keyCode) => {
+      await sendCommand(api, { cmd: "key", code: keyCode, direction });
+    },
     transport,
   };
 
@@ -171,11 +250,18 @@ async function buildAttachedInstance(
 
   const api: SimulatorServerApi = {
     apiUrl: externalDevice.simulatorServer.apiUrl,
+    deviceId: device.id,
     external: true,
-    pressKey: (direction, code) => sendCommand(api, { cmd: "key", code, direction }),
+    pressKey: async (direction, code) => {
+      await sendCommand(api, { cmd: "key", code, direction });
+    },
     streamUrl: externalDevice.simulatorServer.streamUrl,
     /** `transport: undefined`, so the WS + HTTP path is reused unchanged. */
   };
+
+  // A provider's build without the display route answers 404 and the device
+  // stays single-panel; the route itself is on the parity allow-list.
+  await attachFoldableDisplay(api, device);
 
   return {
     api,
@@ -263,8 +349,12 @@ async function spawnSimulatorServerProcess(
       fn();
     };
 
+    // Set on `exit`, before the rejection waits for stderr: stdout can still
+    // deliver buffered readiness lines, and an exited process is never ready.
+    let exited = false;
+
     const resolveWhenReady = () => {
-      if (apiUrl == null) return;
+      if (apiUrl == null || exited) return;
       settle(() => resolve({ proc, apiUrl: apiUrl!, streamUrl }));
     };
 
@@ -289,31 +379,61 @@ async function spawnSimulatorServerProcess(
     });
 
     const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
+    // The binary explains a failed start on stderr (e.g. "Error: Failed to find
+    // any running emulator"), so keep the last lines for the rejection below.
+    const stderrTail: string[] = [];
+    let partialLine = "";
+    // Routine lines are dropped here, not when the message is built, so a burst
+    // of shutdown logging cannot push the error out of the tail.
+    const keepLine = (line: string) => {
+      if (!line.trim() || ROUTINE_LOG_LINE.test(line)) return;
+      stderrTail.push(line.trimEnd().slice(0, STDERR_MAX_LINE_CHARS));
+      stderrTail.splice(0, Math.max(0, stderrTail.length - STDERR_TAIL_LINES));
+    };
     proc.stderr?.on("data", (data: Buffer) => {
       process.stderr.write(`[sim ${udidTag}] ${data}`);
+      if (settled) return;
+      const lines = (partialLine + data.toString()).split("\n");
+      partialLine = (lines.pop() ?? "").slice(-STDERR_MAX_LINE_CHARS);
+      lines.forEach(keepLine);
     });
 
     proc.on("exit", (code, signal) => {
-      settle(() =>
-        reject(
-          new FailureError("simulator-server exited with code before becoming ready", {
-            error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_EXITED,
-            failure_stage: "simulator_server_spawn_ready",
-            failure_area: "tool_server",
-            error_kind: "subprocess",
-            failure_command: "simulator_server",
-            ...(typeof code === "number" ? { failure_exit_code: code } : {}),
-            ...(signal === "SIGABRT" ||
-            signal === "SIGHUP" ||
-            signal === "SIGINT" ||
-            signal === "SIGKILL" ||
-            signal === "SIGQUIT" ||
-            signal === "SIGTERM"
-              ? { failure_signal: signal }
-              : {}),
-          })
-        )
-      );
+      exited = true;
+      // The ready deadline must not fire during the stderr wait and replace the
+      // exit code and reason with a timeout.
+      clearTimeout(timer);
+      const fail = () => {
+        keepLine(partialLine);
+        partialLine = "";
+        settle(() =>
+          reject(
+            new FailureError(exitedBeforeReadyMessage(code, signal, stderrTail), {
+              error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_EXITED,
+              failure_stage: "simulator_server_spawn_ready",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              failure_command: "simulator_server",
+              ...(typeof code === "number" ? { failure_exit_code: code } : {}),
+              ...(signal === "SIGABRT" ||
+              signal === "SIGHUP" ||
+              signal === "SIGINT" ||
+              signal === "SIGKILL" ||
+              signal === "SIGQUIT" ||
+              signal === "SIGTERM"
+                ? { failure_signal: signal }
+                : {}),
+            })
+          )
+        );
+      };
+      const stderr = proc.stderr;
+      if (settled || !stderr || stderr.readableEnded) return fail();
+      const drainTimer = setTimeout(fail, STDERR_DRAIN_MS);
+      stderr.once("end", () => {
+        clearTimeout(drainTimer);
+        fail();
+      });
     });
 
     proc.on("error", (err) => {
@@ -473,6 +593,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       api: {
         apiUrl,
         streamUrl,
+        deviceId: device.id,
         pressKey: (direction: "Down" | "Up", keyCode: number) => {
           /**
            * simulator-server never replies on stdin, so there is nothing to
@@ -487,6 +608,10 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       },
       events,
     };
+
+    // The first command a foldable gets must already name its live panel, so
+    // the probe runs before the instance is handed out.
+    await attachFoldableDisplay(instance.api, device);
 
     return instance;
   },
