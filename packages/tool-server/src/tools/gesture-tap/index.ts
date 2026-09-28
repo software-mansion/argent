@@ -54,6 +54,11 @@ interface Result {
    * effect. Set only when true.
    */
   reactivated?: true;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the tap went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
 }
 
 function tapDescription(params: Params, tense: "present" | "past"): string {
@@ -221,9 +226,10 @@ Before tapping, determine the correct coordinates by using discovery tools — p
       return { tapped: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    let warning: string | undefined;
     for (let i = 1; i <= clickCount; i++) {
       if (i > 1) await sleep(MULTI_TAP_GAP_MS);
-      await sendCommand(api, {
+      const down = await sendCommand(api, {
         cmd: "touch",
         type: "Down",
         x: params.x,
@@ -231,6 +237,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
         second_x: null,
         second_y: null,
       });
+      warning ??= down.warning;
       await sleep(TAP_HOLD_MS);
       await sendCommand(api, {
         cmd: "touch",
@@ -241,6 +248,6 @@ Before tapping, determine the correct coordinates by using discovery tools — p
         second_y: null,
       });
     }
-    return { tapped: true, timestampMs };
+    return { tapped: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
   },
 };

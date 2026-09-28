@@ -40,7 +40,7 @@ vi.mock("../../src/tools/flows/flow-pixels", async (importOriginal) => ({
 }));
 
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
-import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { serializeFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 
 function stillScreen(): DescribeNode {
   return {
@@ -63,24 +63,26 @@ function mockRegistry(): Registry {
 
 let tmpDir: string;
 
-async function writeIdleFlow(name: string): Promise<void> {
+async function writeFlow(name: string, steps: FlowStep[]): Promise<void> {
   const dir = path.join(tmpDir, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, `${name}.yaml`),
-    serializeFlow({
-      executionPrerequisite: "",
-      steps: [
-        { kind: "idle", timeout: 5000, stableFor: 0 },
-        { kind: "echo", message: "after" },
-      ],
-    }),
+    serializeFlow({ executionPrerequisite: "", steps }),
     "utf8"
   );
 }
 
-async function run(name: string, device: string) {
-  await writeIdleFlow(name);
+async function writeIdleFlow(name: string): Promise<void> {
+  await writeFlow(name, [
+    { kind: "idle", timeout: 5000, stableFor: 0 },
+    { kind: "echo", message: "after" },
+  ]);
+}
+
+async function run(name: string, device: string, steps?: FlowStep[]) {
+  if (steps) await writeFlow(name, steps);
+  else await writeIdleFlow(name);
   const tool = createRunFlowTool(mockRegistry());
   const result = await tool.execute({}, { name, project_root: tmpDir, device });
   if (!("steps" in result)) throw new Error("expected a run result");
@@ -98,9 +100,9 @@ afterEach(async () => {
 });
 
 // `await: { idle: true }` judges the screen by two signals and one of them —
-// the flow tree — does not exist on every platform. On harmony (and ios-remote)
-// every read fails by construction, so the step used to spend its whole budget
-// polling — on a real device each round also minted a STARTING → ERROR cycle
+// the flow tree — does not exist on every platform. On harmony every read
+// fails by construction, so the step would spend its whole budget polling — on
+// a real device each round also minted a STARTING → ERROR cycle
 // against the SimulatorServer its capture resolves — before being scored
 // never-judged with a remedy ("check the app is in the foreground") that no
 // amount of foregrounding can satisfy where there is no source at all.
@@ -128,13 +130,12 @@ describe("await: { idle } on a platform with no flow tree source", () => {
     expect(r.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
   });
 
-  it("fails fast on ios-remote too", async () => {
-    const r = await run("idle-remote", "remote:00000000-0000-0000-0000-0000000000ab");
+  it("dispatches a coordinate tap on harmony without settling on a tree it cannot read", async () => {
+    const r = await run("tap-harmony", "harmony-127.0.0.1:5555", [{ kind: "tap", x: 0.5, y: 0.5 }]);
 
-    expect(r.steps[0]).toMatchObject({ kind: "idle", status: "error" });
+    expect(r.steps[0]).toMatchObject({ kind: "tap", status: "pass" });
+    expect(r.steps[0]).not.toHaveProperty("warning");
     expect(reads).toHaveLength(0);
-    expect(captures).toHaveLength(0);
-    expect(r.steps[0].reason).toContain("ios-remote");
   });
 
   it("leaves a supported platform's idle alone", async () => {

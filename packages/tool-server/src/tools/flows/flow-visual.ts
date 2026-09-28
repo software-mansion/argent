@@ -11,9 +11,10 @@ import {
   offscreenHint,
   type ActionEnv,
 } from "./flow-actions";
-import { describeSelector, type FlowSelector } from "./flow-utils";
+import { authoringPlatform, describeSelector, type FlowSelector } from "./flow-utils";
 import { supportsFlowTree } from "./flow-tree";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
+import { foldablePostureHint } from "../../utils/foldable";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 /** Default visual tolerance (percent of pixels) when a step sets none. */
@@ -35,6 +36,12 @@ export interface SnapshotArtifacts {
 interface VisualOutcome {
   status: "pass" | "fail" | "skip";
   reason?: string;
+  /**
+   * What the capture had to say: on a foldable whose panel could not be
+   * resolved, that the capture is of the cover panel (the screenshot tool's
+   * own warning).
+   */
+  warning?: string;
   /**
    * Baseline key stem (`<name>__<platform>-WxH`, plus `-crop-<hash>` for
    * cropOn) — present whenever `artifacts` is, so a consumer exporting the
@@ -126,8 +133,8 @@ async function cropPngFile(
 
 /**
  * Capture the current screen and compare it to a stored baseline keyed by
- * platform + resolution. A missing baseline FAILS the step — adopting one is
- * always an explicit `updateBaselines` gesture. The key is derived from the
+ * authoring platform + resolution. A missing baseline FAILS the step — adopting
+ * one is always an explicit `updateBaselines` gesture. The key is derived from the
  * capture, so any device-class drift (another simulator model, a rotation, an
  * auto-detected device) lands here too; passing instead would let a CI run go
  * green having compared nothing.
@@ -209,7 +216,10 @@ export async function runSnapshot(
   const shot = (await invokeOnDevice(env, "screenshot", {
     scale: 1.0,
     includeImageInContext: false,
-  })) as { image: ArtifactHandle };
+  })) as { image: ArtifactHandle; warning?: string };
+  // The screenshot tool's warning (a foldable whose panel could not be
+  // resolved) rides every outcome built on this capture.
+  const captureWarned = shot.warning !== undefined ? { warning: shot.warning } : {};
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
@@ -221,7 +231,12 @@ export async function runSnapshot(
     opts.cropOn === undefined
       ? ""
       : `-crop-${createHash("sha256").update(cropIdentity(opts.cropOn)).digest("hex").slice(0, 8)}`;
-  const snapshotKey = `${opts.name}__${env.device.platform}-${w}x${h}${cropSuffix}`;
+  // Keyed on the AUTHORING platform: the key names a device class, not a host.
+  // A remote simulator of the same model renders the same pixels at the same
+  // geometry, so it must reuse the baseline a local run committed rather than
+  // demand a second copy that can drift. `WxH` still separates genuinely
+  // different device classes, which is the check the key exists for.
+  const snapshotKey = `${opts.name}__${authoringPlatform(env.device.platform)}-${w}x${h}${cropSuffix}`;
   const key = `${snapshotKey}.png`;
   const dir = baselineDir(opts.flowsDir, opts.flowName);
   const baselinePath = path.join(dir, key);
@@ -233,6 +248,7 @@ export async function runSnapshot(
   const priorApp = opts.seenKeys.get(snapshotKey);
   if (priorApp !== undefined && priorApp !== opts.appIdentity) {
     return {
+      ...captureWarned,
       status: "fail",
       reason:
         `snapshot "${opts.name}" was already captured in this run from a different app ` +
@@ -273,6 +289,7 @@ export async function runSnapshot(
       const cropped = await cropPngFile(shot.image.hostPath, croppedPath, cropFrame);
       if (cropped === null) {
         return {
+          ...captureWarned,
           status: "fail",
           reason:
             `cropOn matched ${describeSelector(opts.cropOn!)} but its on-screen region is ` +
@@ -298,9 +315,16 @@ export async function runSnapshot(
         kind: "screenshot",
         mimeType: "image/png",
       });
+      // The folded key makes this the file a local run compares against, so a
+      // remote capture replacing it says so. Otherwise a cloud refresh of a
+      // committed baseline reads exactly like a local one.
+      const source = env.device.platform === "ios-remote" ? " from a remote simulator" : "";
       return {
+        ...captureWarned,
         status: "pass",
-        reason: exists ? `baseline updated (${key})` : `baseline written (${key})`,
+        reason: exists
+          ? `baseline updated${source} (${key})`
+          : `baseline written${source} (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };
@@ -311,6 +335,7 @@ export async function runSnapshot(
       // the truth a re-run silently passes against, and a workspace that never
       // persists baselines (ephemeral CI) would gate nothing forever.
       return {
+        ...captureWarned,
         status: "fail",
         reason:
           `no baseline for "${opts.name}" on this device class — expected ${baselinePath}, ` +
@@ -351,7 +376,13 @@ export async function runSnapshot(
       // snapshots keep normalization and only reach this on an aspect change.
       if (result.dimensionMismatch) {
         const { expected, actual } = result.dimensionMismatch;
+        // A full-screen mismatch on a foldable is usually a posture mismatch:
+        // the panels differ in size. Wording only; the step fails either way.
+        const posture = opts.cropOn
+          ? undefined
+          : await foldablePostureHint(env.device.id, expected, actual);
         return {
+          ...captureWarned,
           status: "fail",
           reason:
             `baseline is ${expected.width}x${expected.height} but the ` +
@@ -360,7 +391,8 @@ export async function runSnapshot(
             (opts.cropOn
               ? `. The element's size drifted — crop a fixed-size container, or re-adopt ` +
                 `with updateBaselines`
-              : ""),
+              : "") +
+            (posture ? `. ${posture}` : ""),
           snapshotKey,
           artifacts: {
             baseline: await store.register({
@@ -376,7 +408,7 @@ export async function runSnapshot(
       const within = result.mismatchPercentage <= opts.maxMismatch;
       const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
-        return { status: "pass", reason };
+        return { status: "pass", reason, ...captureWarned };
       }
 
       const artifacts: SnapshotArtifacts = {

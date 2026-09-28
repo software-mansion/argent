@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 sidebar_label: Supported platforms
 title: Supported platforms
 sidebar_custom_props:
@@ -14,6 +14,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
+| **HarmonyOS**     | Phones over `hdc`, and DevEco Studio emulator instances                 | Touch / gesture  |
 
 <Video
   src="/video/ios-android-web.mp4"
@@ -33,9 +34,25 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   caption="The same interaction model on a physical Pixel connected over adb"
 />
 
+### Foldable simulators
+
+Argent drives the iPhone Duo simulator closed, half-open and open. The agent folds and unfolds the device with the `fold` tool. Screenshots, element trees, taps and recordings use the panel that shows the UI. See the [tools reference](/docs/reference/tools).
+
 ### Physical iPhones
 
 Argent also drives a physical iPhone over a USB cable. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
+
+### HarmonyOS
+
+Argent drives any HarmonyOS phone or emulator that `hdc` is connected to. A phone with USB debugging enabled appears as `harmony-<connectKey>`. A DevEco Studio emulator instance appears as `harmony-emulator-<name>`. `boot-device` starts the instance and returns its `harmony-<connectKey>` id, so the same tools drive a phone and an emulator.
+
+- Argent reads the screen and injects taps, swipes and text through the device's own `uitest`.
+- `gesture-pinch` sends the start and end points of both fingers in one `uinput` call. The device interpolates the movement.
+- `launch-app`, `restart-app` and `open-url` use the `bm` and `aa` shell commands.
+- Argent refuses `gesture-rotate` and `gesture-custom`. The device moves each contact along one straight line per call.
+- Argent also refuses `rotate`, the profilers and the debugger. The device has no orientation command, and the profilers and the debugger have no HarmonyOS ingest path.
+
+Huawei restricts the emulator image download to mainland China. Outside mainland China, you cannot create an emulator instance until you get an image.
 
 ## TV targets
 

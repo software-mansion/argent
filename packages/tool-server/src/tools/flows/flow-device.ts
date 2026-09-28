@@ -2,11 +2,14 @@ import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { blockSteps, type FlowStep, type WhenPlatform } from "./flow-utils";
+import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils";
 
-// The flows directory's one platform set — LAUNCH_PLATFORMS in flow-utils,
-// reached through WhenPlatform.
-export type FlowPlatform = WhenPlatform;
+/**
+ * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
+ * Wider than the authoring set by `ios-remote`: a remote simulator is a device
+ * a run can select, never something a flow file names.
+ */
+export type FlowPlatform = SelectablePlatform;
 
 /**
  * Arg names that mean "the device to act on". Stripped from every recorded step
@@ -55,7 +58,7 @@ const DEVICE_ARG_KEYS = DEVICE_BIND_KEYS;
 
 interface RawDevice {
   /** `list-devices` lists every platform it knows, not only the ones flows run on. */
-  platform: FlowPlatform | "ios-remote" | "harmony";
+  platform: FlowPlatform | "harmony";
   state?: string;
   udid?: string;
   serial?: string;
@@ -65,15 +68,16 @@ interface RawDevice {
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
-  // `ios-remote` and `harmony` key their entries by `udid` as iOS does. Neither
-  // is AUTO-resolvable — `isBooted` has no arm for either — but both are
-  // legitimate to name explicitly, which is why the id has to reach the caller
-  // through the "available devices" line. `fetchFlowTree` has an arm for neither,
-  // so a run on either degrades per step rather than dead-ending: coordinate steps
-  // work and `snapshot` captures (measured on harmony 6.1.1 — a `tap` passes, a
+  // A remote row carries `udid` too (the `remote:`-prefixed id), not `serial`.
+  // `harmony` keys its entries by `udid` as well. It is not AUTO-resolvable —
+  // `isBooted` has no arm for it — but it is legitimate to name explicitly,
+  // which is why the id has to reach the caller through the "available devices"
+  // line. Flows have no tree source there (`supportsFlowTree`), so a run
+  // degrades per step rather than dead-ending: coordinate steps work and
+  // `snapshot` captures (measured on harmony 6.1.1 — a `tap` passes, a
   // `snapshot` keys a baseline), while a selector step errors with "ui-tree
-  // matching is not supported on platform <p>". That is more use to a caller than
-  // a blanket refusal.
+  // matching is not supported on platform harmony". That is more use to a
+  // caller than a blanket refusal.
   if (d.platform === "ios" || d.platform === "ios-remote" || d.platform === "harmony") {
     return d.udid;
   }
@@ -89,6 +93,11 @@ function isBooted(d: RawDevice): boolean {
       // hardware because a phone happens to be on the cable, and a cabled
       // phone must not turn a lone booted simulator into an ambiguity. Name
       // the phone with `device` to run on it.
+      return d.state === "Booted";
+    case "ios-remote":
+      // A remote simulator reports the same simctl states as a local one, and
+      // carries none of the physical-device ambiguity above: `ios-remote` is
+      // always kind "simulator" (utils/device-info.ts).
       return d.state === "Booted";
     case "android":
       return d.state === "device";
@@ -228,6 +237,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     case "scroll-to":
     case "pinch":
     case "rotate":
+    case "fold":
     case "snapshot":
       return true;
     default: {
