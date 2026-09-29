@@ -1,4 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import * as fsp from "node:fs/promises";
 import {
   chmod,
   lstat,
@@ -129,19 +130,39 @@ describe("writeOutFile", () => {
     }
   );
 
+  // The target has to pass `occupantRefusal` and then fail the rename, or this
+  // covers the refusal instead of the cleanup. A directory that appears only
+  // AFTER the lstat is the one state that reaches it, so lstat is what gives
+  // way — the real race, made deterministic.
   it("removes the staging file when the rename cannot be completed", async () => {
     root = await mkdtemp(join(tmpdir(), "outwrite-"));
-    // A non-empty directory standing where the file should go: staging succeeds,
-    // the rename onto it does not.
-    const out = join(root, "occupied");
-    await mkdir(out);
-    await writeFile(join(out, "keep"), "keep");
+    const out = join(root, "raced.png");
 
-    const r = await writeOutFile(out, Buffer.from("png"));
+    vi.resetModules();
+    vi.doMock("node:fs/promises", async () => {
+      const real = await vi.importActual<typeof fsp>("node:fs/promises");
+      return {
+        ...real,
+        lstat: async (p: Parameters<typeof fsp.lstat>[0]) => {
+          if (p !== out) return real.lstat(p);
+          await real.mkdir(out);
+          await real.writeFile(join(out, "keep"), "keep");
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        },
+      };
+    });
 
-    expect("failure" in r).toBe(true);
-    expect((await readdir(root)).filter((n) => n.includes(".part"))).toEqual([]);
-    expect(await readdir(out)).toEqual(["keep"]);
+    try {
+      const { writeOutFile: raced } = await import("../src/out-path.js");
+      const r = await raced(out, Buffer.from("png"));
+
+      expect("failure" in r).toBe(true);
+      expect((await readdir(root)).filter((n) => n.includes(".part"))).toEqual([]);
+      expect(await readdir(out)).toEqual(["keep"]);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
   });
 
   // `rename` does not follow a symlink and does not care what it unlinks, so
@@ -199,6 +220,44 @@ describe("writeOutFile", () => {
 
     expect(await writeOutFile(out, Buffer.from("png"))).toEqual({ wrote: out });
     expect(await readFile(out, "utf8")).toBe("png");
+  });
+
+  // An ascii name never splits mid-character, so only a multi-byte one shows
+  // whether the trim respects the byte budget it computes. Asserted on the
+  // staging name the failure quotes, because APFS counts CHARACTERS: an
+  // over-long staged name still writes here, and only a byte-limited
+  // filesystem (ext4) would turn the overflow into an ENAMETOOLONG.
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps the staging name inside the byte budget for a multi-byte basename",
+    async () => {
+      root = await mkdtemp(join(tmpdir(), "outwrite-"));
+      const dir = join(root, "locked");
+      await mkdir(dir);
+      const out = join(dir, `${"é".repeat(119)}.png`);
+      await chmod(dir, 0o555);
+
+      try {
+        const r = await writeOutFile(out, Buffer.from("png"));
+
+        expect(r).toMatchObject({ failure: expect.stringContaining(".part") });
+        const staged = ("failure" in r ? r.failure : "").match(/'([^']*\.part)'/)?.[1] ?? "";
+        expect(staged).not.toContain("\uFFFD");
+        expect(Buffer.byteLength(staged.split(sep).pop()!)).toBeLessThanOrEqual(255);
+      } finally {
+        await chmod(dir, 0o755);
+      }
+    }
+  );
+
+  it("refuses a NUL byte rather than reporting one against the staging path", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    const out = join(root, "a", "b", "sh\0ot.png");
+
+    const r = await writeOutFile(out, Buffer.from("png"));
+
+    expect(r).toEqual({ failure: `Could not save to ${out}: out contains a NUL byte.` });
+    // Nothing built on the way to a path that was never writable.
+    expect(await readdir(root)).toEqual([]);
   });
 
   it("propagates a refusal instead of writing", async () => {

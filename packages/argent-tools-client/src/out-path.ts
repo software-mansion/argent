@@ -51,6 +51,8 @@ export function resolveOutPath(out: string): OutPathResolution {
   if (trimmed === "~" || namesADirectory(trimmed)) {
     return { refusal: "out names the file to write, not a directory." };
   }
+  // Refused here, or `writeFile`'s error would quote the staging path, not `out`.
+  if (trimmed.includes("\0")) return { refusal: "out contains a NUL byte." };
   return { path: resolve(expandTilde(trimmed)) };
 }
 
@@ -76,17 +78,34 @@ async function occupantRefusal(target: string): Promise<string | null> {
 }
 
 /**
+ * `s` cut to at most `max` BYTES, on a code-point boundary.
+ *
+ * Slicing the buffer instead would split a multi-byte sequence, and the 3-byte
+ * replacement character substituted for the fragment can leave the result
+ * LONGER than `max` — the opposite of what the cut is for.
+ */
+function truncateToBytes(s: string, max: number): string {
+  if (Buffer.byteLength(s) <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const width = Buffer.byteLength(ch);
+    if (used + width > max) break;
+    out += ch;
+    used += width;
+  }
+  return out;
+}
+
+/**
  * A staging path beside `target` that cannot itself exceed NAME_MAX: the suffix
  * would otherwise push a filename the caller may legally use (up to 255 bytes)
  * over the limit, failing a write that the target path alone permits.
  */
 function stagingPath(target: string): string {
   const suffix = `.${process.pid}-${Math.random().toString(36).slice(2, 8)}.part`;
-  const base = basename(target);
-  const room = 255 - Buffer.byteLength(suffix);
-  const trimmed =
-    Buffer.byteLength(base) <= room ? base : Buffer.from(base).subarray(0, room).toString();
-  return join(dirname(target), `${trimmed}${suffix}`);
+  const base = truncateToBytes(basename(target), 255 - Buffer.byteLength(suffix));
+  return join(dirname(target), `${base}${suffix}`);
 }
 
 /**

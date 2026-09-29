@@ -359,7 +359,7 @@ export async function flowRunToMcpContent(
     // `error` is the legacy spelling of `reason`.
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
-    const warning = step.warning ?? unwrittenOutWarning(step.args);
+    const warning = step.warning ?? unwrittenOutWarning(step);
     const timing = step.kind === "echo" ? "" : durationSuffix(step.durationMs);
     blocks.push({
       type: "text",
@@ -415,8 +415,10 @@ export async function flowRunToMcpContent(
  * CLI needs no counterpart: `argent flow run` refuses env and link routing, so
  * its runner is always the local one.
  */
-function unwrittenOutWarning(args: unknown): string | null {
-  const out = requestedOut(args);
+function unwrittenOutWarning(step: FlowStepResult): string | null {
+  // Pass only, like the runner: a failed step captured nothing to leave unsaved.
+  if (step.status !== "pass") return null;
+  const out = requestedOut(step.args);
   if (!out) return null;
   return (
     `\`out\` was not written: a flow step's arguments come from the flow file, not from you, so ` +

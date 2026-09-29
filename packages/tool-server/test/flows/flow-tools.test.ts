@@ -589,6 +589,7 @@ describe("flow-add-step", () => {
     expect(flow.steps).toEqual([{ kind: "tool", name: "screenshot", args: { scale: 1 } }]);
     expect(result.message).toContain("/tmp/run7-baseline.png");
     expect(result.message).toContain("was not written");
+    expect(result.message).toContain('Step added to "out-rec" flow — ');
     // The live call still ran with everything the caller passed.
     expect(registry.invokeTool).toHaveBeenCalledWith("screenshot", {
       scale: 1,

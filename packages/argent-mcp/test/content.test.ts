@@ -1211,6 +1211,32 @@ describe("flowRunToMcpContent", () => {
     expect(await fs.readFile(victim, "utf8")).toBe("stale baseline");
   });
 
+  // A step that failed captured nothing, so telling its reader the capture went
+  // unsaved invents one. The runner raises its own warning only on a pass.
+  it.each(["fail", "error", "skip"] as const)(
+    "says nothing about `out` on a step that %s'd",
+    async (status) => {
+      const input: FlowExecuteResult = {
+        flow: "skew",
+        steps: [
+          {
+            index: 0,
+            kind: "tool",
+            status,
+            tool: "screenshot",
+            outputHint: "image",
+            reason: "the device went away",
+            args: { udid: "DEV-1", out: join(root, "v.png") },
+          },
+        ],
+      };
+      const blocks = await flowRunToMcpContent(input);
+      expect(blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n")).not.toContain(
+        "was not written"
+      );
+    }
+  );
+
   it("defers to the runner's own warning rather than saying it twice", async () => {
     const input: FlowExecuteResult = {
       flow: "skew",
