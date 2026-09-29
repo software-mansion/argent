@@ -122,9 +122,13 @@ import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devto
 import { queryFullHierarchyTree } from "../src/tools/flows/flow-ios-tree";
 import { createDescribeTool } from "../src/tools/describe";
 import { describeIos } from "../src/tools/describe/platforms/ios";
+import { processScopedUdid } from "./helpers/process-scoped-udid";
 
-const UDID = "DD1D0000-1111-2222-3333-444444444444";
-const SOCKET = "/tmp/argent-nd-DD1D0000.sock";
+// Every factory below really binds this path, and a bind takes it from whoever
+// holds it, so a constant would make two concurrent runs destroy each other's
+// socket. Same pairing as the sibling that binds for real, native-devtools-app-state.
+const UDID = processScopedUdid("-1111-2222-3333-444444444444");
+const SOCKET = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 const BUNDLE = "com.example.silentskip";
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 // The launched app as an unpinned tree-read hint: the reader measures it only
@@ -702,6 +706,140 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
     } finally {
       await second?.dispose();
       await first.dispose();
+    }
+  });
+
+  it("scopes the endpoint-lost wording to what each reading actually measured", async () => {
+    // The message is shared by both readings that reach the verdict, and only
+    // one of them inspected the process. Opening it with the injected-and-
+    // running assertion for the reading that measured nothing puts that claim
+    // in the same payload as `state: "indeterminate"`.
+    const first = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let second: Instance | undefined;
+    try {
+      const api = first.api as NativeDevtoolsApi;
+      advance(10_000);
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("unregistered");
+      // Reached and handed out while the socket is still ours — the unreadable
+      // reading below can only repeat a verdict that was.
+      expect(
+        adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY).terminal
+      ).toBe(true);
+
+      second = await nativeDevtoolsBlueprint.factory({}, device, { device });
+      expect(api.holdsEndpoint()).toBe(false);
+
+      // The measured reading did read an injected, running process, and says so.
+      const measured = adviseOnUninjectedApp(
+        api,
+        BUNDLE,
+        "unregistered",
+        INJECTION_FAILED_RECOVERY
+      );
+      expect(measured.message).toContain(
+        `${BUNDLE} is running with argent's native devtools injected`
+      );
+
+      // The unreadable one read nothing, and must claim nothing — while still
+      // naming the socket, which is the half both readings did establish.
+      world.psFails = true;
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("indeterminate");
+      const unreadable = adviseOnUninjectedApp(
+        api,
+        BUNDLE,
+        "indeterminate",
+        INJECTION_FAILED_RECOVERY
+      );
+      expect(unreadable.message).toContain("could not be inspected on this read");
+      expect(unreadable.message).not.toContain("is running with argent's native devtools injected");
+      expect(unreadable.message).toContain(`${SOCKET} is not the endpoint this service bound`);
+    } finally {
+      await second?.dispose();
+      await first.dispose();
+    }
+  });
+
+  it("retires a standing verdict once the app is measured not running", async () => {
+    // The verdict speaks about a process measured running and silent. Once the
+    // app has quit there is no such process, and repeating it against whatever
+    // is launched next answers for one this service never inspected — with
+    // `do NOT restart the app`, which is the only remedy left at that point.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      advance(10_000);
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("unregistered");
+      expect(
+        adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY).terminal
+      ).toBe(true);
+      expect(api.verdictStands(BUNDLE)).toBe(true);
+
+      world.running = [];
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("not_running");
+      expect(api.verdictStands(BUNDLE)).toBe(false);
+
+      // A fresh process, two seconds old, that this read cannot inspect: the
+      // remedy is the one restart-app the unreadable state prescribes, not a
+      // verdict about the process that quit.
+      world.running = [BUNDLE];
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(2_000);
+      world.psFails = true;
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("indeterminate");
+      const advice = adviseOnUninjectedApp(api, BUNDLE, "indeterminate", INJECTION_FAILED_RECOVERY);
+      expect(advice.terminal).toBe(false);
+      expect(advice.message).toContain("Call restart-app then retry");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("does not record the terminal verdict for a read whose hint no agent sees", async () => {
+    // The twin of the relaunch-record guard below: only a verdict an agent was
+    // actually shown may be repeated by a reading that measured nothing. A poll
+    // whose hint is discarded reaches the same verdict, and recording it there
+    // would let the next unreadable read hand out a dead end nobody was told.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      const registry = {
+        resolveService: async (urn: string) => {
+          if (urn.startsWith("NativeDevtools:")) return api;
+          throw new Error("ax-service unavailable in this test");
+        },
+      } as unknown as Parameters<typeof describeIos>[0];
+
+      advance(10_000);
+      // Records the hand-out: this one IS rendered, through the describe tool.
+      const tool = createDescribeTool(registry as Parameters<typeof createDescribeTool>[0]);
+      await tool.execute({}, { udid: UDID, bundleId: BUNDLE });
+
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+
+      // A poll read: reaches the verdict, hint discarded, so nothing is recorded.
+      const polled = await describeIos(registry, device, { bundleId: BUNDLE }, { isTvOs: false });
+      expect(polled.hint).toContain("still never connected");
+      expect(api.verdictStands(BUNDLE)).toBe(false);
+
+      world.psFails = true;
+      const advice = adviseOnUninjectedApp(api, BUNDLE, "indeterminate", INJECTION_FAILED_RECOVERY);
+      expect(advice.terminal).toBe(false);
+    } finally {
+      await instance.dispose();
     }
   });
 

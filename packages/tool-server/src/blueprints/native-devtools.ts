@@ -358,14 +358,22 @@ function buildUnreadableProcessMessage(bundleId: string): string {
 }
 
 /**
- * What `unregistered` means when this service no longer owns the socket the app
- * was told to dial. Both of the terminal verdict's premises fail here: the app
- * may be connected, to a listener this service cannot see, and a tool-server
- * restart is then the fix rather than the futile step the diagnosis calls it.
+ * What either reading that reaches the verdict means when this service no longer
+ * owns the socket the app was told to dial. Both of the terminal verdict's
+ * premises fail here: the app may be connected, to a listener this service
+ * cannot see, and a tool-server restart is then the fix rather than the futile
+ * step the diagnosis calls it.
  */
-function buildEndpointLostMessage(bundleId: string, socketPath: string): string {
+function buildEndpointLostMessage(
+  bundleId: string,
+  socketPath: string,
+  unreadable: boolean
+): string {
+  // `indeterminate` inspected no process, so it may claim only the socket.
   return (
-    `${bundleId} is running with argent's native devtools injected, but this tool-server no longer ` +
+    (unreadable
+      ? `${bundleId}'s process could not be inspected on this read, and this tool-server no longer `
+      : `${bundleId} is running with argent's native devtools injected, but this tool-server no longer `) +
     `owns this simulator's devtools socket: ${socketPath} is not the endpoint this service bound. ` +
     `That path carries no owner and the last binder takes it, so a second argent tool-server on this ` +
     `simulator is the usual cause. A connection the app made to that listener is invisible here, so ` +
@@ -471,7 +479,10 @@ export function adviseOnUninjectedApp(
   // (`service_stale` from the precheck for `unregistered`), whose remedy is that
   // restart.
   if (!api.holdsEndpoint()) {
-    return { terminal: false, message: buildEndpointLostMessage(bundleId, api.socketPath) };
+    return {
+      terminal: false,
+      message: buildEndpointLostMessage(bundleId, api.socketPath, state === "indeterminate"),
+    };
   }
   if (state === "indeterminate") {
     return { terminal: true, message: buildUnreadableProcessMessage(bundleId) + terminalRecovery };
@@ -789,8 +800,9 @@ export interface NativeDevtoolsApi {
   wasAdvisedToRelaunch(bundleId: string): boolean;
   /**
    * Record that the terminal verdict has been handed to an agent for
-   * `bundleId`. Retired wherever the relaunch record is, since a handshake
-   * settles both.
+   * `bundleId`. Retired at the handshake that settles the relaunch record too,
+   * and additionally by a reading that measures the app not running at all,
+   * which leaves the verdict without the process it is about.
    */
   noteTerminalVerdict(bundleId: string): void;
   /**
@@ -1450,7 +1462,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (connections.has(bundleId)) return "connected";
 
         if (inspection === null) return "indeterminate";
-        if (!inspection.running) return "not_running";
+        if (!inspection.running) {
+          // With no process the verdict has no subject; kept, it would answer
+          // an unreadable read of the next launch. The relaunch record stays so
+          // a replacement can re-derive the verdict from a measurement.
+          terminalVerdict.delete(bundleId);
+          return "not_running";
+        }
         if (inspection.process === null) return "indeterminate";
 
         // The current process for this bundle, so a later `unregistered` reading
