@@ -339,6 +339,54 @@ describe("a recording of a foldable follows the live panel", () => {
     await stop(api);
   });
 
+  it("records host-side even where simulator-server could record for itself", async () => {
+    // The server's recorder keeps to one panel, so it cannot follow a fold.
+    // The endpoint here answers; the one-panel twin proves the stub is taken.
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith("/api/recording/start")
+        ? new Response(JSON.stringify({ status: "ok", id: "rec-1" }))
+        : new Response(JSON.stringify({ status: "ok" }))
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const startTool = (display?: object) =>
+        createScreenRecordingStartTool({
+          resolveService: vi.fn(async () => ({
+            apiUrl: "http://127.0.0.1:61830",
+            streamUrl: BASE_URL,
+            deviceId: DUO,
+            ...(display ? { display } : {}),
+          })),
+        } as unknown as Registry);
+      const recordingStarts = () =>
+        fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/recording/start")).length;
+      const params = { udid: DUO, showTouches: false, trimStatic: false, timeLimitSeconds: 60 };
+
+      resolveLivePanelMock.mockResolvedValue(live(3));
+      serveStreams(() => INNER);
+      const child = fakeChild();
+      const foldable = await makeSession();
+      const start = startTool({ foldable: true, panels: PANELS, hingeAngle: null }).execute(
+        { session: foldable },
+        params
+      );
+      start.catch(() => {});
+      await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+      expect((await start).status).toBe("recording");
+      expect(recordingStarts()).toBe(0);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(foldable.captureProcess).toBe(child);
+      await stop(foldable);
+
+      const onePanel = await makeSession();
+      expect((await startTool().execute({ session: onePanel }, params)).status).toBe("recording");
+      expect(recordingStarts()).toBe(1);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("counts a start that resolved nothing with the checks that failed", async () => {
     serveStreams(() => COVER);
     fakeChild();
