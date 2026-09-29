@@ -32,7 +32,7 @@ export type { SecretSourceOptions };
 /** Copied in packages/argent-mcp/src/auto-capture.ts, which cannot depend on this package. */
 export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
-const PLACEHOLDER_RE = /\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
+export const PLACEHOLDER_RE = /\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
 
 /** Names (never values) of all secrets currently exposed to argent. */
 export function availableSecretNames(options: SecretSourceOptions = {}): string[] {

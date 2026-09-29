@@ -13,6 +13,7 @@ import {
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
+import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
@@ -364,16 +365,27 @@ describe("flow-add-echo", () => {
 });
 
 describe("a step the recorder refuses", () => {
+  // An echo whose reference the recording's document cannot resolve is appended
+  // with a warning, so a refusal needs a reference the parser itself rejects.
   it("leaves the flow file exactly as it was, and the recording usable", async () => {
     await flowStartRecordingTool.execute({}, { name: "poison", project_root: tmpDir });
     await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "one" });
 
     const err = await flowInsertEchoTool
-      .execute({}, { name: "poison", project_root: tmpDir, message: "created {{output:user.id}}" })
+      .execute(
+        {},
+        { name: "poison", project_root: tmpDir, message: "created {{output:user.id ||}}" }
+      )
       .catch((e: unknown) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("unsupported template syntax");
+    expect((err as Error).message).toContain(
+      "The echo was not recorded: its own `message` failed validation."
+    );
+    expect((err as Error).message).toContain(
+      "Step 2 (`echo`): `echo` holds a malformed output reference"
+    );
+    expect(getFailureSignal(err as Error)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
     expect(parseFlow(await onDisk("poison")).steps).toEqual([{ kind: "echo", message: "one" }]);
 
     await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "two" });
@@ -399,39 +411,73 @@ describe("a step the recorder refuses", () => {
     );
 
     const err = await flowInsertEchoTool
-      .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user.id}}" })
+      .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user.id ||}}" })
       .catch((e: unknown) => e as Error);
 
-    expect((err as Error).message).toContain("unsupported template syntax");
+    expect((err as Error).message).toContain(
+      "Step 2 (`echo`): `echo` holds a malformed output reference"
+    );
     const session = await getRecordingSession(clientRoot, "poison");
     expect(session?.flow.steps).toEqual([{ kind: "echo", message: "one" }]);
   });
 
-  it("says the tool call already ran when the refusal lands after it", async () => {
-    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
+  // The call's own references are checked before the tool runs, so a refusal
+  // for one of them can no longer land after the device has acted.
+  it("refuses a reference in the call's own args without dispatching the tool", async () => {
+    const registry = createMockRegistry({
+      "keyboard": { result: { typed: "…", keys: 15 } },
+      "run-sequence": { result: { completed: 1 } },
+    });
     const tool = createFlowAddStepTool(registry);
     await flowStartRecordingTool.execute(
       {},
-      { name: "already-ran", project_root: tmpDir, executionPrerequisite: PREREQ }
+      { name: "not-dispatched", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
 
-    const err = await tool
+    const malformed = await tool
       .execute(
         {},
         {
-          name: "already-ran",
+          name: "not-dispatched",
           project_root: tmpDir,
           command: "keyboard",
-          args: '{"text":"{{output:code}}"}',
+          args: '{"text":"{{output:code ||}}"}',
         }
       )
       .catch((e: unknown) => e as Error);
 
-    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "{{output:code}}" });
-    expect((err as Error).message).toContain("`keyboard` call ran");
-    expect((err as Error).message).toContain("unsupported template syntax");
-    expect(getFailureSignal(err as Error)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
-    expect(parseFlow(await onDisk("already-ran")).steps).toEqual([]);
+    expect(malformed).toBeInstanceOf(Error);
+    expect((malformed as Error).message).toContain(
+      "The `keyboard` call was not made and nothing was recorded: `args.text` holds a malformed " +
+        "output reference"
+    );
+    expect((malformed as Error).message).not.toContain("call ran");
+    expect(getFailureSignal(malformed as Error)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+      failure_stage: "flow_output_reference",
+    });
+
+    // A static field — a run-sequence step's tool name is read as written.
+    const inStatic = await tool
+      .execute(
+        {},
+        {
+          name: "not-dispatched",
+          project_root: tmpDir,
+          command: "run-sequence",
+          args: '{"steps":[{"tool":"{{output:tool}}","args":{}}]}',
+        }
+      )
+      .catch((e: unknown) => e as Error);
+
+    expect((inStatic as Error).message).toContain(
+      "The `run-sequence` call was not made and nothing was recorded: `args.steps[0].tool` " +
+        "cannot hold an output reference"
+    );
+    expect(getFailureSignal(inStatic as Error)?.failure_stage).toBe("flow_output_reference");
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await onDisk("not-dispatched")).steps).toEqual([]);
   });
 
   // A host-mode append re-parses the file, so the same guard also judges the
@@ -446,7 +492,7 @@ describe("a step the recorder refuses", () => {
     );
     await fs.writeFile(
       path.join(flowsDirFor(tmpDir), "hand-edited.yaml"),
-      `executionPrerequisite: ${PREREQ}\nsteps:\n  - echo: "created {{output:user.id}}"\n`
+      `executionPrerequisite: ${PREREQ}\nsteps:\n  - echo: "created {{output:user.id ||}}"\n`
     );
 
     const err = await tool
@@ -496,6 +542,81 @@ describe("a step the recorder refuses", () => {
     expect(message).toContain("something already in the flow file failed validation");
     expect(message).toContain("The flow's `env.X` uses unsupported template syntax");
     expect(message).not.toContain("Fix the step named below");
+  });
+
+  // The file's refusal carries the same failure stage as the call's own would,
+  // so holding a reference cannot tell the two apart: a well-formed one in the
+  // call must not take the blame for a hand edit.
+  it("blames the file, not a flow-add-echo with a well-formed reference, for a static-field reference a hand edit wrote", async () => {
+    await flowStartRecordingTool.execute({}, { name: "static-edit", project_root: tmpDir });
+    const handEdited = `steps:\n  - launch: "com.acme.{{output:app}}"\n`;
+    await fs.writeFile(path.join(flowsDirFor(tmpDir), "static-edit.yaml"), handEdited);
+
+    const err = await flowInsertEchoTool
+      .execute(
+        {},
+        { name: "static-edit", project_root: tmpDir, message: "Order {{output:order.id}}" }
+      )
+      .catch((e: unknown) => e as Error);
+
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("already in the file, not in this call");
+    expect(message).not.toContain("its own `message` failed validation");
+    expect(message).toContain("Step 1 (`launch`)");
+    expect(message).toContain("cannot hold an output reference");
+    expect(await onDisk("static-edit")).toBe(handEdited);
+
+    // A malformed message is still the call's own fault.
+    await flowStartRecordingTool.execute({}, { name: "clean", project_root: tmpDir });
+    const own = await flowInsertEchoTool
+      .execute({}, { name: "clean", project_root: tmpDir, message: "Order {{output:order.id ||}}" })
+      .catch((e: unknown) => e as Error);
+
+    expect((own as Error).message).toContain(
+      "The echo was not recorded: its own `message` failed validation."
+    );
+    expect((own as Error).message).not.toContain("already in the file");
+    expect(parseFlow(await onDisk("clean")).steps).toEqual([]);
+  });
+
+  it("blames the file, not a flow-add-step whose reference resolved, for a static-field reference a hand edit wrote", async () => {
+    await fs.mkdir(path.join(tmpDir, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "scripts", "seed.mjs"), `output.code = "4711";\n`);
+    await flowStartRecordingTool.execute({}, { name: "static-step", project_root: tmpDir });
+    // The args are resolved before the tool runs, so the recording's document
+    // has to hold `code` for the call to reach the append at all.
+    await flowAddScriptTool.execute(
+      {},
+      { name: "static-step", project_root: tmpDir, path: "../../scripts/seed.mjs" }
+    );
+    const handEdited =
+      `steps:\n  - script: { path: ../../scripts/seed.mjs }\n` +
+      `  - launch: "com.acme.{{output:app}}"\n`;
+    await fs.writeFile(path.join(flowsDirFor(tmpDir), "static-step.yaml"), handEdited);
+    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 9 } } });
+
+    const err = await createFlowAddStepTool(registry)
+      .execute(
+        {},
+        {
+          name: "static-step",
+          project_root: tmpDir,
+          command: "keyboard",
+          args: '{"text":"Code {{output:code}}"}',
+        }
+      )
+      .catch((e: unknown) => e as Error);
+
+    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "Code 4711" });
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("`keyboard` call ran");
+    expect(message).toContain("something already in the flow file failed validation");
+    expect(message).toContain("it is not in this call");
+    expect(message).not.toContain("its step failed validation");
+    expect(message).toContain("Step 2 (`launch`)");
+    expect(await onDisk("static-step")).toBe(handEdited);
   });
 
   // The other half of that claim: the tool's description tells an agent a

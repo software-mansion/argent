@@ -111,7 +111,7 @@ export function scriptEnvParameter(whose: string) {
   );
 }
 
-function describeUnusableEnvValue(value: string): string | null {
+export function describeUnusableEnvValue(value: string): string | null {
   if (value.includes("\0")) return "holds a NUL character";
   if (LONE_SURROGATE.test(value)) return "holds an unpaired surrogate";
   return null;
