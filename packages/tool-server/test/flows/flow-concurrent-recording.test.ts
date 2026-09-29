@@ -2065,6 +2065,137 @@ describe("recording a flow-execute step while several projects are in play", () 
     expect(same.message).toBe('Step added to "quiet" flow');
     expect(await readSteps(recordingRoot, "quiet")).toEqual([{ kind: "run", flow: "helper.yaml" }]);
   });
+
+  it("warns that a rewritten run: step drops the env the recorded call passed", async () => {
+    const recordingRoot = await makeRoot("run-target-env");
+    await writeSavedFlow(recordingRoot, "helper", fragment);
+
+    await start(recordingRoot, "wrapper");
+    const res = await addRawStep(recordingRoot, "wrapper", "flow-execute", {
+      name: "helper",
+      project_root: recordingRoot,
+      env: { BUILD: "1421", AUTH: "Bearer abc" },
+      udid: IOS_DEVICE,
+    });
+
+    expect(res.message).toContain("a run: step takes no env");
+    expect(res.message).toContain("BUILD, AUTH");
+    expect(res.message).not.toContain("Bearer abc");
+    expect(res.message).toContain("only for a name that fragment does not itself declare");
+    expect(await readSteps(recordingRoot, "wrapper")).toEqual([
+      { kind: "run", flow: "helper.yaml" },
+    ]);
+
+    const finished = (await flowFinishRecordingTool.execute(
+      {},
+      { name: "wrapper", project_root: recordingRoot }
+    )) as { message: string; summary: string[] };
+    expect(finished.message).toContain(
+      "1 step replays under a different env than the recorded call ran with"
+    );
+    expect(finished.summary.join("\n")).toContain("a run: step takes no env");
+  });
+
+  it("warns that a rewritten run: step hands the fragment the recording's own env", async () => {
+    const recordingRoot = await makeRoot("run-target-inherits");
+    await writeSavedFlow(recordingRoot, "helper", fragment);
+
+    await start(recordingRoot, "wrapper");
+    await writeSavedFlow(recordingRoot, "wrapper", {
+      executionPrerequisite: "",
+      env: { API_URL: "https://staging.example" },
+      steps: [],
+    });
+    const res = await addRawStep(recordingRoot, "wrapper", "flow-execute", {
+      name: "helper",
+      project_root: recordingRoot,
+      udid: IOS_DEVICE,
+    });
+
+    expect(res.message).toContain(
+      "at replay the run: step passes API_URL from this recording's env: to helper.yaml's " +
+        "scripts, but the live flow-execute call ran without it"
+    );
+    expect(res.message).toContain("declare it in helper.yaml's own env:");
+    expect(res.message).not.toContain("https://staging.example");
+    expect(res.message).not.toContain("a run: step takes no env");
+    expect(await readSteps(recordingRoot, "wrapper")).toEqual([
+      { kind: "run", flow: "helper.yaml" },
+    ]);
+
+    const finished = await finish(recordingRoot, "wrapper");
+    expect(finished.message).toContain(
+      "1 step replays under a different env than the recorded call ran with"
+    );
+    expect(finished.summary).toEqual([
+      "1. run: helper.yaml",
+      expect.stringContaining("warning: at replay the run: step passes API_URL"),
+    ]);
+  });
+
+  it("stays quiet about the recording's env when the replay adds nothing to the live call", async () => {
+    const root = await makeRoot("run-target-inherits-none");
+    await writeSavedFlow(root, "helper", fragment);
+    await writeSavedFlow(root, "declares", {
+      ...fragment,
+      env: { API_URL: "https://fragment.example" },
+    });
+
+    await start(root, "plain");
+    const plain = await addRawStep(root, "plain", "flow-execute", {
+      name: "helper",
+      project_root: root,
+      udid: IOS_DEVICE,
+    });
+    expect(plain.message).toBe('Step added to "plain" flow');
+
+    await start(root, "shadowed");
+    await writeSavedFlow(root, "shadowed", {
+      executionPrerequisite: "",
+      env: { API_URL: "https://staging.example" },
+      steps: [],
+    });
+    const shadowed = await addRawStep(root, "shadowed", "flow-execute", {
+      name: "declares",
+      project_root: root,
+      udid: IOS_DEVICE,
+    });
+    expect(shadowed.message).toBe('Step added to "shadowed" flow');
+    expect(await readSteps(root, "shadowed")).toEqual([{ kind: "run", flow: "declares.yaml" }]);
+    const finished = await finish(root, "shadowed");
+    expect(finished.message).toBe('Finished recording "shadowed" flow (1 steps)');
+  });
+
+  it("joins both env warnings when the call passed values and the recording has its own", async () => {
+    const root = await makeRoot("run-target-env-both");
+    await writeSavedFlow(root, "helper", { ...fragment, env: { TENANT: "acme" } });
+
+    await start(root, "wrapper");
+    await writeSavedFlow(root, "wrapper", {
+      executionPrerequisite: "",
+      env: { API_URL: "https://staging.example", REGION: "eu", TENANT: "demo", BUILD: "1" },
+      steps: [],
+    });
+    const res = await addRawStep(root, "wrapper", "flow-execute", {
+      name: "helper",
+      project_root: root,
+      env: { BUILD: "1421" },
+      udid: IOS_DEVICE,
+    });
+
+    expect(res.message).toContain("the value this call passed (BUILD) is NOT part");
+    expect(res.message).toContain(
+      "at replay the run: step passes API_URL, REGION from this recording's env: to " +
+        "helper.yaml's scripts, but the live flow-execute call ran without them"
+    );
+    expect(res.message).toContain("declare them in helper.yaml's own env:");
+
+    const finished = await finish(root, "wrapper");
+    expect(finished.message).toContain("1 step replays under a different env");
+    expect(finished.summary).toHaveLength(2);
+    expect(finished.summary[1]).toContain("a run: step takes no env");
+    expect(finished.summary[1]).toContain("passes API_URL, REGION from this recording's env:");
+  });
 });
 
 // ── Summarizing a hand-edited file that the parser cannot fully constrain ──

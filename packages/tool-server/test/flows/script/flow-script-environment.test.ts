@@ -4,10 +4,15 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MIN_SCRIPT_HEAP_LIMIT_MB } from "@argent/configuration-core";
 import {
+  describeScriptEnvProblem,
+  mergeScriptEnv,
+} from "../../../src/tools/flows/script/flow-script-env";
+import {
   FlowScriptExecutor,
   type FlowScriptExecutorOptions,
 } from "../../../src/tools/flows/script/flow-script-executor";
 import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-script-workspace";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 const workspaces: ScriptWorkspace[] = [];
 const restoreEnv: Array<() => void> = [];
@@ -27,14 +32,22 @@ function withEnv(name: string, value: string): void {
   process.env[name] = value;
 }
 
-async function asWindows<T>(body: () => Promise<T>): Promise<T> {
+async function onPlatform<T>(platform: NodeJS.Platform, body: () => Promise<T>): Promise<T> {
   const real = process.platform;
-  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
   try {
     return await body();
   } finally {
     Object.defineProperty(process, "platform", { value: real, configurable: true });
   }
+}
+
+async function asWindows<T>(body: () => Promise<T>): Promise<T> {
+  return onPlatform("win32", body);
+}
+
+async function asPosix<T>(body: () => Promise<T>): Promise<T> {
+  return onPlatform("linux", body);
 }
 
 function withoutEnv(name: string): void {
@@ -66,9 +79,18 @@ describe("flow script executor — the environment allowlist", () => {
     withEnv("ARGENT_PORT", "43111");
     withEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
     const ws = workspace();
+    withEnv("HOME", ws.dir);
+    withEnv("USERPROFILE", ws.dir);
     const script = ws.write(
       "env.mjs",
-      reporter(["ARGENT_AUTH_TOKEN", "ARGENT_PORT", "ARGENT_SECRET_APP_PASSWORD", "PATH", "HOME"])
+      reporter([
+        "ARGENT_AUTH_TOKEN",
+        "ARGENT_PORT",
+        "ARGENT_SECRET_APP_PASSWORD",
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+      ])
     );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
@@ -77,7 +99,8 @@ describe("flow script executor — the environment allowlist", () => {
     expect(env.ARGENT_PORT).toBeNull();
     expect(env.ARGENT_SECRET_APP_PASSWORD).toBeNull();
     expect(env.PATH).toBe(process.env.PATH);
-    expect(env.HOME).toBe(process.env.HOME);
+    expect(env.HOME).toBe(ws.dir);
+    expect(env.USERPROFILE).toBe(ws.dir);
   });
 
   it("copies every npm_config_ value, so a project's npm settings survive", async () => {
@@ -198,6 +221,26 @@ describe("flow script executor — the environment allowlist", () => {
     expect(result.failure?.message).toContain("Electron_Run_As_Node");
   }, 30_000);
 
+  it("drops the host's spelling of a name a Windows override claims", async () => {
+    withEnv("LANG", "en_US.UTF-8");
+    const ws = workspace();
+    const script = ws.write(
+      "lang.mjs",
+      `output.lang = Object.entries(process.env)
+        .filter(([name]) => name.toLowerCase() === "lang")
+        .map(([, value]) => value);`
+    );
+    const result = await asWindows(() =>
+      executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { Lang: "pl_PL.UTF-8" },
+      })
+    );
+
+    expect(result.output?.lang).toEqual(["pl_PL.UTF-8"]);
+  }, 30_000);
+
   it("does not set the Electron flag when the server's environment lacks it", async () => {
     withoutEnv("ELECTRON_RUN_AS_NODE");
     const ws = workspace();
@@ -205,6 +248,45 @@ describe("flow script executor — the environment allowlist", () => {
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect((result.output?.env as Record<string, string | null>).ELECTRON_RUN_AS_NODE).toBeNull();
+  });
+});
+
+describe("an env map holding two names that differ only in case", () => {
+  it("is a usable map on POSIX, where the two names are two variables", async () => {
+    const problem = await asPosix(async () =>
+      describeScriptEnvProblem({ API_URL: "first", api_url: "second" })
+    );
+
+    expect(problem).toBeNull();
+  });
+
+  it("is refused on Windows, in a clause naming both spellings", async () => {
+    const problem = await asWindows(async () =>
+      describeScriptEnvProblem({ API_URL: "first", api_url: "second" })
+    );
+
+    expect(problem).toContain("holds API_URL and api_url, which Windows reads as one variable");
+    expect(problem).toContain("Give them one spelling, or names of their own");
+  });
+
+  it("merges to one variable per spelling on POSIX", async () => {
+    const merged = await asPosix(async () =>
+      mergeScriptEnv({ API_URL: "flow" }, { api_url: "step" })
+    );
+
+    expect(merged).toEqual({ API_URL: "flow", api_url: "step" });
+  });
+
+  it("merges to the later layer's value on Windows, whichever way round the spellings fall", async () => {
+    const upperFirst = await asWindows(async () =>
+      mergeScriptEnv({ API_URL: "flow" }, { api_url: "step" })
+    );
+    const lowerFirst = await asWindows(async () =>
+      mergeScriptEnv({ api_url: "flow" }, { API_URL: "step" })
+    );
+
+    expect(upperFirst).toEqual({ api_url: "step" });
+    expect(lowerFirst).toEqual({ API_URL: "step" });
   });
 });
 
@@ -452,4 +534,91 @@ describe("flow script executor — the working directory", () => {
     expect(fs.realpathSync(result.output?.cwd as string)).toBe(fs.realpathSync(ws.dir));
     expect(result.output?.cwd).not.toBe(process.cwd());
   });
+});
+
+describe("an environment near the operating system's limit", () => {
+  const onPosix = it.skipIf(process.platform === "win32");
+
+  onPosix(
+    "names the environment's size above the limit and just below it",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("noop.mjs", "output.ok = true;");
+
+      const refused = await executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_400_000) },
+      });
+      expect(refused.failure?.kind).toBe("spawn");
+      expect(refused.failure?.message).toContain("E2BIG");
+      expect(refused.failure?.message).toContain("ARG_MAX");
+
+      const died = await executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_000_000) },
+      });
+      const said = `${died.failure?.message ?? ""} ${died.notes.join(" ")}`;
+      expect(died.ok).toBe(false);
+      expect(said).toMatch(/ARG_MAX/);
+      expect(said).toMatch(/100\d{4} bytes/);
+    },
+    60_000
+  );
+
+  onPosix(
+    "names the environment's size for a .sh step too",
+    async () => {
+      const found = await resolveHostBash();
+      if (!("path" in found)) return;
+      const ws = workspace();
+      const script = ws.write("noop.sh", "printf '{}' > \"$ARGENT_OUTPUT\"");
+
+      const refused = await executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_400_000) },
+      });
+
+      expect(refused.failure?.kind).toBe("spawn");
+      expect(refused.failure?.message).toContain("E2BIG");
+      expect(refused.failure?.message).toContain("ARG_MAX");
+      expect(refused.failure?.message).not.toContain("scripts.bash");
+      expect(refused.failure?.message).not.toContain("is not a bash");
+    },
+    60_000
+  );
+
+  it("says nothing about the environment when an ordinary one dies early", async () => {
+    const ws = workspace();
+    const script = ws.write("early.mjs", "process.exit(7);");
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { SMALL: "value" },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.notes.join(" ")).not.toContain("ARG_MAX");
+  }, 30_000);
+
+  it("stays off a step that was cancelled before the runner started", async () => {
+    const ws = workspace();
+    const script = ws.write("slow.mjs", "await new Promise((r) => setTimeout(r, 5000));");
+    const controller = new AbortController();
+    const pending = executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { BIG: "x".repeat(400 * 1024) },
+      signal: controller.signal,
+    });
+    controller.abort();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("cancelled");
+    expect(result.notes.join(" ")).not.toContain("ARG_MAX");
+  }, 30_000);
 });

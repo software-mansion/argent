@@ -22,14 +22,23 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
-import { promisify, stripVTControlCharacters } from "node:util";
+import { inspect, promisify, stripVTControlCharacters } from "node:util";
 import {
+  configFilePath,
+  getAtPath,
   getConfigDefinition,
   getConfigValue,
   MIN_SCRIPT_HEAP_LIMIT_MB,
   MIN_SCRIPT_TIMEOUT_MS,
+  NPM_CONFIG_ENV_PREFIX,
+  PROTO_ENV_NAME,
+  reservedScriptEnvName,
+  reservedScriptEnvNamesForMessage,
+  RUNNER_ACTIVATION_ENV,
+  SCRIPT_ENV_NAME_PATTERN,
   type ConfigDefinition,
 } from "@argent/configuration-core";
+import { isLongEnoughToBeSecret, makeSensitiveBank } from "@zapier/secret-scrubber/lib/utils";
 import { isElectronHostedEnv } from "../../../utils/electron-env";
 import { formatErrorForAgent } from "../../../utils/format-error";
 import {
@@ -102,10 +111,6 @@ const V8_HEAP_FATAL_RE = /FATAL ERROR:[^\n]*(?:heap limit|heap out of memory|All
 const HEAP_FATAL_WINDOW_CHARS = 256;
 
 const RUNNER_FILE = "flow-script-runner.mjs";
-
-const RUNNER_ACTIVATION_ENV = "ARGENT_FLOW_SCRIPT_RUNNER";
-
-const BASH_OUTPUT_ENV = "ARGENT_OUTPUT";
 
 const EXCHANGE_DIR_PREFIX = "argent-flow-script-";
 
@@ -211,56 +216,15 @@ const ALLOWED_ENV_NAMES: readonly string[] = [
   "CI",
 ];
 
-const NPM_CONFIG_ENV_PREFIX = "npm_config_";
+const SCRIPT_ENV_ALLOW_KEY = "scripts.env.allow";
 
+/**
+ * The npm prefix is copied WHOLE out of the host environment, which is why the
+ * reserved table names npm config KEYS as well as exact variables: the three
+ * that reach `NODE_OPTIONS` would otherwise ride in under this prefix. The
+ * reserved check below runs ahead of it for that reason.
+ */
 const ALLOWED_ENV_PREFIXES: readonly string[] = [NPM_CONFIG_ENV_PREFIX];
-
-/**
- * npm config keys that reach `NODE_OPTIONS`, and so carry through the prefix
- * above what the exact name is reserved to keep out. `node-options` is npm's
- * own spelling of the variable — it hands the key back as `NODE_OPTIONS` to
- * what it starts — and `userconfig` and `globalconfig` each name an `.npmrc`
- * npm would read that key from.
- */
-const RESERVED_NPM_CONFIG_KEYS: readonly string[] = ["node-options", "userconfig", "globalconfig"];
-
-/**
- * Refused in a caller-supplied environment map, because each steers the
- * runner's own process: `NODE_CHANNEL_FD` and `NODE_UNIQUE_ID` name the IPC
- * channel this protocol runs on, `ELECTRON_RUN_AS_NODE` decides whether the
- * child boots as Node at all, and the activation flag decides which process
- * the runner preload takes over.
- */
-const RESERVED_ENV_NAMES: readonly string[] = [
-  "NODE_CHANNEL_FD",
-  "NODE_UNIQUE_ID",
-  "NODE_OPTIONS",
-  "ELECTRON_RUN_AS_NODE",
-  RUNNER_ACTIVATION_ENV,
-  BASH_OUTPUT_ENV,
-];
-
-/**
- * One npm config has many environment spellings: npm matches the prefix without
- * regard to case, lowercases the rest, and reads `_` and `-` as the same
- * character everywhere but the key's first — so `npm_config_node_options`,
- * `npm_config_node-options` and `NPM_CONFIG_NODE_OPTIONS` are one name to it.
- * Refusing only the one written out would leave the others open on every
- * platform, which is why this does not go through the exact list above.
- */
-function reservedNpmConfigName(name: string): string | undefined {
-  const lower = name.toLowerCase();
-  if (!lower.startsWith(NPM_CONFIG_ENV_PREFIX)) return undefined;
-  const key = lower.slice(NPM_CONFIG_ENV_PREFIX.length).replace(/(?!^)_/g, "-");
-  return RESERVED_NPM_CONFIG_KEYS.includes(key) ? `${NPM_CONFIG_ENV_PREFIX}${key}` : undefined;
-}
-
-function reservedEnvNamesForMessage(): string {
-  return [
-    ...RESERVED_ENV_NAMES,
-    ...RESERVED_NPM_CONFIG_KEYS.map((key) => `${NPM_CONFIG_ENV_PREFIX}${key}`),
-  ].join(", ");
-}
 
 export interface FlowScriptSecret {
   name: string;
@@ -275,6 +239,12 @@ export function createScriptLogBudget(): FlowScriptLogBudget {
   return { remainingBytes: SCRIPT_RUN_LOG_LIMIT_BYTES };
 }
 
+export type FlowScriptRunNotes = Set<string>;
+
+export function createScriptRunNotes(): FlowScriptRunNotes {
+  return new Set<string>();
+}
+
 export interface FlowScriptRequest {
   scriptPath: string;
   interpreter?: "node" | "bash";
@@ -285,6 +255,7 @@ export interface FlowScriptRequest {
   flowDir?: string;
   secrets?: readonly FlowScriptSecret[];
   logBudget?: FlowScriptLogBudget;
+  runNotes?: FlowScriptRunNotes;
   signal?: AbortSignal;
   runnerDir?: string;
 }
@@ -563,7 +534,10 @@ export class FlowScriptExecutor {
     let outputJson: string;
     try {
       cwd = resolveWorkingDirectory(request, notes);
-      env = buildChildEnv(request.env);
+      env = buildChildEnv(
+        request.env,
+        configuredEnvAllowNames(request.projectRoot ?? request.flowDir, notes, request.runNotes)
+      );
       runnerPath = resolveRunnerPath(request.runnerDir);
       outputJson = encodeRequestOutput(request.output);
     } catch (err) {
@@ -602,12 +576,21 @@ export class FlowScriptExecutor {
       }
       if (!("path" in found)) {
         return emptyResult(
-          { kind: "spawn", message: found.problem },
+          {
+            kind: "spawn",
+            message: redactBounded(
+              /\bE2BIG\b/.test(found.problem)
+                ? spawnFailureMessage(new Error("spawn E2BIG"), env)
+                : found.problem,
+              request.secrets ?? [],
+              SCRIPT_MAX_FAILURE_MESSAGE_CHARS
+            ),
+          },
           { notes, durationMs: Date.now() - startedAt }
         );
       }
       interpreterPath = found.path;
-      if (found.note) notes.push(found.note);
+      if (found.note) notes.push(scrubScriptText(found.note, request.secrets ?? []));
       try {
         exchange = createExchange(
           this.options.exchangeRoot ?? os.tmpdir(),
@@ -652,7 +635,7 @@ export class FlowScriptExecutor {
           : { ...common, interpreter: "node" }
       );
     } finally {
-      if (exchange) await removeExchange(exchange, notes);
+      if (exchange) await removeExchange(exchange, notes, request.secrets ?? []);
       if (pendingSweep) await pendingSweep;
     }
   }
@@ -706,7 +689,14 @@ export class FlowScriptExecutor {
       child = fork(run.interpreter === "bash" ? run.runnerPath : scriptPath, [], forkOptions);
     } catch (err) {
       return emptyResult(
-        { kind: "spawn", message: `Could not start the script process: ${errorMessage(err)}` },
+        {
+          kind: "spawn",
+          message: redactBounded(
+            spawnFailureMessage(err, env),
+            request.secrets ?? [],
+            SCRIPT_MAX_FAILURE_MESSAGE_CHARS
+          ),
+        },
         { notes, durationMs: Date.now() - startedAt }
       );
     }
@@ -722,7 +712,7 @@ export class FlowScriptExecutor {
 
     let startedSeen = false;
     let terminal: ScriptTerminalResponse | null = null;
-    let stderrLineAtVerdict: string | undefined;
+    let stderrLineAtVerdict: StderrLine | undefined;
     let protocolProblem: string | null = null;
     let spawnProblem: string | null = null;
     let interrupted: "timeout" | "cancelled" | null = null;
@@ -863,7 +853,7 @@ export class FlowScriptExecutor {
     // after the script's process exited, which the reason can take: see below.
     const exitedAt = Date.now();
     const stderrQuietFor = () => Date.now() - Math.max(exitedAt, lastStderrAt);
-    let stderrLineAtQuiet: string | undefined;
+    let stderrLineAtQuiet: StderrLine | undefined;
     let stderrQuietTimer: NodeJS.Timeout | undefined;
     let watchingStderr = true;
     const watchStderr = () => {
@@ -924,10 +914,23 @@ export class FlowScriptExecutor {
       settled === "closed"
         ? (stderrLineAtQuiet ?? capture.lastStderrLine)
         : (stderrLineAtVerdict ?? capture.lastStderrLine);
-    const verdict = redactSecrets(
-      run.interpreter === "bash" ? withStderrLine(outcome, stderrLine) : outcome,
-      request.secrets ?? []
-    );
+    // The line is redacted on its own, before it is trimmed, and joins the
+    // message after the message is redacted.
+    const redacted = redactSecrets(outcome, request.secrets ?? []);
+    const verdict =
+      run.interpreter === "bash"
+        ? withStderrLine(redacted, stderrLine, request.secrets ?? [])
+        : redacted;
+
+    if (!startedSeen && !interrupted && environmentBytes(env) >= LARGE_ENVIRONMENT_BYTES) {
+      notes.push(
+        `The environment this step would carry is ${environmentBytes(env)} bytes. An ` +
+          `environment near this operating system's limit for one process (ARG_MAX) is refused ` +
+          `outright above it and dies inside Node's own startup just below it, which is what a ` +
+          `runner that exits before the script starts looks like. Shorten the \`env\` values, or ` +
+          `write the payload to a file and pass its path.`
+      );
+    }
 
     return {
       ...verdict,
@@ -1059,79 +1062,54 @@ function classifyOutcome(
   );
 }
 
+/**
+ * A failed step's own text with each resolved `{{secret:NAME}}` value replaced
+ * by that placeholder, so the reader sees which secret stood there.
+ *
+ * The FAILURE text is the whole of it. A script's output document comes back
+ * exactly as it was written: a resolved value inside it is data a later step
+ * reads, and rewriting it to `{{secret:NAME}}` hands that step a string nothing
+ * downstream can use. The reference and the flow-authoring skill say so
+ * instead — do not put a credential in the document; hand a later step a
+ * derived value.
+ */
 function redactSecrets(
   verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
   secrets: readonly FlowScriptSecret[]
 ): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
   if (secrets.length === 0) return verdict;
-  if (verdict.output) {
-    const collision = scrubDocument(verdict.output, secrets);
-    // Refused rather than resolved: the document cannot be both redacted and
-    // whole, and dropping whichever entry lost would take it out of the
-    // document later steps read with nothing to say it had ever been there.
-    if (collision) {
-      return failed(
-        "output",
-        `Two keys in the script's output become "${collision}" once the secret in them is ` +
-          `redacted, so one would silently replace the other. Rename one of them.`
-      );
-    }
-  }
   const failure = verdict.failure;
   if (!failure) return verdict;
   return {
     ...verdict,
     failure: {
       ...failure,
-      message: redactTruncated(failure.message, secrets),
-      ...(failure.stack ? { stack: redactTruncated(failure.stack, secrets) } : {}),
+      message: redactBounded(failure.message, secrets, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
+      ...(failure.stack
+        ? { stack: redactBounded(failure.stack, secrets, SCRIPT_MAX_FAILURE_STACK_CHARS) }
+        : {}),
     },
   };
 }
 
 function withStderrLine(
   verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
-  line: string
+  line: StderrLine,
+  secrets: readonly FlowScriptSecret[]
 ): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
-  if (!line || verdict.failure?.kind !== "exit") return verdict;
+  if (!line.raw || verdict.failure?.kind !== "exit") return verdict;
+  const shown = redactedStderrLine(line, secrets);
   return {
     ...verdict,
     failure: {
       ...verdict.failure,
-      message: clampText(`${verdict.failure.message} ${line}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
+      message: clampText(`${verdict.failure.message} ${shown}`, SCRIPT_MAX_FAILURE_MESSAGE_CHARS),
     },
   };
 }
 
-function scrubDocument(
-  root: Record<string, unknown>,
-  secrets: readonly FlowScriptSecret[]
-): string | undefined {
-  const pending: unknown[] = [root];
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) {
-        const value = node[i];
-        if (typeof value === "string") node[i] = scrubSecretValues(value, secrets);
-        else if (value !== null && typeof value === "object") pending.push(value);
-      }
-      continue;
-    }
-    if (node === null || typeof node !== "object") continue;
-    const record = node as Record<string, unknown>;
-    for (const key of Object.keys(record)) {
-      const value = record[key];
-      if (typeof value === "string") record[key] = scrubSecretValues(value, secrets);
-      else if (value !== null && typeof value === "object") pending.push(value);
-      const scrubbedKey = scrubSecretValues(key, secrets);
-      if (scrubbedKey === key) continue;
-      if (Object.prototype.hasOwnProperty.call(record, scrubbedKey)) return scrubbedKey;
-      record[scrubbedKey] = record[key];
-      delete record[key];
-    }
-  }
-  return undefined;
+function redactBounded(text: string, secrets: readonly FlowScriptSecret[], max: number): string {
+  return clampText(redactTruncated(text, secrets), max);
 }
 
 function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
@@ -1188,6 +1166,25 @@ function clampPath(at: string): string {
 }
 
 /**
+ * V8 writes the window in four shapes, one per side it had to cut: the whole
+ * document, `"…"...`, `..."…"` and `..."…"...`. Both ellipses are optional, so
+ * both are matched here — a leading one appears whenever the error is more than
+ * about ten characters into the document, which is every document with
+ * structure around the value.
+ *
+ * The token is exactly ONE code unit, and saying so is what keeps the window
+ * out of the part that is kept. A lazy `.+?` in its place stops at the first
+ * `, "` it can find, which for a document holding `", "` — an ordinary object
+ * with two members — is INSIDE the window, so the characters before it were
+ * carried into the reported reason. Greedy is no better from the other side.
+ *
+ * Greedy to the LAST quote, because the window is inserted raw: an unbalanced
+ * `"` inside it is the ordinary case for a document that failed to parse.
+ */
+const JSON_WINDOW_RE =
+  /^(Unexpected token '[\s\S]'), (?:\.\.\.)?"[\s\S]*"(?:\.\.\.)? is not valid JSON$/;
+
+/**
  * Every rule the parent applies to a document it did not encode itself, or
  * `undefined` for one it accepts.
  *
@@ -1213,9 +1210,9 @@ function clampPath(at: string): string {
  *   die with an uncaught `RangeError` on every Node up to 24 — telling the
  *   agent the tool failed for a script that succeeded.
  *
- * Iterative for the reason `scrubDocument` is: the document came from a child
- * that ran arbitrary code, and a deep one would overflow the stack inside a
- * call that owes its caller a verdict, not a throw.
+ * Iterative rather than recursive: the document came from a child that ran
+ * arbitrary code, and a megabyte of `[[[[…` is legal JSON that would overflow
+ * the stack inside `execute`, which owes its caller a verdict, not a throw.
  */
 function documentProblem(root: Record<string, unknown>): string | undefined {
   const pending: Array<{ node: unknown; at: string; depth: number }> = [
@@ -1285,10 +1282,10 @@ function childProblem(
  * of JSON input`) quotes only with apostrophes and survives unchanged.
  */
 function withoutDocumentExcerpt(err: unknown): string {
-  return errorMessage(err).replace(JSON_DOCUMENT_EXCERPT_RE, "");
+  const message = errorMessage(err);
+  const quoted = JSON_WINDOW_RE.exec(message);
+  return quoted ? `${quoted[1]} is not valid JSON` : message;
 }
-
-const JSON_DOCUMENT_EXCERPT_RE = /,? "[\s\S]*"(?:\.\.\.)?/;
 
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
@@ -1296,20 +1293,130 @@ function memberPath(key: string): string {
   return IDENTIFIER_RE.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
 }
 
+function secretForms(secrets: readonly FlowScriptSecret[]): FlowScriptSecret[] {
+  const forms = [...secrets];
+  for (const secret of secrets) {
+    for (const form of spellingsOf(secret)) {
+      if (!forms.some((seen) => seen.value === form))
+        forms.push({ name: secret.name, value: form });
+    }
+  }
+  return forms;
+}
+
+/** Kept per secret: the log asks for the forms again on every chunk it reads. */
+const SPELLINGS = new WeakMap<FlowScriptSecret, readonly string[]>();
+
+function spellingsOf(secret: FlowScriptSecret): readonly string[] {
+  let spellings = SPELLINGS.get(secret);
+  if (!spellings) {
+    const { value } = secret;
+    spellings = isLongEnoughToBeSecret(value)
+      ? [...Object.keys(makeSensitiveBank([value])), ...printedSpellings(value)]
+      : [];
+    SPELLINGS.set(secret, spellings);
+  }
+  return spellings;
+}
+
+/** Spellings Node or bash print by default that the package's bank does not hold. */
+function printedSpellings(value: string): string[] {
+  // A URL's user name or password: `@ : / ;` escaped, `$ & + , %` kept.
+  const url = new URL("http://host");
+  url.password = value;
+  return [
+    url.password,
+    // A form body, `URLSearchParams` or `url.searchParams`: `! ' ( ) ~` escaped too.
+    new URLSearchParams([["", value]]).toString().slice(1),
+    // bash: `set -x` single-quotes a word, `declare -p` double-quotes a value,
+    // and from 5.2 writes one that holds a control character as `$'…'`. With
+    // no UTF-8 locale, `$'…'` holds each byte past ASCII in octal, and both
+    // write any value with such a byte that way.
+    value.replaceAll("'", "'\\''"),
+    value.replace(/[\\"$`]/g, "\\$&"),
+    ansiCQuoted(value),
+    ansiCQuoted(value).replace(/[\u{80}-\u{10ffff}]/gu, (char) =>
+      [...Buffer.from(char)].map((byte) => `\\${byte.toString(8)}`).join("")
+    ),
+    // util.inspect, as console.log prints an object: the string quoted and
+    // escaped, by default to its first 10,000 characters and then a count of
+    // the rest.
+    ...[...new Set([value, value.slice(0, INSPECT_MAX_STRING)])].flatMap((shown) => [
+      inspect(shown, INSPECT_WHOLE).slice(1, -1),
+      ...inspectedSplits(shown),
+    ]),
+  ];
+}
+
+/** util.inspect's default `maxStringLength`. */
+const INSPECT_MAX_STRING = 10_000;
+
+/** One quoted string, however long: no split into lines, no cut. */
+const INSPECT_WHOLE = { breakLength: Infinity, maxStringLength: Infinity };
+
+/**
+ * util.inspect writes a long multi-line string as quoted pieces, one per line,
+ * joined by `+` and a line break indented two past the string's own level, two
+ * for each level it is nested at. Ten levels are covered. The quotes at the two
+ * ends are left out, so the form starts and ends with the value's own text.
+ */
+function inspectedSplits(value: string): string[] {
+  const pieces = value.split(/(?<=\n)/).map((line) => inspect(line, INSPECT_WHOLE));
+  if (pieces.length < 2) return [];
+  return Array.from({ length: 11 }, (_, level) =>
+    pieces.join(` +\n${" ".repeat(2 * level + 2)}`).slice(1, -1)
+  );
+}
+
+const ANSI_C_ESCAPES: Readonly<Record<string, string>> = {
+  "\x07": "\\a",
+  "\b": "\\b",
+  "\t": "\\t",
+  "\n": "\\n",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\r": "\\r",
+  "\x1b": "\\E",
+  "'": "\\'",
+  "\\": "\\\\",
+};
+
+// eslint-disable-next-line no-control-regex
+const ANSI_C_ESCAPED_RE = /[\x00-\x1f\x7f'\\]/g;
+
+/** The body of bash's `$'…'`: a control character by its name or in octal. */
+function ansiCQuoted(value: string): string {
+  return value.replace(
+    ANSI_C_ESCAPED_RE,
+    (char) => ANSI_C_ESCAPES[char] ?? `\\${char.charCodeAt(0).toString(8).padStart(3, "0")}`
+  );
+}
+
+export function scrubScriptText(text: string, secrets: readonly FlowScriptSecret[]): string {
+  if (secrets.length === 0) return text;
+  return scrubSecretValues(text, secretForms(secrets));
+}
+
 /**
  * A failure message is clamped by the child, the only side that can bound what
  * crosses the channel, and the child has no secret list — so a value straddling
  * the cut leaves a prefix that a whole-value replacement never matches. That
  * tail is dropped and counted, and only on text whose marker says it was cut.
+ *
+ * Both are read off the RAW text, before the scrub. Every character of the
+ * marker is argent's own - the runner's wording and a number it counted - so a
+ * secret whose value occurs in it (a value of `"0"` is enough) must not rewrite
+ * it and hide the cut. And the tail is the front of one value, which can hold a
+ * shorter secret that a scrub would replace, leaving a front no prefix matches.
  */
 function redactTruncated(text: string, secrets: readonly FlowScriptSecret[]): string {
-  const scrubbed = scrubSecretValues(text, secrets);
-  const omission = OMISSION_RE.exec(scrubbed);
-  if (!omission) return scrubbed;
-  const head = scrubbed.slice(0, omission.index);
-  const partial = partialSecretTail(head, secrets);
-  if (partial === 0) return scrubbed;
-  return `${head.slice(0, head.length - partial)}${omissionMarker(Number(omission[1]) + partial)}`;
+  const forms = secretForms(secrets);
+  const omission = OMISSION_RE.exec(text);
+  if (!omission) return scrubSecretValues(text, forms);
+  const head = text.slice(0, omission.index);
+  const partial = partialSecretTail(head, forms);
+  const kept = scrubSecretValues(head.slice(0, head.length - partial), forms);
+  return `${kept}${omissionMarker(Number(omission[1]) + partial)}`;
 }
 
 const OMISSION_RE = /… \[(\d+) more characters omitted]$/;
@@ -1372,8 +1479,12 @@ function isHeapAbort(
   return process.platform === "win32" && exit.code !== null && WINDOWS_ABORT_CODES.has(exit.code);
 }
 
-/** `abort()` through the CRT, and the fast-fail path V8 takes instead of it. */
-const WINDOWS_ABORT_CODES = new Set([3, 0xc0000409]);
+/**
+ * `abort()` through the CRT, the fast-fail path V8 takes instead of it, and
+ * Node's own abort, which on Windows exits with 134. That last one is what a
+ * heap exhaustion reports there, and `process.abort()` as well.
+ */
+const WINDOWS_ABORT_CODES = new Set([3, 134, 0xc0000409]);
 
 function describeExit(exit: { code: number | null; signal: NodeJS.Signals | null }): string {
   if (exit.signal) return `signal ${exit.signal}`;
@@ -1482,13 +1593,17 @@ function createExchange(
   }
 }
 
-async function removeExchange(exchange: ExchangeFiles, notes: string[]): Promise<void> {
+async function removeExchange(
+  exchange: ExchangeFiles,
+  notes: string[],
+  secrets: readonly FlowScriptSecret[]
+): Promise<void> {
   try {
     await removeTree(exchange.dir);
   } catch (err) {
     notes.push(
       `The script's private directory ${exchange.dir} could not be removed ` +
-        `(${errorMessage(err)}); it still holds the document the script wrote. A later bash ` +
+        `(${scrubScriptText(errorMessage(err), secrets)}); it still holds the document the script wrote. A later bash ` +
         `step sweeps it with the same recursive remove once this step's own time limit has ` +
         `passed, so a cause that call cannot get past - a mode the script changed on the ` +
         `directory itself - needs the directory removed by hand.`
@@ -1708,15 +1823,17 @@ function resolveRunnerPath(runnerDir: string | undefined): string {
   return runner;
 }
 
-export function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.ProcessEnv {
+export function buildChildEnv(
+  overrides: Record<string, string> | undefined,
+  extraAllowed: readonly string[] = []
+): NodeJS.ProcessEnv {
   const caseInsensitive = process.platform === "win32";
   const allowed = new Set(
-    ALLOWED_ENV_NAMES.map((name) => (caseInsensitive ? name.toLowerCase() : name))
+    [...ALLOWED_ENV_NAMES, ...extraAllowed].map((name) =>
+      caseInsensitive ? name.toLowerCase() : name
+    )
   );
-  const reservedName = (name: string) =>
-    RESERVED_ENV_NAMES.find((candidate) =>
-      caseInsensitive ? candidate.toLowerCase() === name.toLowerCase() : candidate === name
-    ) ?? reservedNpmConfigName(name);
+  const reservedName = (name: string) => reservedScriptEnvName(name, caseInsensitive);
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
@@ -1747,8 +1864,20 @@ export function buildChildEnv(overrides: Record<string, string> | undefined): No
       throw new ScriptSetupError(
         "invalid",
         `${name} cannot be set for a script: it steers the runner's own process ` +
-          `(reserved names: ${reservedEnvNamesForMessage()}).`
+          `(reserved names: ${reservedScriptEnvNamesForMessage()}).`
       );
+    }
+    // On Windows an override spelled differently from the host's own name is
+    // the SAME variable, and writing it under the override's spelling would
+    // send both to the fork. Node then dedupes them case-insensitively and
+    // keeps whichever sorts first — so ASCII order, not the documented
+    // precedence, would decide which value the script reads. The host's
+    // spelling goes, the override's stays.
+    if (caseInsensitive) {
+      for (const existing of Object.keys(env)) {
+        if (existing !== name && existing.toLowerCase() === name.toLowerCase())
+          delete env[existing];
+      }
     }
     env[name] = value;
   }
@@ -1761,10 +1890,36 @@ export function buildChildEnv(overrides: Record<string, string> | undefined): No
   return env;
 }
 
+function spawnFailureMessage(err: unknown, env: NodeJS.ProcessEnv): string {
+  const message = errorMessage(err);
+  if (!/\bE2BIG\b/.test(message)) return `Could not start the script process: ${message}`;
+  return (
+    `Could not start the script process: ${message} — the environment it would carry is ` +
+    `${environmentBytes(env)} bytes, past this operating system's limit for one process ` +
+    `(ARG_MAX). Shorten the \`env\` values, or write the payload to a file and pass its path.`
+  );
+}
+
+const LARGE_ENVIRONMENT_BYTES = 128 * 1024;
+
+function environmentBytes(env: NodeJS.ProcessEnv): number {
+  let total = 0;
+  for (const [name, value] of Object.entries(env)) {
+    total += Buffer.byteLength(name, "utf8") + Buffer.byteLength(value ?? "", "utf8") + 2;
+  }
+  return total;
+}
+
 function describeEnvNameProblem(name: string): string | null {
   if (name === "") return "is empty";
   if (name.includes("=")) return 'contains "=", which is what separates a name from its value';
   if (name.includes("\0")) return "contains a NUL character";
+  if (name === PROTO_ENV_NAME) {
+    return (
+      "names an accessor on a plain object rather than an entry, so the value would be dropped " +
+      "on the way to the child"
+    );
+  }
   return null;
 }
 
@@ -1812,6 +1967,143 @@ function configuredNumber(key: string): number | undefined {
   const value = getConfigValue(def);
   return typeof value === "number" && value > 0 ? value : undefined;
 }
+
+function projectAnchoredConfigValue<T>(key: string, anchor: string | undefined): T | undefined {
+  const def = getConfigDefinition(key) as ConfigDefinition<T> | undefined;
+  if (!def) return undefined;
+  return getConfigValue(def, anchor ? { cwd: anchor } : {});
+}
+
+function configuredEnvAllowNames(
+  projectRoot: string | undefined,
+  notes: string[],
+  alreadySaid: FlowScriptRunNotes | undefined
+): string[] {
+  const said = alreadySaid ?? new Set<string>();
+  const say = (note: string): void => {
+    if (said.has(note)) return;
+    notes.push(note);
+    said.add(note);
+  };
+  const options = projectRoot ? { cwd: projectRoot } : {};
+  const listedIn = new Map<string, string[]>();
+  for (const scope of ["project", "global"] as const) {
+    const file = configFilePath(scope, options);
+    let text: string;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    let document: unknown;
+    try {
+      document = JSON.parse(text);
+    } catch {
+      say(
+        `${file} is not valid JSON, so argent read nothing from it at all — ` +
+          `${SCRIPT_ENV_ALLOW_KEY} included — and the script ran without every name it lists. ` +
+          `Repair the file.`
+      );
+      continue;
+    }
+    const raw =
+      typeof document === "object" && document !== null && !Array.isArray(document)
+        ? getAtPath(document as Record<string, unknown>, SCRIPT_ENV_ALLOW_KEY)
+        : undefined;
+    if (Array.isArray(raw)) {
+      const unreadable: string[] = [];
+      for (const entry of raw) {
+        if (typeof entry !== "string" || entry.trim() === "") {
+          unreadable.push(JSON.stringify(entry) ?? String(entry));
+          continue;
+        }
+        const files = listedIn.get(entry.trim()) ?? [];
+        files.push(file);
+        listedIn.set(entry.trim(), files);
+      }
+      if (unreadable.length > 0) {
+        const many = unreadable.length > 1;
+        say(
+          `${SCRIPT_ENV_ALLOW_KEY} in ${file} holds ${unreadable.join(", ")}, which argent reads ` +
+            `no name from — an entry is a string naming one variable. ` +
+            `${many ? "Those entries were" : "That entry was"} ignored and the script ran ` +
+            `without ${many ? "them" : "it"}. A nested list is the usual way in: write ` +
+            `["AWS_PROFILE", "AWS_REGION"], not [["AWS_PROFILE", "AWS_REGION"]].`
+        );
+      }
+      continue;
+    }
+    if (raw === undefined) continue;
+    say(
+      `${SCRIPT_ENV_ALLOW_KEY} in ${file} is not a list, so argent ` +
+        `read no names from it and the script ran without them. Write it as an array of names, ` +
+        `e.g. ["DATABASE_URL"].`
+    );
+  }
+  const configuredFiles = new Set([...listedIn.values()].flat());
+  const listedInClause = (names: readonly string[]): string => {
+    if (configuredFiles.size < 2) return "";
+    const files = [...new Set(names.flatMap((name) => listedIn.get(name) ?? []))];
+    return files.length === 0 ? "" : ` Listed in ${files.join(" and ")}.`;
+  };
+  const configured = projectAnchoredConfigValue<string[]>(SCRIPT_ENV_ALLOW_KEY, projectRoot);
+  if (!Array.isArray(configured) || configured.length === 0) return [];
+  const kept: string[] = [];
+  const owned: string[] = [];
+  const reserved: string[] = [];
+  const malformed: string[] = [];
+  const unusable: string[] = [];
+  for (const name of configured) {
+    if (name === PROTO_ENV_NAME) unusable.push(name);
+    else if (argentOwnedEnvName(name)) owned.push(name);
+    else if (reservedScriptEnvName(name)) reserved.push(name);
+    else if (!SCRIPT_ENV_NAME_PATTERN.test(name)) malformed.push(name);
+    else kept.push(name);
+  }
+  if (owned.length > 0) {
+    say(
+      `${SCRIPT_ENV_ALLOW_KEY} names ${owned.join(", ")}, which argent keeps out of the copy ` +
+        `it takes from its own environment; ` +
+        `${owned.length > 1 ? "those entries were" : "that entry was"} ` +
+        `ignored. Pass the value the script needs under a name of your own instead.${listedInClause(owned)}`
+    );
+  }
+  if (reserved.length > 0) {
+    say(
+      `${SCRIPT_ENV_ALLOW_KEY} names ${reserved.join(", ")}, which ` +
+        `${reserved.length > 1 ? "steer" : "steers"} the runner's own process rather than ` +
+        `reaching the script, so no allowlist entry can pass ` +
+        `${reserved.length > 1 ? "them" : "it"} through; ` +
+        `${reserved.length > 1 ? "those entries were" : "that entry was"} ignored.` +
+        listedInClause(reserved)
+    );
+  }
+  if (unusable.length > 0) {
+    say(
+      `${SCRIPT_ENV_ALLOW_KEY} names ${PROTO_ENV_NAME}, which argent cannot carry: the ` +
+        `operating system takes the name, but every merge on the way to the child copies the ` +
+        `map through a plain object, where ${PROTO_ENV_NAME} is an accessor rather than an ` +
+        `entry. That entry was ignored. Use a name of your own.` +
+        listedInClause(unusable)
+    );
+  }
+  if (malformed.length > 0) {
+    say(
+      `${SCRIPT_ENV_ALLOW_KEY} names ${malformed.map((name) => JSON.stringify(name)).join(", ")}, ` +
+        `which ${malformed.length > 1 ? "are not environment variable names" : "is not an environment variable name"} ` +
+        `— a name starts with a letter or "_" and continues with letters, digits or "_". ` +
+        `${malformed.length > 1 ? "Those entries were" : "That entry was"} ignored.` +
+        listedInClause(malformed)
+    );
+  }
+  return kept;
+}
+
+function argentOwnedEnvName(name: string): boolean {
+  return name.toUpperCase().startsWith(ARGENT_ENV_PREFIX);
+}
+
+const ARGENT_ENV_PREFIX = "ARGENT_";
 
 /**
  * POSIX names the runner's process group, which outlives the runner and holds
@@ -1985,7 +2277,8 @@ interface StreamState {
  * Redaction runs on the live stream, ahead of both limits: a value can straddle
  * two pipe chunks and a per-chunk replacement sees neither half, and one
  * straddling the truncation cut would leave a prefix that a whole-value
- * replacement never matches.
+ * replacement never matches. It takes every form of each value that
+ * {@link secretForms} lists.
  */
 class ScriptLogCapture {
   private readonly parts: string[] = [];
@@ -1995,7 +2288,7 @@ class ScriptLogCapture {
   private cut = false;
   private heapFatalFlag = false;
   private heapFatalTail = "";
-  private stderrLastLine = "";
+  private stderrLastLine = NO_STDERR_LINE;
 
   constructor(
     private readonly secrets: () => readonly FlowScriptSecret[],
@@ -2028,7 +2321,7 @@ class ScriptLogCapture {
   }
 
   get text(): string {
-    return scrubSecretValues(this.parts.join(""), this.secrets());
+    return scrubSecretValues(this.parts.join(""), secretForms(this.secrets()));
   }
 
   get truncated(): boolean {
@@ -2039,12 +2332,19 @@ class ScriptLogCapture {
     return this.heapFatalFlag;
   }
 
-  get lastStderrLine(): string {
+  get lastStderrLine(): StderrLine {
     return this.stderrLastLine;
   }
 
-  get stderrLineSoFar(): string {
-    return this.streams.get("stderr")?.lastLine?.peek() ?? this.stderrLastLine;
+  private closed(): boolean {
+    if (this.cut) return true;
+    const runRemaining = this.runBudget ? this.runBudget.remainingBytes : Number.POSITIVE_INFINITY;
+    return Math.min(this.stepRemaining, runRemaining) <= 0;
+  }
+
+  get stderrLineSoFar(): StderrLine {
+    const lastLine = this.streams.get("stderr")?.lastLine;
+    return lastLine ? lastLine.snapshot() : this.stderrLastLine;
   }
 
   private watchForHeapFatal(text: string): void {
@@ -2081,7 +2381,13 @@ class ScriptLogCapture {
     if (!text && !final) return;
     if (state.watchForHeapFatal) this.watchForHeapFatal(text);
     state.lastLine?.write(text);
-    const secrets = this.secrets();
+    if (this.closed()) {
+      if (text || state.holdback) this.truncatedFlag = true;
+      state.holdback = "";
+      state.holdbackAt = undefined;
+      return;
+    }
+    const secrets = secretForms(this.secrets());
     const held = state.holdback;
     const pending = held + text;
     const { emit, held: keep } = scrubSecretChunk(pending, secrets, final);
@@ -2099,7 +2405,7 @@ class ScriptLogCapture {
       this.append(state.collapser ? state.collapser.write(emit) : emit);
       return;
     }
-    const head = scrubSecretValues(released, this.secrets());
+    const head = scrubSecretValues(released, secretForms(this.secrets()));
     const headText = emit.startsWith(head) ? head : "";
     this.append(state.collapser ? state.collapser.write(headText) : headText, at);
     const tailText = emit.slice(headText.length);
@@ -2156,12 +2462,12 @@ function withoutPartialMarker(buffer: Buffer, taken: number): number {
  * The line a bash step that exited non-zero ends its reason with: the last line
  * a stream carried that was not blank, whether that is the script's own
  * `echo … >&2` or the error of the command `set -e` stopped on. Fed the text as
- * the script wrote it, because what this returns joins the failure message and
- * is redacted with it.
+ * the script wrote it: the line it picks is redacted by
+ * {@link redactedStderrLine} when the verdict is made.
  *
  * Only the head of each line is kept, so a long line is cut at its end: that is
- * where `redactTruncated` looks for the half of a value a cut leaves, and a cut
- * at the start would leave the other half where nothing looks.
+ * where `redactedStderrLine` looks for the half of a value a cut leaves, and a
+ * cut at the start would leave the other half where nothing looks.
  */
 class LastLineTracker {
   private head = "";
@@ -2180,15 +2486,20 @@ class LastLineTracker {
     this.extend(text.slice(from));
   }
 
-  end(): string {
+  end(): StderrLine {
     this.close();
-    return this.peek();
+    return this.snapshot();
   }
 
-  peek(): string {
+  snapshot(): StderrLine {
     const lines = this.heads.map((head, i) => stderrLine(head, this.lengths[i]!));
-    if (!this.blank) lines.push(stderrLine(this.head, this.length));
-    return reasonLine(lines);
+    if (this.blank) return reasonLine(lines) ?? NO_STDERR_LINE;
+    const open = stderrLine(this.head, this.length);
+    const reason = reasonLine([...lines, open]) ?? NO_STDERR_LINE;
+    // The line still being written ends where Argent read it, so it is flagged:
+    // `redactedStderrLine` drops and counts the front of a value it had only
+    // begun to write, as it does at the head's own cut.
+    return reason === open && this.length <= this.head.length ? { ...open, open: true } : reason;
   }
 
   private extend(segment: string): void {
@@ -2221,15 +2532,98 @@ class LastLineTracker {
 interface StderrLine {
   raw: string;
   shown: string;
+  length: number;
+  /** Still being written when it was read. */
+  open?: true;
 }
+
+const NO_STDERR_LINE: StderrLine = { raw: "", shown: "", length: 0 };
 
 /** A blank line is `""` in both. */
 function stderrLine(head: string, length: number): StderrLine {
-  if (!head) return { raw: "", shown: "" };
-  if (length <= head.length) return { raw: head, shown: head.trim() };
+  if (!head) return NO_STDERR_LINE;
+  if (length <= head.length) return { raw: head, shown: head.trim(), length };
   const final = head.charCodeAt(head.length - 1);
   const kept = final >= 0xd800 && final <= 0xdbff ? head.slice(0, -1) : head;
-  return { raw: head, shown: `${kept.trimStart()}${omissionMarker(length - kept.length)}` };
+  return {
+    raw: head,
+    shown: `${kept.trimStart()}${omissionMarker(length - kept.length)}`,
+    length,
+  };
+}
+
+/**
+ * The line as the reason shows it, with the values in it hidden before it is
+ * trimmed: a value's leading or trailing whitespace is part of it. The tracker
+ * keeps lines, not the text, so each line of a multi-line value counts as a
+ * value here too, from six characters that are not whitespace. Every character
+ * an occurrence covers is hidden, and occurrences that overlap become one
+ * marker, so neither of two secrets that share text keeps a part the other
+ * took. Where the line was cut at its end, or was still being written, the
+ * front of a value it ends on is dropped and counted.
+ */
+function redactedStderrLine(line: StderrLine, secrets: readonly FlowScriptSecret[]): string {
+  if (!line.raw || secrets.length === 0) return line.shown;
+  const forms = secretForms(secrets).concat(secrets.flatMap(valueLines));
+  const cut = line.length - line.raw.length;
+  const final = line.raw.charCodeAt(line.raw.length - 1);
+  const split = cut > 0 && final >= 0xd800 && final <= 0xdbff ? 1 : 0;
+  const head = line.raw.slice(0, line.raw.length - split);
+  const runs = coveredRuns(head, forms);
+  let keep = head.length;
+  if (cut > 0 || line.open) {
+    const partial = partialSecretTail(head, forms);
+    const last = runs[runs.length - 1];
+    const inside = last !== undefined && last.to === head.length && last.from <= keep - partial;
+    if (!inside) keep -= partial;
+    for (const run of runs) if (run.from < keep && run.to > keep) keep = run.from;
+  }
+  let shown = "";
+  let at = 0;
+  for (const run of runs) {
+    if (run.to > keep) break;
+    shown += `${head.slice(at, run.from)}${SECRET_PLACEHOLDER_MARKER}${run.name}}}`;
+    at = run.to;
+  }
+  shown += head.slice(at, keep);
+  const omitted = cut + split + head.length - keep;
+  return omitted > 0 ? `${shown.trimStart()}${omissionMarker(omitted)}` : shown.trim();
+}
+
+/** Each occurrence of each form in `text`, overlapping ones merged, named for the first. */
+function coveredRuns(
+  text: string,
+  forms: readonly FlowScriptSecret[]
+): Array<{ from: number; to: number; name: string }> {
+  const spans: Array<{ from: number; to: number; name: string }> = [];
+  for (const { name, value } of forms) {
+    if (!value) continue;
+    for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) {
+      spans.push({ from: at, to: at + value.length, name });
+    }
+  }
+  spans.sort((a, b) => a.from - b.from || b.to - a.to);
+  const runs: typeof spans = [];
+  for (const span of spans) {
+    const last = runs[runs.length - 1];
+    if (last && span.from < last.to) last.to = Math.max(last.to, span.to);
+    else runs.push({ ...span });
+  }
+  return runs;
+}
+
+/** Each line of a multi-line value, as written and as bash quotes it. */
+function valueLines({ name, value }: FlowScriptSecret): FlowScriptSecret[] {
+  if (!value.includes("\n")) return [];
+  const lines = value
+    .split("\n")
+    .filter((line) => isLongEnoughToBeSecret(line.replace(/\s/g, "")))
+    .flatMap((line) => [
+      line.trim(),
+      line.trim().replaceAll("'", "'\\''"),
+      line.trim().replace(/[\\"$`]/g, "\\$&"),
+    ]);
+  return [...new Set(lines)].map((line) => ({ name, value: line }));
 }
 
 /**
@@ -2237,17 +2631,21 @@ function stderrLine(head: string, length: number): StderrLine {
  * line about itself rather than on its error: Node.js and Bun after an uncaught
  * error print their version last, and npm the path of its debug log.
  */
-function reasonLine(lines: readonly StderrLine[]): string {
+function reasonLine(lines: readonly StderrLine[]): StderrLine | undefined {
   const end = newestShown(lines, lines.length - 1);
-  if (end < 0) return "";
-  const newest = lines[end]!.shown;
-  if (RUNTIME_TRAILER_RE.test(newest)) return uncaughtErrorLine(lines, end) ?? newest;
+  if (end < 0) return undefined;
+  const newest = lines[end]!;
+  if (RUNTIME_TRAILER_RE.test(newest.shown)) return uncaughtErrorLine(lines, end) ?? newest;
   let hint = end;
-  if (!NPM_LOG_HINT_RE.test(newest)) {
+  if (!NPM_LOG_HINT_RE.test(newest.shown)) {
     // Older npm puts the log's path on a line of its own, under the hint.
     const above = newestShown(lines, end - 1);
     const hintAbove = above >= 0 ? lines[above]!.shown : "";
-    if (!NPM_LINE_RE.test(newest) || !hintAbove.endsWith(":") || !NPM_LOG_HINT_RE.test(hintAbove)) {
+    if (
+      !NPM_LINE_RE.test(newest.shown) ||
+      !hintAbove.endsWith(":") ||
+      !NPM_LOG_HINT_RE.test(hintAbove)
+    ) {
       return newest;
     }
     hint = above;
@@ -2266,8 +2664,11 @@ function reasonLine(lines: readonly StderrLine[]): string {
  * Failing those, the newest line not indented and not a lone bracket. The walk
  * stops at an earlier version line.
  */
-function uncaughtErrorLine(lines: readonly StderrLine[], trailerAt: number): string | undefined {
-  let fallback: string | undefined;
+function uncaughtErrorLine(
+  lines: readonly StderrLine[],
+  trailerAt: number
+): StderrLine | undefined {
+  let fallback: StderrLine | undefined;
   for (let i = trailerAt - 1; i >= 0; i--) {
     const { raw, shown } = lines[i]!;
     if (!shown) continue;
@@ -2278,25 +2679,24 @@ function uncaughtErrorLine(lines: readonly StderrLine[], trailerAt: number): str
       let above = i - 1;
       while (above >= 0 && (!lines[above]!.shown || isFrame(lines[above]!))) above--;
       if (above < 0) return fallback;
-      const line = lines[above]!.shown;
-      return /[\p{L}\p{N}]/u.test(line) ? line : (firstLineUnderCaret(lines, above) ?? line);
+      const line = lines[above]!;
+      return /[\p{L}\p{N}]/u.test(line.shown) ? line : (firstLineUnderCaret(lines, above) ?? line);
     }
     if (SOURCE_CARET_RE.test(bare)) {
-      const under = lines.slice(i + 1, trailerAt).find((line) => line.shown);
-      return under?.shown ?? fallback;
+      return lines.slice(i + 1, trailerAt).find((line) => line.shown) ?? fallback;
     }
-    if (bare.startsWith("error: ")) return shown;
+    if (bare.startsWith("error: ")) return lines[i];
     if (fallback === undefined && !/^\s/.test(bare) && !/^[\]})]+[,;]?$/.test(shown)) {
-      fallback = shown;
+      fallback = lines[i];
     }
   }
   return fallback;
 }
 
-function firstLineUnderCaret(lines: readonly StderrLine[], below: number): string | undefined {
+function firstLineUnderCaret(lines: readonly StderrLine[], below: number): StderrLine | undefined {
   for (let i = below - 1; i >= 0 && !RUNTIME_TRAILER_RE.test(lines[i]!.shown); i--) {
     if (SOURCE_CARET_RE.test(stripVTControlCharacters(lines[i]!.raw))) {
-      return lines.slice(i + 1, below).find((line) => line.shown)?.shown;
+      return lines.slice(i + 1, below).find((line) => line.shown);
     }
   }
   return undefined;
@@ -2307,13 +2707,13 @@ function isFrame(line: StderrLine): boolean {
 }
 
 /** The first line of npm's error block above its log hint that says more than a code. */
-function npmErrorLine(lines: readonly StderrLine[], hintAt: number): string | undefined {
+function npmErrorLine(lines: readonly StderrLine[], hintAt: number): StderrLine | undefined {
   const last = newestShown(lines, hintAt - 1);
   if (last < 0 || !NPM_LINE_RE.test(lines[last]!.shown)) return undefined;
   let first = last;
   while (first > 0 && NPM_LINE_RE.test(lines[first - 1]!.shown)) first--;
   for (let i = first; i <= last; i++) {
-    if (!NPM_DETAIL_RE.test(lines[i]!.shown)) return lines[i]!.shown;
+    if (!NPM_DETAIL_RE.test(lines[i]!.shown)) return lines[i];
   }
   return undefined;
 }

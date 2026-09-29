@@ -70,7 +70,7 @@ Commands:
   flags       Show current feature-flag state
   providers   Inspect and manage external device providers (list / check / publish / withdraw / prune)
   config      Manage configuration (list / get / set / unset, project & global)
-  secrets     List the secrets a {{secret:NAME}} placeholder can type, and their sources
+  secrets     List the secrets a {{secret:NAME}} placeholder can resolve, and their sources
   telemetry   Manage opt-out telemetry (status / enable / disable)
 
 Options:
