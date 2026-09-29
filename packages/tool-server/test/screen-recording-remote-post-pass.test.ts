@@ -95,8 +95,8 @@ async function durationSeconds(file: string): Promise<number> {
 }
 
 describe.skipIf(!hasFfmpeg())("remote recording post-pass (real ffmpeg)", () => {
-  let tmpDir: string;
-  let restore: () => void;
+  let tmpDir = "";
+  let restore: () => void = () => {};
   beforeEach(async () => {
     vi.clearAllMocks();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-postpass-"));
