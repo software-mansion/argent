@@ -340,6 +340,34 @@ describe("screenshotDiffTool", () => {
     );
   });
 
+  it("leaves the live capture in outputDir when the aspect ratios differ", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-live-mismatch-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    await writePng(baselinePath, 4, 2, { r: 10, g: 20, b: 30 });
+    const run = vi.fn(async () => ({
+      imageBase64: pngBytes(2, 8, { r: 10, g: 20, b: 30 }).toString("base64"),
+    }));
+
+    const result = await executeScreenshotDiffTool(
+      { iosDeviceRunner: { run, udid: PHYSICAL_UDID } },
+      { baselinePath, captureCurrent: true, udid: PHYSICAL_UDID, outputDir: dir },
+      { artifacts: new ArtifactStore() }
+    );
+
+    // The result carries no host path, so listing outputDir is how an agent
+    // finds the live capture.
+    expect(result.summary).toContain("- status: dimension_mismatch");
+    expect(Object.keys(result).sort()).toEqual(["summary"]);
+    expect((await fs.readdir(dir)).sort()).toEqual([
+      "baseline.png",
+      expect.stringMatching(/^current-[a-f0-9]{8}\.live\.png$/),
+    ]);
+    const outputDirDescription = agentFacingText(screenshotDiffTool).find(
+      ([surface]) => surface === "outputDir"
+    )?.[1];
+    expect(outputDirDescription).toContain("no diff images");
+  });
+
   it("does not fall back for an outputDir it can reach but not write into", async () => {
     // The fallback the description advertises is keyed on the tool-server not
     // being able to *reach* the directory. A path it reaches and cannot use is

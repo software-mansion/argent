@@ -65,7 +65,7 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "Directory where diff artifacts should be written. Optional — defaults to a temp directory, and falls back to one when the tool-server cannot reach the directory given; a directory it reaches but cannot write into ends the call instead. dimension_mismatch writes no images there, having compared nothing."
+        "Directory where diff artifacts should be written. Optional — defaults to a temp directory, and falls back to one when the tool-server cannot reach the directory given; a directory it reaches but cannot write into ends the call instead. dimension_mismatch writes no diff images there, having compared nothing — a live capture is copied in before the comparison runs and stays."
       ),
   })
   .strict();
