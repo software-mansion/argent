@@ -134,9 +134,9 @@ describe("flowStepLine", () => {
     expect(stepLines(flow.steps)).toEqual([3, 4]);
   });
 
-  it("gives no line to the steps of a list written as an alias", () => {
-    // The alias repeats a list written elsewhere; its steps have no entry of
-    // their own to point at.
+  it("gives the steps of a list written as an alias the lines of the list it repeats", () => {
+    // The alias has no entries of its own; its steps are written in the list
+    // the anchor names.
     const flow = parseFlow(
       yaml(
         "steps:",
@@ -148,7 +148,22 @@ describe("flowStepLine", () => {
       )
     );
 
-    expect(stepLines(flow.steps)).toEqual([2, 4, 5, undefined]);
+    expect(stepLines(flow.steps)).toEqual([2, 4, 5, 4]);
+  });
+
+  it("gives a block written as an alias the alias's line, and its steps the lines they repeat", () => {
+    const flow = parseFlow(
+      yaml(
+        "steps:",
+        "  - &guard",
+        "    when: { platform: ios }",
+        "    steps:",
+        "      - tap: A",
+        "  - *guard"
+      )
+    );
+
+    expect(stepLines(flow.steps)).toEqual([3, 5, 6, 5]);
   });
 
   it("gives no line to a step that was not parsed from a file", () => {
@@ -229,6 +244,29 @@ describe("where a run reports each step is written", () => {
       { kind: "when", status: "pass", line: 3, file: undefined },
       { kind: "echo", status: "pass", line: 5, file: undefined },
       { kind: "assert", status: "fail", line: 6, file: undefined },
+    ]);
+  });
+
+  it("reports a failing step of a when: block whose steps: is an alias at the line it repeats", async () => {
+    await writeFlowYaml(
+      "aliased.yaml",
+      yaml(
+        "steps:",
+        "  - when: { platform: android }",
+        "    steps: &checks",
+        "      - assert: { visible: Welcome }",
+        "  - when: { platform: ios }",
+        "    steps: *checks"
+      )
+    );
+
+    const result = await run("aliased");
+
+    expect(where(result)).toEqual([
+      { kind: "when", status: "skip", line: 2, file: undefined },
+      { kind: "assert", status: "skip", line: 4, file: undefined },
+      { kind: "when", status: "pass", line: 5, file: undefined },
+      { kind: "assert", status: "fail", line: 4, file: undefined },
     ]);
   });
 

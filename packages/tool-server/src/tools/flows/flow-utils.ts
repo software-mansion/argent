@@ -3,7 +3,16 @@ import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { stringify as yamlStringify, parseDocument, isMap, isNode, isSeq, LineCounter } from "yaml";
+import {
+  stringify as yamlStringify,
+  parseDocument,
+  isAlias,
+  isMap,
+  isNode,
+  isSeq,
+  LineCounter,
+  type Document,
+} from "yaml";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
@@ -3675,25 +3684,34 @@ export function flowStepLine(step: FlowStep): number | undefined {
   return stepLines.get(step);
 }
 
+/** The node an alias repeats, or `node` itself when it is not an alias. */
+function unalias(node: unknown, doc: Document): unknown {
+  return isAlias(node) ? node.resolve(doc) : node;
+}
+
 /**
  * Record the line of each step in `steps` and of its block's children, read
- * off the YAML sequence the steps were parsed from. A list the file spells as
- * an alias has no items of its own, so its steps get no line.
+ * off the YAML sequence the steps were parsed from. An alias has no items of
+ * its own, so a list or a block the file spells as one is read from the node
+ * the alias repeats. A step spelled as an alias starts on the alias's line.
  */
 function recordStepLines(
   steps: FlowStep[],
-  seq: unknown,
+  node: unknown,
+  doc: Document,
   lineCounter: LineCounter,
   lineOffset: number
 ): void {
+  const seq = unalias(node, doc);
   if (!isSeq(seq)) return;
   steps.forEach((step, i) => {
     const item = seq.items[i];
     if (!isNode(item) || !item.range) return;
     stepLines.set(step, lineCounter.linePos(item.range[0]).line + lineOffset);
     const inner = blockSteps(step);
-    if (inner && isMap(item)) {
-      recordStepLines(inner, item.get("steps", true), lineCounter, lineOffset);
+    const block = unalias(item, doc);
+    if (inner && isMap(block)) {
+      recordStepLines(inner, block.get("steps", true), doc, lineCounter, lineOffset);
     }
   });
 }
@@ -3774,7 +3792,7 @@ export function parseFlow(content: string): FlowFile {
   // counted in `trimmed` must add back.
   const leading = content.slice(0, content.length - content.trimStart().length);
   const leadingLines = leading.split("\n").length - 1;
-  recordStepLines(steps, doc.get("steps", true), lineCounter, leadingLines);
+  recordStepLines(steps, doc.get("steps", true), doc, lineCounter, leadingLines);
   return flow;
 }
 
