@@ -62,8 +62,8 @@ function stopWritesVideo(bytes = "mp4 bytes"): void {
 }
 
 describe("remote screen recording", () => {
-  let tmpDir: string;
-  let restoreTmpdir: () => void;
+  let tmpDir = "";
+  let restoreTmpdir: () => void = () => {};
 
   beforeEach(async () => {
     vi.clearAllMocks();
