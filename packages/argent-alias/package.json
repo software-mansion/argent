@@ -5,14 +5,14 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/software-mansion/argent.git",
-    "directory": "packages/argent-alias"
+    "url": "git+https://github.com/software-mansion/argent.git"
   },
   "homepage": "https://docs.swmansion.com/argent",
   "bin": {
     "argent": "cli.cjs"
   },
   "scripts": {
+    "prepack": "node sync-readme.cjs",
     "preinstall": "node preinstall.cjs"
   },
   "engines": {
