@@ -578,6 +578,61 @@ describe("argent flow run", () => {
     ]);
   });
 
+  it("frames a fragment step by the file its symlink points to, whatever that file is named", async () => {
+    const dir = path.join(tempRoot, "frame-link");
+    await fsp.mkdir(path.join(dir, "fragsrc"), { recursive: true });
+    await fsp.mkdir(path.join(dir, "shared"), { recursive: true });
+    await fsp.writeFile(path.join(dir, "main.yaml"), "steps:\n  - run: shared/sign-in.yaml\n");
+    await fsp.writeFile(
+      path.join(dir, "fragsrc", "real.yml"),
+      "steps:\n  - tap: { text: Sign in }\n  - type: { text: hunter2 }\n"
+    );
+    // The runner accepts the link's `.yaml` name, then names the file the link points to.
+    await fsp.symlink(
+      path.join("..", "fragsrc", "real.yml"),
+      path.join(dir, "shared", "sign-in.yaml")
+    );
+    const real = await fsp.realpath(path.join(dir, "fragsrc", "real.yml"));
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        flow: "main",
+        ok: false,
+        passed: 1,
+        failed: 1,
+        steps: [
+          { index: 0, kind: "run", status: "pass", line: 2 },
+          {
+            index: 1,
+            kind: "tap",
+            status: "fail",
+            target: '"Sign in"',
+            reason: 'no element matched selector text="Sign in"',
+            line: 2,
+            file: real,
+          },
+        ],
+      }),
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", path.join("frame-link", "main.yaml")], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const lines = logs.join("\n").split("\n");
+    const at = lines.indexOf(`    at ${path.join("frame-link", "fragsrc", "real.yml")}:2`);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.slice(at + 1, at + 4)).toEqual([
+      "      1 | steps:",
+      "    > 2 |   - tap: { text: Sign in }",
+      "      3 |   - type: { text: hunter2 }",
+    ]);
+  });
+
   it("exits 2 without calling the tool when --device is missing its value", async () => {
     await expect(flow(["run", "checkout", "--device"], opts)).rejects.toThrow("process.exit:2");
 
@@ -2686,23 +2741,18 @@ describe("argent flow run <dir>", () => {
   it("shows no source for a step without a usable line or fragment, and never the flow's own file instead", async () => {
     const suite = path.join(tempRoot, "unframed");
     await fsp.mkdir(path.join(suite, "fragments"), { recursive: true });
-    await Promise.all([
-      fsp.writeFile(path.join(suite, "fragments", "sign-in.yaml"), SIGN_IN_YAML),
-      fsp.writeFile(path.join(suite, "fragments", "sign-in.yml"), SIGN_IN_YAML),
-    ]);
-    const realSuite = await fsp.realpath(suite);
+    await fsp.writeFile(path.join(suite, "fragments", "sign-in.yaml"), SIGN_IN_YAML);
     // Every file named here is readable and has the line, so any frame in the
     // output would come from a value the CLI should have refused.
     const variants: [string, Pick<StepFixture, "line" | "file">][] = [
       // A tool-server older than the field sends no line.
       ["a-no-line", {}],
-      // The fragment path is wire data: only an absolute path to a flow file is read.
+      // The fragment path is wire data: only an absolute path is read.
       ["b-relative-file", { line: 2, file: path.join("unframed", "fragments", "sign-in.yaml") }],
-      ["c-yml-file", { line: 2, file: path.join(realSuite, "fragments", "sign-in.yml") }],
-      ["d-null-file", { line: 2, file: null }],
-      ["e-zero-line", { line: 0 }],
-      ["f-fractional-line", { line: 2.5 }],
-      ["g-string-line", { line: "4" }],
+      ["c-null-file", { line: 2, file: null }],
+      ["d-zero-line", { line: 0 }],
+      ["e-fractional-line", { line: 2.5 }],
+      ["f-string-line", { line: "4" }],
     ];
     await Promise.all(
       variants.map(([name]) => fsp.writeFile(path.join(suite, `${name}.yaml`), LOGIN_YAML))

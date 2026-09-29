@@ -470,7 +470,9 @@ export function renderSourceFrame(where: string, line: number, text: string | un
  * Where a report's failed step is written, read from the file now: the flow
  * at `flowPath`, or the fragment the step names. Undefined when the step
  * carries no line, which a tool-server older than this field sends. The
- * fragment path is wire data, so only an absolute path to a flow file is read.
+ * fragment path is wire data, so only an absolute path is read. Its name need
+ * not end in `.yaml`: the tool-server names a fragment reached through a
+ * symlink by the file the link points to.
  */
 async function readFailureSource(
   report: FlowReport,
@@ -482,7 +484,7 @@ async function readFailureSource(
     return undefined;
   }
   const file = step.file === undefined ? flowPath : step.file;
-  if (typeof file !== "string" || !path.isAbsolute(file) || !file.endsWith(".yaml")) {
+  if (typeof file !== "string" || !path.isAbsolute(file)) {
     return undefined;
   }
   const text = await fsp.readFile(file, "utf8").catch(() => undefined);
