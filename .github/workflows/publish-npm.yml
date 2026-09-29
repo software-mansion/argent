@@ -17,7 +17,8 @@ name: Publish npm package
 #                        release.
 #
 # Trusted publishing: THIS file is registered on npmjs.com as the npm Trusted
-# Publisher for @swmansion/argent, so the OIDC exchange authenticates the
+# Publisher for @swmansion/argent and for `argent` (the npx alias published by
+# the publish-alias job), so the OIDC exchange authenticates the
 # publish and no npm token is involved. Renaming or moving it breaks publishing
 # until that registration is updated to match. NPM_TOKEN survives as a repo
 # secret only for sync-next-tag.yml, which mutates dist-tags — OIDC covers
@@ -64,6 +65,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.PUBLISH_NPM_UNIFIED == '1'
     outputs:
       version: ${{ steps.mode.outputs.version }}
+      # The version that actually went out: a canary's is only known after the
+      # publish, which may have restamped it on a collision.
+      published_version: ${{ steps.published.outputs.version }}
+      dist_tag: ${{ steps.mode.outputs.dist_tag }}
     permissions:
       contents: read
       id-token: write # npm provenance attestation + trusted-publishing OIDC exchange
@@ -331,15 +336,64 @@ jobs:
           exit 1
 
       - name: Publish summary
+        id: published
         if: success() && !(steps.mode.outputs.mode == 'dispatch' && inputs.dry_run)
         run: |
           VERSION=$(node -p "require('./packages/argent/package.json').version")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Published \`@swmansion/argent@${VERSION}\` under dist-tag \`${{ steps.mode.outputs.dist_tag }}\` (with provenance)" >> "$GITHUB_STEP_SUMMARY"
 
       # `npm publish --tag` already tags this release. Re-pointing `next` at the
       # highest published version (and repairing it if stale) is the
       # "Sync 'next' dist-tag" workflow, which runs automatically once this one
       # succeeds.
+
+  # Publishes `argent`, the alias that makes `npx argent <command>` run
+  # @swmansion/argent, at the same version and dist-tag, pinned to the
+  # @swmansion/argent release just published. A separate job, so a failure here
+  # never holds back the main package or its release tarball; continue-on-error
+  # keeps it from failing the run, which sync-next-tag.yml needs to succeed.
+  # Re-run this job once the cause is fixed.
+  publish-alias:
+    needs: publish
+    runs-on: ubuntu-latest
+    if: needs.publish.outputs.published_version != ''
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation + trusted-publishing OIDC exchange
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
+      # The committed manifest carries 0.0.0 placeholders; the alias always
+      # mirrors the @swmansion/argent version it runs. Re-running the job after
+      # the alias went out is a no-op rather than a version-exists failure.
+      - name: Publish the argent alias
+        working-directory: packages/argent-alias
+        env:
+          VERSION: ${{ needs.publish.outputs.published_version }}
+          DIST_TAG: ${{ needs.publish.outputs.dist_tag }}
+        run: |
+          npm pkg set version="$VERSION" "dependencies.@swmansion/argent=$VERSION"
+          if npm view "argent@${VERSION}" version >/dev/null 2>&1; then
+            echo "argent@${VERSION} is already on npm — nothing to publish"
+            exit 0
+          fi
+          npm publish --tag "$DIST_TAG" --provenance
+          echo "Published \`argent@${VERSION}\` (alias for \`@swmansion/argent@${VERSION}\`) under dist-tag \`${DIST_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
 
   # Attaches the published tarball to the GitHub release for its tag, so users
   # who don't pull from the npm registry can download it from the release page.

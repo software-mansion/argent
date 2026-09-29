@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "!packages/docs"
+    "!packages/docs",
+    "!packages/argent-alias"
   ],
   "scripts": {
     "build": "tsc --build && node packages/tool-server/scripts/copy-build-assets.mjs",
