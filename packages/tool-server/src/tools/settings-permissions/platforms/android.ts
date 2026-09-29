@@ -1,7 +1,7 @@
-import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { InvalidToolInputError } from "../../../utils/capability";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, isTerminalAdbError, shellQuote } from "../../../utils/adb";
+import { adbShell, isAdbTransportFailure, shellQuote } from "../../../utils/adb";
 import type {
   PermissionAction,
   PermissionName,
@@ -66,32 +66,6 @@ interface PmResult {
   detail: string;
 }
 
-// A pm call fails two ways: pm ran and refused the permission (a manifest-style
-// rejection, which belongs in `skipped`), or the transport died / timed out, so
-// the call never ran and every remaining one is unreliable — that must reach the
-// caller with adb's own cause, not be relabelled as a manifest gap.
-//
-// `isTerminalAdbError` covers the device-state shapes; these patterns cover the
-// client↔daemon leg (`protocol fault ... Connection reset by peer` from the
-// shared adb server restarting mid-command, `cannot connect to daemon` from it
-// being down). They are matched here rather than in `isTerminalAdbError` because
-// that predicate also gates `waitForBootCompleted`, where a reconnecting daemon
-// mid-boot is a transient it deliberately swallows and retries.
-const ADB_DAEMON_TRANSPORT_PATTERNS: RegExp[] = [
-  /connection reset by peer/i,
-  /cannot connect to daemon/i,
-  /protocol fault/i,
-];
-
-function isTransportFailure(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return (
-    isTerminalAdbError(message) ||
-    ADB_DAEMON_TRANSPORT_PATTERNS.some((pattern) => pattern.test(message)) ||
-    getFailureSignal(err)?.error_kind === "timeout"
-  );
-}
-
 // pm errors arrive as a Java exception followed by a dozen `at com.android...`
 // stack frames; only the exception line ("Package X has not requested
 // permission Y") is actionable.
@@ -118,7 +92,7 @@ async function runPm(udid: string, pmArgs: string): Promise<PmResult> {
   } catch (err) {
     // Not a pm rejection — propagate adbShell's classified FailureError so a
     // dead or wedged device surfaces its real cause, not a bogus "manifest gap".
-    if (isTransportFailure(err)) throw err;
+    if (isAdbTransportFailure(err)) throw err;
     return {
       ok: false,
       detail: stripStackFrames(err instanceof Error ? err.message : String(err)),

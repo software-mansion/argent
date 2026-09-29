@@ -16,7 +16,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { getAdditionalIosDeviceSets } from "@argent/configuration-core";
-import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
+import { SIMCTL_KILL_SIGNAL, SIMCTL_LIST_TIMEOUT_MS } from "./simctl-config";
 import {
   assertExternalCapabilitySync,
   externalClaimForAnyId,
@@ -63,7 +63,7 @@ async function setContainsUdid(deviceSet: DeviceSetPath, udid: string): Promise<
     const { stdout } = await execFileAsync(
       "xcrun",
       [...simctlPrefix(deviceSet), "list", "devices", "--json"],
-      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+      { timeout: SIMCTL_LIST_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
     const data = JSON.parse(stdout) as {
       devices?: Record<string, Array<{ udid?: string }>>;
