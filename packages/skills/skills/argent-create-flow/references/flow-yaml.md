@@ -311,7 +311,7 @@ A script can return data for later steps. Use `{{output:path}}` to read it:
 - In `.mjs`, read or change the `output` object, for example `output.user = { displayName: "Test user" };`.
 - In `.sh`, write a JSON object to the file at `$ARGENT_OUTPUT`. The file initially contains the current document. If a command also reads this file, write to a second file first. Then move the second file to `$ARGENT_OUTPUT`.
 - Each run starts with an empty document. Nested `run:` flows and `when` blocks share it. A `tool: flow-execute` step has a separate document.
-- After a successful script, each returned top-level key replaces its previous value, including nested values. Other keys keep their values. To clear a key, set it to `null`. Failed scripts do not update the document.
+- After a successful script, each returned top-level key replaces its previous value, including nested values. Other keys keep their values. To clear a key, set it to `null`. Do not remove the key from a `.sh` file. Failed scripts do not update the document.
 - Use JSON values. Keep the combined document and each script's output at or below 1 MiB. Use strings for identifiers, prices and codes.
 
 ### References

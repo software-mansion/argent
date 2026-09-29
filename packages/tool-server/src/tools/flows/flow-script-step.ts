@@ -38,7 +38,9 @@ interface FlowScriptStepOutcome {
  * the `{{output:user.id}}` that then stops names a key the author can see being
  * written. A `.sh` always writes a whole file, so this is also what lets it
  * follow a `.mjs` without erasing what the `.mjs` set. A script clears a value
- * by setting it to `null`; it cannot remove a key.
+ * by setting it to `null`; it cannot remove a key. The runner returns a `.mjs`
+ * top-level key set to `undefined`, or deleted from the `output` it was handed,
+ * as `null`, so both clear it too.
  */
 export function mergeScriptOutput(
   current: OutputDocument,

@@ -21,6 +21,14 @@ let finished = false;
 
 let maxOutputBytes = 0;
 
+/**
+ * The `output` object a `.mjs` script is handed, and its top-level keys, read
+ * before the script runs. A key the script deletes from THIS object is one it
+ * cleared; see `validate`.
+ */
+let handedOutput;
+let handedKeys = [];
+
 let probing = false;
 
 let idleResources = [];
@@ -197,6 +205,8 @@ async function prepare() {
 
   try {
     globalThis.output = decodeJson(request.outputJson);
+    handedOutput = globalThis.output;
+    handedKeys = Object.keys(handedOutput);
   } catch (err) {
     finish({
       type: "failure",
@@ -921,8 +931,8 @@ function isLoaderFailure(err) {
  * Validation cannot happen in the parent: the IPC channel serializes as JSON,
  * so a function vanishes silently, `NaN` and `Infinity` arrive as `null`, and a
  * BigInt or cycle throws inside `send`. An `undefined` member vanishes there
- * too, but that one loss `walk` adopts on purpose rather than refuses, so the
- * parent would reach the same document either way.
+ * too, and at the top level that loss would keep an earlier step's value; see
+ * `walk`.
  *
  * What is encoded is the copy the walk built, never a second read of the live
  * object: a getter, a Proxy trap or a `toJSON` may answer differently the
@@ -956,7 +966,24 @@ function validate(root) {
   if (root === null || typeof root !== "object" || Array.isArray(root) || !isPlainObject(root)) {
     return { problem: `output is ${describeValue(root)}; output must be a plain object` };
   }
-  return walk(root, "output");
+  const walked = walk(root, "output");
+  // The parent merges this document over the run's, so a key missing here keeps
+  // its earlier value. A key deleted from the object the script was handed is
+  // one it cleared. A script that assigns a new object keeps every key it
+  // leaves out, as a `.sh` that writes a new file does. A `toJSON` on the root
+  // can make the copy something other than an object; the parent refuses that.
+  if (
+    walked.problem === undefined &&
+    root === handedOutput &&
+    walked.value !== null &&
+    typeof walked.value === "object" &&
+    isPlainObject(walked.value)
+  ) {
+    for (const key of handedKeys) {
+      if (!Object.hasOwn(walked.value, key)) walked.value[key] = null;
+    }
+  }
+  return walked;
 }
 
 /**
@@ -1091,12 +1118,18 @@ function walk(root, rootPath) {
         };
       }
       const member = frame.source[key];
-      // Dropped rather than refused, as `JSON.stringify` drops it. A script that
-      // writes `output.promo = user.promo?.code` is saying "there is no promo",
-      // and failing the step on it would stop the flow before a later step's
-      // `??` fallback got the chance to supply one. Only a plain `undefined`
-      // earns this: a function or a symbol is still a mistake worth naming.
-      if (member === undefined) continue;
+      // Not refused: a script that writes `output.promo = user.promo?.code` is
+      // saying "there is no promo", and a later step's `??` fallback can supply
+      // one. At the top level the key becomes `null`, which clears it: the
+      // parent merges this document over the run's, so a dropped key would keep
+      // an earlier step's promo. Deeper down it is dropped, as `JSON.stringify`
+      // drops it, because its top-level value replaces the old one whole. Only a
+      // plain `undefined` earns this: a function or a symbol is still a mistake
+      // worth naming.
+      if (member === undefined) {
+        if (frames.length === 1) frame.copy[key] = null;
+        continue;
+      }
       problem = enter(member, `${frame.path}${memberPath(key)}`, (copy) => {
         frame.copy[key] = copy;
       });

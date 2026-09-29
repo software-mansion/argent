@@ -142,11 +142,46 @@ describe("flow script executor — output validation", () => {
     expect(result.failure?.message).toBe(expected);
   });
 
-  it("drops a member set to undefined the way JSON.stringify does", async () => {
+  it("returns a top-level member set to undefined as null, so the merge clears it", async () => {
     const result = await run(`output.promo = undefined; output.ok = true;`);
     expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ ok: true });
-    expect(Object.hasOwn(result.output!, "promo")).toBe(false);
+    expect(result.output).toEqual({ promo: null, ok: true });
+  });
+
+  it("returns a key deleted from the handed document as null", async () => {
+    const ws = workspace();
+    const script = ws.write("clear.mjs", `delete output.promo; output.name = "Bob";`);
+    const result = await new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      output: { name: "Ada", promo: "SPRING", kept: 1 },
+    });
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ name: "Bob", promo: null, kept: 1 });
+  });
+
+  it("refuses a handed document whose toJSON gives a string as not an object", async () => {
+    const ws = workspace();
+    const script = ws.write("to-json.mjs", `output.toJSON = () => "x";`);
+    const result = await new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      output: { name: "Ada" },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.failure?.message).toBe("The script's output was not an object.");
+  });
+
+  it("does not clear the keys a newly assigned object leaves out", async () => {
+    const ws = workspace();
+    const script = ws.write("assign.mjs", `output = { name: "Bob" };`);
+    const result = await new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      output: { name: "Ada", promo: "SPRING" },
+    });
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual({ name: "Bob" });
   });
 
   it("drops a nested member set to undefined", async () => {
@@ -161,10 +196,10 @@ describe("flow script executor — output validation", () => {
     expect(result.output).toEqual({ codes: ["a", null, "c"] });
   });
 
-  it("accepts an optional chain that found nothing, so a later ?? fallback sees no key", async () => {
+  it("accepts an optional chain that found nothing, so a later ?? fallback sees null", async () => {
     const result = await run(`const user = {}; output.promo = user.promo?.code; output.ok = true;`);
     expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ ok: true });
+    expect(result.output).toEqual({ promo: null, ok: true });
   });
 
   it("rejects a cycle rather than crashing on it", async () => {

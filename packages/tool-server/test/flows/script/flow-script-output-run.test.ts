@@ -309,6 +309,32 @@ describe("the run's output document: lifecycle and merge", () => {
     expect(echoes(result).map((step) => step.message)).toEqual(["gone", "u_2", "kept", "cleared"]);
   });
 
+  it("clears a key an earlier script set when a .mjs sets it to undefined or deletes it", async () => {
+    await write(
+      "scripts/user-a.mjs",
+      `output.name = "Ada";\noutput.promo = "SPRING";\noutput.coupon = "C1";\n`
+    );
+    await write(
+      "scripts/user-b.mjs",
+      `const userB = { name: "Bob" };\n` +
+        `output.name = userB.name;\n` +
+        `output.promo = userB.promo?.code;\n` +
+        `delete output.coupon;\n`
+    );
+    await flow(
+      "clear-key",
+      "steps:",
+      `  - script: { path: ${script("user-a.mjs")} }`,
+      `  - script: { path: ${script("user-b.mjs")} }`,
+      `  - echo: "{{output:name}} {{output:promo ?? 'NONE'}} {{output:coupon ?? 'NONE'}}"`
+    );
+
+    const { result } = await runFlow("clear-key");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[2].message).toBe("Bob NONE NONE");
+  });
+
   it("merges the pure rule { ...current, ...returned } and refuses a merged document over 1 MiB", () => {
     // `vi.mocked` wraps the real function, so this is the real rule.
     expect(

@@ -1019,23 +1019,22 @@ describe("what a recorded script's document carries", () => {
     });
   });
 
-  it("drops a .mjs member set to undefined, and does not remove a key an earlier script set", async () => {
+  it("clears a key an earlier script set when a .mjs sets it to undefined", async () => {
     await write("scripts/set-promo.mjs", `output.promo = "SUMMER";`);
     await write("scripts/no-promo.mjs", `output.kept = "yes";\noutput.promo = undefined;`);
 
     await start("fresh");
     const fresh = await addScript("fresh", "../../scripts/no-promo.mjs");
     expect(fresh.status).toBe("pass");
-    expect(fresh.outputJson).toBe('{"kept":"yes"}');
-    const freshSession = await session("fresh");
-    expect(freshSession.output).toEqual({ kept: "yes" });
-    expect(Object.hasOwn(freshSession.output, "promo")).toBe(false);
+    expect(fresh.outputJson).toBe('{"kept":"yes","promo":null}');
+    expect((await session("fresh")).output).toEqual({ kept: "yes", promo: null });
 
-    // A script cannot remove a key: `undefined` is simply not written.
+    // The result shows the same document the recording now holds.
     await start("earlier");
     await addScript("earlier", "../../scripts/set-promo.mjs");
     const cleared = await addScript("earlier", "../../scripts/no-promo.mjs");
     expect(cleared.status).toBe("pass");
-    expect((await session("earlier")).output).toEqual({ promo: "SUMMER", kept: "yes" });
+    expect(cleared.outputJson).toBe('{"promo":null,"kept":"yes"}');
+    expect((await session("earlier")).output).toEqual({ promo: null, kept: "yes" });
   });
 });

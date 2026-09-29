@@ -480,6 +480,8 @@ After a successful script step, Argent updates the output document:
 
 - Each returned top-level key replaces its previous value, including nested values.
 - Other top-level keys keep their values. To clear a key, set it to `null`.
+- Argent also clears a top-level key that an `.mjs` script sets to `undefined`. It clears a key that the script deletes from the `output` object that Argent gives it.
+- In a `.sh` script, a key that the script removes from the file keeps its value.
 - Argent ignores output from failed scripts.
 
 Use JSON objects, arrays, strings, finite numbers, booleans and `null` as values. Keep each returned document and the combined document at or below 1 MiB. Use strings for identifiers, prices and codes to preserve their exact values.
