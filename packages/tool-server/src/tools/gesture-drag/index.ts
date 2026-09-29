@@ -129,7 +129,7 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
     };
     // Marks the button up before dispatching, so a release that rejects is not
     // retried by the recovery path below.
-    let buttonDown = false;
+    let buttonDown: boolean;
     const release = async (x: number, y: number): Promise<void> => {
       buttonDown = false;
       await chromium.dispatchMouseEvent({ type: "mouseReleased", x, y, clickCount: 1 });
