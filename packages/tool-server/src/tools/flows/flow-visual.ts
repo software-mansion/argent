@@ -158,6 +158,12 @@ export async function runSnapshot(
     maxMismatch: number;
     updateBaselines: boolean;
     cropOn?: FlowSelector;
+    /**
+     * `cropOn` as the flow file spells it, `{{output:…}}` references and all.
+     * The baseline key hashes this one, so a reference that resolves to another
+     * value on each run keeps one baseline file. Defaults to `cropOn`.
+     */
+    authoredCropOn?: FlowSelector;
     /** The app this capture is taken from (flow-run's `snapshotAppIdentity` shape). */
     appIdentity: string;
     /** Run-scoped: the appIdentity each snapshot key was first captured from. */
@@ -218,13 +224,15 @@ export async function runSnapshot(
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
   // cropped dimensions — a function of layout — would destroy. A cropOn key
-  // additionally hashes the selector's own fields, so same-name snapshots
-  // cropping different elements do not share a baseline file.
+  // additionally hashes the selector's own fields as the flow file spells
+  // them, so same-name snapshots with different selectors do not share a
+  // baseline file, and one whose reference resolves differently each run does.
   const { w, h } = await pngDimensions(shot.image.hostPath);
+  const cropKey = opts.authoredCropOn ?? opts.cropOn;
   const cropSuffix =
-    opts.cropOn === undefined
+    cropKey === undefined
       ? ""
-      : `-crop-${createHash("sha256").update(cropIdentity(opts.cropOn)).digest("hex").slice(0, 8)}`;
+      : `-crop-${createHash("sha256").update(cropIdentity(cropKey)).digest("hex").slice(0, 8)}`;
   // Keyed on the AUTHORING platform: the key names a device class, not a host.
   // A remote simulator of the same model renders the same pixels at the same
   // geometry, so it must reuse the baseline a local run committed rather than

@@ -2091,6 +2091,7 @@ async function execLeafStep(
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
           cropOn: step.cropOn,
+          authoredCropOn: (authored as typeof step).cropOn,
           appIdentity: snapshotAppIdentity(state),
           seenKeys: state.snapshotApps,
         });

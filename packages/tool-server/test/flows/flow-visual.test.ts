@@ -482,6 +482,25 @@ describe("runSnapshot cropOn", () => {
     await expect(pngSize(cropBaselinePath())).resolves.toEqual({ w: 50, h: 50 });
   });
 
+  it("keys the baseline on authoredCropOn and crops to cropOn", async () => {
+    const resolved = { identifier: "order-o_2" };
+    const authored = { identifier: "order-{{output:order.id}}" };
+
+    const r = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: resolved, authoredCropOn: authored })
+    );
+
+    expect(r.status).toBe("pass");
+    expect(vi.mocked(waitForFrame)).toHaveBeenCalledWith(env, resolved);
+    expect(r.snapshotKey).toBe(
+      `home__ios-100x200-crop-${createHash("sha256")
+        .update(JSON.stringify([null, null, "order-{{output:order.id}}", null, false]))
+        .digest("hex")
+        .slice(0, 8)}`
+    );
+  });
+
   it("compares the cropped image and sweeps the crop scratch dir on a pass", async () => {
     await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
     await writeRealPng(cropBaselinePath(), 50, 50);
