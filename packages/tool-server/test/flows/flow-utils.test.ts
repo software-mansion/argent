@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import * as os from "node:os";
@@ -215,6 +215,25 @@ describe("parseFlow", () => {
     // locate the syntax error.
     expect((thrown as Error).message).toContain("Invalid flow file:");
     expect((thrown as Error).message).toContain("line 1");
+  });
+
+  it("logs a YAML warning as the yaml package's parse does, and still parses the flow", async () => {
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const flow = parseFlow("steps:\n  - echo: !foo hi\n");
+
+      expect(flow.steps).toEqual([{ kind: "echo", message: "hi" }]);
+      expect(emitWarning).toHaveBeenCalledTimes(1);
+      expect(emitWarning).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "YAMLWarning",
+          code: "TAG_RESOLVE_FAILED",
+          message: expect.stringContaining("Unresolved tag: !foo at line 2"),
+        })
+      );
+    } finally {
+      emitWarning.mockRestore();
+    }
   });
 
   // `step must be an object` is spelled twice — here for a top-level entry, and

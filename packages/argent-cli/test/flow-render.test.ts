@@ -11,6 +11,7 @@ import {
   renderBatchSummary,
   renderFailedFlows,
   renderSingleFailure,
+  renderSourceFrame,
   summarizeFailure,
   type FlowReport,
   type StepReport,
@@ -641,5 +642,236 @@ describe("failure recap", () => {
       "    diff 2.10% > 1%",
     ]);
     expect(renderSingleFailure(mkReport([{ index: 0, kind: "tap", status: "pass" }]))).toEqual([]);
+  });
+});
+
+describe("failure source frame", () => {
+  const LOGIN = [
+    "name: login",
+    "steps:",
+    "  - launch: com.acme.shop",
+    "  - assert: { visible: { text: Home } }",
+    "  - tap: { text: Profile }",
+  ].join("\n");
+
+  it("frames the failing line between the lines around it, marking it", () => {
+    expect(renderSourceFrame("flows/a-login.yaml", 4, LOGIN)).toEqual([
+      "at flows/a-login.yaml:4",
+      "  3 |   - launch: com.acme.shop",
+      "> 4 |   - assert: { visible: { text: Home } }",
+      "  5 |   - tap: { text: Profile }",
+    ]);
+  });
+
+  it("frames only the lines that exist at the start and the end of the file", () => {
+    expect(renderSourceFrame("f.yaml", 1, LOGIN)).toEqual([
+      "at f.yaml:1",
+      "> 1 | name: login",
+      "  2 | steps:",
+    ]);
+    expect(renderSourceFrame("f.yaml", 5, LOGIN)).toEqual([
+      "at f.yaml:5",
+      "  4 |   - assert: { visible: { text: Home } }",
+      "> 5 |   - tap: { text: Profile }",
+    ]);
+  });
+
+  it("pads each line number to the widest one shown, keeping the bars in one column", () => {
+    const text = Array.from({ length: 100 }, (_, i) => `  - tap: t${i + 1}`).join("\n");
+    const at9 = renderSourceFrame("f.yaml", 9, text);
+    expect(at9).toEqual([
+      "at f.yaml:9",
+      "   8 |   - tap: t8",
+      ">  9 |   - tap: t9",
+      "  10 |   - tap: t10",
+    ]);
+    expect(renderSourceFrame("f.yaml", 10, text).slice(1, 3)).toEqual([
+      "   9 |   - tap: t9",
+      "> 10 |   - tap: t10",
+    ]);
+    // The width is the last number shown, not the file's line count.
+    expect(renderSourceFrame("f.yaml", 7, text).slice(1)).toEqual([
+      "  6 |   - tap: t6",
+      "> 7 |   - tap: t7",
+      "  8 |   - tap: t8",
+    ]);
+    const at99 = renderSourceFrame("f.yaml", 99, text);
+    expect(at99.slice(1)).toEqual([
+      "   98 |   - tap: t98",
+      ">  99 |   - tap: t99",
+      "  100 |   - tap: t100",
+    ]);
+    for (const frame of [at9, at99]) {
+      const bars = frame.slice(1).map((l) => l.indexOf("|"));
+      expect(new Set(bars).size).toBe(1);
+    }
+  });
+
+  it("prints an empty line as its gutter alone, with no trailing space", () => {
+    const frame = renderSourceFrame("f.yaml", 3, "steps:\n\n  - tap: { text: Pay }\n");
+    expect(frame).toEqual(["at f.yaml:3", "  2 |", "> 3 |   - tap: { text: Pay }"]);
+    // A blank last line is a line of the file: only the one newline that ends
+    // the text is dropped.
+    expect(renderSourceFrame("f.yaml", 2, "steps:\n  - tap: x\n\n")).toEqual([
+      "at f.yaml:2",
+      "  1 | steps:",
+      "> 2 |   - tap: x",
+      "  3 |",
+    ]);
+  });
+
+  it("reads CRLF and LF text ending in a newline without a line after the last one", () => {
+    const crlf = "steps:\r\n  - tap: { text: Pay }\r\n  - tap: { text: Done }\r\n";
+    expect(renderSourceFrame("f.yaml", 2, crlf)).toEqual([
+      "at f.yaml:2",
+      "  1 | steps:",
+      "> 2 |   - tap: { text: Pay }",
+      "  3 |   - tap: { text: Done }",
+    ]);
+    expect(renderSourceFrame("f.yaml", 3, crlf)).toEqual([
+      "at f.yaml:3",
+      "  2 |   - tap: { text: Pay }",
+      "> 3 |   - tap: { text: Done }",
+    ]);
+    expect(renderSourceFrame("f.yaml", 4, crlf)).toEqual(["at f.yaml:4"]);
+    expect(renderSourceFrame("f.yaml", 2, "steps:\n  - tap: x\n")).toEqual([
+      "at f.yaml:2",
+      "  1 | steps:",
+      "> 2 |   - tap: x",
+    ]);
+  });
+
+  it("leaves out a byte order mark at the start of the file", () => {
+    expect(renderSourceFrame("f.yaml", 1, "\ufeffsteps:\n  - tap: x\n")).toEqual([
+      "at f.yaml:1",
+      "> 1 | steps:",
+      "  2 |   - tap: x",
+    ]);
+  });
+
+  it("gives only the location when the file could not be read or no longer has the line", () => {
+    expect(renderSourceFrame("f.yaml", 4, undefined)).toEqual(["at f.yaml:4"]);
+    expect(renderSourceFrame("f.yaml", 6, LOGIN)).toEqual(["at f.yaml:6"]);
+    expect(renderSourceFrame("f.yaml", 1, "")).toEqual(["at f.yaml:1"]);
+  });
+
+  it("escapes a line's invisible characters, so each stays one terminal line", () => {
+    const [tab, cr, esc, nbsp, lineSep] = [0x09, 0x0d, 0x1b, 0xa0, 0x2028].map((c) =>
+      String.fromCodePoint(c)
+    );
+    const text = [
+      "steps:",
+      `  - type: { text: "a${tab}b${nbsp}c" }`,
+      `  - echo: "${esc}[31mred${esc}[0m and a${cr}b${lineSep}c"`,
+    ].join("\n");
+    const frame = renderSourceFrame("f.yaml", 2, text);
+    expect(frame).toEqual([
+      "at f.yaml:2",
+      "  1 | steps:",
+      String.raw`> 2 |   - type: { text: "a\tb\u00a0c" }`,
+      String.raw`  3 |   - echo: "\u001b[31mred\u001b[0m and a\rb\u2028c"`,
+    ]);
+    for (const c of [tab, cr, esc, nbsp, lineSep]) expect(frame.join("")).not.toContain(c);
+  });
+
+  it("cuts a line over 300 characters and says how many more it had", () => {
+    const long = `  - type: ${"x".repeat(390)}`;
+    const text = ["steps:", long, "  - tap: { text: Pay }"].join("\n");
+    expect(renderSourceFrame("f.yaml", 2, text)).toEqual([
+      "at f.yaml:2",
+      "  1 | steps:",
+      `> 2 | ${long.slice(0, 300)} … (100 more characters)`,
+      "  3 |   - tap: { text: Pay }",
+    ]);
+    // A line around the failing one is cut the same way.
+    expect(renderSourceFrame("f.yaml", 3, text)[1]).toBe(
+      `  2 | ${long.slice(0, 300)} … (100 more characters)`
+    );
+  });
+
+  it("prints the source after the failing step's reason and detail lines in a single run's recap", () => {
+    const report = mkReport([
+      { index: 0, kind: "launch", status: "pass" },
+      {
+        index: 1,
+        kind: "assert",
+        status: "fail",
+        target: 'visible "Home"',
+        reason: 'no element matched selector text="Home"',
+        hint: "the login may still be loading",
+      },
+      { index: 2, kind: "tap", status: "skip", target: '"Profile"' },
+    ]);
+    const source = renderSourceFrame("flows/a-login.yaml", 4, LOGIN);
+    const recap = [
+      '  ✗ step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      "    hint: the login may still be loading",
+      "    at flows/a-login.yaml:4",
+      "      3 |   - launch: com.acme.shop",
+      "    > 4 |   - assert: { visible: { text: Home } }",
+      "      5 |   - tap: { text: Profile }",
+    ];
+    expect(renderSingleFailure(report, source)).toEqual(["", ...recap]);
+    expect(renderReport(report, source)).toBe(
+      [
+        'Flow "checkout" on UDID-1',
+        "  ✓  1 launch",
+        '  ✗  2 assert visible "Home" — no element matched selector text="Home"',
+        "       hint: the login may still be loading",
+        '  ·  3 tap "Profile"',
+        "",
+        ...recap,
+        "",
+        "FAIL — 1 passed, 1 failed, 0 errored, 1 skipped",
+      ].join("\n")
+    );
+    // A passing report has no recap to put a source in.
+    const passing = mkReport([{ index: 0, kind: "tap", status: "pass" }]);
+    expect(renderSingleFailure(passing, source)).toEqual([]);
+    expect(renderReport(passing, source)).toBe(renderReport(passing));
+  });
+
+  it("renders a report without a source exactly as before", () => {
+    const report = mkReport(STEPS);
+    expect(renderReport(report, undefined)).toBe(renderReport(report));
+    expect(renderReport(report, [])).toBe(renderReport(report));
+    expect(renderSingleFailure(report, undefined)).toEqual(renderSingleFailure(report));
+    expect(renderSingleFailure(report, [])).toEqual(renderSingleFailure(report));
+  });
+
+  it("puts a failed flow's source between its detail and its re-run command", () => {
+    expect(
+      renderFailedFlows([
+        {
+          path: "a-login.yaml",
+          headline: 'step 2 assert visible "Home"',
+          detail: 'no element matched selector text="Home"',
+          source: renderSourceFrame("flows/a-login.yaml", 4, LOGIN),
+          rerun: "argent flow run flows/a-login.yaml --platform ios",
+        },
+        {
+          path: "b-checkout.yaml",
+          headline: "step 1 tap",
+          source: ["at flows/b-checkout.yaml:9"],
+          rerun: "argent flow run flows/b-checkout.yaml --platform ios",
+        },
+      ])
+    ).toEqual([
+      "",
+      "Failed flows (2)",
+      "",
+      '  ✗ a-login.yaml › step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      "    at flows/a-login.yaml:4",
+      "      3 |   - launch: com.acme.shop",
+      "    > 4 |   - assert: { visible: { text: Home } }",
+      "      5 |   - tap: { text: Profile }",
+      "    re-run: argent flow run flows/a-login.yaml --platform ios",
+      "",
+      "  ✗ b-checkout.yaml › step 1 tap",
+      "    at flows/b-checkout.yaml:9",
+      "    re-run: argent flow run flows/b-checkout.yaml --platform ios",
+    ]);
   });
 });
