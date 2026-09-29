@@ -10,6 +10,17 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   ),
 }));
 
+// Replaces the runner's line lookup when set: every parsed step has a line, so
+// only a replaced lookup gives a step none.
+let lineLookup: ((step: FlowStep) => number | undefined) | undefined;
+vi.mock("../../src/tools/flows/flow-utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/tools/flows/flow-utils")>();
+  return {
+    ...actual,
+    flowStepLine: (step: FlowStep) => (lineLookup ?? actual.flowStepLine)(step),
+  };
+});
+
 import type { Registry } from "@argent/registry";
 import { createFlowTestHarness, label, screen } from "./harness";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -26,6 +37,7 @@ const { run, writeFlowYaml } = createFlowTestHarness({
   tempDirectoryPrefix: "flow-step-lines-",
   reset: () => {
     currentTree = () => screen([label("Sign in")]);
+    lineLookup = undefined;
   },
 });
 
@@ -335,6 +347,21 @@ describe("where a run reports each step is written", () => {
       { kind: "run", status: "pass", line: 2, file: undefined },
       { kind: "echo", status: "pass", line: 2, file: login },
     ]);
+  });
+
+  it("names no file for a fragment step whose line is not known", async () => {
+    // `file` says which file `line` is in, so a step with no line has neither.
+    await writeFlowYaml("main.yaml", yaml("steps:", "  - run: login.yaml"));
+    await writeFlowYaml("login.yaml", yaml("steps:", "  - echo: signing in"));
+    lineLookup = (step) => (step.kind === "run" ? 2 : undefined);
+
+    const result = await run("main");
+
+    expect(where(result)).toEqual([
+      { kind: "run", status: "pass", line: 2, file: undefined },
+      { kind: "echo", status: "pass", line: undefined, file: undefined },
+    ]);
+    expect(Object.keys(result.steps[1])).not.toContain("line");
   });
 
   it("reports a run: step inside a fragment in that fragment's file", async () => {
