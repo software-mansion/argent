@@ -10,8 +10,9 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
   ),
 }));
 
+import type { Registry } from "@argent/registry";
 import { createFlowTestHarness, label, screen } from "./harness";
-import type { FlowRunResult } from "../../src/tools/flows/flow-run";
+import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import {
   blockSteps,
   flowStepLine,
@@ -342,6 +343,49 @@ describe("where a run reports each step is written", () => {
       { kind: "run", status: "error", line: 3, file: outer },
     ]);
     expect(result.steps[2].reason).toMatch(/could not load fragment "broken\.yaml"/);
+  });
+
+  it("keeps the nested run's lines and fragment files in a tool: flow-execute step's result", async () => {
+    // The step's result is the nested run's whole report, which MCP prints as
+    // JSON, so the nested steps carry their lines there too.
+    const inner = await writeFlowYaml(
+      "inner.yaml",
+      yaml("steps:", "  - echo: inner", "  - run: helpers/frag.yaml")
+    );
+    const frag = await writeFlowYaml("helpers/frag.yaml", yaml("steps:", "", "  - echo: frag"));
+    const projectRoot = path.dirname(path.dirname(path.dirname(inner)));
+    await writeFlowYaml(
+      "outer.yaml",
+      yaml(
+        "steps:",
+        "  - echo: outer",
+        "  - tool: flow-execute",
+        `    args: { name: inner, project_root: ${JSON.stringify(projectRoot)} }`
+      )
+    );
+    const registry = {
+      invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) =>
+        id === "flow-execute" ? runFlow.execute({}, args as never) : { ok: true }
+      ),
+      // `device` is a bind key, so the nested run drives the outer run's device.
+      getTool: vi.fn(() => ({ inputSchema: { properties: { name: {}, device: {} } } })),
+    } as unknown as Registry;
+    const runFlow = createRunFlowTool(registry);
+
+    const result = (await runFlow.execute(
+      {},
+      { name: "outer", project_root: projectRoot, device: "DEVICE" }
+    )) as FlowRunResult;
+
+    expect(where(result)).toEqual([
+      { kind: "echo", status: "pass", line: 2, file: undefined },
+      { kind: "tool", status: "pass", line: 3, file: undefined },
+    ]);
+    expect(where(result.steps[1].result as FlowRunResult)).toEqual([
+      { kind: "echo", status: "pass", line: 2, file: undefined },
+      { kind: "run", status: "pass", line: 3, file: undefined },
+      { kind: "echo", status: "pass", line: 3, file: frag },
+    ]);
   });
 
   it("reports the steps skipped after a hard stop at their lines", async () => {
