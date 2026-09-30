@@ -176,8 +176,8 @@ const RUN_OPTIONS = {
   "json-stream": { kind: "boolean" },
   "recursive": { kind: "boolean", alias: "r" },
   "device": { kind: "value" },
-  // The tool-server's own rejection is a raw Zod issue dump, and in a directory
-  // run it lands only after the first flow has run, stopping the whole batch.
+  // The tool-server's schema rejection carries no error_kind, so in a directory
+  // run it would stop the whole batch.
   "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
