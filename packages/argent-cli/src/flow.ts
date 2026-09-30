@@ -132,7 +132,8 @@ counts the remaining flows skipped.
 
 A run goes to the tool-server the CLI is routed to: the auto-started local
 one, or the one named by \`argent link\` or ARGENT_TOOLS_URL. Over a link, a
-flow with run:, script: or snapshot: steps is rejected before the first step.
+flow with run:, script: or snapshot: steps, or a nested tool: flow-execute
+step, is rejected before the first step.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or

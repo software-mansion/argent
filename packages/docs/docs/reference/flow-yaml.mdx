@@ -428,12 +428,12 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 `argent link` routes the CLI to a tool-server on another computer. `argent flow run` then uploads the flow file with the call. The tool-server keeps the file in a temporary directory for the duration of the run.
 
-| Flow content                                     | Over a link                                                      |
-| ------------------------------------------------ | ---------------------------------------------------------------- |
-| Directives that drive the device, `echo`, `when` | Runs                                                             |
-| `run:`, `script:`, `snapshot:`                   | Rejected before the first step. The message lists each such step |
-| A relative `launch: { chromium: <path> }`        | Rejected. Use an absolute path on the tool-server                |
-| `--update-baselines`                             | Rejected together with the `snapshot:` step                      |
+| Flow content                                         | Over a link                                                      |
+| ---------------------------------------------------- | ---------------------------------------------------------------- |
+| Directives that drive the device, `echo`, `when`     | Runs                                                             |
+| `run:`, `script:`, `snapshot:`, `tool: flow-execute` | Rejected before the first step. The message lists each such step |
+| A relative `launch: { chromium: <path> }`            | Rejected. Use an absolute path on the tool-server                |
+| `--update-baselines`                                 | Rejected together with the `snapshot:` step                      |
 
 When the client and the tool-server run on one computer with one disk, for example over a link to `127.0.0.1`, the tool-server reads the file in place and every step kind runs.
 
@@ -441,7 +441,7 @@ A rejected flow gives exit code 1 and the error code `FLOW_FILE_INVALID`. With `
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. When the tool-server runs on a different computer, both sources send only that one file, and the tool-server keeps it in a temporary directory. Argent checks the whole flow before it runs any step. It rejects a `run:`, `script:` or `snapshot` step at any depth, lists each such step, and names the missing co-location, not a missing fragment, script or baseline. When the client and the tool-server share one disk, the tool-server reads the file in place and every step kind runs. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. When the tool-server runs on a different computer, both sources send only that one file, and the tool-server keeps it in a temporary directory. Argent checks the whole flow before it runs any step. It rejects a `run:`, `script:`, `snapshot` or `tool: flow-execute` step at any depth, lists each such step, and names the missing co-location, not a missing fragment, script, baseline or nested flow. When the client and the tool-server share one disk, the tool-server reads the file in place and every step kind runs. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 

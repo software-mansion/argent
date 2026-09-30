@@ -110,7 +110,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. The argent client uploads the file when the tool-server runs on another computer; an uploaded flow must be self-contained (no run:, script: or snapshot: steps). On one computer with one disk, the file is read in place and every step kind runs. Pass the path through the argent client; a raw path that the file-input boundary did not verify is rejected."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. The argent client uploads the file when the tool-server runs on another computer; an uploaded flow must be self-contained (no run:, script:, snapshot: or nested tool: flow-execute steps). On one computer with one disk, the file is read in place and every step kind runs. Pass the path through the argent client; a raw path that the file-input boundary did not verify is rejected."
       ),
     device: z
       .string()
@@ -1202,21 +1202,34 @@ const UPLOAD_STAGE_BY_KIND = {
   run: "flow_upload_run_composition",
   script: "flow_upload_script_step",
   snapshot: "flow_upload_snapshot_baseline",
+  nested: "flow_upload_nested_flow",
 } as const;
+
+/** The flow a nested `tool: flow-execute` step names, quoted in the refusal's step list. */
+function nestedFlowRef(args: Record<string, unknown>): string {
+  if (typeof args.name === "string") return ` (name: ${args.name})`;
+  if (typeof args.flow_path === "string") return ` (flow_path: ${args.flow_path})`;
+  return "";
+}
 
 /**
  * Reject an uploaded root flow that is not self-contained — one with a `run:`,
- * `script:` or `snapshot` step at any depth — before anything executes, so a
- * mid-run or guard-gated error cannot execute half the flow first. All three
- * anchor at the flow file's real directory, which an uploaded flow does not
- * have: a run: step's referenced files stayed on the client, a script step's
- * `.mjs` (and whatever it imports) stayed there too, and against a per-call temp
- * materialization a plain snapshot can only fail (no baseline) while
- * updateBaselines writes PNGs no later run can find.
+ * `script:` or `snapshot` step, or a nested `tool: flow-execute`, at any depth —
+ * before anything executes, so a mid-run or guard-gated error cannot execute
+ * half the flow first. All four read files that stayed on the client: a run:
+ * step's referenced files, a script step's `.mjs` (and whatever it imports), a
+ * snapshot's baselines (against a per-call temp materialization a plain snapshot
+ * can only fail, while updateBaselines writes PNGs no later run can find), and
+ * the flow a nested `flow-execute` names under the client's project_root. That
+ * last one is the raw step the recorder keeps for every nested flow in a remote
+ * recording (see captureRunTarget); {@link invokeSubTool} forwards no file
+ * inputs, so the nested run would open the client's path on THIS host — ENOENT
+ * after the earlier steps drove the device, or, when the same path exists here,
+ * the server's own copy reported as a pass.
  *
  * Every offending step is listed, in walk order, so the author sees the whole
  * repair at once rather than one step per run. The stage is the first
- * offender's, and the three stay distinct: each names a different file the
+ * offender's, and the four stay distinct: each names a different file the
  * link does not carry, and each is lifted on its own once it does.
  */
 function assertUploadSelfContained(flow: FlowFile): void {
@@ -1228,13 +1241,18 @@ function assertUploadSelfContained(flow: FlowFile): void {
       offending.push({ kind: "script", line: `${where}: script: { path: ${step.path} }` });
     } else if (step.kind === "snapshot") {
       offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
+    } else if (step.kind === "tool" && step.name === "flow-execute") {
+      offending.push({
+        kind: "nested",
+        line: `${where}: tool: flow-execute${nestedFlowRef(step.args)}`,
+      });
     }
   }
   if (offending.length === 0) return;
   throw new FailureError(
     `This flow is not self-contained, and it arrived as an upload from a client that does ` +
-      `not share a filesystem with this tool-server. The steps below read files beside the ` +
-      `flow file, which stayed on the client:\n` +
+      `not share a filesystem with this tool-server. The steps below read files that stayed ` +
+      `on the client:\n` +
       offending.map((o) => `  - ${o.line}`).join("\n") +
       `\nRun the flow on the same computer as the tool-server: without a link, or over a ` +
       `link to 127.0.0.1 with the project on this disk.`,

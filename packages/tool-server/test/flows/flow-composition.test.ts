@@ -1854,6 +1854,58 @@ describe("flow composition (run:)", () => {
     expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
   });
 
+  it("rejects an uploaded flow whose nested tool: flow-execute names a flow on the client", async () => {
+    // The raw step the recorder keeps for every nested flow in a remote
+    // recording. invokeSubTool forwards no file inputs, so without the
+    // preflight the nested run opens `<project_root>/.argent/flows/login.yaml`
+    // on THIS host after step 1 drove the device: ENOENT, or — when the same
+    // path exists here — the server's own copy, reported as a pass.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+          {
+            kind: "tool",
+            name: "flow-execute",
+            args: { name: "login", project_root: "/client", prerequisiteAcknowledged: true },
+          },
+        ],
+      }),
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("not self-contained");
+    expect(message).toContain("  - step 2: tool: flow-execute (name: login)");
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
+    // Preflight, not mid-run: neither the tap nor the nested run was dispatched.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("allows a snapshot step for a co-located flow_file resolved in place", async () => {
     // The inverse pin for the snapshot upload rejection above: the everyday
     // co-located client (presentOnHost, NOT an upload) keeps its durable
