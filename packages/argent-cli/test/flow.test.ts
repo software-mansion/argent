@@ -1788,7 +1788,7 @@ describe("argent flow run", () => {
       "filename (minus .yaml) names the run's report and artifacts"
     );
     expect(logs.join("\n")).toContain('contain only letters, numbers, "_", or "-"');
-    expect(logs.join("\n")).toContain("the one named by `argent link` or ARGENT_TOOLS_URL");
+    expect(logs.join("\n")).toContain("the one that `argent link` or ARGENT_TOOLS_URL names");
     expect(logs.join("\n")).toContain("--json-stream");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();

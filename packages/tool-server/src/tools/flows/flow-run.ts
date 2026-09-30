@@ -110,7 +110,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. The argent client uploads the file when the tool-server runs on another computer; an uploaded flow must be self-contained (no run:, script:, snapshot: or nested tool: flow-execute steps). On one computer with one disk, the file is read in place and every step kind runs. Pass the path through the argent client; a raw path that the file-input boundary did not verify is rejected."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. When the tool-server runs on another computer, the argent client uploads the file. An uploaded flow must be self-contained: no run:, script:, snapshot: or nested tool: flow-execute steps. When the client and the tool-server share one disk, the tool-server reads the file in place and all step kinds run."
       ),
     device: z
       .string()

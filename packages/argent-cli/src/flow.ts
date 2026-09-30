@@ -130,10 +130,10 @@ file, or a device it cannot resolve. A transport failure, a rejection the server
 does not mark as validation, or a reply that is not a report stops the batch and
 counts the remaining flows skipped.
 
-A run goes to the tool-server the CLI is routed to: the auto-started local
-one, or the one named by \`argent link\` or ARGENT_TOOLS_URL. Over a link, a
-flow with run:, script: or snapshot: steps, or a nested tool: flow-execute
-step, is rejected before the first step.
+The CLI sends a run to its tool-server: the local one that starts
+automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
+a link, a flow with run:, script:, snapshot: or nested tool: flow-execute
+steps does not run. The tool-server rejects it before the first step.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
