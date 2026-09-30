@@ -98,6 +98,11 @@ export function resolveSecretPlaceholders(
  * Zero-length values are skipped: replacing an empty string would corrupt the
  * text rather than redact anything.
  *
+ * Destructive on curated text: it replaces the value wherever it appears, so a
+ * two-character secret rewrites ordinary words and a numeric one swallows a
+ * character count. Anything a tool composes for the agent to read should be
+ * written value-free instead.
+ *
  * Callers that scrub a *stream* must scrub before any truncation and must hold
  * back a chunk tail across chunk boundaries, since a whole-value match sees
  * neither half of a value split across two writes — see
@@ -236,11 +241,19 @@ function markerLengthAt(
     : 0;
 }
 
+/** Causes past this depth are not rendered by `formatErrorForAgent` either. */
+const CAUSE_CHAIN_DEPTH = 8;
+
 /**
  * Scrub resolved secret values from an error before it propagates — a backend
  * failure can echo its input (Android typing surfaces the device-side
  * `input text` command line). Mutates message/stack in place to preserve the
  * error's class, and with it the HTTP status and telemetry mapping.
+ *
+ * Down the whole `cause` chain, to the depth `formatErrorForAgent` flattens into
+ * the message the agent is shown: the keyboard repair raises its cancellation
+ * with the failed adb call as the cause, so scrubbing the head alone leaves the
+ * command line one `— caused by:` away.
  */
 export function redactSecretsFromError(
   err: unknown,
@@ -248,10 +261,29 @@ export function redactSecretsFromError(
 ): unknown {
   const scrub = (s: string) => scrubSecretValues(s, secrets);
   if (err instanceof Error) {
-    err.message = scrub(err.message);
-    if (err.stack) err.stack = scrub(err.stack);
+    const seen = new Set<unknown>();
+    let current: unknown = err;
+    for (let depth = 0; depth <= CAUSE_CHAIN_DEPTH; depth++) {
+      if (!(current instanceof Error) || seen.has(current)) break;
+      seen.add(current);
+      overwrite(current, "message", scrub(current.message));
+      if (current.stack) overwrite(current, "stack", scrub(current.stack));
+      current = (current as { cause?: unknown }).cause;
+    }
     return err;
   }
   if (typeof err === "string") return scrub(err);
   return err;
+}
+
+/**
+ * Not `err[key] = value`: a `DOMException` — what `AbortSignal.throwIfAborted`
+ * raises, and this module runs on the cancellation path of a tool that types
+ * secrets — inherits `message` as a getter-ONLY prototype accessor, so
+ * assignment throws in strict mode and takes the redaction down with the error
+ * it is scrubbing (its `stack` is an own accessor that does have a setter). An
+ * own data property shadows the getter and keeps the error's class.
+ */
+function overwrite(err: Error, key: "message" | "stack", value: string): void {
+  Object.defineProperty(err, key, { value, writable: true, configurable: true });
 }

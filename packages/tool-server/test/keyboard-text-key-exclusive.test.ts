@@ -147,13 +147,12 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
       // Rejected before the dispatch, so the backend is never reached: no keys
       // injected on any of the four.
       expect(injections()).toBe(0);
-      // Adds signal on ios and chromium only — those resolve a service (and
-      // would spawn one) on a call that gets through. Android injects through
-      // `adbShell` directly and the vega branch never references the registry,
-      // so a SUCCESSFUL call resolves nothing there either and this line cannot
-      // fail on those two iterations. Kept because it holds for all four and
-      // guards the two that can regress; `injections()` above is what carries
-      // the android and vega rows.
+      // Adds signal on ios, chromium and android — each resolves a service on a
+      // call that gets through (android resolves the android-devtools helper for
+      // the typed-text read-back, and would `adb install -t` its APK), so a guard
+      // that ran after the dispatch would show up here. The vega branch never
+      // references the registry, so this line cannot fail on that row;
+      // `injections()` above is what carries it.
       expect(r.resolveService).not.toHaveBeenCalled();
     });
 
@@ -394,6 +393,25 @@ describe("keyboard — how the constraint reaches a client", () => {
     expect(key.description).toMatch(/Cannot be combined with `text`/);
     expect(key.description).toMatch(/run-sequence/);
   });
+
+  for (const { platform, udid, injections } of BACKENDS) {
+    it(`${platform}: types nothing when the caller has already cancelled`, async () => {
+      // `longRunning` drops the MCP adapter's 30 s bound, so the signal is all
+      // that is left to stop a call nobody is waiting for. Checked in `execute`
+      // as well as inside the backends that loop per key, because this is the
+      // last point common to all four where nothing has reached the device.
+      await expect(
+        createKeyboardTool(registry()).execute(
+          {},
+          { udid, text: "hi", delayMs: 0 } as never,
+          {
+            signal: AbortSignal.abort(),
+          } as never
+        )
+      ).rejects.toThrow(/abort/i);
+      expect(injections()).toBe(0);
+    });
+  }
 
   it("accepts and rejects exactly the shapes the docs describe", async () => {
     // The runtime table the prose above stands for. Without it "text OR key"

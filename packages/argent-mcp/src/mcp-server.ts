@@ -309,17 +309,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       if (udid && (wantScreenshot || wantTree) && containsSecretPlaceholder(params.arguments)) {
         // The tool-server typed the *resolved* secret; a screenshot of a
         // non-secure-entry field would hand the plaintext back to the model as
-        // pixels, and the element tree would hand it back as text. Every
-        // instruction in the note must be safe to follow AFTER the typing,
-        // since this branch only fires on a call that already typed it: hence
-        // it forbids re-sending the typing step (a rebuilt `run-sequence`
-        // would type the secret a second time on top of the first) and states
-        // that only this call is skipped, the decision being per call's args.
+        // pixels, and the element tree would hand it back as text — so the
+        // capture is skipped whenever a {{secret:…}} rode the args. The branch
+        // keys on the args alone, so it cannot know whether the secret step
+        // actually ran (a `run-sequence` can stop on an earlier step, never
+        // reaching the typing) or whether the read-back proved the text landed.
+        // The note therefore asserts neither: it sends the model to the result
+        // to decide, and never advises submitting unconditionally, since a
+        // proven-unlanded secret would submit a partial credential.
         content = [
           ...content,
           {
             type: "text" as const,
-            text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
+            text: "Auto-screenshot and element tree skipped: the input carries a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. Read this result before acting. If it shows the secret was typed, do NOT re-send that step — the field would then hold two copies. If it says the text did not land, the field may already hold part of the value, so do not submit it: restore the field and retype from a known state. If the secret step never ran (a sequence that stopped on an earlier step), retrying is safe. Once the field holds the value, submit or navigate away, then verify the resulting screen. Only this call is covered: the next call is captured normally and shows the secret if the field is still on screen. To cover the submit too, put the typing and the submit in ONE `run-sequence` next time you type a secret.",
           },
         ];
       } else if (udid && (wantScreenshot || wantTree)) {
