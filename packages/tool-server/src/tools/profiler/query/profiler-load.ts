@@ -25,6 +25,7 @@ import {
   isCaptureInFlight,
   inFlightGuardMessage,
 } from "../../../utils/profiler-shared/capture-guard";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 // session_id is interpolated into on-disk file paths, so restrict it to a token
@@ -59,12 +60,7 @@ const zodSchema = z.object({
       "Timestamp-based session identifier (e.g. '20250313-143022') from the list output. " +
         "Required for load_react and load_native modes."
     ),
-  port: z.coerce
-    .number()
-    .default(8081)
-    .describe(
-      "Metro port — the loaded React data is cached under this port for query tools (default 8081)"
-    ),
+  port: metroPortField,
   device_id: metroDeviceIdParam(
     "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
   ),
@@ -505,6 +501,9 @@ Fails if the session_id is not found or required XML files are missing from disk
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
   capability: RN_ONLY_TOOL_CAPABILITY,
+  // load_native re-parses the whole export, which can outlast the 30s MCP fetch
+  // timeout; an aborted call is replayed, not cancelled.
+  longRunning: true,
   services: (params) => {
     const svcs: Record<string, ServiceRef> = {};
     if (params.mode === "load_native") {
@@ -531,7 +530,7 @@ Fails if the session_id is not found or required XML files are missing from disk
             }
           );
         }
-        return loadReactSession(debugDir, params.session_id, params.port, params.device_id);
+        return loadReactSession(debugDir, params.session_id, metroPort(params), params.device_id);
       }
 
       case "load_native": {

@@ -11,7 +11,7 @@ import {
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
-import { cachedDeviceSetForUdid, simctlPrefix } from "../utils/ios-device-sets";
+import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
@@ -107,13 +107,15 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 // the host-shared /tmp, so the host connects to that path directly.
 function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   // The factory's device-list validation already learned this UDID's device
-  // set, so the synchronous cached lookup is warm here.
+  // set, so the synchronous cached lookup is warm here. Spawning the AX reader
+  // is the ax-service mechanism, so a provider's device needs that grant.
+  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
   const proc = execFile(
     "xcrun",
     [
-      ...simctlPrefix(cachedDeviceSetForUdid(udid)),
+      ...axTarget.prefix,
       "spawn",
-      udid,
+      axTarget.nativeId,
       tvosAxServiceBinaryPath(),
       "--socket",
       socketPath,

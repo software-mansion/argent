@@ -48,12 +48,32 @@ vi.mock("child_process", () => ({
     captureState.lastSpawn = { args, child };
     return child;
   },
+
+  /**
+   * `promisify(execFile)`d at module load by utils/adb, which the mock below
+   * pulls in for real. Never called from here.
+   */
+  execFile: (
+    _file: string,
+    _args: string[],
+    _options: unknown,
+    callback: (err: Error | null, result: { stdout: string; stderr: string }) => void
+  ) => {
+    callback(null, { stderr: "", stdout: "" });
+  },
 }));
 const lastSpawnRef = () => captureState.lastSpawn as { args: string[]; child: FakeChild } | null;
 vi.mock("../../src/utils/android-binary", () => ({
   resolveAndroidBinary: vi.fn(async () => "/fake/adb"),
 }));
-vi.mock("../../src/utils/adb", () => ({
+
+/**
+ * Stub only the two runners that would reach a real device. Everything else
+ * (notably the argv substitution the capture applies before spawning) stays
+ * real, so a listing mock here can't quietly replace it with a no-op.
+ */
+vi.mock("../../src/utils/adb", async () => ({
+  ...(await vi.importActual<typeof import("../../src/utils/adb")>("../../src/utils/adb")),
   runAdb: vi.fn(async () => ({ stdout: "", stderr: "" })),
   adbShell: vi.fn(async () => ""),
 }));
