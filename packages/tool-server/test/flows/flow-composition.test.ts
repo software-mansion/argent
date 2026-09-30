@@ -1463,7 +1463,7 @@ describe("flow composition (run:)", () => {
           },
         }
       )
-    ).rejects.toThrow(/co-located/i);
+    ).rejects.toThrow("step 2: run: login.yaml");
     // Preflight, not mid-run: nothing was dispatched to the device.
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
@@ -1493,7 +1493,7 @@ describe("flow composition (run:)", () => {
           },
         }
       )
-    ).rejects.toThrow(/co-located/i);
+    ).rejects.toThrow("step 1 of the when: block at step 1: run: login.yaml");
   });
 
   it("rejects an uploaded flow whose run: sits two when: blocks deep", async () => {
@@ -1539,7 +1539,9 @@ describe("flow composition (run:)", () => {
         (e: unknown) => e
       );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain('run: composition ("run: login.yaml")');
+    expect((err as Error).message).toContain(
+      "step 1 of the when: block at step 1 of the when: block at step 1: run: login.yaml"
+    );
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
     // Preflight, not mid-run: nothing was dispatched to the device.
     expect(registry.invokeTool).not.toHaveBeenCalled();
@@ -1579,7 +1581,7 @@ describe("flow composition (run:)", () => {
           },
         }
       )
-    ).rejects.toThrow(/run: composition/);
+    ).rejects.toThrow("step 2: run: login.yaml");
     // Preflight, not post-boot: no Electron instance was spawned and no
     // device was resolved before the rejection.
     expect(bootElectronApp).not.toHaveBeenCalled();
@@ -1626,15 +1628,15 @@ describe("flow composition (run:)", () => {
     // A rejection — not a { notice, executionPrerequisite } return: on a
     // failure this prints the notice that leaked through instead.
     expect(outcome).toBeInstanceOf(Error);
-    expect((outcome as Error).message).toContain('run: composition ("run: login.yaml")');
+    expect((outcome as Error).message).toContain("step 1: run: login.yaml");
     expect(getFailureSignal(outcome)?.failure_stage).toBe("flow_upload_run_composition");
   });
 
-  it("rejects an uploaded flow quoting the first run:'s as-written directory-qualified path", async () => {
-    // The guard's quote is the author's remediation pointer: with two
+  it("rejects an uploaded flow quoting each run:'s as-written directory-qualified path", async () => {
+    // The guard's list is the author's remediation pointer: with two
     // same-stem steps (`run: ios/login.yaml`, then `run: android/login.yaml`)
-    // the throw fires on the FIRST offender, and only the as-written
-    // directory says which of the two lines it means. Reducing the target to
+    // every offender is listed, and only the as-written directory says which
+    // of the two lines each entry means. Reducing the target to
     // its basename stem (runTargetName — what the report attribution sites
     // use, and what `step.flow` carried before targets kept their spelling)
     // would print `run: login`, a string appearing nowhere in the flow and
@@ -1673,7 +1675,8 @@ describe("flow composition (run:)", () => {
         (e: unknown) => e
       );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain('run: composition ("run: ios/login.yaml")');
+    expect((err as Error).message).toContain("step 1: run: ios/login.yaml");
+    expect((err as Error).message).toContain("step 2: run: android/login.yaml");
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
     // Preflight, not mid-run: nothing was dispatched to the device.
     expect(registry.invokeTool).not.toHaveBeenCalled();
@@ -1761,7 +1764,7 @@ describe("flow composition (run:)", () => {
         (e: unknown) => e
       );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain('snapshot step ("snapshot: home")');
+    expect((err as Error).message).toContain("step 2: snapshot: home");
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
     // Preflight, not mid-run: nothing was dispatched to the device and the
     // differ was never pointed at the temp materialization dir.
@@ -1800,6 +1803,55 @@ describe("flow composition (run:)", () => {
         (e: unknown) => e
       );
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
+  });
+
+  it("lists every run:, script: and snapshot step of an uploaded flow in one rejection", async () => {
+    // One rejection names the whole repair: an author fixing the flow for a
+    // link sees every step that reads beside the file, in walk order, rather
+    // than one step per run. The stage is the first offender's.
+    vi.mocked(runSnapshot).mockClear();
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "echo", message: "before" },
+          { kind: "run", flow: "frag.yaml" },
+          { kind: "echo", message: "between" },
+          { kind: "snapshot", name: "title", maxMismatch: 0.5 },
+        ],
+      }),
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("not self-contained");
+    expect(message).toContain("  - step 2: run: frag.yaml\n  - step 4: snapshot: title");
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
   });
 
   it("allows a snapshot step for a co-located flow_file resolved in place", async () => {

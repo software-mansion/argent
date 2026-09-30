@@ -439,6 +439,74 @@ describe("flow-execute flow_path over HTTP", () => {
     const dispatched = (steps.invokeTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     expect(dispatched).toContain("tap");
   });
+
+  /** A wrapper for a client file that does not exist on this host, content and all. */
+  function uploadedWrapper(clientPath: string, yaml: string): Record<string, unknown> {
+    return {
+      __argentFileInput: true,
+      path: clientPath,
+      size: Buffer.byteLength(yaml, "utf8"),
+      mtimeMs: 1_790_000_000_000,
+      content: Buffer.from(yaml, "utf8").toString("base64"),
+    };
+  }
+
+  it("runs an uploaded self-contained flow_path", async () => {
+    // The whole remote chain: the boundary finds no host file, materializes
+    // the content, and resolveFlowSource runs the copy under the client's
+    // flow name — the same contract an uploaded `name` run has.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "uploaded" },
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: uploadedWrapper("/client/.argent/flows/remote.yaml", yaml),
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      flow: "remote",
+      steps: [
+        { kind: "echo", status: "pass", message: "uploaded" },
+        { kind: "tool", status: "pass", tool: "tap" },
+      ],
+    });
+    const dispatched = (steps.invokeTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(dispatched).toContain("tap");
+  });
+
+  it("rejects an uploaded flow_path that composes", async () => {
+    // The files beside the client's flow stayed on the client, so the run is
+    // refused before step 1 with the list of steps that would read them.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "before" },
+        { kind: "run", flow: "frag.yaml" },
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: uploadedWrapper("/client/.argent/flows/composed.yaml", yaml),
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error_code).toBe("FLOW_FILE_INVALID");
+    expect(res.body.error).toMatch(/not self-contained/);
+    expect(res.body.error).toContain("  - step 2: run: frag.yaml");
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("flow-read-prerequisite flow_path over HTTP", () => {

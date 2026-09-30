@@ -343,7 +343,7 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 
 ## The `argent flow` command
 
-`argent flow run` replays a flow without an agent and exits non-zero on failure. The command always uses a local tool-server.
+`argent flow run` replays a flow without an agent and exits non-zero on failure. The command sends the flow to the tool-server that the CLI is routed to. See [Flows over a link](#flows-over-a-link).
 
 | Command                       | Description                                          |
 | ----------------------------- | ---------------------------------------------------- |
@@ -420,13 +420,28 @@ When a single flow run fails its steps, Argent prints the first step that failed
 
 A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
 
-A single flow run with `--json` writes the report of that flow. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent puts the reason on stderr instead. Use `--json-stream` to get the failure as a record.
+A single flow run with `--json` writes the report of that flow. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent puts one JSON object on stderr instead. The object holds `event`, `error`, and `error_code` and `error_kind` when the tool-server sends them. `--json-stream` puts the same object on stdout.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
+### Flows over a link
+
+`argent link` routes the CLI to a tool-server on another computer. `argent flow run` then uploads the flow file with the call. The tool-server keeps the file in a temporary directory for the duration of the run.
+
+| Flow content                                     | Over a link                                                      |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| Directives that drive the device, `echo`, `when` | Runs                                                             |
+| `run:`, `script:`, `snapshot:`                   | Rejected before the first step. The message lists each such step |
+| A relative `launch: { chromium: <path> }`        | Rejected. Use an absolute path on the tool-server                |
+| `--update-baselines`                             | Rejected together with the `snapshot:` step                      |
+
+When the client and the tool-server run on one computer with one disk, for example over a link to `127.0.0.1`, the tool-server reads the file in place and every step kind runs.
+
+A rejected flow gives exit code 1 and the error code `FLOW_FILE_INVALID`. With `--json`, the CLI prints one JSON object on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run with `--json` keeps the rejected flow as an entry of its `flows` array.
+
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. `run:` targets and baselines resolve on the file system of the tool-server. When the tool-server runs on a different machine, a `name` run sends only that one file. Argent checks the whole flow before it runs any step, and rejects a `run:`, `script:` or `snapshot` step at any depth with an error about the missing co-location, not about a missing fragment, script or baseline. `flow_path` is refused when the agent and the tool-server do not share a file system.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. When the tool-server runs on a different computer, both sources send only that one file, and the tool-server keeps it in a temporary directory. Argent checks the whole flow before it runs any step. It rejects a `run:`, `script:` or `snapshot` step at any depth, lists each such step, and names the missing co-location, not a missing fragment, script or baseline. When the client and the tool-server share one disk, the tool-server reads the file in place and every step kind runs. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 
