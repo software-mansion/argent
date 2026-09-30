@@ -142,7 +142,7 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega | ios-remote — narrow
+  --platform <p>         ${SELECTABLE_PLATFORMS.join(" | ")} — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
