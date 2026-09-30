@@ -166,17 +166,17 @@ describe("parseRunArgs", () => {
     );
   });
 
-  it("throws on a --platform value outside the four the help lists", () => {
+  it("throws on a --platform value outside the platforms the help lists", () => {
     for (const bad of ["iOS", "macos", "web", "android-tv"]) {
       expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(FlagParseException);
       expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(
-        `--platform must be "ios", "android", "chromium" or "vega", got "${bad}"`
+        `--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "${bad}"`
       );
       expect(() => parseRunArgs(["checkout.yaml", `--platform=${bad}`])).toThrow(
         FlagParseException
       );
     }
-    for (const good of ["ios", "android", "chromium", "vega"]) {
+    for (const good of ["ios", "android", "chromium", "vega", "ios-remote"]) {
       expect(parseRunArgs(["checkout.yaml", "--platform", good]).platform).toBe(good);
     }
   });
@@ -1978,7 +1978,7 @@ describe("argent flow run <dir>", () => {
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     expect(errs.join("\n")).toContain(
-      '--platform must be "ios", "android", "chromium" or "vega", got "iOS"'
+      '--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "iOS"'
     );
   });
 

@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
+import { FAILURE_CODES, FLOW_NAME_PATTERN, SELECTABLE_PLATFORMS } from "@argent/registry";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -176,10 +176,9 @@ const RUN_OPTIONS = {
   "json-stream": { kind: "boolean" },
   "recursive": { kind: "boolean", alias: "r" },
   "device": { kind: "value" },
-  // Constrained here because the tool-server's own rejection is a raw Zod issue
-  // dump — and in a directory run it lands only after the first flow has run,
-  // taking the rest of the batch down with it.
-  "platform": { kind: "value", choices: ["ios", "android", "chromium", "vega"] },
+  // The tool-server's own rejection is a raw Zod issue dump, and in a directory
+  // run it lands only after the first flow has run, stopping the whole batch.
+  "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
 
