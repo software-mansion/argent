@@ -2335,6 +2335,24 @@ describe("argent flow run <dir>", () => {
   });
 
   it("emits the --json aggregate with every report when an artifact export throws", async () => {
+    const failed = (current: unknown): Record<string, unknown> =>
+      report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            snapshotKey: "home__ios-390x844",
+            artifacts: { current },
+          },
+        ],
+      });
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: failed(handle("/srv/cache/current.png")),
+    });
     toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("artifact fetch died"));
 
     await expect(
@@ -2342,14 +2360,15 @@ describe("argent flow run <dir>", () => {
         ["run", flowsDir, "--json", "--output", path.join(tempRoot, "out-export-throw-json")],
         opts
       )
-    ).rejects.toThrow("process.exit:0");
+    ).rejects.toThrow("process.exit:1");
 
     // stdout stays parseable: a consumer piping into `jq` still gets the
-    // ledger, each flow under the verdict of its own report.
+    // ledger, each flow under the verdict of its own report and each artifact
+    // as a path.
     const aggregate = JSON.parse(logs.join("\n"));
-    expect(aggregate).toMatchObject({ ok: true, total: 2, passed: 2, failed: 0, skipped: 0 });
+    expect(aggregate).toMatchObject({ ok: false, total: 2, passed: 1, failed: 1, skipped: 0 });
     expect(aggregate.flows).toEqual([
-      { path: "a-login.yaml", status: "pass", report: report() },
+      { path: "a-login.yaml", status: "fail", report: failed("/srv/cache/current.png") },
       { path: "b-checkout.yaml", status: "pass", report: report() },
     ]);
     expect(errs).toEqual([

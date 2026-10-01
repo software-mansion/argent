@@ -378,7 +378,7 @@ A directory run prints a numbered header for each flow. Under the header Argent 
 
 A flow that fails its steps lets the directory run continue. So does a flow that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the flows after the failure as skipped.
 
-A failure to copy an image of a flow to `--output` does not change the result of that flow. Argent prints a warning and copies the other images.
+A failure to copy an image of a flow to `--output` does not change the result of that flow. Argent prints a warning and the run continues.
 
 The outcome line of a flow that produced a report gives the result, the step counts and the time of that flow. The outcome line of a flow that produced no report states the reason. A single flow run prints the same reason under the name of the flow.
 
