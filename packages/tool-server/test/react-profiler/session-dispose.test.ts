@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import { reactProfilerSessionBlueprint } from "../../src/blueprints/react-profiler-session";
 import type { JsRuntimeDebuggerApi } from "../../src/blueprints/js-runtime-debugger";
@@ -21,10 +21,16 @@ interface SentCall {
   params?: Record<string, unknown>;
 }
 
+type CdpEvents = TypedEventEmitter<Record<string, (...args: unknown[]) => void>>;
+
+function cdpEventsOf(api: JsRuntimeDebuggerApi): CdpEvents {
+  return (api.cdp as unknown as { events: CdpEvents }).events;
+}
+
 function fakeDebuggerApi(sent: SentCall[]): JsRuntimeDebuggerApi {
-  // The CDP event map is not exported; nothing here subscribes, the emitter only
-  // has to exist for the factory's `cdp.events.on(...)` calls.
-  const events = new TypedEventEmitter<Record<string, (...args: unknown[]) => void>>();
+  // The CDP event map is not exported; the emitter is loosely typed so a test
+  // can emit into it the way the real client does.
+  const events: CdpEvents = new TypedEventEmitter();
   const cdp = {
     events,
     send: async (method: string, params?: Record<string, unknown>) => {
@@ -97,6 +103,34 @@ describe("ReactProfilerSession dispose", () => {
     await instance.dispose();
 
     expect(sent.map((c) => c.method)).toEqual(["Profiler.disable"]);
+  });
+
+  it("stops listening on the debugger's CDP client, which outlives the session", async () => {
+    // `react-profiler-stop` disposes only this node; the JsRuntimeDebugger and
+    // its client stay up, so a listener left on carries a dead session's state
+    // into every later run on the same connection.
+    const sent: SentCall[] = [];
+    const api = fakeDebuggerApi(sent);
+    const instance = await reactProfilerSessionBlueprint.factory(
+      { debugger: api },
+      "8081:AAAA-1111",
+      undefined
+    );
+
+    await instance.dispose();
+
+    const terminated = vi.fn();
+    instance.events.on("terminated", terminated);
+    const events = cdpEventsOf(api);
+    events.emit("scriptParsed", {
+      scriptId: "42",
+      url: "index.bundle",
+      sourceMapURL: "index.map",
+    });
+    events.emit("disconnected", new Error("connection lost"));
+
+    expect(instance.api.scriptSources.size).toBe(0);
+    expect(terminated).not.toHaveBeenCalled();
   });
 
   it("still disables the domain when the in-app stop throws", async () => {
