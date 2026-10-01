@@ -16,6 +16,12 @@ vi.mock("../src/utils/update-checker", () => ({
   suppressUpdateNote: vi.fn(),
 }));
 
+const discoverMetro = vi.fn();
+vi.mock("../src/utils/debugger/discovery", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/debugger/discovery")>()),
+  discoverMetro: (port: number) => discoverMetro(port),
+}));
+
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import {
   SERVER_POLICY_ENV,
@@ -164,6 +170,20 @@ describe("admission", () => {
     expect(deniedRule(() => admitToolInvocation(tool("flow-add-script"), {}))).toBe(
       "server_policy_operation"
     );
+  });
+
+  // Metro picks the runtime, and a port serving one device is used whatever
+  // device_id was asked for, so an allowed id cannot vouch for the target.
+  it("refuses debugger tools under a device allowlist before Metro is consulted", async () => {
+    install({ devices: { allow: [PINNED] } });
+
+    const outcome = await registry.invokeTool("debugger-connect", { device_id: PINNED }).then(
+      () => undefined,
+      (err: unknown) => getFailureSignal(err)?.error_code
+    );
+
+    expect(outcome).toBe(FAILURE_CODES.SERVER_POLICY_DENIED);
+    expect(discoverMetro).not.toHaveBeenCalled();
   });
 
   it("refuses a flow script step when flow-scripts is denied", async () => {

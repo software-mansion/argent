@@ -215,13 +215,14 @@ With `devices.allow`:
 - A tool call that names another device fails.
 - `boot-device` cannot start a device by `avdName`, `vvdImage` or `electronAppPath`. Start the allowed device by its id.
 - The preview window cannot show or shut down another device.
+- The debugger, network and React profiler tools fail. These tools reach the app through Metro, and Argent cannot match a Metro target to a device id.
 
 The operations:
 
-| Operation         | Effect when denied                                                                                                                                                                 |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `device-shutdown` | No tool and no preview action shuts down a device. `boot-device` with `force` fails. Argent Lens does not shut down its devices at the end of a session                            |
-| `flow-scripts`    | `flow-add-script` fails, and a flow with a `script` step fails at that step. A script runs any code on the machine of the tool-server, so a policy cannot limit what a script does |
+| Operation         | Effect when denied                                                                                                                                                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `device-shutdown` | No tool and no preview action shuts down a device. `boot-device` with `force` fails. When the screen of a running emulator does not respond, `boot-device` fails and does not restart the emulator. Argent Lens does not shut down its devices at the end of a session |
+| `flow-scripts`    | `flow-add-script` fails, and a flow with a `script` step fails at that step. A script runs any code on the machine of the tool-server, so a policy cannot limit what a script does                                                                                     |
 
 A call that the policy denies fails with the error code `SERVER_POLICY_DENIED` and the HTTP status `403`. Do not retry the call. Use an allowed tool and device, or ask the operator to change the policy.
 

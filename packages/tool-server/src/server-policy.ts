@@ -159,6 +159,19 @@ function assertDeviceAllowed(id: string): void {
   if (!isDeviceAllowed(id)) throw policyDenied("device", `device "${id}" is not allowed`);
 }
 
+/**
+ * Debugger tools reach an app's JS runtime through Metro, and Metro's targets
+ * carry no device id the allowlist could match, so they are refused under one.
+ */
+export function assertMetroDebuggingAllowed(): void {
+  if (activePolicy?.deviceIds) {
+    throw policyDenied(
+      "device",
+      "debugger tools attach through Metro, which cannot be bound to an allowed device id"
+    );
+  }
+}
+
 export function isOperationDenied(operation: GatedOperation): boolean {
   return activePolicy?.deniedOperations.has(operation) ?? false;
 }
