@@ -6,7 +6,12 @@ import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/regist
 
 vi.mock("../src/utils/sim-remote", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/sim-remote")>();
-  return { ...actual, screenRecordStart: vi.fn(), screenRecordStop: vi.fn() };
+  return {
+    ...actual,
+    screenRecordStart: vi.fn(),
+    screenRecordStop: vi.fn(),
+    screenRecordFetch: vi.fn(),
+  };
 });
 // The post-pass is exercised through its absence here (no ffmpeg -> the raw
 // download is handed over with a warning); the graph itself has its own tests.
@@ -27,7 +32,7 @@ import {
   startRemoteCapture,
   stopRemoteCapture,
 } from "../src/tools/screen-recording/capture-remote";
-import { screenRecordStart, screenRecordStop } from "../src/utils/sim-remote";
+import { screenRecordFetch, screenRecordStart, screenRecordStop } from "../src/utils/sim-remote";
 import {
   __resetActiveScreenRecordingsForTesting,
   getActiveScreenRecordings,
@@ -37,6 +42,7 @@ import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 const mockStart = vi.mocked(screenRecordStart);
 const mockStop = vi.mocked(screenRecordStop);
+const mockFetch = vi.mocked(screenRecordFetch);
 
 const REMOTE_UDID = "remote:6DBF83B4-0000-0000-0000-000000000000";
 
@@ -71,7 +77,7 @@ describe("remote screen recording", () => {
     __resetReapedSessionsForTesting();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-remote-recording-"));
     restoreTmpdir = redirectTmpdir(tmpDir);
-    mockStart.mockResolvedValue(undefined);
+    mockStart.mockResolvedValue("rec-1");
     stopWritesVideo();
   });
 
@@ -200,6 +206,67 @@ describe("remote screen recording", () => {
     expect(stopped.warning).toContain("the watermark was not applied");
     // Nothing was rewritten, so there is no trimmed length to report against.
     expect(stopped.trimmedMs).toBeUndefined();
+  });
+
+  /**
+   * The runner keeps a stopped recording, so a download that broke off is
+   * asked for again by id instead of costing the video.
+   */
+  it("fetches the recording again when the stop's download fails", async () => {
+    const api = await makeSession();
+    const started = await startRemoteCapture(api, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: false,
+    });
+    mockStop.mockRejectedValueOnce(new Error("connection reset"));
+    mockFetch.mockImplementation(async (_udid: string, _id: string, outputFile: string) => {
+      await fs.writeFile(outputFile, "mp4 bytes");
+    });
+
+    const stopped = await stopRemoteCapture(api);
+    expect(mockFetch).toHaveBeenCalledWith(REMOTE_UDID, "rec-1", started.outputFile);
+    expect(stopped.sizeBytes).toBeGreaterThan(0);
+  });
+
+  /** When the fetch fails too, the stop's own error is the one to report. */
+  it("reports the stop's error when the recording cannot be fetched either", async () => {
+    const api = await makeSession();
+    await startRemoteCapture(api, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: false,
+    });
+    mockStop.mockRejectedValueOnce(new Error("simulator is not recording"));
+    mockFetch.mockRejectedValueOnce(new Error("no such recording"));
+
+    await expect(stopRemoteCapture(api)).rejects.toThrow("simulator is not recording");
+    expect(api.recordingActive).toBe(false);
+  });
+
+  /**
+   * A recording the runner is still making, which this session knows nothing
+   * about, would refuse every start on the device. It is stopped — the runner
+   * keeps its video — and the start goes through.
+   */
+  it("stops a leftover recording on the runner and starts again", async () => {
+    const api = await makeSession();
+    mockStart.mockRejectedValueOnce(new Error("simulator X is already recording"));
+
+    const started = await startRemoteCapture(api, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: false,
+    });
+
+    expect(started.status).toBe("recording");
+    expect(mockStart).toHaveBeenCalledTimes(2);
+    expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID, expect.stringContaining("-leftover"));
+    // The leftover's download is not this recording's video.
+    expect(await fs.readdir(tmpDir)).toEqual([]);
   });
 
   it("fails the stop when the download brings back nothing", async () => {

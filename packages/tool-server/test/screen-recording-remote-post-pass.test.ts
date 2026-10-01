@@ -9,7 +9,12 @@ import type { DeviceInfo } from "@argent/registry";
 
 vi.mock("../src/utils/sim-remote", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/sim-remote")>();
-  return { ...actual, screenRecordStart: vi.fn(), screenRecordStop: vi.fn() };
+  return {
+    ...actual,
+    screenRecordStart: vi.fn(),
+    screenRecordStop: vi.fn(),
+    screenRecordFetch: vi.fn(),
+  };
 });
 
 import {
@@ -101,7 +106,7 @@ describe.skipIf(!hasFfmpeg())("remote recording post-pass (real ffmpeg)", () => 
     vi.clearAllMocks();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-postpass-"));
     restore = redirectTmpdir(tmpDir);
-    vi.mocked(screenRecordStart).mockResolvedValue(undefined);
+    vi.mocked(screenRecordStart).mockResolvedValue("rec-1");
     vi.mocked(screenRecordStop).mockImplementation(async (_u: string, out: string) => {
       await makeSourceVideo(out);
     });

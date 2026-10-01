@@ -5,7 +5,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
-import { screenRecordStart, screenRecordStop } from "../../utils/sim-remote";
+import { screenRecordFetch, screenRecordStart, screenRecordStop } from "../../utils/sim-remote";
 import {
   clearActiveScreenRecording,
   markScreenRecordingFinalized,
@@ -86,11 +86,12 @@ export async function startRemoteCapture(
   // start or stop is rejected instead of racing this one through the async
   // window below; the finally clears it on every exit.
   api.startPending = true;
+  let recordingId: string | null;
   try {
     // A dispose that ran while an earlier await suspended this start would no
     // longer be able to release a recording started after it.
     assertNotDisposed(api, "screen_recording_start");
-    await screenRecordStart(api.deviceId, { showTouches: params.showTouches });
+    recordingId = await startOnRunner(api.deviceId, params.showTouches);
   } catch (err) {
     api.startPending = false;
     throw asStartFailure(err);
@@ -113,6 +114,7 @@ export async function startRemoteCapture(
   api.trimStatic = params.trimStatic;
   api.watermark = params.watermark;
   api.remoteFetch = null;
+  api.remoteRecordingId = recordingId;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
@@ -144,9 +146,11 @@ export async function startRemoteCapture(
     // Fetch at the cap rather than at stop: the runner is still recording
     // until this call, so waiting would let the video keep growing past the
     // limit the caller set. Errors are held for whoever calls stop.
-    api.remoteFetch = screenRecordStop(api.deviceId, outputFile).catch((err: unknown) => {
-      api.remoteFetchError = err instanceof Error ? err : new Error(String(err));
-    });
+    api.remoteFetch = stopAndDownload(api.deviceId, recordingId, outputFile).catch(
+      (err: unknown) => {
+        api.remoteFetchError = err instanceof Error ? err : new Error(String(err));
+      }
+    );
   }, params.timeLimitSeconds * 1_000);
 
   return {
@@ -154,6 +158,46 @@ export async function startRemoteCapture(
     timeLimitSeconds: params.timeLimitSeconds,
     outputFile,
   };
+}
+
+/**
+ * Start a recording on the runner. One the runner is already making belongs to
+ * nobody here — this session would have refused the start itself — so it is a
+ * leftover of a tool-server that lost track of it. It is stopped, which keeps
+ * its video on the runner, and the start is tried once more.
+ */
+async function startOnRunner(deviceId: string, showTouches: boolean): Promise<string | null> {
+  try {
+    return await screenRecordStart(deviceId, { showTouches });
+  } catch (err) {
+    if (!/already recording/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    const leftover = outputPath(deviceId, "-leftover");
+    await screenRecordStop(deviceId, leftover);
+    await fs.rm(leftover, { force: true }).catch(() => {});
+    return screenRecordStart(deviceId, { showTouches });
+  }
+}
+
+/**
+ * Stop the recording and download it. The runner keeps a stopped recording, so
+ * when the stop fails — typically a transfer that broke off — the same
+ * recording is fetched once more by its id before the failure is reported.
+ */
+async function stopAndDownload(
+  deviceId: string,
+  recordingId: string | null,
+  outputFile: string
+): Promise<void> {
+  try {
+    await screenRecordStop(deviceId, outputFile);
+  } catch (err) {
+    if (!recordingId) throw err;
+    // The stop's own error is the one worth reporting if this fails as well:
+    // the fetch can only say the recording is not there.
+    await screenRecordFetch(deviceId, recordingId, outputFile).catch(() => {
+      throw err;
+    });
+  }
 }
 
 export async function stopRemoteCapture(
@@ -191,7 +235,7 @@ export async function stopRemoteCapture(
         api.recordingActive = false;
         api.wallClockEndMs = Date.now();
       }
-      await screenRecordStop(api.deviceId, rawFile);
+      await stopAndDownload(api.deviceId, api.remoteRecordingId, rawFile);
     }
     // The runner no longer holds anything to release.
     api.remoteRelease = null;
@@ -249,6 +293,7 @@ export async function stopRemoteCapture(
     api.pendingRetrieval = false;
     api.remoteRelease = null;
     api.remoteFetch = null;
+    api.remoteRecordingId = null;
     api.remoteFetchError = null;
     api.outputFile = null;
     api.watermarkSkipped = null;
