@@ -66,7 +66,10 @@ export interface BuildToolsServerEnvOptions {
    * whatever `baseEnv` carries — for `process.env`, the developer's own export.
    */
   host?: string;
-  /** Idle-timeout minutes (0 disables). Omit to inherit the tool-server default. */
+  /**
+   * Idle-timeout minutes (0 disables), exported as `ARGENT_IDLE_TIMEOUT_MINUTES`.
+   * Omitting it leaves the key at whatever `baseEnv` carries.
+   */
   idleTimeoutMinutes?: number;
   /**
    * Auth token, exported as `ARGENT_AUTH_TOKEN` so the tool-server enforces

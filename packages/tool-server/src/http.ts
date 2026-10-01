@@ -497,8 +497,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
   if (!expectedToken) {
     process.stderr.write(
-      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is not set; running with authentication disabled. ` +
-        `Any local process can drive the tool-server. This is only safe when the server is reachable from localhost.\n`
+      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is empty or not set; running with authentication disabled. ` +
+        `Anyone who can reach the port can drive the tool-server. This is only safe when the server binds a loopback address.\n`
     );
   }
 
