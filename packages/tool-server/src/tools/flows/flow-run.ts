@@ -45,7 +45,11 @@ import {
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
-import { isClientRequestAbort, isClientRequestFailure } from "../../client-requests";
+import {
+  isClientRequestAbort,
+  isClientRequestFailure,
+  isClientRequestRefusal,
+} from "../../client-requests";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
@@ -1250,6 +1254,13 @@ function nestedFlowRef(args: Record<string, unknown>): string {
  * `run:` steps for a client that does, so the way out is the update, not the
  * co-location the refusal otherwise names.
  *
+ * The same gate guards every fragment the client serves, charged to the
+ * `run:` step that loads it ({@link execRunStep}): a fragment's steps are not
+ * known before that step, and letting one through would run its script, or
+ * read its baseline, against a server path that is at best missing and at
+ * worst a same-named copy that reports a pass. `origin` words the refusal for
+ * the file it is about.
+ *
  * Every offending step is listed, in walk order, so the author sees the whole
  * repair at once rather than one step per run. The stage is the first
  * offender's, and the four stay distinct: each names a different file the
@@ -1257,7 +1268,11 @@ function nestedFlowRef(args: Record<string, unknown>): string {
  */
 function assertUploadSelfContained(
   flow: FlowFile,
-  offeredOps: readonly ClientServiceOp[] | undefined
+  offeredOps: readonly ClientServiceOp[] | undefined,
+  origin: { subject: string; arrival: string } = {
+    subject: "This flow",
+    arrival: "it arrived as an upload from a client",
+  }
 ): void {
   const serves = new Set<ClientServiceOp>(offeredOps ?? []);
   const offending: { kind: keyof typeof UPLOAD_STAGE_BY_KIND; line: string }[] = [];
@@ -1282,7 +1297,7 @@ function assertUploadSelfContained(
       ? ` This tool-server serves run: steps for a client that sends client services. Update the argent CLI or MCP adapter on the client.`
       : "";
   throw new FailureError(
-    `This flow is not self-contained, and it arrived as an upload from a client that does ` +
+    `${origin.subject} is not self-contained, and ${origin.arrival} that does ` +
       `not share a filesystem with this tool-server. The steps below read files that stayed ` +
       `on the client:\n` +
       offending.map((o) => `  - ${o.line}`).join("\n") +
@@ -1360,18 +1375,19 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses. In client mode the seed is the root flow's CLIENT
-      // path: `run:` targets anchor to the directory of the file that names
-      // them, and that directory is on the client, not the temp dir this host
-      // materialized the upload into. The path is the client's own spelling,
-      // not a realpath — the client never sent one — so a chain that symlinks
-      // its way back to the root is caught one hop later, when the fragment
-      // it re-enters is already on the stack.
+      // path, canonicalized on the client ({@link clientRootCanonical}):
+      // `run:` targets anchor to the directory of the file that names them,
+      // and that directory is on the client, not the temp dir this host
+      // materialized the upload into.
       const clientRootPath =
         project.mode === "client"
           ? (ctx?.fileInputs?.flow_path ?? ctx?.fileInputs?.flow_file)?.clientPath
           : undefined;
       const rootEntry: RunStackEntry = {
-        canonical: clientRootPath ?? canonicalPath,
+        canonical:
+          clientRootPath === undefined
+            ? canonicalPath
+            : await clientRootCanonical(project, clientRootPath, flow),
         display: flowName,
       };
 
@@ -1660,6 +1676,47 @@ function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
 
 /** {@link scanLeadingLaunch}'s "keep scanning the parent" outcome. */
 const NO_EXECUTABLE_STEP = "no-executable-step";
+
+/**
+ * Where the root flow REALLY lives on the client — what a co-located run gets
+ * from `canonicalFlowPath` before it anchors anything. The client's spelling
+ * may be a symlink, and a `run:` target resolves beside the real file, so the
+ * runner asks the client to resolve the root the way it resolves a fragment.
+ * Asked only when the flow composes at all: a flow with no `run:` step never
+ * reads the anchor. A client that declines (the real file lies outside the
+ * roots it serves) fails the run before step 1: anchoring beside the symlink
+ * instead would silently run a same-named fragment there, which is exactly
+ * what a co-located run never does. A channel that does not answer fails the
+ * run as any other request would.
+ */
+async function clientRootCanonical(
+  project: ProjectAccess,
+  clientRootPath: string,
+  flow: FlowFile
+): Promise<string> {
+  const composes = [...walkSteps(flow.steps)].some(({ step }) => step.kind === "run");
+  if (!composes) return clientRootPath;
+  try {
+    const hop = await project.resolveFlowFile(
+      path.dirname(clientRootPath),
+      path.basename(clientRootPath)
+    );
+    return hop.canonical;
+  } catch (err) {
+    if (!isClientRequestRefusal(err)) throw err;
+    throw new FailureError(
+      `The client did not resolve the flow file "${clientRootPath}" (${errMsg(err)}). ` +
+        `Its run: targets resolve beside the file's real location, so the run cannot ` +
+        `anchor them. Keep the flow file, or a symlink to it, under the project root.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "client_root_refused",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+}
 
 /**
  * The launch the RUN begins with, following a leading `run:` — a fragment whose
@@ -2380,11 +2437,21 @@ async function execRunStep(
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
-  // The root flow's load-time gate, applied to the fragment at the only moment
-  // its steps exist. Charged to the run: step, so the fragment is refused whole
-  // rather than part-executed up to the offending step.
+  // The root flow's load-time gates, applied to the fragment at the only
+  // moment its steps exist. Charged to the run: step, so the fragment is
+  // refused whole rather than part-executed up to the offending step.
   const retiredArg = findRetiredToolArg(state.registry, fragment.steps);
   if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
+  if (state.project.mode === "client") {
+    try {
+      assertUploadSelfContained(fragment, state.ctx?.clientServices?.ops, {
+        subject: `The fragment "${target}"`,
+        arrival: "the client served it from a project",
+      });
+    } catch (err) {
+      return fail(errMsg(err));
+    }
+  }
 
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
@@ -3061,9 +3128,9 @@ export async function resolveFlowSource(
 /**
  * The on-disk spelling of an uploaded root flow, read from the CLIENT's
  * listing of the flow's own directory — the one directory the gate cannot
- * read itself. A client that did not offer `list-dir` leaves the verdict
- * `listed`, which vouches for nothing and so refuses nothing, exactly as an
- * unreadable listing does on the host.
+ * read itself. A client that did not offer `list-dir`, or that refused the
+ * request, leaves the verdict `listed`, which vouches for nothing and so
+ * refuses nothing, exactly as an unreadable listing does on the host.
  */
 async function clientSpelling(
   clientServices: ToolContext["clientServices"],
@@ -3072,7 +3139,17 @@ async function clientSpelling(
 ): Promise<OnDiskSpelling> {
   if (!clientServices?.ops.includes("list-dir")) return { state: "listed" };
   const project = new ClientProjectAccess(clientServices);
-  return classifyListedSpelling(await project.listDir(path.dirname(clientPath)), base);
+  let entries: string[] | null;
+  try {
+    entries = await project.listDir(path.dirname(clientPath));
+  } catch (err) {
+    // A client that declines to list the directory (one it does not serve)
+    // vouches for nothing, like a listing it cannot read; only a channel that
+    // does not answer at all fails the run.
+    if (!isClientRequestRefusal(err)) throw err;
+    entries = null;
+  }
+  return classifyListedSpelling(entries, base);
 }
 
 /**

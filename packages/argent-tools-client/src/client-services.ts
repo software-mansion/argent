@@ -92,11 +92,16 @@ export async function createClientServicesHandler(opts: {
   roots: string[];
   advertised: ClientServiceOp[];
 }): Promise<ClientServicesHandler | null> {
-  const roots: string[] = [];
+  const resolvedRoots: string[] = [];
   for (const root of opts.roots) {
     const real = await fs.realpath(root).catch(() => null);
-    if (real !== null && !roots.includes(real)) roots.push(real);
+    if (real !== null && !resolvedRoots.includes(real)) resolvedRoots.push(real);
   }
+  // A root inside another root adds no reach; keep the wire to the outermost
+  // ones (the project's own `.argent/flows` is sent only when it lies elsewhere).
+  const roots = resolvedRoots.filter(
+    (root) => !resolvedRoots.some((other) => other !== root && isInsideRoots(root, [other]))
+  );
   if (roots.length === 0) return null;
   const ops = IMPLEMENTED_OPS.filter((op) => opts.advertised.includes(op));
   if (ops.length === 0) return null;

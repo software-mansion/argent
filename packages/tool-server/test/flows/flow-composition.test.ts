@@ -124,7 +124,12 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
  */
 function fakeClientServices(
   files: Record<string, string>,
-  opts: { listing?: Record<string, string[] | null>; ops?: ClientServiceOp[] } = {}
+  opts: {
+    listing?: Record<string, string[] | null>;
+    ops?: ClientServiceOp[];
+    /** Client paths that are symlinks, mapped to where they really live. */
+    realpaths?: Record<string, string>;
+  } = {}
 ): {
   services: NonNullable<ToolContext["clientServices"]>;
   calls: Array<{ op: string; args: Record<string, unknown> }>;
@@ -136,7 +141,8 @@ function fakeClientServices(
     request: vi.fn(async (op: ClientServiceOp, args: Record<string, unknown>) => {
       calls.push({ op, args });
       if (op === "resolve-file") {
-        const canonical = path.posix.join(String(args.anchorDir), String(args.target));
+        const spelled = path.posix.join(String(args.anchorDir), String(args.target));
+        const canonical = opts.realpaths?.[spelled] ?? spelled;
         const text = files[canonical];
         if (text === undefined) return { canonical, spelling: { state: "listed" }, exists: false };
         return {
@@ -1573,14 +1579,13 @@ describe("flow composition (run:)", () => {
         flow: "login",
         message: "served from the client",
       });
-      // The target resolves against the directory of the CLIENT file that
-      // names it — the root flow's client path — not the temp dir the upload
-      // was materialized into on this host.
-      expect(calls.filter((c) => c.op === "resolve-file")).toEqual([
-        {
-          op: "resolve-file",
-          args: { anchorDir: "/client/.argent/flows", target: "login.yaml", kind: "flow" },
-        },
+      // The root is resolved on the client first (its real location is the
+      // anchor), then the target resolves against the directory of the CLIENT
+      // file that names it — never the temp dir the upload was materialized
+      // into on this host.
+      expect(calls.filter((c) => c.op === "resolve-file").map((c) => c.args)).toEqual([
+        { anchorDir: "/client/.argent/flows", target: "main.yaml", kind: "flow" },
+        { anchorDir: "/client/.argent/flows", target: "login.yaml", kind: "flow" },
       ]);
     });
 
@@ -1602,6 +1607,7 @@ describe("flow composition (run:)", () => {
         "after",
       ]);
       expect(calls.filter((c) => c.op === "resolve-file").map((c) => c.args)).toEqual([
+        { anchorDir: "/client/.argent/flows", target: "main.yaml", kind: "flow" },
         { anchorDir: "/client/.argent/flows", target: "login.yaml", kind: "flow" },
         { anchorDir: "/client/.argent/flows", target: "../shared/inner.yaml", kind: "flow" },
       ]);
@@ -1635,10 +1641,16 @@ describe("flow composition (run:)", () => {
         }
       );
       const { services } = fakeClientServices({});
-      (services.request as ReturnType<typeof vi.fn>).mockImplementation(async (op: string) => {
-        if (op === "resolve-file") throw timeout;
-        return { entries: null };
-      });
+      const serve = (services.request as ReturnType<typeof vi.fn>).getMockImplementation() as (
+        op: ClientServiceOp,
+        args: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>;
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp, args: Record<string, unknown>) => {
+          if (op === "resolve-file" && args.target === "login.yaml") throw timeout;
+          return serve(op, args);
+        }
+      );
 
       const result = asRun(await runUploaded(services));
 
@@ -1663,10 +1675,16 @@ describe("flow composition (run:)", () => {
         }
       );
       const { services } = fakeClientServices({});
-      (services.request as ReturnType<typeof vi.fn>).mockImplementation(async (op: string) => {
-        if (op === "resolve-file") throw refusal;
-        return { entries: null };
-      });
+      const serve = (services.request as ReturnType<typeof vi.fn>).getMockImplementation() as (
+        op: ClientServiceOp,
+        args: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>;
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp, args: Record<string, unknown>) => {
+          if (op === "resolve-file" && args.target === "login.yaml") throw refusal;
+          return serve(op, args);
+        }
+      );
 
       const result = asRun(await runUploaded(services));
 
@@ -1685,13 +1703,21 @@ describe("flow composition (run:)", () => {
       // "run aborted", so this one must not read as a fragment failure.
       const controller = new AbortController();
       const { services } = fakeClientServices({});
-      (services.request as ReturnType<typeof vi.fn>).mockImplementation(async (op: string) => {
-        if (op !== "resolve-file") return { entries: null };
-        controller.abort();
-        const err = new Error("the client disconnected before answering the resolve-file request");
-        err.name = "AbortError";
-        throw err;
-      });
+      const serve = (services.request as ReturnType<typeof vi.fn>).getMockImplementation() as (
+        op: ClientServiceOp,
+        args: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>;
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp, args: Record<string, unknown>) => {
+          if (op !== "resolve-file" || args.target !== "login.yaml") return serve(op, args);
+          controller.abort();
+          const err = new Error(
+            "the client disconnected before answering the resolve-file request"
+          );
+          err.name = "AbortError";
+          throw err;
+        }
+      );
 
       const result = asRun(await runUploaded(services, { signal: controller.signal }));
 
@@ -1775,7 +1801,175 @@ describe("flow composition (run:)", () => {
       const result = asRun(await runUploaded(services));
 
       expect(result.ok).toBe(true);
-      expect(calls.map((c) => c.op)).toEqual(["resolve-file"]);
+      expect(calls.map((c) => c.op)).toEqual(["resolve-file", "resolve-file"]);
+    });
+
+    it("refuses a client-served fragment whose steps the client did not offer to serve, at the run: step", async () => {
+      // The root gate cannot see a fragment before the run: step loads it;
+      // charging the refusal to that step keeps the fragment from part-running
+      // a script against a path that only exists on the client (or, worse,
+      // the server's same-named copy).
+      const { services, calls } = fakeClientServices({
+        "/client/.argent/flows/login.yaml": serializeFlow({
+          executionPrerequisite: "",
+          steps: [
+            { kind: "echo", message: "fragment start" },
+            { kind: "script", path: "setup.mjs" },
+            { kind: "tool", name: "flow-execute", args: { name: "other" } },
+          ],
+        }),
+      });
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.ok).toBe(false);
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "echo:pass",
+        "run:error",
+        "echo:skip",
+      ]);
+      const reason = result.steps[1]?.reason ?? "";
+      expect(reason).toContain('The fragment "login.yaml" is not self-contained');
+      expect(reason).toContain("step 2: script: { path: setup.mjs }");
+      expect(reason).toContain("step 3: tool: flow-execute (name: other)");
+      expect(reason).not.toContain("Update the argent CLI");
+      // Nothing of the fragment ran, and nothing was asked for its script.
+      expect(result.steps.map((s) => s.message)).not.toContain("fragment start");
+      expect(calls.map((c) => c.op)).toEqual(["list-dir", "resolve-file", "resolve-file"]);
+    });
+
+    it("anchors run: targets beside the root flow's real file when the root is a symlink on the client", async () => {
+      // Co-located runs realpath the root before anchoring; the client's
+      // spelling is a symlink here, so the runner asks the client where the
+      // file really is and anchors there, as a local run would.
+      const { services, calls } = fakeClientServices(
+        {
+          "/vault/main.yaml": serializeFlow({ executionPrerequisite: "", steps: rootSteps }),
+          "/vault/login.yaml": fragmentYaml("beside the real file"),
+          "/client/.argent/flows/login.yaml": fragmentYaml("BESIDE THE SYMLINK"),
+        },
+        { realpaths: { "/client/.argent/flows/main.yaml": "/vault/main.yaml" } }
+      );
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.ok).toBe(true);
+      expect(result.steps[2]).toMatchObject({ kind: "echo", message: "beside the real file" });
+      expect(calls.filter((c) => c.op === "resolve-file").map((c) => c.args)).toEqual([
+        { anchorDir: "/client/.argent/flows", target: "main.yaml", kind: "flow" },
+        { anchorDir: "/vault", target: "login.yaml", kind: "flow" },
+      ]);
+    });
+
+    it("catches a cycle back through a symlinked root on the first repeat, as a local run does", async () => {
+      const { services } = fakeClientServices(
+        {
+          "/vault/main.yaml": serializeFlow({
+            executionPrerequisite: "",
+            steps: [
+              { kind: "echo", message: "tick" },
+              { kind: "run", flow: "main.yaml" },
+            ],
+          }),
+        },
+        { realpaths: { "/client/.argent/flows/main.yaml": "/vault/main.yaml" } }
+      );
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [
+            { kind: "echo", message: "tick" },
+            { kind: "run", flow: "main.yaml" },
+          ],
+        }),
+        "utf8"
+      );
+
+      const result = asRun(await runUploaded(services));
+
+      // One tick, then the cycle — never a second pass over the root's steps.
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["echo:pass", "run:error"]);
+      expect(result.steps[1]?.reason).toMatch(/^cyclic flow reference: main → \.\/main$/);
+    });
+
+    it("fails before step 1 when the client refuses to resolve the root flow's real location", async () => {
+      // Anchoring beside the symlink instead would run a same-named fragment
+      // there, so the refusal is the run's verdict, not a fallback.
+      const refusal = new FailureError(
+        'the client refused the resolve-file request for "main.yaml": outside every root',
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "client_request_refused",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+      const { services, calls } = fakeClientServices({
+        "/client/.argent/flows/login.yaml": fragmentYaml("BESIDE THE SYMLINK"),
+      });
+      const serve = (services.request as ReturnType<typeof vi.fn>).getMockImplementation() as (
+        op: ClientServiceOp,
+        args: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>;
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp, args: Record<string, unknown>) => {
+          if (op === "resolve-file" && args.target === "main.yaml") throw refusal;
+          return serve(op, args);
+        }
+      );
+
+      const err = await runUploaded(services).catch((e: unknown) => e as Error);
+
+      expect(getFailureSignal(err)?.failure_stage).toBe("client_root_refused");
+      expect((err as Error).message).toContain(
+        'did not resolve the flow file "/client/.argent/flows/main.yaml"'
+      );
+      // Nothing beside the symlink was ever asked for.
+      expect(calls.filter((c) => c.args.target === "login.yaml")).toEqual([]);
+    });
+
+    it("does not ask where the root flow really is when the flow has no run: step", async () => {
+      await fs.writeFile(uploadedPath, fragmentYaml("no composition"), "utf8");
+      const { services, calls } = fakeClientServices({});
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.ok).toBe(true);
+      expect(calls.map((c) => c.op)).toEqual(["list-dir"]);
+    });
+
+    it("skips the listing gate when the client refuses list-dir", async () => {
+      // A flows directory symlinked outside the project is a layout the client
+      // may decline to list; declining vouches for nothing, exactly like an
+      // unreadable listing on the host, and must not fail a run that base
+      // versions ran without the gate.
+      const refusal = new FailureError(
+        'the client refused the list-dir request for "/client/.argent/flows": outside every root',
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "client_request_refused",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+      const { services } = fakeClientServices({
+        "/client/.argent/flows/login.yaml": fragmentYaml("served"),
+      });
+      const underlying = services.request as ReturnType<typeof vi.fn>;
+      const serve = underlying.getMockImplementation() as (
+        op: ClientServiceOp,
+        args: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>;
+      underlying.mockImplementation(async (op: ClientServiceOp, args: Record<string, unknown>) => {
+        if (op === "list-dir") throw refusal;
+        return serve(op, args);
+      });
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.ok).toBe(true);
+      expect(result.steps[2]).toMatchObject({ kind: "echo", message: "served" });
     });
 
     it("keeps host resolution for a co-located flow_file even when the caller sent client_services", async () => {

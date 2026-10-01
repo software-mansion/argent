@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import * as path from "node:path";
 
 import {
@@ -216,18 +217,35 @@ export function errorBodyMessage(body: {
 /**
  * The handler for one call, or null when the arguments carry no string
  * `project_root` (nothing to serve under) or nothing under the roots exists.
- * The roots are the project and the directory of `flow_path` when given, so a
- * flow addressed outside the project can still reach its own fragments.
+ * The roots are the project, its `.argent/flows` directory (a project may keep
+ * that one as a symlink to a tree outside the project, and the flows there
+ * are still the project's own), the directory of `flow_path` when given, so a
+ * flow addressed outside the project can still reach its own fragments, and
+ * the directory the root flow file REALLY lives in: a `run:` target resolves
+ * beside the real file, as it does on one computer, so a root flow that is a
+ * symlink serves the fragments next to its target. Every root is served by
+ * its real location; one that does not exist is dropped.
  */
 async function clientServicesHandlerFor(
   advert: ClientServicesAdvert,
   args: unknown
 ): Promise<ClientServicesHandler | null> {
   if (typeof args !== "object" || args === null) return null;
-  const { project_root, flow_path } = args as Record<string, unknown>;
+  const { project_root, flow_path, name } = args as Record<string, unknown>;
   if (typeof project_root !== "string") return null;
-  const roots = [project_root];
-  if (typeof flow_path === "string") roots.push(path.dirname(flow_path));
+  const flowsDir = path.join(project_root, ".argent", "flows");
+  const roots = [project_root, flowsDir];
+  const rootFlow =
+    typeof flow_path === "string"
+      ? flow_path
+      : typeof name === "string"
+        ? path.join(flowsDir, `${name}.yaml`)
+        : undefined;
+  if (rootFlow !== undefined) {
+    roots.push(path.dirname(rootFlow));
+    const real = await realpath(rootFlow).catch(() => null);
+    if (real !== null) roots.push(path.dirname(real));
+  }
   return createClientServicesHandler({ roots, advertised: advert.ops });
 }
 

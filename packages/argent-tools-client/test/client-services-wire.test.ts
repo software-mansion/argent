@@ -174,6 +174,54 @@ describe("callTool client services", () => {
     await fs.rm(path.dirname(outsideFlow), { recursive: true, force: true });
   });
 
+  it("adds the real location of a symlinked .argent/flows as a root, and no root inside another", async () => {
+    // The project's flows directory may be a symlink to a tree outside the
+    // project; the flows there are still the project's own, so the handler
+    // serves that location. A flows directory inside the project is already
+    // covered by the project root and is not sent twice.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const linked = await fs.mkdtemp(path.join(tmpdir(), "argent-linked-proj-"));
+    const vault = await fs.mkdtemp(path.join(tmpdir(), "argent-vault-flows-"));
+    await fs.mkdir(path.join(linked, ".argent"), { recursive: true });
+    await fs.symlink(vault, path.join(linked, ".argent", "flows"));
+    await fs.writeFile(path.join(vault, "root.yaml"), "steps: []\n");
+    const { callTool } = createToolsClient();
+
+    await callTool("flow-execute", { project_root: linked, name: "root" });
+
+    expect(
+      (invokeRequest().body as { client_services: { roots: string[] } }).client_services.roots
+    ).toEqual([await fs.realpath(linked), await fs.realpath(vault)]);
+    await fs.rm(linked, { recursive: true, force: true });
+    await fs.rm(vault, { recursive: true, force: true });
+  });
+
+  it("adds the real directory of a root flow that is a symlink as a root", async () => {
+    // A run: target resolves beside the REAL file, so the fragments next to a
+    // symlinked root's target must be reachable; by name and by path alike.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const vault = await fs.mkdtemp(path.join(tmpdir(), "argent-vault-root-"));
+    await fs.writeFile(path.join(vault, "linked.yaml"), "steps: []\n");
+    await fs.symlink(path.join(vault, "linked.yaml"), path.join(flowsDir, "linked.yaml"));
+    const { callTool } = createToolsClient();
+
+    await callTool("flow-execute", { project_root: projectDir, name: "linked" });
+    const byName = (invokeRequest().body as { client_services: { roots: string[] } })
+      .client_services.roots;
+    requests.length = 0;
+    await callTool("flow-execute", {
+      project_root: projectDir,
+      flow_path: path.join(flowsDir, "linked.yaml"),
+    });
+    const byPath = (invokeRequest().body as { client_services: { roots: string[] } })
+      .client_services.roots;
+
+    const realVault = await fs.realpath(vault);
+    expect(byName).toEqual([projectDir, realVault]);
+    expect(byPath).toEqual([projectDir, realVault]);
+    await fs.rm(vault, { recursive: true, force: true });
+  });
+
   it("sends no client_services when the listing has no clientServices", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     listing = [{ name: "flow-execute", description: "", inputSchema: {} }];

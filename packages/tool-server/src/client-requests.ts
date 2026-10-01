@@ -159,3 +159,8 @@ export function isClientRequestFailure(err: unknown): boolean {
   const stage = getFailureSignal(err)?.failure_stage;
   return stage !== undefined && REQUEST_FAILURE_STAGES.has(stage);
 }
+
+/** True for a request the client answered with a refusal (the channel itself is fine). */
+export function isClientRequestRefusal(err: unknown): boolean {
+  return getFailureSignal(err)?.failure_stage === "client_request_refused";
+}

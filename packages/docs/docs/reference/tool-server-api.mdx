@@ -58,11 +58,11 @@ The client adds a `client_services` parameter to the arguments of a call when al
 }
 ```
 
-| Field     | Value                                                                                                                                                        |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `version` | `1`                                                                                                                                                          |
-| `ops`     | The ops the client serves: the ops that the tool-server advertised and that the client implements                                                            |
-| `roots`   | Absolute client directories. The realpath of `project_root`, plus the realpath of the directory of `flow_path` when the arguments carry a string `flow_path` |
+| Field     | Value                                                                                                                                                                                                                                                          |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version` | `1`                                                                                                                                                                                                                                                            |
+| `ops`     | The ops the client serves: the ops that the tool-server advertised and that the client implements                                                                                                                                                              |
+| `roots`   | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of `flow_path` when the arguments carry one, and the directory of the real file behind the root flow. A root inside another root is not sent |
 
 The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 to a call that carries `client_services` without that header. The tool-server sends a request for an op only when the client listed the op in `ops`.
 
@@ -137,7 +137,7 @@ The endpoint sits behind the same bearer-token check and Host check as `/tools/<
 
 ### `resolve-file`
 
-The tool-server sends `resolve-file` for each `run:` step. The client resolves the target on its own disk and returns the file.
+The tool-server sends `resolve-file` for each `run:` step. The client resolves the target on its own disk and returns the file. When the flow has a `run:` step, the tool-server also sends `resolve-file` for the root flow itself before the first step, to learn the real location of the file. The `run:` targets of the root flow resolve beside that location, as they do on one computer. A refusal of that request fails the run before the first step.
 
 Request `args`:
 
@@ -192,11 +192,12 @@ The protocol defines the op names `read-file`, `write-file` and `run-script`. Th
 
 The tool-server waits 30 s for the answer to `resolve-file` and to `list-dir`.
 
-| Event                                | Effect on the run                                                                                            |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| No answer within 30 s                | The step reports `error`. The reason names the op, the target and the timeout. The later steps report `skip` |
-| An answer with `ok: false`           | The step reports `error`. The reason quotes the `error` text of the client. The later steps report `skip`    |
-| The HTTP response of the call closes | The tool-server rejects every pending request and aborts the run                                             |
+| Event                                 | Effect on the run                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| No answer within 30 s                 | The step reports `error`. The reason names the op, the target and the timeout. The later steps report `skip` |
+| An answer with `ok: false`            | The step reports `error`. The reason quotes the `error` text of the client. The later steps report `skip`    |
+| `ok: false` to the `list-dir` request | The tool-server skips the spelling check of the flow name, as it does when it cannot read a directory        |
+| The HTTP response of the call closes  | The tool-server rejects every pending request and aborts the run                                             |
 
 ## Client policy
 
@@ -217,4 +218,4 @@ The client enforces these rules. The tool-server enforces none of them. The tool
 | older  | 0.27        | The call has no `client_services`. The tool-server rejects the flow before the first step and adds: "This tool-server serves run: steps for a client that sends client services. Update the argent CLI or MCP adapter on the client." |
 | older  | older       | The tool-server rejects the flow before the first step                                                                                                                                                                                |
 
-`script:` and `snapshot:` steps and nested `tool: flow-execute` steps need a co-located client and tool-server in every cell. The tool-server rejects them before the first step and lists each one.
+`script:` and `snapshot:` steps and nested `tool: flow-execute` steps need a co-located client and tool-server in every cell. In the root flow, the tool-server rejects them before the first step and lists each one. In a fragment that the client serves, the tool-server rejects them when the `run:` step loads the fragment: that step reports `error` with the same list, and no step of the fragment runs.
