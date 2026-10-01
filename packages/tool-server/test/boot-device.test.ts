@@ -797,6 +797,16 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
     }
   );
 
+  // `sim-remote` is absent from the primed dep cache, so reaching the remote
+  // path surfaces its dependency check.
+  it("still routes a `remote:` id to the remote simulator path", async () => {
+    const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
+
+    await expect(
+      tool.execute!({}, { udid: "remote:11111111-1111-1111-1111-111111111111" })
+    ).rejects.toThrow(/`sim-remote` CLI not found/);
+  });
+
   it.each([{ udid: "chromium-cdp-9222" }, { udid: "iPhone 16 Pro" }, {}])(
     "answers %j with a 400, not a server error",
     async (body) => {
