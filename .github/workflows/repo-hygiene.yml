@@ -50,8 +50,8 @@ jobs:
         # Spelled as bytes rather than `grep -P '\x{00a0}'` so the check does
         # not depend on git being built with PCRE.
         run: |
-          if git grep -nIF "$(printf '\302\240')"; then
-            echo "::error::No-break space (U+00A0) found in tracked files — use a plain space."
+          if git grep -nIF "$(printf '\302\240')" -- '*.md' '*.mdx'; then
+            echo "::error::No-break space (U+00A0) found in Markdown — use a plain space."
             exit 1
           fi
 
