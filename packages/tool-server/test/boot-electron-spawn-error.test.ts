@@ -226,19 +226,26 @@ describe("bootElectronApp — spawn error handling", () => {
     await expect(promise).rejects.toThrow(/EACCES/);
   });
 
-  it("still rejects when spawn returns a child with no pid (early-fail path)", async () => {
-    // `spawn()` reports an unresolvable binary synchronously as a missing pid,
-    // before any deferred `error` event can arrive. The "no pid" guard turns
-    // that into the rejection.
-    spawnMock.mockReturnValue(makeFakeChild({ pid: undefined }));
+  it("falls back to the no-pid rejection when a pidless child never emits 'error'", async () => {
+    // Node always follows a missing pid with a next-tick 'error'; this pins the
+    // bounded fallback for a runtime that breaks that contract.
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      spawnMock.mockReturnValue(makeFakeChild({ pid: undefined }));
 
-    await expect(
-      bootElectronApp({
+      const settled = bootElectronApp({
         appPath: appDir,
         port: UNREACHABLE_CDP_PORT,
         readyTimeoutMs: 100,
-      })
-    ).rejects.toThrow(/spawn returned without a pid/);
+      }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const signal = getFailureSignal(await settled);
+      expect(signal?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED);
+      expect(signal?.failure_stage).toBe("electron_spawn_no_pid");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("detaches BOTH boot listeners after successful boot — child outliving the function must not leak rejections", async () => {
@@ -383,15 +390,20 @@ describe("bootElectronApp — spawn error handling", () => {
     }
   });
 
-  it("swallows the deferred 'error' that follows the no-pid throw — no uncaught exception, no unhandled rejection", async () => {
+  it("reports the deferred spawn error of a pidless child - errno and install hint, no unhandled rejection", async () => {
     // Node reports an unresolvable binary both ways: `spawn()` returns a child
-    // with no pid AND emits ENOENT on the next tick, after the "no pid" guard
-    // has already thrown. That event must reach a listener that neither
-    // rejects the promise the throw orphaned nor lets EventEmitter escalate it
-    // to an uncaught exception — either one kills the whole tool-server,
-    // taking every other session's device connections with it.
+    // with no pid AND emits ENOENT on the next tick. That event carries the
+    // cause, so it must become the rejection rather than escape as an uncaught
+    // `error` event, which would kill the whole tool-server.
     const child = makeFakeChild({ pid: undefined });
-    spawnMock.mockReturnValue(child);
+    spawnMock.mockImplementation(() => {
+      process.nextTick(() => {
+        const err = new Error("spawn electron ENOENT") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        child.emit("error", err);
+      });
+      return child;
+    });
 
     let unhandledRejections = 0;
     const onUnhandled = () => {
@@ -400,20 +412,15 @@ describe("bootElectronApp — spawn error handling", () => {
     process.on("unhandledRejection", onUnhandled);
 
     try {
-      await expect(
-        bootElectronApp({
-          appPath: appDir,
-          port: UNREACHABLE_CDP_PORT,
-          readyTimeoutMs: 100,
-        })
-      ).rejects.toThrow(/spawn returned without a pid/);
-
-      // Fire the deferred error now — like Node would.
-      const err = new Error("late ENOENT") as NodeJS.ErrnoException;
-      err.code = "ENOENT";
-      // An 'error' event with no listener is rethrown synchronously out of
-      // emit(); in the tool-server that surfaces as the uncaught exception.
-      expect(() => child.emit("error", err)).not.toThrow();
+      const err = await bootElectronApp({
+        appPath: appDir,
+        port: UNREACHABLE_CDP_PORT,
+        readyTimeoutMs: 100,
+      }).catch((e: unknown) => e);
+      expect((err as Error).message).toMatch(
+        /failed to launch electron \(ENOENT\).*installed.*PATH/
+      );
+      expect(getFailureSignal(err)?.failure_stage).toBe("electron_spawn_error");
 
       // Give microtasks a tick to surface any unhandled rejection.
       await new Promise((r) => setImmediate(r));

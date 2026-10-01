@@ -319,8 +319,8 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // Attach `error` before checking pid: spawn() returns synchronously but
   // ENOENT / EACCES / EAGAIN arrive as a deferred `error` event, and an
   // unhandled one crashes the whole tool-server (e.g. boot-device with
-  // `electronAppPath` on a host without electron on PATH). Fold it into the
-  // readiness race so the caller sees a clean rejection.
+  // `electronAppPath` on a host without electron on PATH). Fold it into a
+  // rejection so the caller sees the errno and the install hint.
   const onSpawnError = (err: NodeJS.ErrnoException, reject: (e: Error) => void) => {
     const codeSuffix = err.code ? ` (${err.code})` : "";
     reject(
@@ -348,23 +348,23 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   child.once("error", spawnErrorListener);
 
   if (!child.pid) {
-    // An unresolvable binary reports both ways: spawn() returns without a pid
-    // AND emits ENOENT on the next tick. Swap the rejecting listener for an
-    // absorber so that event neither rejects the promise this throw orphans nor
-    // escapes as an uncaught `error` event and kills the tool-server.
-    child.removeListener("error", spawnErrorListener);
-    child.on("error", () => {});
-    spawnErrorReject = null;
-    throw new FailureError(
-      `Electron boot: spawn returned without a pid (binary: ${launcher.command}).`,
-      {
-        error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
-        failure_stage: "electron_spawn_no_pid",
-        failure_area: "tool_server",
-        error_kind: "subprocess",
-        failure_command: "electron",
-      }
-    );
+    // Node leaves pid unset exactly when it queues the spawn error for the next
+    // tick; the timer only guards against a runtime that breaks that contract.
+    return Promise.race([
+      spawnError,
+      sleepUnref(1000).then((): never => {
+        throw new FailureError(
+          `Electron boot: spawn returned without a pid (binary: ${launcher.command}).`,
+          {
+            error_code: FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED,
+            failure_stage: "electron_spawn_no_pid",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            failure_command: "electron",
+          }
+        );
+      }),
+    ]);
   }
 
   // Forward Electron stderr so launch failures are visible to the user / agent.
