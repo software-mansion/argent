@@ -1,0 +1,95 @@
+---
+sidebar_position: 2
+sidebar_label: Get crash reports and logs
+title: Get crash reports and logs
+sidebar_custom_props:
+  icon: bug
+---
+
+The logs of a hosted simulator are files on the hosted machine. You cannot open them from your computer. `sim-remote logs` collects them on the machine and downloads them in one bundle.
+
+## What the bundle contains
+
+`sim-remote logs` collects three kinds of logs.
+
+| Kind      | Content                                                                                                    | Needs a booted simulator |
+| --------- | ---------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `crash`   | The crash reports (`.ips` files) of the processes of the simulator. The reports of your app are among them | No                       |
+| `system`  | The log directory of the simulator: `system.log`, the install logs and the asset logs                      | No                       |
+| `unified` | The most recent part of the unified log of the simulator, as text                                          | Yes                      |
+
+The bundle contains only the logs of the simulator that you name. The logs of your other simulators are not in it.
+
+## Download the logs
+
+Run the command with the UDID of the simulator. `sim-remote` unpacks the bundle into a new temporary directory on your computer.
+
+```bash
+sim-remote logs <UDID>
+```
+
+The first line of the output is the path of the directory. Each of the next lines is one file. A crash report shows the name of its process.
+
+```
+/var/folders/.../sim-remote-logs-Ab12Cd
+  crash/MyApp-2026-09-30-141736.ips  (MyApp)
+  system/system.log
+  system/MobileInstallation/mobile_installation.log.0
+  unified/log.txt
+```
+
+## Get the logs of one app
+
+The `--process` option keeps only the crash reports and the log records of one app. Give the bundle identifier or the name of the executable. Repeat the option for more apps.
+
+```bash
+sim-remote logs <UDID> --process com.example.MyApp
+```
+
+The `system` directory is not filtered. It belongs to the simulator, not to one app.
+
+## Select the kinds and the time range
+
+The `--kind` option selects the kinds of logs. Repeat the option for more kinds. The `--last` option sets how far back the unified log goes. The default is 10 minutes.
+
+```bash
+sim-remote logs <UDID> --kind crash
+sim-remote logs <UDID> --kind unified --process com.example.MyApp --last 30m
+```
+
+The unified log of a simulator is large. Use `--process` or a short `--last` value to keep the download small.
+
+## Keep the bundle as an archive
+
+The `--archive` option saves the bundle as a `.tar.gz` file and does not unpack it. Use the option in CI to store the logs of a failed job as an artifact.
+
+```bash
+sim-remote logs <UDID> --archive ./simulator-logs.tar.gz
+```
+
+## When a kind has no logs
+
+A kind without logs does not fail the command. `sim-remote` downloads the other kinds and prints one line for the kind that it skipped.
+
+```
+/var/folders/.../sim-remote-logs-Xy34Zw
+  crash/MyApp-2026-09-30-141736.ips  (MyApp)
+  unified: skipped — could not read the unified log: ...
+```
+
+The unified log is skipped when the simulator is not booted. Boot the simulator and run the command again.
+
+## Example instructions
+
+- "Download the crash reports of `com.example.MyApp` from the hosted simulator."
+- "The app crashed on the hosted simulator. Get its crash report and the last 5 minutes of its logs."
+- "Save the logs of the hosted simulator as `simulator-logs.tar.gz`."
+
+## Limits
+
+- Download the logs before you release the machine. Argent Cloud erases the machine when the session ends. See [Security and data](/docs/cloud/reference/security-and-data#what-survives-a-session).
+- The unified log needs a booted simulator. The crash reports and the `system` directory do not.
+- The bundle does not contain the files that your app writes into its own container. Download those with `sim-remote simctl get_app_container <UDID> <BUNDLE_ID> data`. See the [simctl reference](/docs/cloud/reference/simctl).
+- `sim-remote` does not remove the temporary directory. Delete it when you finish.
+
+The [CLI reference](/docs/cloud/reference/cli#the-logs-command) lists every option and describes the manifest of the bundle.
