@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Registry } from "@argent/registry";
+import request from "supertest";
+import { Registry } from "@argent/registry";
 
 type ExecFileCallback = (error: Error | null, stdout?: string, stderr?: string) => void;
 
@@ -59,6 +60,7 @@ vi.mock("../src/blueprints/ax-service", () => ({
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
+import { createHttpApp } from "../src/http";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
@@ -770,7 +772,7 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
   it.each([
     ["chromium-cdp-9222", /`electronAppPath`/],
     ["amazon-4a27df03c9777152", /`vvdImage`/],
-    ["emulator-5554", /`avdName`/],
+    ["emulator-5554", /Boot an Android emulator by passing `avdName`/],
   ])("refuses %s and names the parameter that boots it", async (udid, hint) => {
     const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
 
@@ -778,4 +780,34 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
     await expect(tool.execute!({}, { udid })).rejects.toThrow(hint);
     expect(mockExecFile).not.toHaveBeenCalled();
   });
+
+  // Any id that is not UUID-shaped classifies as Android, so these are not
+  // known to be Android serials and must not be answered as if they were.
+  it.each(["iPhone 16 Pro", "4A27DF03"])(
+    "refuses %s without calling it an Android emulator",
+    async (udid) => {
+      const tool = createBootDeviceTool({
+        resolveService: async () => ({}),
+      } as unknown as Registry);
+
+      const error = await tool.execute!({}, { udid }).catch((e: Error) => e);
+      expect((error as Error).message).toMatch(/Pass the `udid` field of a simulator/);
+      expect((error as Error).message).not.toMatch(/Boot an Android emulator/);
+      expect(mockExecFile).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([{ udid: "chromium-cdp-9222" }, { udid: "iPhone 16 Pro" }, {}])(
+    "answers %j with a 400, not a server error",
+    async (body) => {
+      const registry = new Registry();
+      registry.registerTool(createBootDeviceTool(registry));
+      const { app } = createHttpApp(registry);
+
+      const res = await request(app).post("/tools/boot-device").send(body);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error_code).toBe("BOOT_DEVICE_TARGET_SELECTION_INVALID");
+    }
+  );
 });

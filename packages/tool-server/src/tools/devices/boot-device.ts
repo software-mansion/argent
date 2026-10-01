@@ -37,7 +37,11 @@ import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
-import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import {
+  classifyDevice,
+  isAndroidEmulatorSerial,
+  stripRemotePrefix,
+} from "../../utils/device-info";
 import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
 import { InvalidToolInputError } from "../../utils/capability";
 import {
@@ -1333,6 +1337,21 @@ const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
   vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
 };
 
+/**
+ * `classifyDevice` reports every id that is not UUID-shaped as `android`, so a
+ * simulator name or a truncated UDID lands there too. Only an `emulator-<port>`
+ * serial is known to be Android.
+ */
+const UNRECOGNISED_UDID_HINT =
+  "Pass the `udid` field of a simulator from `list-devices`, not its name. " +
+  "An Android emulator boots through `avdName` instead.";
+
+function nonIosUdidHint(udid: string, platform: "android" | "chromium" | "vega"): string {
+  return platform === "android" && !isAndroidEmulatorSerial(udid)
+    ? UNRECOGNISED_UDID_HINT
+    : NON_IOS_UDID_HINT[platform];
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
@@ -1370,13 +1389,11 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
       const hasElectron = Boolean(params.electronAppPath);
       const provided = [hasUdid, hasAvd, hasVega, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
-        throw new FailureError(
+        throw new InvalidToolInputError(
           "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron).",
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
-            failure_area: "tool_server",
-            error_kind: "validation",
           }
         );
       }
@@ -1414,14 +1431,12 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
           return bootIosRemote(params.udid!, registry, params.force);
         }
         if (platform !== "ios") {
-          throw new FailureError(
+          throw new InvalidToolInputError(
             `\`udid\` takes an iOS simulator UDID from \`list-devices\`; \`${params.udid}\` is not one. ` +
-              NON_IOS_UDID_HINT[platform],
+              nonIosUdidHint(params.udid!, platform),
             {
               error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
               failure_stage: "boot_device_target_selection",
-              failure_area: "tool_server",
-              error_kind: "validation",
             }
           );
         }
