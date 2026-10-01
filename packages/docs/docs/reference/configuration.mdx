@@ -184,6 +184,8 @@ An environment variable changes the behavior of the process that reads it. Expor
 
 ### Tool-server
 
+Argent sets `ARGENT_PORT`, `ARGENT_HOST` and `ARGENT_IDLE_TIMEOUT_MINUTES` each time it starts the tool-server. An exported value of these three variables has no effect.
+
 | Variable                      | Default                              | Description                                                                                                                                                                                                     |
 | ----------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ARGENT_PORT`                 | `3001`                               | The port the tool-server listens on. Set it with `argent server start --port`. A tool-server that Argent starts on demand takes a free port                                                                     |
