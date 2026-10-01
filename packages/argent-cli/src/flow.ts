@@ -1160,8 +1160,8 @@ interface BatchFlowResult {
  * summary; a flow failing its steps — or one the tool-server rejects up front
  * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
  * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, a reply that is not a report, or a failed artifact export
- * stops it and counts the remaining flows skipped.
+ * as validation, or a reply that is not a report stops it and counts the
+ * remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1252,17 +1252,13 @@ async function runFlowDirectory(
         baseUrl
       );
     } catch (err) {
-      // A dead tool-server or an unwritable --output directory is the same
-      // wall for every remaining flow, so stop the batch rather than run them
-      // into it.
-      const message = err instanceof Error ? err.message : String(err);
-      const verdict = "artifact export failed";
-      if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
-      console.error(message);
-      results.push({ path: rel, status: "fail", error: message });
-      failures.push({ path: rel, headline: verdict, detail: message, rerun });
-      stopped = true;
-      continue;
+      // What throws here is scoped to this flow's own artifacts (an unreadable
+      // capture, a malformed handle), and the report already holds the verdict.
+      console.error(
+        `warning: could not export artifacts for ${flowPath}: ` +
+          (err instanceof Error ? err.message : String(err))
+      );
+      resolveArtifactDisplayPaths(report);
     }
     results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
     if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });

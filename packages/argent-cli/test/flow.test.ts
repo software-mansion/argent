@@ -2255,33 +2255,56 @@ describe("argent flow run <dir>", () => {
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
   });
 
-  it("stops the batch on an artifact-export throw instead of losing the tally", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("artifact fetch died"));
+  it("keeps a flow's own verdict and runs the next flow when its artifact export throws", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            reason: "pixels differ",
+            snapshotKey: "home__ios-390x844",
+            artifacts: { current: handle("/srv/cache/current.png") },
+          },
+        ],
+      }),
+    });
+    materializeArtifactsMock.mockRejectedValueOnce(new Error("EACCES: permission denied"));
+    const output = path.join(tempRoot, "out-export-throw");
 
-    await expect(
-      flow(["run", flowsDir, "-r", "--output", path.join(tempRoot, "out-export-throw")], opts)
-    ).rejects.toThrow("process.exit:1");
+    await expect(flow(["run", flowsDir, "--output", output], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
 
-    // The flow itself ran — only its export died — so the outcome is one
-    // failed flow and the rest skipped, not a batch that ends mid-loop.
-    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
-    expect(errs.join("\n")).toContain("artifact fetch died");
-    const lines = logs.join("\n").split("\n");
-    expect(lines.slice(0, 2)).toEqual(["[1/3] a-login.yaml", "  ✗ artifact export failed"]);
-    expect(lines).toContain("  · not run (batch stopped)");
-    expect(lines.slice(lines.indexOf("Failed flows (1)"))).toEqual([
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs).toEqual([
+      `warning: could not export artifacts for ${path.join(flowsDir, "a-login.yaml")}: EACCES: permission denied`,
+    ]);
+    // The whole ledger: the flow's own failing step, with the capture where the
+    // server left it, then the next flow.
+    expect(logs.join("\n").split("\n")).toEqual([
+      "[1/2] a-login.yaml",
+      "  ✗  1 snapshot — pixels differ",
+      "       current: /srv/cache/current.png",
+      "  FAIL (started on SIM-1) — 0 passed, 1 failed, 0 errored, 0 skipped",
+      "[2/2] b-checkout.yaml",
+      "  PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped",
+      "",
       "Failed flows (1)",
       "",
-      "  ✗ a-login.yaml › artifact export failed",
-      "    artifact fetch died",
-      `    re-run: argent flow run ${path.join(flowsDir, "a-login.yaml")} --output ${path.join(tempRoot, "out-export-throw")}`,
+      "  ✗ a-login.yaml › step 1 snapshot",
+      "    pixels differ",
+      `    re-run: argent flow run ${path.join(flowsDir, "a-login.yaml")} --output ${output}`,
       "",
-      "FAIL — 3 flows: 0 passed, 1 failed, 2 skipped (0.0s)",
+      expect.stringMatching(/^FAIL — 2 flows: 1 passed, 1 failed, 0 skipped/),
     ]);
   });
 
-  it("emits the --json aggregate when artifact export throws", async () => {
+  it("emits the --json aggregate with every report when an artifact export throws", async () => {
     toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("artifact fetch died"));
 
     await expect(
@@ -2289,21 +2312,19 @@ describe("argent flow run <dir>", () => {
         ["run", flowsDir, "--json", "--output", path.join(tempRoot, "out-export-throw-json")],
         opts
       )
-    ).rejects.toThrow("process.exit:1");
+    ).rejects.toThrow("process.exit:0");
 
     // stdout stays parseable: a consumer piping into `jq` still gets the
-    // ledger, with the export failure as the flow's reason.
-    expect(JSON.parse(logs.join("\n"))).toMatchObject({
-      ok: false,
-      total: 2,
-      passed: 0,
-      failed: 1,
-      skipped: 1,
-      flows: [
-        { path: "a-login.yaml", status: "fail", error: "artifact fetch died" },
-        { path: "b-checkout.yaml", status: "skip" },
-      ],
-    });
+    // ledger, each flow under the verdict of its own report.
+    const aggregate = JSON.parse(logs.join("\n"));
+    expect(aggregate).toMatchObject({ ok: true, total: 2, passed: 2, failed: 0, skipped: 0 });
+    expect(aggregate.flows).toEqual([
+      { path: "a-login.yaml", status: "pass", report: report() },
+      { path: "b-checkout.yaml", status: "pass", report: report() },
+    ]);
+    expect(errs).toEqual([
+      `warning: could not export artifacts for ${path.join(flowsDir, "a-login.yaml")}: artifact fetch died`,
+    ]);
   });
 
   it("ends a failed batch with the failed flows, each with a command that runs it alone", async () => {
