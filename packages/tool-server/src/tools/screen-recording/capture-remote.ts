@@ -5,7 +5,13 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
-import { screenRecordFetch, screenRecordStart, screenRecordStop } from "../../utils/sim-remote";
+import {
+  screenRecordEnd,
+  screenRecordFetch,
+  screenRecordStart,
+  screenRecordStop,
+} from "../../utils/sim-remote";
+import { stripRemotePrefix } from "../../utils/device-info";
 import {
   clearActiveScreenRecording,
   markScreenRecordingFinalized,
@@ -65,10 +71,10 @@ const execFileAsync = promisify(execFile);
  */
 const TRIM_FILTERS = `fps=${OUTPUT_FPS},mpdecimate=hi=1:lo=1:frac=1,setpts=N/${OUTPUT_FPS}/TB`;
 
-function outputPath(deviceId: string, suffix = ""): string {
+function outputPath(deviceId: string): string {
   return path.join(
     os.tmpdir(),
-    `argent-screen-recording-${deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}${suffix}.mp4`
+    `argent-screen-recording-${deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
   );
 }
 
@@ -164,16 +170,15 @@ export async function startRemoteCapture(
  * Start a recording on the runner. One the runner is already making belongs to
  * nobody here — this session would have refused the start itself — so it is a
  * leftover of a tool-server that lost track of it. It is stopped, which keeps
- * its video on the runner, and the start is tried once more.
+ * its video on the runner, and the start is tried once more — also when that
+ * stop fails, since the runner ends a recording whatever its stop came to.
  */
 async function startOnRunner(deviceId: string, showTouches: boolean): Promise<string | null> {
   try {
     return await screenRecordStart(deviceId, { showTouches });
   } catch (err) {
     if (!/already recording/i.test(err instanceof Error ? err.message : String(err))) throw err;
-    const leftover = outputPath(deviceId, "-leftover");
-    await screenRecordStop(deviceId, leftover);
-    await fs.rm(leftover, { force: true }).catch(() => {});
+    await screenRecordEnd(deviceId).catch(() => {});
     return screenRecordStart(deviceId, { showTouches });
   }
 }
@@ -218,6 +223,7 @@ export async function stopRemoteCapture(
   const trimStatic = api.trimStatic;
   const watermark = api.watermark;
   const timedOut = api.recordingTimedOut;
+  const recordingId = api.remoteRecordingId;
   const pending = api.remoteFetch;
   let outputFile = rawFile;
   let warning: string | undefined;
@@ -284,7 +290,11 @@ export async function stopRemoteCapture(
         .catch(() => true);
       if (empty) await fs.rm(file, { force: true }).catch(() => {});
     }
-    throw timedOut ? asFetchAfterCapFailure(err, api.timeLimitSeconds) : err;
+    throw asStopFailure(err, {
+      deviceId: api.deviceId,
+      recordingId,
+      timeLimitSeconds: timedOut ? api.timeLimitSeconds : undefined,
+    });
   } finally {
     // Always return the session to a startable state — a failed post-pass must
     // not wedge the next start behind "already active".
@@ -477,17 +487,30 @@ function asStartFailure(err: unknown): FailureError {
 }
 
 /**
- * A cap-time fetch failure is worth its own message: the recording did end on
- * the runner, so re-running stop cannot bring it back and the caller should
- * record again rather than retry.
+ * A stop that brought no video back. The session is startable again after it,
+ * so this message is the caller's only way back to the recording: the runner
+ * keeps a stopped recording until the machine is released, and the id is what
+ * fetches it. `timeLimitSeconds` is set when the cap ended the recording.
  */
-function asFetchAfterCapFailure(err: unknown, timeLimitSeconds: number | null): FailureError {
+function asStopFailure(
+  err: unknown,
+  ctx: { deviceId: string; recordingId: string | null; timeLimitSeconds?: number | null }
+): FailureError {
   if (err instanceof FailureError) return err;
   const message = err instanceof Error ? err.message : String(err);
+  const what =
+    ctx.timeLimitSeconds === undefined
+      ? `The recording could not be retrieved from the remote simulator: ${message}.`
+      : `The recording hit its ${ctx.timeLimitSeconds ?? "?"}s time limit, but the video could ` +
+        `not be retrieved from the remote simulator: ${message}.`;
+  const recovery = ctx.recordingId
+    ? `If the recording was stopped there, the remote machine keeps it until the machine is ` +
+      `released. Download it with \`sim-remote screen-record fetch ` +
+      `${stripRemotePrefix(ctx.deviceId)} <FILE> --recording ${ctx.recordingId}\`. ` +
+      `Do not retry the stop.`
+    : `Start a new recording; do not retry the stop.`;
   return new FailureError(
-    `The recording hit its ${timeLimitSeconds ?? "?"}s time limit, but the video could not be ` +
-      `retrieved from the remote simulator: ${message}. The recording has already ended there, ` +
-      `so start a new one rather than retrying the stop.`,
+    `${what} ${recovery}`,
     {
       error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
       failure_stage: "screen_recording_remote_fetch",
