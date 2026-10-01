@@ -22,13 +22,13 @@ The bundle contains only the logs of the simulator that you name. The logs of yo
 
 ## Download the logs
 
-Run the command with the UDID of the simulator. `sim-remote` unpacks the bundle into a new temporary directory on your computer.
+Run the command with the UDID of the simulator. Without the `--archive` option, `sim-remote` unpacks the bundle into a new temporary directory on your computer.
 
 ```bash
 sim-remote logs <UDID>
 ```
 
-The first line of the output is the path of the directory. Each of the next lines is one file. A crash report shows the name of its process.
+The first line of the output is the path of the directory. Each of the next lines is one file, or one kind of logs that `sim-remote` skipped. A crash report shows the name of its process.
 
 ```
 /var/folders/.../sim-remote-logs-Ab12Cd
