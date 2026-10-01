@@ -444,9 +444,13 @@ Fails if native-profiler-analyze has not been run or no parsed trace data is in 
   zodSchema,
   // No chromium entry: it has no native trace capture.
   capability: {
-    apple: { simulator: true, device: true },
+    apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
   },
+  // The Android branch re-queries the .pftrace, so a cold trace-processor engine
+  // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays
+  // rather than cancels.
+  longRunning: true,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

@@ -1,0 +1,61 @@
+---
+sidebar_position: 2
+sidebar_label: Installation
+title: Installation
+sidebar_custom_props:
+  icon: download
+---
+
+## Prerequisites
+
+- **macOS** on Apple Silicon, or **Linux** on x86_64 or arm64. The Linux binary needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or newer).
+- An **API key** for Argent Cloud.
+- No Xcode. `sim-remote` does not use a local Xcode installation.
+
+## Download `sim-remote`
+
+We publish `sim-remote` as one binary per platform at [github.com/software-mansion/sim-remote-releases](https://github.com/software-mansion/sim-remote-releases/releases). Always use the latest release.
+
+| Asset                                  | Platform             |
+| -------------------------------------- | -------------------- |
+| `sim-remote-aarch64-apple-darwin`      | macOS, Apple Silicon |
+| `sim-remote-x86_64-unknown-linux-gnu`  | Linux, x86_64        |
+| `sim-remote-aarch64-unknown-linux-gnu` | Linux, arm64         |
+
+Download the asset for your platform, make it executable, and move it to a directory on your `PATH`. The commands below use `~/.local/bin`.
+
+```bash
+# macOS (Apple Silicon)
+curl -fL -o sim-remote https://github.com/software-mansion/sim-remote-releases/releases/latest/download/sim-remote-aarch64-apple-darwin
+chmod +x sim-remote
+mkdir -p ~/.local/bin && mv sim-remote ~/.local/bin/
+```
+
+```bash
+# Linux (x86_64 or arm64)
+curl -fL -o sim-remote "https://github.com/software-mansion/sim-remote-releases/releases/latest/download/sim-remote-$(uname -m)-unknown-linux-gnu"
+chmod +x sim-remote
+mkdir -p ~/.local/bin && mv sim-remote ~/.local/bin/
+```
+
+If `~/.local/bin` is not on your `PATH`, add this line to your shell profile:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Confirm the installation:
+
+```bash
+sim-remote --help
+```
+
+## Authentication
+
+`sim-remote login` reads the API key from the `SIM_ROUTER_API_KEY` environment variable or from the `--api-key` option. Export the variable in your shell profile, in a `.envrc` file or in a secret manager. Do not put the key in a committed script.
+
+```bash
+export SIM_ROUTER_API_KEY=<your key>
+
+sim-remote login
+```

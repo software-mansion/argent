@@ -68,17 +68,17 @@ A recorded wait carries a different warning: it adds about one second and report
 
 Report that the flow has no flow tree and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.
 
-A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id argent refuses outright. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first non-echo step is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
+A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id argent refuses outright. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first step that is neither `echo:` nor `script:` is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
 
 ## Tree source recovery on Android, Chromium, and Vega
 
 While the required source is down, selector failures and raw-point capture are void. Restore the source and re-record affected taps.
 
-| Platform | Symptom                          | Recovery                                               |
-| -------- | -------------------------------- | ------------------------------------------------------ |
-| Android  | Cannot reach the devtools helper | Unlock the device, allow `adb install -t`, and rerun   |
-| Chromium | No reachable CDP session         | Boot again with `electronAppPath` and remote debugging |
-| Vega     | Toolkit returns no page source   | Relaunch an app built with automation support          |
+| Platform | Symptom                                | Recovery                                                                         |
+| -------- | -------------------------------------- | -------------------------------------------------------------------------------- |
+| Android  | Cannot reach the argent android helper | Argent reinstalls it once; if it persists, read the device's reason in the error |
+| Chromium | No reachable CDP session               | Boot again with `electronAppPath` and remote debugging                           |
+| Vega     | Toolkit returns no page source         | Relaunch an app built with automation support                                    |
 
 On Android, healthy `describe` output does not prove the flow tree is available. It can fall back to legacy `uiautomator`, while the runner refuses that trimmed fallback.
 
