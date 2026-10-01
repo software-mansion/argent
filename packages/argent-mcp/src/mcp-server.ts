@@ -2,17 +2,14 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   ensureToolsServer,
-  errorBodyMessage,
   getResolvedToolsUrl,
   isRemoteRouted,
   getDeviceIdFromArgs,
-  prepareFileInputs,
-  applyClientFileDirectives,
-  type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
 import {
@@ -42,51 +39,9 @@ import {
 } from "./auto-capture.js";
 import { toMcpTool } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
+import { createToolCaller } from "./tool-caller.js";
 
-const MAX_RETRIES = 4;
-const EXP_BACKOFF_BASE = 250;
-const FETCH_TIMEOUT_MS = 30_000;
-
-export async function fetchWithReconnect(
-  getUrl: () => string,
-  reconnect: () => Promise<void>,
-  config?: {
-    init?: RequestInit;
-    expBackoffBase?: number;
-    maxRetries?: number;
-    fetchTimeoutMs?: number | null;
-  }
-): Promise<Response> {
-  const {
-    expBackoffBase = EXP_BACKOFF_BASE,
-    maxRetries = MAX_RETRIES,
-    fetchTimeoutMs = FETCH_TIMEOUT_MS,
-    init,
-  } = config ?? {};
-
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const controller = new AbortController();
-    const timer =
-      fetchTimeoutMs !== null ? setTimeout(() => controller.abort(), fetchTimeoutMs) : undefined;
-    try {
-      return await fetch(getUrl(), { ...init, signal: controller.signal });
-    } catch (err) {
-      lastError = err;
-      if (attempt === maxRetries) break;
-      if (attempt === 0) {
-        // First failure: trigger reconnect (spawns new server if dead)
-        await reconnect();
-      }
-      // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
-      await new Promise((r) => setTimeout(r, expBackoffBase * Math.pow(2, attempt)));
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  throw lastError;
-}
+export { fetchWithReconnect } from "./tool-caller.js";
 
 export interface StartMcpServerOptions {
   /**
@@ -94,6 +49,8 @@ export interface StartMcpServerOptions {
    * remote target is configured and this process must spawn tool-server itself.
    */
   paths: ToolsServerPaths;
+  /** The editor connection. Defaults to stdio; a test passes an in-memory one. */
+  transport?: Transport;
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
@@ -177,60 +134,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   }
 
-  async function fetchTools(): Promise<ToolMeta[]> {
-    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`, reconnect, {
-      init: { headers: authHeader() },
-    });
-    const json = (await res.json()) as { tools: ToolMeta[] };
-    return json.tools;
-  }
-
-  interface ToolAPIResponse {
-    data?: unknown;
-    error?: string;
-    message?: string;
-    issues?: unknown;
-    note?: string;
-  }
-
-  async function callTool(
-    name: string,
-    args: unknown
-  ): Promise<{ result: unknown; outputHint?: string; note?: string }> {
-    const tools = await fetchTools();
-    const meta = tools.find((t) => t.name === name);
-
-    // File boundary, outbound: wrap declared file-path args so the tool-server
-    // can read them in place (co-located) or from inlined content (remote).
-    // An older server that declares no fileInputs gets the args verbatim.
-    let finalArgs = args;
-    if (meta?.fileInputs?.length) {
-      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
-        // An external target may not share this process's filesystem, so the
-        // file bytes have to ride along.
-        includeContent: resolved.url !== null,
-      });
-    }
-
-    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader(), ...aiClientHeaders() },
-        body: JSON.stringify(finalArgs ?? {}),
-      },
-      fetchTimeoutMs: meta?.longRunning ? null : FETCH_TIMEOUT_MS,
-    });
-
-    const json = (await res.json()) as ToolAPIResponse;
-
-    if (!res.ok) throw new Error(errorBodyMessage(json) ?? res.statusText);
-
-    // File boundary, inbound: persist any client-write directives (files that
-    // belong in the agent's project, e.g. recorded flow YAMLs) and rewrite
-    // them to the written paths.
-    const { result: data } = await applyClientFileDirectives(json.data);
-    return { result: data, outputHint: meta?.outputHint, note: json.note };
-  }
+  const { fetchTools, callTool } = createToolCaller({
+    getHandle: () => ({ url: TOOLS_URL, token: AUTH_TOKEN }),
+    reconnect,
+    extraHeaders: aiClientHeaders,
+  });
 
   const server = new Server(
     { name: "argent", version: getInstalledVersion() },
@@ -427,7 +335,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
-  await server.connect(new StdioServerTransport());
+  await server.connect(options.transport ?? new StdioServerTransport());
 
   // Restart the tool server if it dies between requests. Auto-spawned servers
   // only: a remote-routed target is the user's responsibility, and a silent

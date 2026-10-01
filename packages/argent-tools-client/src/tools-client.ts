@@ -17,6 +17,8 @@ export interface ToolMeta {
 export interface ToolInvocationResult {
   data: unknown;
   note?: string;
+  /** The `outputHint` of the tool's listing entry, when it has one. */
+  outputHint?: string;
 }
 
 export interface CallToolOptions {
@@ -38,6 +40,22 @@ export interface ToolsClient {
 export interface CreateToolsClientOptions {
   /** Locations of bundled artifacts. Required unless a tool-server URL is configured. */
   paths?: ToolsServerPaths;
+  /**
+   * Override the resolution of the tool-server URL and token. The MCP adapter
+   * freezes routing at startup and updates the handle after a local respawn.
+   * When set, the client never reads the link config for routing and never
+   * spawns. The remote/co-located decision for file inputs still comes from
+   * `getResolvedToolsUrl()`.
+   */
+  baseUrl?: () => Promise<ToolsServerHandle>;
+  /**
+   * Override the fetch used for GET /tools and POST /tools/:name, so a caller
+   * can wrap retries and a per-attempt timeout around each request.
+   * `meta.longRunning` is the tool's flag from the listing (false for GET
+   * /tools), so the caller can disable its timeout. POST /upload keeps the
+   * global fetch.
+   */
+  fetchImpl?: (url: string, init: RequestInit, meta: { longRunning: boolean }) => Promise<Response>;
 }
 
 /**
@@ -142,8 +160,10 @@ export function errorBodyMessage(body: {
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
+  const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
 
   async function baseUrl(): Promise<ToolsServerHandle> {
+    if (options.baseUrl) return options.baseUrl();
     // Precedence lives in getResolvedToolsUrl. An override without a token means
     // the caller owns an unauthenticated server; with no override, auto-spawn a
     // local, token-authenticated one.
@@ -163,7 +183,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
   async function fetchTools(): Promise<ToolMeta[]> {
     const { url, token } = await baseUrl();
-    const res = await fetch(`${url}/tools`, { headers: authHeaders(token) });
+    const res = await doFetch(
+      `${url}/tools`,
+      { headers: authHeaders(token) },
+      { longRunning: false }
+    );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
@@ -194,21 +218,26 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       });
     }
 
-    const res = await fetch(`${url}/tools/${encodeURIComponent(name)}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(opts?.onProgress ? { Accept: "application/x-ndjson" } : {}),
-        ...authHeaders(token),
+    const res = await doFetch(
+      `${url}/tools/${encodeURIComponent(name)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(opts?.onProgress ? { Accept: "application/x-ndjson" } : {}),
+          ...authHeaders(token),
+        },
+        body: JSON.stringify(finalArgs ?? {}),
       },
-      body: JSON.stringify(finalArgs ?? {}),
-    });
+      { longRunning: meta?.longRunning === true }
+    );
     // The server commits to streaming only after every pre-invoke gate passes —
     // validation errors stay plain JSON with their status codes — so Content-Type
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
     if (opts?.onProgress && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      return consumeToolStream(res.body, opts.onProgress);
+      const streamed = await consumeToolStream(res.body, opts.onProgress);
+      return { ...streamed, outputHint: meta?.outputHint };
     }
     const json = (await res.json().catch(() => ({}))) as {
       data?: unknown;
@@ -229,7 +258,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, inbound: persist client-write directives (e.g. recorded
     // flow YAMLs) and rewrite them to the written paths.
     const { result: data } = await applyClientFileDirectives(json.data);
-    return { data, note: json.note };
+    return { data, note: json.note, outputHint: meta?.outputHint };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };
