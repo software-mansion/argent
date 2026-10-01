@@ -111,6 +111,11 @@ export interface ScreenRecordingSessionApi {
    * runner to stop a recording that already ended.
    */
   remoteFetch: Promise<void> | null;
+  /**
+   * Remote only: the runner's id for this recording, which a failed download
+   * is fetched again by. Null against a `sim-remote` that does not report one.
+   */
+  remoteRecordingId: string | null;
   /** Remote only: why that cap-time download failed, surfaced by stop. */
   remoteFetchError: Error | null;
   /**
@@ -166,6 +171,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.pointerDisable = null;
   state.pointerFailed = false;
   state.remoteFetch = null;
+  state.remoteRecordingId = null;
   state.remoteFetchError = null;
   state.remoteRelease = null;
   state.recordingTimedOut = false;
@@ -236,6 +242,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       trimStatic: true,
       watermark: false,
       remoteFetch: null,
+      remoteRecordingId: null,
       remoteFetchError: null,
       remoteRelease: null,
       framesWritten: 0,

@@ -35,6 +35,13 @@ sim-remote simctl io <UDID> screenshot shot.png
 sim-remote simctl io <UDID> recordVideo demo.mp4
 ```
 
+A script cannot press Ctrl-C. Use `screen-record` there: `start` returns at once and `stop` writes the file.
+
+```bash
+sim-remote screen-record start <UDID> --show-touches
+sim-remote screen-record stop <UDID> demo.mp4
+```
+
 ## Read the logs after a crash
 
 `--console` shows the output of the app while it runs. After a crash, download the crash report and the logs of the simulator. See [Get crash reports and logs](/docs/cloud/guides/logs).
