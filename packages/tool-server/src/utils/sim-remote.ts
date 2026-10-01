@@ -308,9 +308,17 @@ export async function screenRecordStop(udid: string, outputFile: string): Promis
 }
 
 /**
- * Download a recording the runner kept from an earlier stop. It keeps every
- * stopped recording until the machine is released, so a download that broke
- * off is repeated here instead of costing the recording.
+ * Stop the recording without downloading it. The runner keeps the mp4, so
+ * this is for a recording that only has to end.
+ */
+export async function screenRecordEnd(udid: string): Promise<void> {
+  await run(["screen-record", "stop", stripRemotePrefix(udid)]);
+}
+
+/**
+ * Download a recording the runner kept from an earlier stop. It keeps the
+ * latest recordings of a simulator until the machine is released, so a
+ * download that broke off is repeated here instead of costing the recording.
  */
 export async function screenRecordFetch(
   udid: string,

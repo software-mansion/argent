@@ -39,6 +39,8 @@ Two details differ from a local recording:
 - Argent removes the still parts and stamps the watermark after the download, in a second pass over the finished video. When `ffmpeg` is not installed, Argent gives you the recording anyway and tells you that it did neither, instead of failing the recording.
 - The still parts collapse completely. A local recording keeps the first second of each still part.
 
+If the download fails, the recording stays on the remote machine until you release the machine. The error message gives the `sim-remote screen-record fetch` command that downloads it.
+
 ## Where the video lands
 
 Argent saves each video in the `.argent/recordings/` directory of the project. The file name contains the device and the time of the recording. Argent does not overwrite an existing file. You can change the directory in the Argent configuration.
