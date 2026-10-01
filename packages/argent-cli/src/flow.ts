@@ -702,9 +702,9 @@ async function claimExportDirName(
  * copied role's path in the report so the renderers and `--json` print the
  * durable location instead of a temp path. Failure-only: a clean pass carries
  * no artifacts, and a seeded baseline is already durable under
- * `__baselines__/`. Best-effort per snapshot and per file — a read or copy
- * error warns on stderr and leaves the source path in place; artifact export
- * must never change a run's verdict. Names that fail `SAFE_ARTIFACT_NAME` are skipped before any
+ * `__baselines__/`. Best-effort per snapshot and per file — a read or a copy
+ * that throws warns on stderr and leaves the source path in place; artifact
+ * export must never change a run's verdict. Names that fail `SAFE_ARTIFACT_NAME` are skipped before any
  * materialization, so nothing is downloaded for a step that won't be written.
  */
 export async function exportFailureArtifacts(
