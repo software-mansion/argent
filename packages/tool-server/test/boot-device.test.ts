@@ -781,8 +781,8 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
-  // Any id that is not UUID-shaped classifies as Android, so these are not
-  // known to be Android serials and must not be answered as if they were.
+  // An id `classifyDevice` does not recognise classifies as Android, so these
+  // are not known to be Android serials and must not be answered as if they were.
   it.each(["iPhone 16 Pro", "4A27DF03"])(
     "refuses %s without calling it an Android emulator",
     async (udid) => {
@@ -791,7 +791,7 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
       } as unknown as Registry);
 
       const error = await tool.execute!({}, { udid }).catch((e: Error) => e);
-      expect((error as Error).message).toMatch(/Pass the `udid` field of a simulator/);
+      expect((error as Error).message).toMatch(/Copy the `udid` field of an iOS simulator/);
       expect((error as Error).message).not.toMatch(/Boot an Android emulator/);
       expect(mockExecFile).not.toHaveBeenCalled();
     }
@@ -799,7 +799,7 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
 
   // `sim-remote` is absent from the primed dep cache, so reaching the remote
   // path surfaces its dependency check.
-  it("still routes a `remote:` id to the remote simulator path", async () => {
+  it("routes a `remote:` id to the remote simulator path", async () => {
     const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
 
     await expect(

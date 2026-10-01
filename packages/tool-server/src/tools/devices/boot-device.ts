@@ -1338,13 +1338,13 @@ const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
 };
 
 /**
- * `classifyDevice` reports every id that is not UUID-shaped as `android`, so a
- * simulator name or a truncated UDID lands there too. Only an `emulator-<port>`
+ * `classifyDevice` reports every id it does not recognise as `android`, so a
+ * simulator name or a truncated UDID lands there too. Only an `emulator-`
  * serial is known to be Android.
  */
 const UNRECOGNISED_UDID_HINT =
-  "Pass the `udid` field of a simulator from `list-devices`, not its name. " +
-  "An Android emulator boots through `avdName` instead.";
+  "Copy the `udid` field of an iOS simulator from `list-devices` exactly. " +
+  "An Android emulator boots through `avdName`; a connected Android phone needs no boot.";
 
 function nonIosUdidHint(udid: string, platform: "android" | "chromium" | "vega"): string {
   return platform === "android" && !isAndroidEmulatorSerial(udid)
