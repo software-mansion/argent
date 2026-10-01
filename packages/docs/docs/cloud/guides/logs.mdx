@@ -46,7 +46,7 @@ The `--process` option keeps only the crash reports and the log records of one a
 sim-remote logs <UDID> --process com.example.MyApp
 ```
 
-The `system` directory is not filtered. It belongs to the simulator, not to one app.
+`--process` does not filter the `system` directory. The directory belongs to the simulator, not to one app.
 
 ## Select the kinds and the time range
 
@@ -77,7 +77,7 @@ A kind without logs does not fail the command. `sim-remote` downloads the other 
   unified: skipped — could not read the unified log: ...
 ```
 
-The unified log is skipped when the simulator is not booted. Boot the simulator and run the command again.
+`sim-remote` skips the unified log when the simulator is not booted. Boot the simulator and run the command again.
 
 ## Example instructions
 

@@ -56,7 +56,7 @@ One fetch of the view hierarchy takes about 5 seconds on a large app. A flow ste
 
 - Permission changes go through `simctl privacy`. Notifications, health and Face ID permissions are not available.
 - `clearState` is best-effort. `get_app_container` downloads a copy of the container.
-- `maestro start-device`, the `setProxy` flow command and crash report artifacts are not supported. To get the crash reports, run `sim-remote logs <UDID>` after the test. See [Get crash reports and logs](/docs/cloud/guides/logs).
+- The hosted simulator does not support `maestro start-device`, the `setProxy` flow command, or crash report artifacts. To get the crash reports, run `sim-remote logs <UDID>` after the test. See [Get crash reports and logs](/docs/cloud/guides/logs).
 - Maestro starts a new test runner on the simulator for each `maestro test` invocation. A workflow with one invocation per flow file waits for the launch of the test runner every time.
 - Each `xcrun` call opens a new connection, which costs a few seconds. The test steps share one tunnel and are not affected.
 
