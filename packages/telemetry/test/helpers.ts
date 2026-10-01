@@ -6,41 +6,40 @@ import { afterEach, beforeEach } from "vitest";
 import { _resetConsentCacheForTest } from "../src/consent.js";
 import { _resetIdentityCacheForTest } from "../src/identity.js";
 
-let savedHome: string | undefined;
-let savedUserProfile: string | undefined;
-
 // Point telemetry home resolution at a vitest-scoped temp directory.
-export function useTempHome(): { tmp: string } {
+// The restorer closes over its own snapshot, so nested scopes unwind LIFO-correctly.
+function useTempHome(): { tmp: string; restore: () => void } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argent-telemetry-"));
-  savedHome = process.env.HOME;
-  savedUserProfile = process.env.USERPROFILE;
+  const savedHome = process.env.HOME;
+  const savedUserProfile = process.env.USERPROFILE;
   process.env.HOME = tmp;
   process.env.USERPROFILE = tmp;
-  return { tmp };
-}
-
-export function restoreHome(tmp: string): void {
-  if (savedHome === undefined) delete process.env.HOME;
-  else process.env.HOME = savedHome;
-  if (savedUserProfile === undefined) delete process.env.USERPROFILE;
-  else process.env.USERPROFILE = savedUserProfile;
-  try {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  } catch {
-    /* best-effort */
-  }
-  _resetConsentCacheForTest();
-  _resetIdentityCacheForTest();
+  return {
+    tmp,
+    restore: () => {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = savedUserProfile;
+      try {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+      _resetConsentCacheForTest();
+      _resetIdentityCacheForTest();
+    },
+  };
 }
 
 export function scopeHome(): { tmp: () => string } {
   let active: string;
+  let restore: () => void;
   beforeEach(() => {
-    const { tmp } = useTempHome();
-    active = tmp;
+    ({ tmp: active, restore } = useTempHome());
   });
   afterEach(() => {
-    restoreHome(active);
+    restore();
   });
   return { tmp: () => active };
 }

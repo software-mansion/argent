@@ -15,13 +15,19 @@ afterAll(async () => {
 
 /**
  * Run launchRunner with PATH replaced by `pathDir` (so "xcodebuild" resolves
- * to a stub, or to nothing) and HOME moved under tmpRoot (so the launch log
- * lands in the fixture tree, not the real ~/.argent).
+ * to a stub, or to nothing) and HOME — plus USERPROFILE, which `os.homedir()`
+ * reads on Windows — moved under tmpRoot (so the launch log lands in the
+ * fixture tree, not the real ~/.argent).
  */
 async function launchWithPath(pathDir: string): Promise<Awaited<ReturnType<typeof launchRunner>>> {
-  const saved = { PATH: process.env.PATH, HOME: process.env.HOME };
+  const saved = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+  };
   process.env.PATH = pathDir;
   process.env.HOME = tmpRoot;
+  process.env.USERPROFILE = tmpRoot;
   try {
     return await launchRunner({
       udid: "00008120-000000000000001E",
@@ -59,10 +65,14 @@ describe("launchRunner", () => {
     await fsp.mkdir(stubBin, { recursive: true });
     // The stub echoes the port variable and its argv so the log pins that no
     // port is forced on the runner through TEST_RUNNER_<VAR> (the device picks
-    // it) and that the crash bundle path is pinned on the command line.
+    // it) and that the crash bundle path is pinned on the command line. It also
+    // echoes both names os.homedir() consults — USERPROFILE on Windows, HOME
+    // elsewhere — so the log pins that the fixture redirects the one this
+    // platform ignores too, rather than leaving it on the developer's real home.
     await fsp.writeFile(
       path.join(stubBin, "xcodebuild"),
-      '#!/bin/sh\necho "PORT=${TEST_RUNNER_ARGENT_RUNNER_PORT-unset} ARGS=$@"\nexit 0\n',
+      '#!/bin/sh\necho "PORT=${TEST_RUNNER_ARGENT_RUNNER_PORT-unset} ARGS=$@"\n' +
+        'echo "HOME=${HOME-unset} USERPROFILE=${USERPROFILE-unset}"\nexit 0\n',
       { mode: 0o755 }
     );
 
@@ -80,6 +90,7 @@ describe("launchRunner", () => {
     await once(launched.child, "exit");
     const log = await fsp.readFile(launched.logPath, "utf8");
     expect(log).toContain("PORT=unset");
+    expect(log).toContain(`HOME=${tmpRoot} USERPROFILE=${tmpRoot}`);
     expect(log).toContain("-resultBundlePath");
     // The swallow listener that keeps a late "error" from becoming uncaught.
     expect(launched.child.listenerCount("error")).toBe(1);
