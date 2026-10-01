@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
@@ -48,6 +49,8 @@ export interface StartMcpServerOptions {
    * remote target is configured and this process must spawn tool-server itself.
    */
   paths: ToolsServerPaths;
+  /** The editor connection. Defaults to stdio; a test passes an in-memory one. */
+  transport?: Transport;
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
@@ -332,7 +335,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
-  await server.connect(new StdioServerTransport());
+  await server.connect(options.transport ?? new StdioServerTransport());
 
   // Restart the tool server if it dies between requests. Auto-spawned servers
   // only: a remote-routed target is the user's responsibility, and a silent

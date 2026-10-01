@@ -50,6 +50,7 @@ const LISTING = {
       fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
     },
     { name: "slow", description: "", inputSchema: {}, longRunning: true },
+    { name: "slow-plain", description: "", inputSchema: {} },
     { name: "fast", description: "", inputSchema: {} },
     { name: "reject", description: "", inputSchema: {} },
     { name: "hinted", description: "", inputSchema: {}, outputHint: "image" },
@@ -64,15 +65,22 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-/** A stub tool-server. `fast` drops its first connection unless `dropFirstFast` is false. */
-async function startStub(opts: { dropFirstFast?: boolean } = {}): Promise<Stub> {
-  const dropFirstFast = opts.dropFirstFast ?? true;
+/** A stub tool-server. The routes in `dropFirst` destroy the socket of their first request. */
+async function startStub(opts: { dropFirst?: string[] } = {}): Promise<Stub> {
+  const dropFirst = new Set(opts.dropFirst ?? ["/tools/fast"]);
   const requests: Recorded[] = [];
-  let fastCalls = 0;
+  const calls = new Map<string, number>();
+  let slowPlainCalls = 0;
   const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const url = req.url ?? "";
     requests.push({ method: req.method ?? "", url, headers: req.headers, body });
+    const nth = (calls.get(url) ?? 0) + 1;
+    calls.set(url, nth);
+    if (dropFirst.has(url) && nth === 1) {
+      req.socket.destroy();
+      return;
+    }
     const json = (status: number, payload: unknown) => {
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(payload));
@@ -86,13 +94,12 @@ async function startStub(opts: { dropFirstFast?: boolean } = {}): Promise<Stub> 
       setTimeout(() => json(200, { data: { ok: true } }), 80);
       return;
     }
-    if (req.method === "POST" && url === "/tools/fast") {
-      fastCalls += 1;
-      if (dropFirstFast && fastCalls === 1) {
-        req.socket.destroy();
-        return;
-      }
-      return json(200, { data: { n: fastCalls } });
+    if (req.method === "POST" && url === "/tools/fast") return json(200, { data: { n: nth } });
+    if (req.method === "POST" && url === "/tools/slow-plain") {
+      // Slow only once, so a per-attempt timeout shows as one abort and one retry.
+      slowPlainCalls += 1;
+      setTimeout(() => json(200, { data: { n: slowPlainCalls } }), slowPlainCalls === 1 ? 80 : 0);
+      return;
     }
     if (req.method === "POST" && url === "/tools/reject") return json(422, { error: "nope" });
     if (req.method === "POST" && url === "/tools/hinted") {
@@ -214,7 +221,7 @@ describe("createToolCaller", () => {
   });
 
   it("sends a retry to the handle a reconnect installed, with its token", async () => {
-    const second = await startStub({ dropFirstFast: false });
+    const second = await startStub({ dropFirst: [] });
     try {
       let handle = { url: stub.url, token: "tok" };
       const { callTool, reconnect } = caller({
@@ -242,6 +249,86 @@ describe("createToolCaller", () => {
     await expect(callTool("reject", {})).rejects.toThrow("nope");
     expect(postsTo("/tools/reject")).toHaveLength(1);
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it("aborts an ordinary tool after fetchTimeoutMs and retries it", async () => {
+    const { callTool, reconnect } = caller({ fetchTimeoutMs: 40 });
+
+    // Without the timeout the 80 ms first answer would be the result (n: 1) and
+    // nothing would reconnect. The retry count is not pinned: after an aborted
+    // attempt, fetch can stall the next attempt on the reused keep-alive socket
+    // until its own timeout, which costs one more attempt.
+    const { result } = await callTool("slow-plain", {});
+    const n = (result as { n: number }).n;
+    expect(n).toBeGreaterThanOrEqual(2);
+    expect(postsTo("/tools/slow-plain")).toHaveLength(n);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives an ordinary tool a 30 s per-attempt timeout by default", async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    let posts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const headers = { "Content-Type": "application/json" };
+        if (String(input).endsWith("/tools")) {
+          return new Response(JSON.stringify(LISTING), { headers });
+        }
+        posts += 1;
+        if (posts === 1) {
+          signals.push(init!.signal!);
+          return new Promise<Response>((_resolve, reject) => {
+            init!.signal!.addEventListener("abort", () => reject(new Error("aborted")));
+          });
+        }
+        return new Response(JSON.stringify({ data: { n: posts } }), { headers });
+      })
+    );
+    try {
+      const { callTool, reconnect } = caller({ fetchTimeoutMs: undefined });
+      const pending = callTool("fast", {});
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(signals).toHaveLength(1);
+      expect(signals[0]!.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signals[0]!.aborted).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(pending).resolves.toEqual({ result: { n: 2 } });
+      expect(reconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("retries a call that carried an upload without uploading again", async () => {
+    const dropping = await startStub({ dropFirst: ["/tools/reinstall-app"] });
+    try {
+      vi.stubEnv("ARGENT_TOOLS_URL", dropping.url);
+      const { callTool, reconnect } = caller({
+        getHandle: () => ({ url: dropping.url, token: "tok" }),
+      });
+
+      await expect(
+        callTool("reinstall-app", { udid: "u", bundleId: "x", appPath })
+      ).resolves.toEqual({ result: { reinstalled: true, bundleId: "x" } });
+
+      const uploads = dropping.requests.filter((r) => r.url === "/upload");
+      const posts = dropping.requests.filter((r) => r.url === "/tools/reinstall-app");
+      expect(uploads).toHaveLength(1);
+      expect(posts).toHaveLength(2);
+      expect(reconnect).toHaveBeenCalledTimes(1);
+      const ids = posts.map(
+        (r) => (JSON.parse(r.body) as { appPath: { uploadId?: string } }).appPath.uploadId
+      );
+      expect(ids).toEqual(["u-1", "u-1"]);
+    } finally {
+      await dropping.close();
+    }
   });
 
   it("carries outputHint and note", async () => {
