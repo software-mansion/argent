@@ -132,8 +132,10 @@ counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
-a link, a flow with run:, script:, snapshot: or nested tool: flow-execute
-steps does not run. The tool-server rejects it before the first step.
+a link, a run: step runs when both the CLI and the tool-server are 0.27 or
+later: the tool-server reads each fragment from the client during the run.
+script:, snapshot: and nested tool: flow-execute steps still do not run over
+a link: the tool-server rejects them before the first step.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or

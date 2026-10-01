@@ -141,6 +141,46 @@ async function uploadTar(
 }
 
 /**
+ * Stat and, when asked, read one `kind: "file"` input as the wire carries it.
+ * Null when the path cannot be stat'ed or is not a regular file. With
+ * `includeContent`, a file within MAX_CONTENT_BYTES carries its bytes as
+ * base64; a larger one carries `contentOmitted: "size-limit"` instead, so an
+ * absent-on-server path errors with the transfer limit rather than misleading
+ * "file not found" guidance, and the stat fields stay for in-place resolution.
+ * A file that stats but cannot be read keeps the stat fields and no content.
+ *
+ * Shared by {@link prepareFileInputs} and the client-services handler, so a
+ * file read for an answer is read exactly as one read for a call.
+ */
+export async function readFileInputWire(
+  filePath: string,
+  opts: { includeContent: boolean }
+): Promise<Pick<FileInputWire, "size" | "mtimeMs" | "content" | "contentOmitted"> | null> {
+  let st: Awaited<ReturnType<typeof stat>>;
+  try {
+    st = await stat(filePath);
+  } catch {
+    return null;
+  }
+  if (!st.isFile()) return null;
+  const out: Pick<FileInputWire, "size" | "mtimeMs" | "content" | "contentOmitted"> = {
+    size: st.size,
+    mtimeMs: st.mtimeMs,
+  };
+  if (opts.includeContent && st.size <= MAX_CONTENT_BYTES) {
+    try {
+      out.content = (await readFile(filePath)).toString("base64");
+    } catch {
+      // Stat fields alone describe the file; the caller decides what an
+      // unreadable one means for it.
+    }
+  } else if (opts.includeContent) {
+    out.contentOmitted = "size-limit";
+  }
+  return out;
+}
+
+/**
  * Replace declared file-path args with boundary wrappers. Returns the same
  * args reference when no spec applies, so callers can pass everything through.
  */
@@ -171,24 +211,10 @@ export async function prepareFileInputs(
 
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };
     if (spec.kind === "file") {
-      try {
-        const st = await stat(filePath);
-        if (st.isFile()) {
-          wire.size = st.size;
-          wire.mtimeMs = st.mtimeMs;
-          if (opts.includeContent && st.size <= MAX_CONTENT_BYTES) {
-            wire.content = (await readFile(filePath)).toString("base64");
-          } else if (opts.includeContent) {
-            // Say so instead of sending a bare wrapper, so an absent-on-server
-            // path errors with the transfer limit rather than misleading "file
-            // not found" guidance. Stat fields stay for in-place resolution.
-            wire.contentOmitted = "size-limit";
-          }
-        }
-      } catch {
-        // Unreadable here — the path-only wrapper still resolves if the
-        // server has the file, and errors precisely otherwise.
-      }
+      // Unreadable here (null) keeps the path-only wrapper, which still
+      // resolves if the server has the file, and errors precisely otherwise.
+      const read = await readFileInputWire(filePath, { includeContent: opts.includeContent });
+      if (read) Object.assign(wire, read);
     }
 
     if (spec.kind === "tar-upload") {

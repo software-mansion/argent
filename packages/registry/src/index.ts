@@ -43,6 +43,32 @@ export type {
   ResolvedFileInput,
   ClientFileDirective,
 } from "./file-inputs";
+export {
+  canonicalFlowPath,
+  classifyListedSpelling,
+  classifyOnDiskSpelling,
+  resolveFlowRelativeFile,
+} from "./flow-file-refs";
+export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
+export {
+  CLIENT_SERVICES_VERSION,
+  CLIENT_SERVICE_OPS,
+  CLIENT_REQUEST_EVENT,
+  CLIENT_FILE_OP_TIMEOUT_MS,
+  CLIENT_CONTENT_CAP_BYTES,
+  clientServicesParamSchema,
+} from "./client-services";
+export type {
+  ClientServiceOp,
+  ClientServicesAdvert,
+  ClientServicesParam,
+  ClientRequestLine,
+  ClientResponseBody,
+  ResolveFileArgs,
+  ResolveFileAnswer,
+  ListDirArgs,
+  ListDirAnswer,
+} from "./client-services";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

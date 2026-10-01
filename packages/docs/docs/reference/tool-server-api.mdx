@@ -1,0 +1,220 @@
+---
+sidebar_position: 8
+sidebar_label: Tool-server API
+title: Tool-server API reference
+sidebar_custom_props:
+  icon: plug
+---
+
+This page documents client services: the exchange between the argent client and the tool-server. Through this exchange, the tool-server asks the client for project files during a flow run. The argent CLI and the MCP adapter are clients. The runner stays on the tool-server. The project stays on the client. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
+
+The exchange has four messages:
+
+| Message       | Direction             | Carrier                                            |
+| ------------- | --------------------- | -------------------------------------------------- |
+| Advertisement | Tool-server to client | The `clientServices` field of a `GET /tools` entry |
+| Opt-in        | Client to tool-server | The `client_services` parameter of the call        |
+| Request       | Tool-server to client | A `client-request` line on the NDJSON stream       |
+| Answer        | Client to tool-server | `POST /invocations/<invocation>/client-responses`  |
+
+Only the `flow-execute` tool advertises client services. Both sides gate the exchange on the advertised capability, not on a version number.
+
+## Advertisement: `clientServices` in `GET /tools`
+
+The `GET /tools` listing holds one entry per tool. The entry of a tool that can use client services carries a `clientServices` field:
+
+```json
+{
+  "name": "flow-execute",
+  "clientServices": { "version": 1, "ops": ["resolve-file", "list-dir"] }
+}
+```
+
+| Field     | Value                                         |
+| --------- | --------------------------------------------- |
+| `version` | `1`                                           |
+| `ops`     | The ops the tool-server can send requests for |
+
+An entry without the field belongs to a tool that does not use client services, or to a tool-server older than Argent 0.27.
+
+## Opt-in: the `client_services` parameter
+
+The client adds a `client_services` parameter to the arguments of a call when all three conditions hold:
+
+1. A link routes the call to another tool-server (`argent link` or `ARGENT_TOOLS_URL`).
+2. The `GET /tools` entry of the tool carries `clientServices`.
+3. The arguments carry a string `project_root`.
+
+```json
+{
+  "name": "withrun",
+  "project_root": "/work/proj",
+  "device": "chromium-cdp-9471",
+  "client_services": {
+    "version": 1,
+    "ops": ["resolve-file", "list-dir"],
+    "roots": ["/work/proj"]
+  }
+}
+```
+
+| Field     | Value                                                                                                                                                        |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `version` | `1`                                                                                                                                                          |
+| `ops`     | The ops the client serves: the ops that the tool-server advertised and that the client implements                                                            |
+| `roots`   | Absolute client directories. The realpath of `project_root`, plus the realpath of the directory of `flow_path` when the arguments carry a string `flow_path` |
+
+The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 to a call that carries `client_services` without that header. The tool-server sends a request for an op only when the client listed the op in `ops`.
+
+When one condition does not hold, the client sends no `client_services`. The tool-server then keeps the behavior of a call without client services.
+
+## Request: the `client-request` line
+
+The tool-server writes one line on the NDJSON stream of the call for each request:
+
+```json
+{
+  "event": "client-request",
+  "invocation": "4f4a1c1e-2b0e-4b7f-9d2a-8c3e0b1f6a21",
+  "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13",
+  "op": "resolve-file",
+  "args": { "anchorDir": "/work/proj/.argent/flows", "target": "frag.yaml", "kind": "flow" }
+}
+```
+
+| Field        | Value                                                 |
+| ------------ | ----------------------------------------------------- |
+| `event`      | `client-request`                                      |
+| `invocation` | The id of the tool call. It names the answer endpoint |
+| `id`         | The id of the request. The answer carries the same id |
+| `op`         | One of the ops the client listed                      |
+| `args`       | The arguments of the op. See [Ops](#ops)              |
+
+The line sits between the step progress lines, in order:
+
+```text
+{"event":"progress","data":{"kind":"echo","status":"pass",...}}
+{"event":"client-request","invocation":"...","id":"...","op":"resolve-file","args":{...}}
+{"event":"progress","data":{"kind":"run","status":"pass",...}}
+{"event":"result","data":{...}}
+```
+
+A client that sent no `client_services` never receives the line.
+
+## Answer: `POST /invocations/<invocation>/client-responses`
+
+The client answers each request with a separate HTTP request. `<invocation>` is the `invocation` of the request line.
+
+```text
+POST /invocations/<invocation>/client-responses
+Host: 127.0.0.1:4731
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+The body has one of two shapes. When the client serves the request, the body carries the answer fields of the op:
+
+```json
+{ "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13", "ok": true, "canonical": "...", "exists": true }
+```
+
+When the client refuses the request, the body carries the reason:
+
+```json
+{ "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13", "ok": false, "error": "<text>" }
+```
+
+| Status | Body                    | Meaning                                                 |
+| ------ | ----------------------- | ------------------------------------------------------- |
+| 200    | `{ "accepted": true }`  | The tool-server delivered the answer to the waiting run |
+| 404    | `{ "error": "<text>" }` | Unknown invocation, or unknown or expired request id    |
+| 409    | `{ "error": "<text>" }` | The request already has an answer                       |
+| 413    | `{ "error": "<text>" }` | `content` decodes to more than 32 MiB                   |
+
+The endpoint sits behind the same bearer-token check and Host check as `/tools/<name>`. The JSON body limit of 48 MB applies.
+
+## Ops
+
+### `resolve-file`
+
+The tool-server sends `resolve-file` for each `run:` step. The client resolves the target on its own disk and returns the file.
+
+Request `args`:
+
+| Field       | Value                                                                           |
+| ----------- | ------------------------------------------------------------------------------- |
+| `anchorDir` | Absolute client path of the directory of the flow file that contains the step   |
+| `target`    | The `run:` target as written, for example `frag.yaml` or `../shared/login.yaml` |
+| `kind`      | `flow`. The protocol also defines `script`, which this version does not serve   |
+
+Answer:
+
+| Field       | Value                                                                                    |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `canonical` | The realpath of `anchorDir` + `/` + `target` on the client                               |
+| `spelling`  | How the directory on the client lists the basename of `target`. See the next table       |
+| `exists`    | `true` when the client can stat `canonical` as a file                                    |
+| `size`      | The size of the file in bytes. Present when `exists` is `true`                           |
+| `mtimeMs`   | The modification time of the file in epoch milliseconds. Present when `exists` is `true` |
+| `content`   | The file as base64. Present when `exists` is `true` and `kind` is `flow`                 |
+
+`spelling` has one of three shapes:
+
+| Shape                                                                   | Meaning                                                                                                                                          |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `{ "state": "listed" }`                                                 | The directory lists the basename as written. The client also answers `listed` when it cannot read the directory                                  |
+| `{ "state": "case_folded", "actual": "<name>", "addressable": <bool> }` | The directory lists the name with a different case. `actual` is the listed name. `addressable` is `true` when `actual` is a valid flow file name |
+| `{ "state": "absent" }`                                                 | The directory lists no name that matches, in any case                                                                                            |
+
+The runner applies the same rules to the answer as to a file on its own disk: the cycle guard, the depth limit and the refusal of a `case_folded` spelling. The runner never opens `canonical`. It uses the path as a key and in messages.
+
+### `list-dir`
+
+The tool-server sends `list-dir` for the directory of the root flow. It uses the entries to check the spelling of the flow name.
+
+Request `args`:
+
+| Field  | Value                               |
+| ------ | ----------------------------------- |
+| `path` | Absolute client path of a directory |
+
+Answer:
+
+| Field     | Value                                                                                                      |
+| --------- | ---------------------------------------------------------------------------------------------------------- |
+| `entries` | The names in the directory, as `readdir` returns them, or `null` when the client cannot read the directory |
+
+### Reserved op names
+
+The protocol defines the op names `read-file`, `write-file` and `run-script`. This version serves none of them. The client lists only the ops it serves, so the tool-server never sends a request for them.
+
+## Timeouts and failures
+
+The tool-server waits 30 s for the answer to `resolve-file` and to `list-dir`.
+
+| Event                                | Effect on the run                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| No answer within 30 s                | The step reports `error`. The reason names the op, the target and the timeout. The later steps report `skip` |
+| An answer with `ok: false`           | The step reports `error`. The reason quotes the `error` text of the client. The later steps report `skip`    |
+| The HTTP response of the call closes | The tool-server rejects every pending request and aborts the run                                             |
+
+## Client policy
+
+The client enforces these rules. The tool-server enforces none of them. The tool-server already holds the bearer token, so the rules protect the files of the project, not the token.
+
+1. The client serves a path only when the realpath of the path is inside one of the roots it sent. It refuses a symlink that points outside a root. It refuses a target that leaves a root through `..`.
+2. `resolve-file` and `list-dir` serve `.yaml` files and directories only.
+3. The client refuses a file above 32 MiB. The error names the cap.
+4. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
+5. The client prints nothing by default. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line per request to stderr. The line holds the op and the path. The client never prints the content.
+
+## Version skew
+
+| Client | Tool-server | Result for a `run:` step over a link                                                                                                                                                                                                  |
+| ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0.27   | 0.27        | The tool-server reads the fragment through client services                                                                                                                                                                            |
+| 0.27   | older       | The listing has no `clientServices`. The client sends nothing. The tool-server rejects the flow before the first step                                                                                                                 |
+| older  | 0.27        | The call has no `client_services`. The tool-server rejects the flow before the first step and adds: "This tool-server serves run: steps for a client that sends client services. Update the argent CLI or MCP adapter on the client." |
+| older  | older       | The tool-server rejects the flow before the first step                                                                                                                                                                                |
+
+`script:` and `snapshot:` steps and nested `tool: flow-execute` steps need a co-located client and tool-server in every cell. The tool-server rejects them before the first step and lists each one.

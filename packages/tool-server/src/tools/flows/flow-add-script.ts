@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as nodePath from "node:path";
 import {
+  canonicalFlowPath,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
@@ -18,7 +19,6 @@ import {
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
-import { canonicalFlowPath } from "./flow-file-refs";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";

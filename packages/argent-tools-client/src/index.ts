@@ -67,6 +67,7 @@ export {
 
 export {
   prepareFileInputs,
+  readFileInputWire,
   applyClientFileDirectives,
   FILE_INPUT_MARKER,
   CLIENT_FILE_MARKER,
@@ -77,3 +78,5 @@ export {
   type PrepareFileInputsOptions,
   type AppliedClientFiles,
 } from "./file-inputs.js";
+
+export { createClientServicesHandler, type ClientServicesHandler } from "./client-services.js";
