@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { parseStartFlags, parsePort, parseIdle, StartFlagError } from "../src/server.js";
 
 describe("parseStartFlags", () => {
@@ -129,5 +132,20 @@ describe("parseIdle", () => {
     expect(() => parseIdle("3.5")).toThrow(StartFlagError);
     expect(() => parseIdle("abc")).toThrow(/got "abc"/);
     expect(() => parseIdle("")).toThrow(StartFlagError);
+  });
+});
+
+describe("parseStartFlags --policy", () => {
+  it("resolves an existing policy file to an absolute path", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "argent-policy-flag-"));
+    const file = path.join(dir, "policy.json");
+    writeFileSync(file, "{}");
+
+    expect(parseStartFlags(["--policy", file]).policyPath).toBe(file);
+    expect(parseStartFlags([]).policyPath).toBeUndefined();
+  });
+
+  it("rejects a policy path that does not exist", () => {
+    expect(() => parseStartFlags(["--policy", "/no/such/policy.json"])).toThrow(StartFlagError);
   });
 });

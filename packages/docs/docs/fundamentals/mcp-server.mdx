@@ -53,7 +53,7 @@ The key of the top-level object depends on the editor. Claude Code, Cursor and W
 
 The editor starts `argent mcp` as a child process and talks to it over standard input and output. The MCP server does not control the devices itself. The MCP server forwards each tool call to the Argent tool-server. The tool-server owns the simulators, emulators and device sessions.
 
-By default, the MCP server starts a local tool-server on the first tool call. All agents on the machine share this local tool-server. When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the MCP server sends the tool calls there instead.
+By default, the MCP server starts a local tool-server on the first tool call. All agents on the machine share this local tool-server. When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the MCP server sends the tool calls there instead. The operator of a remote tool-server can limit the devices, tools and operations with a [server policy](/docs/reference/configuration#server-policy).
 
 Run `argent server status` to see the state of the local tool-server. Run `argent server logs` to read its output.
 

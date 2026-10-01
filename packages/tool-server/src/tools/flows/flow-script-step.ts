@@ -10,6 +10,7 @@ import {
   type FlowScriptLogBudget,
   type FlowScriptResult,
 } from "./script/flow-script-executor";
+import { assertOperationAllowed } from "../../server-policy";
 
 /**
  * One `script` step, from a path to a verdict.
@@ -48,6 +49,8 @@ interface FlowScriptStepRequest {
 export async function runFlowScriptStep(
   request: FlowScriptStepRequest
 ): Promise<FlowScriptStepRun> {
+  // A script is arbitrary host code; a server policy can only refuse to run it.
+  assertOperationAllowed("flow-scripts");
   const { flowDir, step } = request;
   const target = step.path;
   const { canonical, spelling } = await resolveFlowRelativeFile(

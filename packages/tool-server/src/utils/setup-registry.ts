@@ -96,12 +96,17 @@ import { chromiumStorageTool } from "../tools/chromium-storage";
 import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
 import { resolveDevice } from "./device-info";
 import { setLivePanelSourceProvider } from "./foldable";
+import { admitToolInvocation } from "../server-policy";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
   // just the HTTP edge in http.ts. Re-read per invocation, so `argent
   // enable/disable <flag>` needs no tool-server restart.
-  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
+  const registry = new Registry({
+    isFlagEnabled: (flag) => isFlagEnabled(flag),
+    // The operator's server policy, on the same every-dispatch-path footing.
+    admitInvocation: admitToolInvocation,
+  });
 
   // The panel a foldable renders to is asked of the ax-service before every
   // touch and capture (`utils/foldable.ts`); that daemon is a service of this

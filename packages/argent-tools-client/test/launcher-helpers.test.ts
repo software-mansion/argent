@@ -14,6 +14,16 @@ const paths = {
   nativeDevtoolsDir: "/pkg/dylibs",
 };
 
+describe("buildToolsServerEnv — server policy", () => {
+  it("exports policyPath as ARGENT_SERVER_POLICY only when given", () => {
+    expect(buildToolsServerEnv(paths, 3001, {}).ARGENT_SERVER_POLICY).toBeUndefined();
+    expect(
+      buildToolsServerEnv(paths, 3001, {}, { policyPath: "/etc/argent/policy.json" })
+        .ARGENT_SERVER_POLICY
+    ).toBe("/etc/argent/policy.json");
+  });
+});
+
 describe("buildToolsServerEnv — host and idle options", () => {
   it("does not set ARGENT_HOST or ARGENT_IDLE_TIMEOUT_MINUTES when options are omitted", () => {
     const env = buildToolsServerEnv(paths, 3001, {});

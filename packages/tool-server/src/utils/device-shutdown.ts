@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { resolveDevice } from "./device-info";
 import { resolveAndroidBinary } from "./android-binary";
 import { simctlArgsForUdid } from "./ios-device-sets";
+import { isDeviceAllowed, isOperationDenied } from "../server-policy";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +19,8 @@ const SHUTDOWN_EXEC_OPTIONS = { timeout: 30_000, killSignal: "SIGKILL" } as cons
  * already gone, or a CLI that isn't on PATH, must not break session teardown.
  */
 export async function shutdownOwnedDevice(id: string): Promise<void> {
+  // A server policy that denies device-shutdown leaves the device running.
+  if (isOperationDenied("device-shutdown")) return;
   let platform: string;
   try {
     platform = resolveDevice(id).platform;
@@ -55,6 +58,12 @@ interface ShutdownResult {
  * so the UI can report why a shutdown failed.
  */
 export async function shutdownDevice(id: string): Promise<ShutdownResult> {
+  if (isOperationDenied("device-shutdown")) {
+    return { ok: false, error: "This tool-server's operator policy denies device-shutdown." };
+  }
+  if (!isDeviceAllowed(id)) {
+    return { ok: false, error: `This tool-server's operator policy does not allow "${id}".` };
+  }
   let device: { platform: string; kind: string };
   try {
     device = resolveDevice(id);

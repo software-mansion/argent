@@ -110,6 +110,8 @@ interface StartFlags {
   force: boolean;
   /** No token minted; the server accepts unauthenticated requests. */
   noAuth: boolean;
+  /** Absolute path to an operator server policy file. */
+  policyPath: string | undefined;
   help: boolean;
 }
 
@@ -123,6 +125,7 @@ const START_OPTIONS = {
   "port": { kind: "value", alias: "p" },
   "host": { kind: "value" },
   "idle-timeout": { kind: "value" },
+  "policy": { kind: "value" },
 } as const satisfies OptionSpecs;
 
 /** Run a parser and surface bad input as this command's error class. */
@@ -150,8 +153,19 @@ export function parseStartFlags(argv: string[]): StartFlags {
     detach: options.detach === true,
     force: options.force === true,
     noAuth: options["no-auth"] === true,
+    policyPath:
+      options.policy === undefined ? undefined : parsePolicyPath(options.policy as string),
     help: options.help === true,
   };
+}
+
+/** The tool-server validates the file's contents at startup; this catches a mistyped path. */
+function parsePolicyPath(raw: string): string {
+  const resolved = path.resolve(raw);
+  if (!fs.existsSync(resolved)) {
+    throw new StartFlagError(`--policy file not found: ${resolved}`);
+  }
+  return resolved;
 }
 
 // Digits only: `Number` alone would accept "", signs, decimals, hex and `1e3`.
@@ -187,6 +201,9 @@ Flags:
   --force                 If a tool-server is already running, kill it first.
   --no-auth               Disable authentication (no token). Anyone who can
                           reach the port can drive the server. Dev/trusted only.
+  --policy <file>         Enforce an operator server policy: which devices,
+                          tools, and operations clients may use. The server
+                          refuses to start if the file is invalid.
   --help, -h              Show this help.
 
 Auth:
@@ -201,6 +218,7 @@ Examples:
   argent server start --host 0.0.0.0 --port 4000
   argent server start --detach
   argent server start --host 0.0.0.0 --no-auth
+  argent server start --host 0.0.0.0 --policy ./argent-policy.json
 `);
 }
 
@@ -331,11 +349,11 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
   }
 
   if (flags.detach) {
-    await runDetached(paths, port, flags.host, flags.idleTimeoutMinutes, token);
+    await runDetached(paths, port, flags.host, flags.idleTimeoutMinutes, token, flags.policyPath);
     return;
   }
 
-  await runForeground(paths, port, flags.host, flags.idleTimeoutMinutes, token);
+  await runForeground(paths, port, flags.host, flags.idleTimeoutMinutes, token, flags.policyPath);
 }
 
 async function runDetached(
@@ -343,12 +361,14 @@ async function runDetached(
   port: number,
   host: string,
   idleTimeoutMinutes: number,
-  token?: string
+  token?: string,
+  policyPath?: string
 ): Promise<void> {
   const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
     host,
     idleTimeoutMinutes,
     token,
+    policyPath,
   });
   await writeToolsServerState({
     port: actualPort,
@@ -375,12 +395,14 @@ async function runForeground(
   port: number,
   host: string,
   idleTimeoutMinutes: number,
-  token?: string
+  token?: string,
+  policyPath?: string
 ): Promise<void> {
   const env = buildToolsServerEnv(paths, port, process.env, {
     host,
     idleTimeoutMinutes,
     token,
+    policyPath,
   });
 
   const child = spawn("node", [paths.bundlePath, "start"], {

@@ -179,6 +179,10 @@ export interface ToolCapability {
  */
 export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega";
 
+/** Operations an operator's server policy can deny, whichever tool performs them. */
+export const GATED_OPERATIONS = ["device-shutdown", "flow-scripts"] as const;
+export type GatedOperation = (typeof GATED_OPERATIONS)[number];
+
 export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;
   interaction?: {
@@ -245,6 +249,12 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   hideWhen?: () => boolean;
   /** Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
+  /**
+   * Operations this invocation performs that an operator's server policy can
+   * deny (`operations.deny` in `ARGENT_SERVER_POLICY`). Declared on the tool so
+   * the policy reads the claim instead of a list of tool ids.
+   */
+  gatedOperations?: (params: TParams) => readonly GatedOperation[];
   /**
    * Host binaries needed by *every* invocation, probed by the HTTP dispatcher
    * before `execute` runs (424 on a miss). When the requirement differs per

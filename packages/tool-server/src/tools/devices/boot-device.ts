@@ -1351,6 +1351,8 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
       "boot start launch simulator emulator avd device session ios android vega vvd firetv cold hot",
     zodSchema,
     capability,
+    // `force` restarts a running device, which shuts it down first.
+    gatedOperations: (params) => (params.force ? ["device-shutdown"] : []),
     services: () => ({}),
     async execute(_services, params) {
       const hasUdid = Boolean(params.udid);
