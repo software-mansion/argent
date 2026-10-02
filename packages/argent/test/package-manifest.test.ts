@@ -12,6 +12,20 @@ describe("package manifest", () => {
     expect(pkg.files).toContain("bin/");
     expect(pkg.files).toContain("skills/");
   });
+
+  it("exports the client and keeps deep paths resolvable", () => {
+    const pkgPath = path.resolve(import.meta.dirname, "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+      exports?: Record<string, unknown>;
+    };
+
+    expect(pkg.exports?.["./client"]).toEqual({
+      types: "./dist/client.d.ts",
+      default: "./dist/client.js",
+    });
+    // The `argent` alias package resolves `@swmansion/argent/dist/cli.js`.
+    expect(pkg.exports?.["./*"]).toBe("./*");
+  });
 });
 
 // Regression guard for the ax-service-missing-from-release bug (first shipped

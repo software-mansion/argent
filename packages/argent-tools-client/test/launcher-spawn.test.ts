@@ -104,7 +104,7 @@ describe("killToolServer — full lifecycle", () => {
 
     expect(launcher.isToolsServerProcessAlive(pid)).toBe(true);
 
-    await launcher.killToolServer(FAKE_BUNDLE);
+    expect(await launcher.killToolServer(FAKE_BUNDLE)).toBe(true);
 
     expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
     expect(await launcher.readToolsServerState(FAKE_BUNDLE)).toBeNull();
@@ -158,7 +158,7 @@ describe("killToolServer — full lifecycle", () => {
       host: "127.0.0.1",
     });
 
-    await launcher.killToolServer(FAKE_BUNDLE);
+    expect(await launcher.killToolServer(FAKE_BUNDLE)).toBe(false);
     expect(await launcher.readToolsServerState(FAKE_BUNDLE)).toBeNull();
   });
 });

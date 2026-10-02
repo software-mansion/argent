@@ -9,6 +9,13 @@
     "url": "git+https://github.com/software-mansion/argent.git"
   },
   "type": "module",
+  "exports": {
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./*": "./*"
+  },
   "bin": {
     "argent": "dist/cli.js",
     "argent-simulator-server": "bin/argent-simulator-server.cjs"
@@ -54,6 +61,7 @@
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",
+    "@argent/configuration-core": "file:../configuration-core",
     "@argent/installer": "file:../argent-installer",
     "@argent/mcp": "file:../argent-mcp",
     "@argent/tools-client": "file:../argent-tools-client",
