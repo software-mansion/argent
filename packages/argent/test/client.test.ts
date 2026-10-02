@@ -79,14 +79,14 @@ describe("createArgentClient", () => {
     expect(error).toMatchObject({ message: "bad", code: "C", kind: "validation", issues: [1] });
   });
 
-  it("forwards the abort signal", async () => {
-    callTool.mockResolvedValue({ data: {} });
-    materializeArtifacts.mockResolvedValue({ result: {}, images: [] });
+  it("forwards the abort signal of listTools", async () => {
+    const fetchTools = vi.fn(async () => []);
+    createToolsClient.mockImplementation(() => ({ fetchTools, callTool }));
     const { signal } = new AbortController();
 
-    await createArgentClient().callTool("describe", {}, { signal });
+    await createArgentClient().listTools({ signal });
 
-    expect(callTool).toHaveBeenCalledWith("describe", {}, { signal });
+    expect(fetchTools).toHaveBeenCalledWith({ signal });
   });
 
   it("passes an abort through unwrapped and skips materialization", async () => {

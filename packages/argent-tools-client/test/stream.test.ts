@@ -33,6 +33,7 @@ async function startServer(
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   if (server) {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = undefined;
@@ -219,12 +220,15 @@ describe("callTool abort", () => {
       res.end("{}");
     });
 
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { callTool } = createToolsClient();
     const err = await callTool("streamy", {}, { signal: AbortSignal.abort() }).catch(
       (e: unknown) => e
     );
     expect((err as Error).name).toBe("AbortError");
     expect(invoked).toBe(false);
+    // It stops before any request, also the /tools lookup.
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("rejects with the signal's reason while waiting for a buffered reply", async () => {

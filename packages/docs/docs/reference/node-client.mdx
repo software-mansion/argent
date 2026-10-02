@@ -45,7 +45,7 @@ When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the client 
 | `listFlags()`                     | Returns the feature flags, like `argent flags`: `name`, `description` and `enabled`                                                                               |
 | `ArgentToolError`                 | The error of a rejected or failed call: `message`, `code?`, `kind?` and `issues?`                                                                                 |
 
-When `options.signal` aborts, the call throws the reason of the signal, not an `ArgentToolError`. The tool-server then sends a stop request to the tool. Some tools, for example `run-sequence` and `await-ui-element`, stop. Other tools continue to the end.
+When `options.signal` aborts, the call throws the reason of the signal, not an `ArgentToolError`. The tool-server then sends a stop request to the tool. Some tools, for example `run-sequence` and `await-ui-element`, stop. Other tools continue to the end. If the tool-server is not running, the call starts it first. An abort during the start takes effect when the start is complete.
 
 A validation failure sets `issues`. When the client cannot reach the tool-server, `callTool` and `listTools` throw a plain `Error`, not an `ArgentToolError`.
 

@@ -171,6 +171,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   }
 
   async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+    opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
     const res = await fetch(`${url}/tools`, {
       headers: authHeaders(token),
@@ -194,6 +195,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     args: unknown,
     opts?: CallToolOptions
   ): Promise<ToolInvocationResult> {
+    // An aborted signal must not start a tool-server.
+    opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
@@ -206,6 +209,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
         includeContent: isRemote,
         uploadEndpoint: isRemote ? { url, token } : undefined,
+        signal: opts?.signal,
       });
     }
 
@@ -246,6 +250,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         issues: Array.isArray(json.issues) ? json.issues : undefined,
       });
     }
+    opts?.signal?.throwIfAborted();
     // File boundary, inbound: persist client-write directives (e.g. recorded
     // flow YAMLs) and rewrite them to the written paths.
     const { result: data } = await applyClientFileDirectives(json.data);
