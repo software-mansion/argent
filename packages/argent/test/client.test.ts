@@ -59,8 +59,26 @@ describe("createArgentClient", () => {
     expect(result).toEqual({ data: { image: "/tmp/shot.png" }, note: "n" });
     expect(materializeArtifacts).toHaveBeenCalledWith(
       { image: "handle" },
-      { toolsUrl: "http://127.0.0.1:1", authToken: "t", deviceId: "U1" }
+      { toolsUrl: "http://127.0.0.1:1", authToken: "t", deviceId: "U1", signal: undefined }
     );
+  });
+
+  it("forwards the signal to the artifact download and throws when it aborts there", async () => {
+    const controller = new AbortController();
+    const reason = new Error("gave up");
+    callTool.mockResolvedValue({ data: { video: "handle" } });
+    // The abort lands mid-download, which reads the artifact as missing.
+    materializeArtifacts.mockImplementation(async (_data, ctx: { signal?: AbortSignal }) => {
+      expect(ctx.signal).toBe(controller.signal);
+      controller.abort(reason);
+      return { result: { video: null }, images: [] };
+    });
+
+    const error = await createArgentClient()
+      .callTool("screen-recording-stop", {}, { signal: controller.signal })
+      .catch((e: unknown) => e);
+
+    expect(error).toBe(reason);
   });
 
   it("rethrows a tool-server failure as ArgentToolError", async () => {

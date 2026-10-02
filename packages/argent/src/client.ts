@@ -119,7 +119,10 @@ export function createArgentClient(): ArgentClient {
         toolsUrl: url,
         authToken: token,
         deviceId: getDeviceIdFromArgs(args),
+        signal: options?.signal,
       });
+      // An aborted download reads as a missing file; report the abort instead.
+      options?.signal?.throwIfAborted();
       return { data: result as T, note: response.note };
     } catch (err) {
       if (err instanceof ToolInvocationError) {

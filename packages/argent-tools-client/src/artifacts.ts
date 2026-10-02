@@ -356,6 +356,8 @@ export interface MaterializeContext {
   authToken?: string;
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /** Aborts the downloads; an aborted artifact reads as missing, like a failed one. */
+  signal?: AbortSignal;
 }
 
 interface MaterializeResult {
@@ -484,6 +486,7 @@ export async function materializeArtifacts(
           }
           const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
             headers: authHeaders,
+            signal: ctx.signal,
           });
           if (!res.ok) return null;
           const data = await readCapped(res, value.size);
@@ -510,6 +513,7 @@ export async function materializeArtifacts(
       try {
         const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
           headers: authHeaders,
+          signal: ctx.signal,
         });
         if (!res.ok) return null;
         const data = Buffer.from(await res.arrayBuffer());
