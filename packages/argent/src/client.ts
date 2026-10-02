@@ -12,7 +12,6 @@ import {
   getDeviceIdFromArgs,
   killToolServer,
   materializeArtifacts,
-  readToolsServerState,
   ToolInvocationError,
 } from "@argent/tools-client";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
@@ -90,11 +89,10 @@ export function createArgentClient(): ArgentClient {
   let client = createToolsClient({ paths: BUNDLED_RUNTIME_PATHS });
 
   async function stopServer(): Promise<boolean> {
-    const running = (await readToolsServerState(BUNDLED_RUNTIME_PATHS.bundlePath)) !== null;
-    await killToolServer(BUNDLED_RUNTIME_PATHS.bundlePath);
+    const stopped = await killToolServer(BUNDLED_RUNTIME_PATHS.bundlePath);
     // The tools client caches the server it reached; drop it with the server.
     client = createToolsClient({ paths: BUNDLED_RUNTIME_PATHS });
-    return running;
+    return stopped;
   }
 
   async function listTools(): Promise<ArgentTool[]> {

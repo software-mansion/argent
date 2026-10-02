@@ -575,12 +575,20 @@ async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<voi
 /**
  * Terminate the tracked tool-server and drop its record. With `bundlePath`,
  * THAT install's server; without, the legacy single-slot record only.
+ * Resolves true when a live tool-server was stopped, false when the record was
+ * missing or stale. A live pid that is not verifiably our tool-server (a
+ * recycled pid) is left alone, and its record kept, as in
+ * killToolServerForInstallDir.
  */
-export async function killToolServer(bundlePath?: string): Promise<void> {
+export async function killToolServer(bundlePath?: string): Promise<boolean> {
   const state = await readState(bundlePath);
-  if (!state) return;
-  await terminatePid(state.pid);
+  if (!state) return false;
+  const stillOurs = () => couldBeOurToolServer(state.pid, state.bundlePath);
+  const alive = isProcessAlive(state.pid);
+  if (alive && !stillOurs()) return false;
+  if (alive) await terminatePid(state.pid, stillOurs);
   await clearToolsServerState(bundlePath ?? state.bundlePath);
+  return alive;
 }
 
 function isPathWithin(child: string, parent: string): boolean {

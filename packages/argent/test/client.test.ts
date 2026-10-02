@@ -4,7 +4,6 @@ const callTool = vi.fn();
 const materializeArtifacts = vi.fn();
 const createToolsClient = vi.fn();
 const killToolServer = vi.fn();
-const readToolsServerState = vi.fn();
 
 vi.mock("@argent/tools-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/tools-client")>();
@@ -13,7 +12,6 @@ vi.mock("@argent/tools-client", async (importOriginal) => {
     createToolsClient,
     materializeArtifacts,
     killToolServer,
-    readToolsServerState,
   };
 });
 
@@ -36,7 +34,6 @@ beforeEach(() => {
   callTool.mockReset();
   materializeArtifacts.mockReset();
   killToolServer.mockReset();
-  readToolsServerState.mockReset();
   createToolsClient.mockReset().mockImplementation(() => ({
     fetchTools: async () => [
       { name: "describe", description: "d", inputSchema: {}, fileInputs: [], alwaysLoad: true },
@@ -80,7 +77,7 @@ describe("createArgentClient", () => {
   });
 
   it("stops its own tool-server and reconnects on the next call", async () => {
-    readToolsServerState.mockResolvedValue({ pid: 1 });
+    killToolServer.mockResolvedValue(true);
     const argent = createArgentClient();
 
     expect(await argent.stopServer()).toBe(true);
@@ -88,7 +85,7 @@ describe("createArgentClient", () => {
     // A fresh tools client, so the next call does not reuse the stopped server.
     expect(createToolsClient).toHaveBeenCalledTimes(2);
 
-    readToolsServerState.mockResolvedValue(null);
+    killToolServer.mockResolvedValue(false);
     expect(await argent.stopServer()).toBe(false);
   });
 });
