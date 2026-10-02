@@ -4,9 +4,7 @@ import { format, resolveConfig } from "prettier";
 import { createRegistry } from "../src/utils/setup-registry";
 import { advertisedSchema, definitionsById } from "./helpers/catalog";
 
-// The SDK's typed tool map is derived from the schemas the tool-server
-// advertises. After changing a tool's schema, regenerate it with
-// `npx vitest run test/sdk-tool-args.test.ts -u`.
+// The SDK's typed tool map is derived from the schemas the tool-server advertises.
 const TARGET = "../../argent/src/tool-args.generated.ts";
 
 type Schema = Record<string, any>;
@@ -16,10 +14,10 @@ function key(name: string): string {
 }
 
 function toType(schema: Schema): string {
-  if ("not" in schema) return "never";
   if ("const" in schema) return JSON.stringify(schema.const);
   if (schema.enum) return schema.enum.map((v: unknown) => JSON.stringify(v)).join(" | ");
-  if (schema.anyOf) return schema.anyOf.map(toType).join(" | ");
+  if (schema.anyOf ?? schema.oneOf) return (schema.anyOf ?? schema.oneOf).map(toType).join(" | ");
+  if (schema.allOf) return schema.allOf.map(toType).join(" & ");
   if (Array.isArray(schema.type)) {
     return schema.type.map((type: string) => toType({ ...schema, type })).join(" | ");
   }
@@ -32,24 +30,27 @@ function toType(schema: Schema): string {
     case "integer":
       return "number";
     case "array":
-      return `Array<${schema.items ? toType(schema.items) : "unknown"}>`;
+      if (!schema.items) break;
+      return `Array<${toType(schema.items)}>`;
     case "object": {
       const required = new Set<string>(schema.required ?? []);
-      const props = Object.entries<Schema>(schema.properties ?? {}).map(
-        ([name, prop]) => `${key(name)}${required.has(name) ? "" : "?"}: ${toType(prop)};`
-      );
+      // A retired param (`not: {}`) is left out, so passing it is an excess-property error.
+      const props = Object.entries<Schema>(schema.properties ?? {})
+        .filter(([, prop]) => !("not" in prop))
+        .map(([name, prop]) => `${key(name)}${required.has(name) ? "" : "?"}: ${toType(prop)};`);
       const extra = schema.additionalProperties;
       if (extra && typeof extra === "object") props.push(`[key: string]: ${toType(extra)};`);
       return props.length ? `{ ${props.join(" ")} }` : "Record<string, never>";
     }
-    default:
-      return "unknown";
+    case undefined:
+      if (Object.keys(schema).every((k) => k === "description")) return "unknown";
   }
+  throw new Error(`No TypeScript mapping for schema ${JSON.stringify(schema)}`);
 }
 
 it("the SDK's tool argument types match the advertised schemas", async () => {
   const entries = [...definitionsById(createRegistry())]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([id, definition]) => `${key(id)}: ${toType(advertisedSchema(definition)!)};`);
 
   const source =
@@ -61,5 +62,8 @@ it("the SDK's tool argument types match the advertised schemas", async () => {
     parser: "typescript",
   });
 
-  await expect(formatted).toMatchFileSnapshot(TARGET);
+  await expect(
+    formatted,
+    "Regenerate with: npx vitest run test/sdk-tool-args.test.ts -u"
+  ).toMatchFileSnapshot(TARGET);
 });

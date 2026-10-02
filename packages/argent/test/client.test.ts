@@ -87,7 +87,7 @@ describe("createArgentClient", () => {
     );
 
     const error = await createArgentClient()
-      .callTool("describe", { udid: "U1" })
+      .callTool("list-devices")
       .catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(ArgentToolError);

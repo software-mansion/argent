@@ -79,7 +79,7 @@ export function listFlags(): ArgentFlag[] {
 
 /** `args` may be omitted only when the tool has no required argument. */
 type CallToolParams<N extends ArgentToolName> =
-  Partial<ArgentToolArgs[N]> extends ArgentToolArgs[N]
+  Record<never, never> extends ArgentToolArgs[N]
     ? [args?: ArgentToolArgs[N], options?: CallToolOptions]
     : [args: ArgentToolArgs[N], options?: CallToolOptions];
 
