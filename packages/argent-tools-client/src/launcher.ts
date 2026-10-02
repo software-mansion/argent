@@ -306,10 +306,11 @@ export function spawnToolsServer(
       logFd = fs.openSync("/dev/null", "w");
     }
 
-    // Reuse the running Node binary; Bun, Deno and Electron (whose execPath
-    // launches the app itself) fall back to `node` on PATH.
+    // Reuse the running Node binary while it still exists; Bun, Deno and
+    // Electron (whose execPath launches the app itself) fall back to `node` on PATH.
     const { bun, deno, electron } = process.versions;
-    const nodeBin = bun || deno || electron ? "node" : process.execPath;
+    const nodeBin =
+      !(bun || deno || electron) && fs.existsSync(process.execPath) ? process.execPath : "node";
     const child = spawn(nodeBin, [paths.bundlePath, "start"], {
       detached: true,
       stdio: ["ignore", "pipe", logFd],
@@ -707,7 +708,7 @@ function couldBeOurToolServer(pid: number, marker: string | undefined): boolean 
     return false;
   }
   if (!cmd) return false;
-  // Our servers run `node <bundlePath> start`. Requiring the path at an
+  // Our servers run `<any node path> <bundlePath> start`. Requiring the path at an
   // argument boundary followed by `start` keeps a mention that is not being run
   // from matching, though a command line embedding the pair mid-argv — a
   // `sh -c` wrapper — still does; matching the raw command string rather than
