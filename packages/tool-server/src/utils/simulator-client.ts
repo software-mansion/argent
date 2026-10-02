@@ -585,11 +585,18 @@ async function pointerPost(
   }
 }
 
+/** What simulator-server's `{ error }` says when it refuses `sensitive` text. */
+const SENSITIVE_TEXT_REFUSED = "refused to set sensitive text";
+
 /**
  * Put `text` on the DEVICE clipboard through simulator-server's
- * `POST /api/clipboard/text`; the host clipboard is untouched. Resolves once the
- * device pasteboard holds the text, so a paste keystroke sent afterwards cannot
- * race the fill.
+ * `POST /api/clipboard/text`. Resolves once the device pasteboard holds the
+ * text, so a paste keystroke sent afterwards cannot race the fill.
+ *
+ * The host clipboard is untouched, unless the simulator shares its clipboard
+ * with the Mac (Xcode's Shared Clipboard). With `sensitive`, simulator-server
+ * refuses text that would reach the Mac clipboard that way, and this resolves
+ * `"refused"` without setting anything. Builds without `sensitive` ignore it.
  *
  * A simulator-server built without clipboard support — an older build, or a
  * provider's — answers the route with a bare 404, reported as "unsupported"
@@ -598,8 +605,9 @@ async function pointerPost(
 export async function setSimulatorClipboardText(
   api: SimulatorServerApi,
   text: string,
-  signal?: AbortSignal
-): Promise<void> {
+  options: { sensitive?: boolean; signal?: AbortSignal } = {}
+): Promise<"set" | "refused"> {
+  const { sensitive = false, signal } = options;
   if (api.external) assertAllowedSimServerEndpoint("/api/clipboard/text");
 
   let res: Response;
@@ -607,7 +615,7 @@ export async function setSimulatorClipboardText(
     res = await fetch(`${api.apiUrl}/api/clipboard/text`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(sensitive ? { text, sensitive } : { text }),
       signal,
     });
   } catch (err) {
@@ -636,6 +644,7 @@ export async function setSimulatorClipboardText(
   // Like the other simulator-server POST routes, this one answers HTTP 200 for
   // both outcomes and reports a failure in-band (`{ error }`).
   const body = (await res.json().catch(() => null)) as { status?: string; error?: string } | null;
+  if (sensitive && body?.error?.includes(SENSITIVE_TEXT_REFUSED)) return "refused";
   if (!res.ok || body?.status !== "ok") {
     throw new FailureError(
       `Paste failed: could not set the device clipboard (${body?.error ?? `HTTP ${res.status}`}).`,
@@ -647,6 +656,7 @@ export async function setSimulatorClipboardText(
       }
     );
   }
+  return "set";
 }
 
 /**

@@ -1,12 +1,14 @@
+import { FAILURE_CODES } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../../blueprints/simulator-server";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { UnsupportedOperationError } from "../../../utils/capability";
+import { InvalidToolInputError, UnsupportedOperationError } from "../../../utils/capability";
 import { isTvOsSimulator } from "../../../utils/ios-devices";
 import { isRemoteTvOsSimulator } from "../../../utils/sim-remote";
 import { setSimulatorClipboardText } from "../../../utils/simulator-client";
 import { charToKeyPress } from "../../keyboard/key-codes";
-import type { PasteParams, PasteResult, PasteServices } from "../types";
+import { typeSimulatorServer } from "../../keyboard/simulator-server-keys";
+import type { PasteDispatchParams, PasteParams, PasteResult, PasteServices } from "../types";
 
 /** USB HID usage id of the left GUI (⌘) key. */
 const LEFT_GUI_KEYCODE = 0xe3;
@@ -33,9 +35,37 @@ function rejectTv(device: DeviceInfo): never {
  * ⌘V on the simulator's hardware keyboard is the path UIKit maps to the focused
  * field's paste action. `setSimulatorClipboardText` resolves only once the
  * device pasteboard holds the text, so the chord cannot race the fill.
+ *
+ * A secret goes to the clipboard as `sensitive`. When the simulator shares its
+ * clipboard with the Mac, simulator-server refuses it rather than let it reach
+ * the Mac clipboard, and the secret is typed instead, the way `keyboard` types
+ * it.
  */
-async function pasteSimulator(api: SimulatorServerApi, text: string): Promise<PasteResult> {
-  await setSimulatorClipboardText(api, text);
+async function pasteSimulator(
+  registry: Registry,
+  device: DeviceInfo,
+  api: SimulatorServerApi,
+  params: PasteDispatchParams
+): Promise<PasteResult> {
+  const sensitive = params.hasSecrets === true;
+  if ((await setSimulatorClipboardText(api, params.text, { sensitive })) === "refused") {
+    // Checked up front, so nothing is half-typed, and without naming the
+    // character, which is part of the secret.
+    if (![...params.text].every((char) => charToKeyPress(char))) {
+      throw new InvalidToolInputError(
+        "Paste failed: this simulator shares its clipboard with the Mac, so a secret is typed " +
+          "instead of pasted, and this one has a character the keyboard cannot type. Nothing " +
+          "was typed.",
+        {
+          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+          failure_stage: "paste_secret_typed_simulator",
+          error_kind: "unsupported",
+        }
+      );
+    }
+    await typeSimulatorServer(registry, device, { udid: params.udid, text: params.text });
+    return { pasted: true, via: "keyboard" };
+  }
   await api.pressKey("Down", LEFT_GUI_KEYCODE);
   await sleep(CHORD_STEP_MS);
   await api.pressKey("Down", V_KEYCODE);
@@ -53,7 +83,7 @@ async function pasteSimulator(api: SimulatorServerApi, text: string): Promise<Pa
 
 export function makeIosImpl(
   registry: Registry
-): PlatformImpl<PasteServices, PasteParams, PasteResult> {
+): PlatformImpl<PasteServices, PasteDispatchParams, PasteResult> {
   return {
     // `xcrun` is for the `isTvOsSimulator` probe; simulator-server comes from
     // the blueprint.
@@ -62,7 +92,7 @@ export function makeIosImpl(
       if (await isTvOsSimulator(device.id)) rejectTv(device);
       const ref = simulatorServerRef(device);
       const api = await registry.resolveService<SimulatorServerApi>(ref.urn, ref.options);
-      return pasteSimulator(api, params.text);
+      return pasteSimulator(registry, device, api, params);
     },
   };
 }

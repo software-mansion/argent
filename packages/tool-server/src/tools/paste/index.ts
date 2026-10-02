@@ -2,7 +2,7 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
 import { pasteZodSchema } from "./schema";
-import type { PasteParams, PasteResult, PasteServices } from "./types";
+import type { PasteDispatchParams, PasteParams, PasteResult, PasteServices } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeAndroidImpl } from "./platforms/android";
 
@@ -47,7 +47,12 @@ function serializedPerDevice<T>(deviceId: string, task: () => Promise<T>): Promi
 }
 
 export function createPasteTool(registry: Registry): ToolDefinition<PasteParams, PasteResult> {
-  const dispatch = dispatchByPlatform<PasteServices, PasteServices, PasteParams, PasteResult>({
+  const dispatch = dispatchByPlatform<
+    PasteServices,
+    PasteServices,
+    PasteDispatchParams,
+    PasteResult
+  >({
     toolId: "paste",
     capability,
     ios: makeIosImpl(registry),
@@ -61,10 +66,10 @@ export function createPasteTool(registry: Registry): ToolDefinition<PasteParams,
       completedMsg: () => "Pasted text",
       failedMsg: ({ failureSignal }) => `Failed to paste text: ${failureSignal.error_code}`,
     },
-    description: `Paste text into the focused field: puts \`text\` on the DEVICE clipboard (the host clipboard is untouched), then triggers the platform's paste shortcut (iOS simulator, Android emulator).
+    description: `Paste text into the focused field: puts \`text\` on the DEVICE clipboard, then triggers the platform's paste shortcut (iOS simulator, Android emulator). The host clipboard is untouched unless the simulator shares its clipboard with the Mac (Xcode's Shared Clipboard).
 Do NOT use this in place of \`keyboard\`. \`keyboard\` types as a user would and is the default for all text entry; use \`paste\` only where a real user would paste — a 2FA/OTP code copied from another app, a long link or token, or when testing the app's own paste handling.
-Tap the field first so it has focus. Returns { pasted: true }. Fails on a TV target, when the device clipboard cannot be set, or when the simulator-server build lacks clipboard support.
-Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is never echoed back.`,
+Tap the field first so it has focus. Returns { pasted: true }, plus via: "keyboard" when a secret was typed instead. Fails on a TV target, when the device clipboard cannot be set, or when the simulator-server build lacks clipboard support.
+Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is never echoed back. On a simulator that shares its clipboard with the Mac, a secret is typed instead of pasted, so it never reaches the Mac clipboard.`,
     searchHint: "paste clipboard pasteboard otp 2fa code fill field",
     zodSchema: pasteZodSchema,
     capability,
@@ -77,7 +82,7 @@ Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is neve
       return serializedPerDevice(params.udid, async () => {
         if (secrets.length === 0) return dispatch(services, params, options);
         try {
-          return await dispatch(services, { ...params, text }, options);
+          return await dispatch(services, { ...params, text, hasSecrets: true }, options);
         } catch (err) {
           throw redactSecretsFromError(err, secrets);
         }

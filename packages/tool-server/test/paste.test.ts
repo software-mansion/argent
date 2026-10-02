@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { createPasteTool } from "../src/tools/paste";
-import { UnsupportedOperationError } from "../src/utils/capability";
+import { InvalidToolInputError, UnsupportedOperationError } from "../src/utils/capability";
+import { charToKeyPress } from "../src/tools/keyboard/key-codes";
 
 vi.mock("../src/utils/check-deps", () => ({ ensureDeps: vi.fn(async () => {}) }));
 vi.mock("../src/utils/ios-devices", async (importOriginal) => {
@@ -154,6 +155,95 @@ describe("paste tool", () => {
       expect(first.status).toBe("rejected");
       expect(second.status).toBe("fulfilled");
       expect(keys).toHaveLength(4);
+    });
+
+    describe("a secret", () => {
+      const REFUSED = {
+        error:
+          "failed to set clipboard text: refused to set sensitive text: the device's pasteboard " +
+          "is shared with the host",
+      };
+
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it("goes to the clipboard as sensitive and is pasted when the clipboard takes it", async () => {
+        vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "Ab1!");
+        const { api, keys } = fakeApi();
+
+        const result = await toolFor(api).execute(
+          {},
+          { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" }
+        );
+
+        expect(result).toEqual({ pasted: true });
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(JSON.parse(String(init.body))).toEqual({ text: "Ab1!", sensitive: true });
+        expect(keys).toEqual([
+          ["Down", 0xe3],
+          ["Down", 0x19],
+          ["Up", 0x19],
+          ["Up", 0xe3],
+        ]);
+      });
+
+      it("is typed instead, with no paste shortcut, when the clipboard refuses it", async () => {
+        vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "Ab1!");
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, REFUSED));
+        const { api, keys } = fakeApi();
+
+        const result = await toolFor(api).execute(
+          {},
+          { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" }
+        );
+
+        expect(result).toEqual({ pasted: true, via: "keyboard" });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        // A, b, 1, ! — Shift around A and !, and no ⌘ anywhere.
+        const downs = keys.filter(([direction]) => direction === "Down").map(([, code]) => code);
+        expect(downs).toEqual([
+          0xe1,
+          charToKeyPress("A")!.keyCode,
+          charToKeyPress("b")!.keyCode,
+          charToKeyPress("1")!.keyCode,
+          0xe1,
+          charToKeyPress("!")!.keyCode,
+        ]);
+        expect(downs).not.toContain(0xe3);
+        expect(JSON.stringify(result)).not.toContain("Ab1!");
+      });
+
+      it("is not typed at all when the keyboard cannot type one of its characters", async () => {
+        vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", "pässwort");
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, REFUSED));
+        const { api, keys } = fakeApi();
+
+        const err = await toolFor(api)
+          .execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" })
+          .catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(InvalidToolInputError);
+        expect(getFailureSignal(err)?.error_code).toBe(
+          FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+        );
+        expect((err as Error).message).not.toMatch(/ä|pässwort/);
+        expect(keys).toEqual([]);
+      });
+
+      it("is never sent as sensitive when the text holds no placeholder", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, REFUSED));
+        const { api, keys } = fakeApi();
+
+        const err = await toolFor(api)
+          .execute({}, { udid: IOS_UDID, text: "plain" })
+          .catch((e: unknown) => e);
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(JSON.parse(String(init.body))).toEqual({ text: "plain" });
+        expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.PASTE_CLIPBOARD_SET_FAILED);
+        expect(keys).toEqual([]);
+      });
     });
 
     it("rejects a tvOS simulator before resolving a simulator-server", async () => {

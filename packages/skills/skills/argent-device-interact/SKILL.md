@@ -185,11 +185,11 @@ Where the value is read from, and the rules for using a placeholder — includin
 { "udid": "<UDID>", "text": "482913" }
 ```
 
-Puts `text` on the **device** clipboard (the host clipboard is untouched) and triggers the platform's paste shortcut. iOS simulator and Android emulator only; a TV target, a physical device, Chromium and Vega are rejected.
+Puts `text` on the **device** clipboard and triggers the platform's paste shortcut. The host clipboard is untouched unless the simulator shares its clipboard with the Mac (Xcode's Shared Clipboard). iOS simulator and Android emulator only; a TV target, a physical device, Chromium and Vega are rejected.
 
 `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry — a search query, a login, a form field. Reach for `paste` only where a real user would paste: a 2FA / OTP code copied from another app, a long link or token, or to test how the app handles pasted input. It also carries what `keyboard` can't type on a given platform (multi-line text, non-ASCII on Android), but that alone is not a reason to paste — ask whether the user would.
 
-Tap the field first so it has focus; pasting with no focused field is a silent no-op, as with `keyboard`. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip.
+Tap the field first so it has focus; pasting with no focused field is a silent no-op, as with `keyboard`. `text` accepts the same `{{secret:<NAME>}}` placeholders as `keyboard`, with the same auto-screenshot skip. On a simulator that shares its clipboard with the Mac, a secret is typed instead of pasted, so it never reaches the Mac clipboard; the result then carries `via: "keyboard"`.
 
 ### rotate — Change orientation
 
