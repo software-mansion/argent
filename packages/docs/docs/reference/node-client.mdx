@@ -26,6 +26,8 @@ Add `@swmansion/argent` to the project. Import the client as an ES module.
 npm install --save-dev @swmansion/argent
 ```
 
+When you bundle the program, keep `@swmansion/argent` external, for example with `--external:@swmansion/argent` in esbuild. The client finds the tool-server next to its own file in the installed package.
+
 ## Tool-server
 
 The client connects to the tool-server of the installed package. When no tool-server runs, the client starts one. The `argent run` command and the client share that tool-server.
