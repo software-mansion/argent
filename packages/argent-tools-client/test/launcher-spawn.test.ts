@@ -92,6 +92,7 @@ describe("spawnToolsServer", () => {
 
   it("rejects with a clear message instead of crashing when `node` is not on PATH", async () => {
     // Pose as Bun so the launcher falls back to `node` on PATH, then empty PATH.
+    const savedBun = Object.getOwnPropertyDescriptor(process.versions, "bun");
     Object.defineProperty(process.versions, "bun", { value: "1.0.0", configurable: true });
     const savedPath = process.env.PATH;
     process.env.PATH = TEST_HOME;
@@ -101,7 +102,8 @@ describe("spawnToolsServer", () => {
       );
     } finally {
       process.env.PATH = savedPath;
-      delete (process.versions as Record<string, string>).bun;
+      if (savedBun) Object.defineProperty(process.versions, "bun", savedBun);
+      else delete (process.versions as Record<string, string>).bun;
     }
   });
 });
