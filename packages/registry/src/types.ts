@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ArtifactStore } from "./artifacts";
 import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
 import type { FailureSignal } from "./errors";
+import type { ClientServiceOp, ClientServicesAdvert } from "./client-services";
 
 export enum ServiceState {
   IDLE = "IDLE",
@@ -102,6 +103,23 @@ export interface InvokeToolOptions {
    * authoritative result.
    */
   emitProgress?: (event: unknown) => void;
+  /**
+   * Set by the HTTP layer when the caller sent `client_services` on an NDJSON
+   * request: the ops the client serves, the client roots it serves them under,
+   * and `request`, which writes one client-request line on the stream and
+   * resolves with the client's answer (the body without `id` and `ok`), or
+   * rejects on timeout, refusal or disconnect. Absent for a co-located caller
+   * and for every transport that cannot carry the request line.
+   */
+  clientServices?: {
+    ops: readonly ClientServiceOp[];
+    roots: readonly string[];
+    request(
+      op: ClientServiceOp,
+      args: Record<string, unknown>,
+      timeoutMs: number
+    ): Promise<Record<string, unknown>>;
+  };
 }
 
 /**
@@ -225,6 +243,12 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * warm for the call's duration.
    */
   longRunning?: boolean;
+  /**
+   * Client services this tool can use during a call: ops the tool-server asks
+   * the client to perform on the client's own files. Advertised through
+   * `GET /tools`; the client sends `client_services` only when this is present.
+   */
+  clientServices?: ClientServicesAdvert;
   /**
    * Gates this tool behind a flag name in @argent/configuration-core's
    * FLAG_REGISTRY. Enforced in TWO places, both re-checked per request so

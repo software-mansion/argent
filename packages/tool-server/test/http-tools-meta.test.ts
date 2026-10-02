@@ -38,7 +38,14 @@ function stubRegistry(): Registry {
     getSnapshot: vi.fn(() => ({
       services: new Map(),
       namespaces: [],
-      tools: ["always-tool", "hinted-tool", "plain-tool", "device-tool", "boot-tool"],
+      tools: [
+        "always-tool",
+        "hinted-tool",
+        "plain-tool",
+        "device-tool",
+        "boot-tool",
+        "served-tool",
+      ],
     })),
     getTool: vi.fn((name: string) => {
       if (name === "always-tool") {
@@ -91,6 +98,16 @@ function stubRegistry(): Registry {
           execute: async () => ({}),
         };
       }
+      if (name === "served-tool") {
+        return {
+          id: "served-tool",
+          description: "Uses client services",
+          inputSchema: { type: "object", properties: {} },
+          clientServices: { version: 1, ops: ["resolve-file", "list-dir"] },
+          services: () => ({}),
+          execute: async () => ({}),
+        };
+      }
       return undefined;
     }),
     invokeTool: vi.fn(),
@@ -128,6 +145,19 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(byName.get("hinted-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
+  });
+
+  it("passes clientServices through on /tools response, exactly as declared", async () => {
+    const res = await request(handle.app).get("/tools").expect(200);
+    const byName = new Map<string, Record<string, unknown>>(
+      (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
+    );
+
+    expect(byName.get("served-tool")!.clientServices).toEqual({
+      version: 1,
+      ops: ["resolve-file", "list-dir"],
+    });
+    expect(byName.get("plain-tool")).not.toHaveProperty("clientServices");
   });
 
   it("does not pass bundleId into telemetry invocation metadata", async () => {

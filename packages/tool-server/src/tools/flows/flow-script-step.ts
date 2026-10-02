@@ -1,9 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SCRIPT_FILE_NAME_PATTERN } from "@argent/registry";
+import {
+  canonicalFlowPath,
+  resolveFlowRelativeFile,
+  SCRIPT_FILE_NAME_PATTERN,
+} from "@argent/registry";
 import type { FlowStep } from "./flow-utils";
-import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import {
   flowScriptExecutor,
   type FlowScriptFailureKind,

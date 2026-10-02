@@ -1,6 +1,17 @@
+import { realpath } from "node:fs/promises";
+import * as path from "node:path";
+
+import {
+  CLIENT_REQUEST_EVENT,
+  CLIENT_SERVICES_VERSION,
+  type ClientRequestLine,
+  type ClientServicesAdvert,
+} from "@argent/registry";
+
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import { prepareFileInputs, applyClientFileDirectives, type FileInputSpec } from "./file-inputs.js";
+import { createClientServicesHandler, type ClientServicesHandler } from "./client-services.js";
 
 export interface ToolMeta {
   name: string;
@@ -9,6 +20,8 @@ export interface ToolMeta {
   outputHint?: string;
   /** Args that name files on the CALLER's machine — see file-inputs.ts. */
   fileInputs?: FileInputSpec[];
+  /** Set when the tool can ask the caller for project files — see client-services.ts. */
+  clientServices?: ClientServicesAdvert;
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
@@ -52,8 +65,8 @@ export interface CreateToolsClientOptions {
    * Override the fetch used for GET /tools and POST /tools/:name, so a caller
    * can wrap retries and a per-attempt timeout around each request.
    * `meta.longRunning` is the tool's flag from the listing (false for GET
-   * /tools), so the caller can disable its timeout. POST /upload keeps the
-   * global fetch.
+   * /tools), so the caller can disable its timeout. POST /upload and the
+   * client-services answer POSTs keep the global fetch.
    */
   fetchImpl?: (url: string, init: RequestInit, meta: { longRunning: boolean }) => Promise<Response>;
 }
@@ -87,12 +100,50 @@ function authHeaders(token: string | undefined): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/** How a stream's `client-request` lines are answered: the handler and where to post. */
+interface ClientServicesLink {
+  handler: ClientServicesHandler;
+  answerUrl: (invocation: string) => string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Answer one request line and post the answer. Never rejects: a failed post is
+ * one stderr line, and the server times the request out on its side.
+ */
+async function answerClientRequest(
+  link: ClientServicesLink,
+  msg: ClientRequestLine
+): Promise<void> {
+  const body = await link.handler.handle(msg);
+  const describe = `answer to ${String(msg.op)} request ${String(msg.id)} failed`;
+  try {
+    const res = await fetch(link.answerUrl(String(msg.invocation)), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...link.headers },
+      body: JSON.stringify(body),
+    });
+    // Drain so the connection is released; the body itself is not needed.
+    await res.text().catch(() => undefined);
+    if (!res.ok) {
+      process.stderr.write(`[client-services] ${describe}: ${res.status} ${res.statusText}\n`);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[client-services] ${describe}: ${message}\n`);
+  }
+}
+
 /** Read an NDJSON tool-invocation stream, mirroring the buffered path's contract. */
 async function consumeToolStream(
   body: ReadableStream<Uint8Array>,
-  onProgress: (event: unknown) => void
+  onProgress: (event: unknown) => void,
+  services?: ClientServicesLink
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
+  // Answers are posted while the stream keeps flowing; they are awaited once
+  // the read loop ends so none is left dangling, on success or on error.
+  const answers: Promise<void>[] = [];
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
     const msg = JSON.parse(line) as {
@@ -104,7 +155,10 @@ async function consumeToolStream(
       error_kind?: string;
     };
     if (msg.event === "progress") onProgress(msg.data);
-    else if (msg.event === "result") final = { data: msg.data, note: msg.note };
+    else if (msg.event === CLIENT_REQUEST_EVENT) {
+      // Without a handler the line is ignored, as any unknown event is.
+      if (services) answers.push(answerClientRequest(services, msg as ClientRequestLine));
+    } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
     else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
         errorCode: msg.error_code,
@@ -133,8 +187,10 @@ async function consumeToolStream(
   } catch (err) {
     // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
+    await Promise.all(answers);
     throw err;
   }
+  await Promise.all(answers);
 
   if (!final) {
     throw new Error("tool stream ended without a result — connection lost mid-run?");
@@ -156,6 +212,41 @@ export function errorBodyMessage(body: {
 }): string | undefined {
   if (Array.isArray(body.issues) && typeof body.message === "string") return body.message;
   return body.error ?? body.message;
+}
+
+/**
+ * The handler for one call, or null when the arguments carry no string
+ * `project_root` (nothing to serve under) or nothing under the roots exists.
+ * The roots are the project, its `.argent/flows` directory (a project may keep
+ * that one as a symlink to a tree outside the project, and the flows there
+ * are still the project's own), the directory of `flow_path` when given, so a
+ * flow addressed outside the project can still reach its own fragments, and
+ * the directory the root flow file REALLY lives in: a `run:` target resolves
+ * beside the real file, as it does on one computer, so a root flow that is a
+ * symlink serves the fragments next to its target. Every root is served by
+ * its real location; one that does not exist is dropped.
+ */
+async function clientServicesHandlerFor(
+  advert: ClientServicesAdvert,
+  args: unknown
+): Promise<ClientServicesHandler | null> {
+  if (typeof args !== "object" || args === null) return null;
+  const { project_root, flow_path, name } = args as Record<string, unknown>;
+  if (typeof project_root !== "string") return null;
+  const flowsDir = path.join(project_root, ".argent", "flows");
+  const roots = [project_root, flowsDir];
+  const rootFlow =
+    typeof flow_path === "string"
+      ? flow_path
+      : typeof name === "string"
+        ? path.join(flowsDir, `${name}.yaml`)
+        : undefined;
+  if (rootFlow !== undefined) {
+    roots.push(path.dirname(rootFlow));
+    const real = await realpath(rootFlow).catch(() => null);
+    if (real !== null) roots.push(path.dirname(real));
+  }
+  return createClientServicesHandler({ roots, advertised: advert.ops });
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -207,24 +298,46 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (co-located) or from inlined content (remote).
+    // Client services, outbound: offer to serve project files during the call
+    // when the tool can ask for them and the server is remote.
     let finalArgs = args;
+    let services: ClientServicesLink | undefined;
     const meta = await fetchTool(name);
-    if (meta?.fileInputs?.length) {
+    if (meta?.fileInputs?.length || meta?.clientServices) {
       const { url: routedUrl } = await getResolvedToolsUrl();
       const isRemote = routedUrl !== null;
-      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
-        includeContent: isRemote,
-        uploadEndpoint: isRemote ? { url, token } : undefined,
-      });
+      if (meta.fileInputs?.length) {
+        finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
+          includeContent: isRemote,
+          uploadEndpoint: isRemote ? { url, token } : undefined,
+        });
+      }
+      if (isRemote && meta.clientServices?.version === CLIENT_SERVICES_VERSION) {
+        const handler = await clientServicesHandlerFor(meta.clientServices, args);
+        if (handler) {
+          finalArgs = { ...(finalArgs as Record<string, unknown>), client_services: handler.param };
+          services = {
+            handler,
+            answerUrl: (invocation) =>
+              `${url}/invocations/${encodeURIComponent(invocation)}/client-responses`,
+            headers: authHeaders(token),
+          };
+        }
+      }
     }
 
+    // A handler needs the stream: its requests travel on it.
+    const stream = opts?.onProgress !== undefined || services !== undefined;
     const res = await doFetch(
       `${url}/tools/${encodeURIComponent(name)}`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(opts?.onProgress ? { Accept: "application/x-ndjson" } : {}),
+          // A proxy that compresses the stream holds each line until its buffer
+          // fills, so a request line never gets its answer. `identity` keeps the
+          // stream uncompressed end to end.
+          ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
           ...authHeaders(token),
         },
         body: JSON.stringify(finalArgs ?? {}),
@@ -235,8 +348,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // validation errors stay plain JSON with their status codes — so Content-Type
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
-    if (opts?.onProgress && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      const streamed = await consumeToolStream(res.body, opts.onProgress);
+    if (stream && res.ok && res.body && contentType.includes("application/x-ndjson")) {
+      const streamed = await consumeToolStream(res.body, opts?.onProgress ?? (() => {}), services);
       return { ...streamed, outputHint: meta?.outputHint };
     }
     const json = (await res.json().catch(() => ({}))) as {

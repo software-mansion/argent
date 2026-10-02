@@ -87,6 +87,10 @@ describe("HTTP NDJSON streaming (Accept: application/x-ndjson)", () => {
       .expect(200);
 
     expect(res.headers["content-type"]).toContain("application/x-ndjson");
+    // Intermediaries must pass each line through as written, neither compressed
+    // nor buffered: a client-request line waits for its answer.
+    expect(res.headers["cache-control"]).toBe("no-cache, no-transform");
+    expect(res.headers["x-accel-buffering"]).toBe("no");
     const lines = parseLines(res.body as string);
     expect(lines).toEqual([
       { event: "progress", data: { index: 0, status: "pass" } },

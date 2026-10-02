@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  classifyOnDiskSpelling,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
@@ -18,7 +19,6 @@ import {
   authoringPlatform,
   parseFlow,
   assertSafeFlowName,
-  classifyOnDiskSpelling,
   describeSelector,
   flowsDirFor,
   foldStepFromArgs,

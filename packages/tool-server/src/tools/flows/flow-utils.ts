@@ -174,52 +174,6 @@ async function resolveFlowKey(projectRoot: string, name: string): Promise<string
 const keyResolutions = new Map<string, Promise<string>>();
 
 /**
- * How the flow file a caller addressed is spelled in its own directory.
- * `listed`: the directory carries that basename byte-for-byte — or its listing
- * could not be read at all (an execute-only parent lets stat through while
- * refusing readdir), which vouches for nothing and so must refuse nothing.
- * `case_folded`: no entry carries it, but one differs only by case — what a
- * case-insensitive filesystem (APFS, NTFS) opens for a spelling nothing on disk
- * has. `absent`: nothing matches even case-insensitively. `addressable` says
- * whether the on-disk spelling is one the flow layer's own ladders accept, so a
- * caller can be pointed at it instead of at a rename.
- */
-export type OnDiskSpelling =
-  | { state: "listed" }
-  | { state: "case_folded"; actual: string; addressable: boolean }
-  | { state: "absent" };
-
-/**
- * Classify the supplied basename against `dir`'s listing. One classifier serves
- * every route that turns a caller's spelling into a file it will open — a flow,
- * or since the `script:` step a plain `.mjs` — so they can never drift apart in
- * which spellings they accept.
- *
- * readdir, not realpath: realpath rewrites a symlinked flow to its target's
- * name, and a flow deliberately runs — and composes — under the link's own
- * name. Every call site hands a pure-ASCII basename (the flow-name charset,
- * plus ".yaml" or ".mjs"), so Unicode-normalizing filesystems cannot make the
- * comparison lie.
- *
- * What an `absent` verdict means is the caller's to decide, and they differ:
- * `flow_path` arrives with the boundary's stat already vouching for the file,
- * so a listing that lacks it is itself the phantom-spelling bug, while a `name`
- * may simply not name a saved flow — an ordinary missing-flow error the later
- * read reports far better than a casing complaint could.
- */
-export async function classifyOnDiskSpelling(
-  dir: string,
-  base: string,
-  addressable: RegExp = FLOW_FILE_NAME_PATTERN
-): Promise<OnDiskSpelling> {
-  const entries = await fs.readdir(dir).catch(() => null);
-  if (entries === null || entries.includes(base)) return { state: "listed" };
-  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
-  if (actual === undefined) return { state: "absent" };
-  return { state: "case_folded", actual, addressable: addressable.test(actual) };
-}
-
-/**
  * Where a recording's YAML is persisted:
  * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
  *                directly; the caller's project root is on this machine.
