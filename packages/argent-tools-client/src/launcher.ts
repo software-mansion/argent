@@ -680,14 +680,15 @@ const PS_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 /**
  * `pid`'s full command line from `ps`. Throws whatever `ps` failed with, its
  * stderr included. `flags` replaces the width flags, so a caller can measure
- * what this host's `ps` truncates without them.
+ * what this host's `ps` truncates without them. `env` replaces the UTF-8 one.
  */
 export function readProcessCommandLine(
   pid: number,
-  flags: readonly string[] = PS_WIDTH_FLAGS
+  flags: readonly string[] = PS_WIDTH_FLAGS,
+  env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: PS_LOCALE }
 ): string {
   return execFileSync(PS_BIN, [...flags, "-p", String(pid), "-o", "command="], {
-    env: { ...process.env, LC_ALL: PS_LOCALE },
+    env,
     encoding: "utf8",
     timeout: 2_000,
     // A recycled pid can sit on a process with an argv past Node's 1 MiB exec
@@ -712,25 +713,34 @@ function couldBeOurToolServer(pid: number, marker: string | undefined): boolean 
   // false would veto every kill and leave the servers running. Callers there
   // decide on the record alone.
   if (process.platform === "win32") return true;
-  let cmd: string;
-  try {
-    cmd = readProcessCommandLine(pid);
-  } catch (err) {
-    // Say why: a rejected flag, or a bare-`"ps"` ENOENTing under a sanitized
-    // PATH, orphans every live server — silently, without this.
-    process.stderr.write(
-      `[launcher] ps could not read pid ${pid}'s command line; leaving it alone: ${String(err)}\n`
-    );
-    return false;
-  }
-  if (!cmd) return false;
   // Our servers run `<any node path> <bundlePath> start`. Requiring the path at an
   // argument boundary followed by `start` keeps a mention that is not being run
   // from matching, though a command line embedding the pair mid-argv — a
   // `sh -c` wrapper — still does; matching the raw command string rather than
   // split argv keeps bundle paths containing spaces working.
   const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`).test(cmd);
+  const ours = new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`);
+  // A non-ASCII path gets a second read in the caller's own locale: a host
+  // without PS_LOCALE (glibc before 2.35 and no distro C.UTF-8) renders it
+  // escaped, while a UTF-8 locale of the caller's may still render it.
+  const nonAscii = [...marker].some((c) => c.charCodeAt(0) > 0x7f);
+  const envs = nonAscii ? [undefined, process.env] : [undefined];
+  let failure: string | undefined;
+  for (const env of envs) {
+    try {
+      if (ours.test(readProcessCommandLine(pid, PS_WIDTH_FLAGS, env))) return true;
+    } catch (err) {
+      failure = String(err);
+    }
+  }
+  if (failure !== undefined) {
+    // Say why: a rejected flag, or a bare-`"ps"` ENOENTing under a sanitized
+    // PATH, orphans every live server — silently, without this.
+    process.stderr.write(
+      `[launcher] ps could not read pid ${pid}'s command line; leaving it alone: ${failure}\n`
+    );
+  }
+  return false;
 }
 
 // ensureToolsServer's "is there a healthy server? no → spawn one" is a
