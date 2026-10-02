@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { CHROMIUM_ID_PREFIX, chromiumIdFromPort } from "./device-info";
 import { ensureCdpReachable, discoverPrimaryPage } from "../blueprints/chromium-cdp";
 
@@ -43,7 +44,8 @@ const TRACKED_PORTS = new Set<number>();
  * Tracked ports are mirrored to a file: booted apps are detached and outlive
  * the tool-server (which auto-exits on idle), so without persistence a restart
  * hides running apps from `list-devices` and the agent boots a duplicate.
- * Failed probes prune the file, so it self-heals after the app quits.
+ * Probes that find nothing listening prune the file, so it self-heals after the
+ * app quits.
  */
 function portsFilePath(): string {
   return (
@@ -81,7 +83,7 @@ export function trackChromiumPort(port: number): void {
   persistPorts((ports) => ports.add(port));
 }
 
-/** Remove a port. Optional: a failed probe prunes it anyway. */
+/** Remove a port. Optional: an unreachable probe prunes it anyway. */
 export function untrackChromiumPort(port: number): void {
   TRACKED_PORTS.delete(port);
   persistPorts((ports) => ports.delete(port));
@@ -112,13 +114,18 @@ async function probePort(port: number, timeoutMs: number): Promise<ChromiumDevic
       browser: version.Browser ?? null,
       state: "Running",
     };
-  } catch {
-    // Drop dead tracked ports so list-devices stops probing a closed app.
-    TRACKED_PORTS.delete(port);
-    // Only touch the file when this port was persisted — a failed probe of
-    // 9222 or an env port must not create or rewrite it.
-    if (loadPersistedPorts().includes(port)) {
-      persistPorts((ports) => ports.delete(port));
+  } catch (err) {
+    // Drop the port only when nothing answers on it. Any other failure means
+    // something is still listening: an Electron app whose last window closed
+    // answers /json/version but lists no page target, and pruning it there
+    // hides a running app from list-devices for good.
+    if (getFailureSignal(err)?.error_code === FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE) {
+      TRACKED_PORTS.delete(port);
+      // Only touch the file when this port was persisted — a failed probe of
+      // 9222 or an env port must not create or rewrite it.
+      if (loadPersistedPorts().includes(port)) {
+        persistPorts((ports) => ports.delete(port));
+      }
     }
     return null;
   } finally {

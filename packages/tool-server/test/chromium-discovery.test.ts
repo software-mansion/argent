@@ -23,7 +23,8 @@ interface FakeCdpServer {
 async function startFakeCdpServer(options?: {
   responses?: {
     version?: number | object;
-    list?: number | object;
+    /** A function is re-read per request, so a test can change the reply mid-run. */
+    list?: number | object | (() => number | object);
   };
 }): Promise<FakeCdpServer> {
   const server = http.createServer((req, res) => {
@@ -42,7 +43,8 @@ async function startFakeCdpServer(options?: {
       return;
     }
     if (req.url === "/json/list") {
-      const r = options?.responses?.list ?? [
+      const configured = options?.responses?.list;
+      const r = (typeof configured === "function" ? configured() : configured) ?? [
         {
           id: "abc",
           type: "page",
@@ -172,31 +174,43 @@ describe("discoverChromiumDevices", () => {
     expect(devices).toEqual([]);
   });
 
-  it("untracks a LIVE endpoint that has no page target, exactly as it untracks a dead one", async () => {
-    // The fact four recovery surfaces rest on: an app whose last window closed is
-    // dropped like an exited one, and dropped from the probe set too — so its entry
-    // does not come back when the user reopens a window, and a reader polling
-    // list-devices for the exit relaunches into a running app.
-    const server = await startFakeCdpServer({
-      responses: {
-        list: [
-          { id: "x", type: "service_worker", title: "", url: "", webSocketDebuggerUrl: "ws://x" },
-        ],
-      },
-    });
+  it("keeps a running app tracked while it has no page target", async () => {
+    // An Electron app whose last window closed keeps answering /json/version
+    // while /json/list reports no page. Pruning it there loses the app for
+    // good, since nothing but a fresh boot re-adds a port.
+    let pages: object[] = [];
+    const server = await startFakeCdpServer({ responses: { list: () => pages } });
     serversToCleanup.push(server);
     trackChromiumPort(server.port);
     portsToCleanup.push(server.port);
-    expect(getCandidateChromiumPorts()).toContain(server.port);
 
+    expect(await discoverChromiumDevices({ timeoutMs: 1500, ports: [server.port] })).toEqual([]);
+    expect(getCandidateChromiumPorts()).toContain(server.port);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(server.port);
+
+    // The window comes back: the app must be discoverable again.
+    pages = [
+      {
+        id: "abc",
+        type: "page",
+        title: "Test Page",
+        url: "file:///tmp/index.html",
+        webSocketDebuggerUrl: "ws://127.0.0.1:0/devtools/page/abc",
+      },
+    ];
     const devices = await discoverChromiumDevices({ timeoutMs: 1500 });
-    expect(
-      devices.some((d) => d.port === server.port),
-      "listed while windowless"
-    ).toBe(false);
-    // The endpoint is still answering — only the drivable page is missing.
-    expect((await fetch(`http://127.0.0.1:${server.port}/json/version`)).ok).toBe(true);
-    expect(getCandidateChromiumPorts(), "and no longer probed").not.toContain(server.port);
+    expect(devices.some((d) => d.port === server.port)).toBe(true);
+  });
+
+  it("keeps a tracked port whose endpoint answers with a non-2xx status", async () => {
+    const server = await startFakeCdpServer({ responses: { version: 500 } });
+    serversToCleanup.push(server);
+    trackChromiumPort(server.port);
+    portsToCleanup.push(server.port);
+
+    expect(await discoverChromiumDevices({ timeoutMs: 1500, ports: [server.port] })).toEqual([]);
+    expect(getCandidateChromiumPorts()).toContain(server.port);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(server.port);
   });
 
   it("untracks a port after it stops responding", async () => {

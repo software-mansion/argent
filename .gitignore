@@ -49,6 +49,7 @@ packages/argent/agents/
 packages/argent/rules/
 packages/argent/assets/
 packages/argent/README.md
+packages/argent-alias/README.md
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore
 .claude/

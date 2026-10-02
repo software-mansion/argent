@@ -27,6 +27,14 @@ In a pnpm project, where npm's `devEngines` check may refuse to run `npx`:
 pnpm dlx @swmansion/argent@latest init
 ```
 
+The `argent` package on npm is a short alias for `@swmansion/argent`. It runs the same `@swmansion/argent` version:
+
+```bash
+npx argent@latest init
+```
+
+The alias is only for `npx`. To install Argent globally, install `@swmansion/argent`.
+
 The installation wizard:
 
 - installs `@swmansion/argent` globally,
