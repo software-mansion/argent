@@ -559,18 +559,21 @@ describe("readTapAxes", () => {
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
-    it("does not read a simulator named like the Android device a serial session runs on", async () => {
+    // debugger-connect takes any device_id for the one app on a Metro, so a
+    // serial can key a session on an iOS simulator.
+    it("reads a udid booted with the app's device name for a session connected with another device's serial", async () => {
       simulators.list = [
-        { udid: SIM_UDID, name: "Pixel 9", state: "Booted", runtimeKind: "mobile" },
+        { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
       ];
       const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
       expect(
         await readTapAxes(
           registry as never,
-          app("emulator-5554", "com.example.app (Pixel 9)", undefined, SIM_UDID)
+          app("emulator-5554", "com.example.app (iPhone 18 Pro)", undefined, SIM_UDID)
         )
-      ).toEqual({});
-      expect(registry.resolveService).not.toHaveBeenCalled();
+      ).toEqual({ uiOrientation: "landscapeRight" });
+      expect(registry.resolveService).toHaveBeenCalledTimes(1);
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
     });
 
     it.each([
@@ -660,6 +663,67 @@ describe("readTapAxes", () => {
       ).toEqual({ uiOrientation: "landscapeRight", readInsteadOfUdid: SIM_UDID });
       expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
     });
+
+    it.each([
+      ["is shut down", { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Shutdown" }],
+      ["has another name", { udid: SIM_UDID, name: "iPhone Duo", state: "Booted" }],
+      ["is in no listing", undefined],
+    ])(
+      "reads a udid booted with the app's device name when the simulator device_id names %s",
+      async (_case, own) => {
+        simulators.list = [
+          ...(own ? [{ ...own, runtimeKind: "mobile" }] : []),
+          {
+            udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+            name: "iPhone 18 Pro",
+            state: "Booted",
+            runtimeKind: "mobile",
+          },
+        ];
+        const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+        expect(
+          await readTapAxes(
+            registry as never,
+            app(
+              SIM_UDID,
+              "com.example.app (iPhone 18 Pro)",
+              undefined,
+              "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+            )
+          )
+        ).toEqual({ uiOrientation: "landscapeRight" });
+        expect(registry.resolveService).toHaveBeenCalledTimes(1);
+        expect(registry.resolveService.mock.calls[0]?.[0]).toContain(
+          "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+        );
+      }
+    );
+
+    it.each([
+      ["is shut down", "iPhone 18 Pro", "Shutdown"],
+      ["has another name", "iPhone Duo", "Booted"],
+    ])(
+      "reads the simulator device_id names in place of a udid whose simulator %s",
+      async (_case, name, state) => {
+        simulators.list = [
+          { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+          { udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E", name, state, runtimeKind: "mobile" },
+        ];
+        const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+        expect(
+          await readTapAxes(
+            registry as never,
+            app(
+              SIM_UDID,
+              "com.example.app (iPhone 18 Pro)",
+              undefined,
+              "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+            )
+          )
+        ).toEqual({ uiOrientation: "landscapeRight", readInsteadOfUdid: SIM_UDID });
+        expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
+      }
+    );
 
     it("takes a forwarded logicalDeviceId for the simulator UDID it was connected with", async () => {
       rememberDeviceAlias(LOGICAL_ID, SIM_UDID);

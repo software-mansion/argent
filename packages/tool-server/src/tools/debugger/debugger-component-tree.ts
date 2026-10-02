@@ -559,7 +559,7 @@ const BUNDLE_ID_NAMED_TARGET = /^[\w-]+(\.[\w-]+)+( \(|$)/;
 interface DebuggedApp {
   /** The `device_id` the tool was called with. */
   deviceId: string;
-  /** The simulator the caller names, for a session its `device_id` cannot place. */
+  /** The simulator the caller says shows the app, checked against the listing and `device_id`. */
   udid?: string;
   /** The Metro target's name, `<bundle id> (<device name>)`. */
   appName: string;
@@ -577,10 +577,15 @@ type SimulatorPick = { device: DeviceInfo } & Omit<TapAxesRead, "uiOrientation">
 /**
  * The iOS simulator the session runs on; undefined for any other device. A
  * `udid` is read only when it can be that simulator: the one `device_id`
- * names, or, for a session keyed by a logicalDeviceId, a booted simulator with
- * the app's device name. Any other `udid` gives way to the simulator the
- * session finds by itself, and is mismatched when the session cannot name one.
- * A `udid` its listing does not have could not be checked.
+ * names, or a booted simulator with the app's device name. Any other `udid`
+ * gives way to the simulator the session finds by itself, and is mismatched
+ * when two booted simulators of the app's name leave the session unable to
+ * name one. A `udid` the listing does not have is unlisted.
+ *
+ * debugger-connect takes any `device_id` for the one app on a Metro, so a
+ * `device_id` that names a simulator is no proof that the app runs there. A
+ * `udid` booted with the app's device name outranks such a `device_id` when
+ * that simulator does not have the name itself.
  */
 async function iosSimulatorOf(
   app: DebuggedApp
@@ -597,10 +602,19 @@ async function iosSimulatorOf(
   }
   const named = resolveDevice(app.udid);
   const own = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
+  if (isIosSimulator(own)) {
+    if (own.id === named.id) return { device: own };
+    if (isIosSimulator(named)) {
+      const [listed, ownListed] = await Promise.all([
+        listedAs(named, app.deviceName),
+        listedAs(own, app.deviceName),
+      ]);
+      if (listed === "booted" && ownListed !== "booted") return { device: named };
+    }
+    return { device: own, readInsteadOfUdid: own.id };
+  }
   const [listed, session] = await Promise.all([
-    isIosSimulator(named) && !isIosSimulator(own) && isLogicalKeyed(app)
-      ? listedAs(named, app.deviceName)
-      : undefined,
+    isIosSimulator(named) ? listedAs(named, app.deviceName) : undefined,
     iosSimulatorOfSession(app),
   ]);
   if (listed === "booted" || listed === "twin") {
@@ -648,10 +662,6 @@ async function listedAs(
     : "booted";
 }
 
-function isLogicalKeyed(app: DebuggedApp): boolean {
-  return app.deviceId === app.logicalDeviceId || isLogicalKeyedDevice(app.deviceId);
-}
-
 /**
  * A session keyed by a Metro logicalDeviceId (two devices share one Metro)
  * names no device, so it is found by name among the booted simulators; a name
@@ -662,7 +672,8 @@ async function iosSimulatorOfSession(
 ): Promise<DeviceInfo | typeof AMBIGUOUS_SIMULATOR | undefined> {
   const device = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
   if (isIosSimulator(device)) return device;
-  if (!isLogicalKeyed(app)) return undefined;
+  const logicalKeyed = app.deviceId === app.logicalDeviceId || isLogicalKeyedDevice(app.deviceId);
+  if (!logicalKeyed) return undefined;
   const named = (await listIosSimulators()).filter(
     (sim) => sim.state === "Booted" && sim.runtimeKind === "mobile" && sim.name === app.deviceName
   );
