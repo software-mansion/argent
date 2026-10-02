@@ -13,7 +13,8 @@ import { createArgentClient, ArgentToolError } from "@swmansion/argent/client";
 
 const argent = createArgentClient();
 const { data } = await argent.callTool("list-devices");
-const shot = await argent.callTool("screenshot", { udid: data.devices[0].udid });
+const simulator = data.devices.find((d) => d.platform === "ios" && d.state === "Booted");
+const shot = await argent.callTool("screenshot", { udid: simulator.udid });
 console.log(shot.data); // the result, with the screenshot as a local file path
 ```
 
