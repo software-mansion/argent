@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -25,6 +27,43 @@ describe("package manifest", () => {
     });
     // The `argent` alias package resolves `@swmansion/argent/dist/cli.js`.
     expect(pkg.exports?.["./*"]).toBe("./*");
+  });
+
+  it("resolves every extensionless deep require that 0.26.0 resolved", () => {
+    // Before the exports map, require() probed `.js`/`.json`; an exports map
+    // resolves only the keys it lists, so each of these needs its own.
+    const extensionless: Record<string, string> = {
+      "dist/cli": "dist/cli.js",
+      "dist/bundled-paths": "dist/bundled-paths.js",
+      "dist/fatal-handlers": "dist/fatal-handlers.js",
+      "dist/installer-help": "dist/installer-help.js",
+      "assets/manifest": "assets/manifest.json",
+      "assets/trace-processor/engine_bundle.node": "assets/trace-processor/engine_bundle.node.js",
+      "package": "package.json",
+    };
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-exports-")));
+    try {
+      const pkgDir = path.join(root, "node_modules", "@swmansion", "argent");
+      for (const file of [...Object.values(extensionless), "dist/client.js"]) {
+        fs.mkdirSync(path.dirname(path.join(pkgDir, file)), { recursive: true });
+        fs.writeFileSync(path.join(pkgDir, file), "");
+      }
+      fs.copyFileSync(
+        path.resolve(import.meta.dirname, "..", "package.json"),
+        path.join(pkgDir, "package.json")
+      );
+      const require = createRequire(path.join(root, "index.js"));
+
+      for (const [spec, file] of Object.entries(extensionless)) {
+        expect(require.resolve(`@swmansion/argent/${spec}`)).toBe(path.join(pkgDir, file));
+        expect(require.resolve(`@swmansion/argent/${file}`)).toBe(path.join(pkgDir, file));
+      }
+      expect(require.resolve("@swmansion/argent/client")).toBe(
+        path.join(pkgDir, "dist", "client.js")
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

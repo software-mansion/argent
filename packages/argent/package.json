@@ -14,6 +14,13 @@
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
     },
+    "./dist/cli": "./dist/cli.js",
+    "./dist/bundled-paths": "./dist/bundled-paths.js",
+    "./dist/fatal-handlers": "./dist/fatal-handlers.js",
+    "./dist/installer-help": "./dist/installer-help.js",
+    "./assets/manifest": "./assets/manifest.json",
+    "./assets/trace-processor/engine_bundle.node": "./assets/trace-processor/engine_bundle.node.js",
+    "./package": "./package.json",
     "./*": "./*"
   },
   "bin": {
