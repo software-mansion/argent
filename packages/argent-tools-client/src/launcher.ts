@@ -670,6 +670,13 @@ const PS_BIN = ["/bin/ps", "/usr/bin/ps"].find((p) => fs.existsSync(p)) ?? "ps";
 // the live server. Same flag tool-server's vega-process PS_ARGS uses.
 const PS_WIDTH_FLAGS = ["-ww"] as const;
 
+// Outside a UTF-8 locale ps escapes every non-ASCII byte (`M-E` on macOS, `?`
+// on procps), so a bundle path under e.g. `/Users/Łukasz` never matches its own
+// marker and the guard vetoes the kill. A launchd-, systemd- or container-
+// spawned process often has no locale at all. C.UTF-8 is built into glibc 2.35+
+// and shipped by Debian-family distros; macOS always ships en_US.UTF-8.
+const PS_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+
 /**
  * `pid`'s full command line from `ps`. Throws whatever `ps` failed with, its
  * stderr included. `flags` replaces the width flags, so a caller can measure
@@ -680,6 +687,7 @@ export function readProcessCommandLine(
   flags: readonly string[] = PS_WIDTH_FLAGS
 ): string {
   return execFileSync(PS_BIN, [...flags, "-p", String(pid), "-o", "command="], {
+    env: { ...process.env, LC_ALL: PS_LOCALE },
     encoding: "utf8",
     timeout: 2_000,
     // A recycled pid can sit on a process with an argv past Node's 1 MiB exec
