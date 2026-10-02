@@ -43,7 +43,13 @@ case "$ARGENT_PS_STUB" in
   locale)
     printf '%s\\n' "\${LC_ALL-}" >> "$ARGENT_PS_STUB_LOG"
     case "\${LC_ALL-}" in
-      C.UTF-8|en_US.UTF-8) echo "node /stub/za????????/tool-server.cjs start" ;;
+      C.UTF-8|en_US.UTF-8)
+        case "\${ARGENT_PS_STUB_FORCED-}" in
+          fail) echo "ps: cannot read under this locale" >&2; exit 1 ;;
+          hang) exec /bin/sleep 5 ;;
+          *) echo "node /stub/za????????/tool-server.cjs start" ;;
+        esac
+        ;;
       *) printf '%s\\n' "$ARGENT_PS_STUB_CMD" ;;
     esac
     ;;
@@ -78,6 +84,8 @@ beforeAll(async () => {
 
 const spawnedPids: number[] = [];
 describe("couldBeOurToolServer — host without the forced UTF-8 locale", () => {
+  const FORCED_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+
   const paths = (bundle: string): import("../src/launcher.js").ToolsServerPaths => ({
     bundlePath: bundle,
     simulatorServerDir: "/unused/sim",
@@ -100,13 +108,17 @@ describe("couldBeOurToolServer — host without the forced UTF-8 locale", () => 
     return pid;
   }
 
-  function stubPs(cmd: string): { reads: () => string[]; restore: () => void } {
+  function stubPs(
+    cmd: string,
+    forced?: "fail" | "hang"
+  ): { reads: () => string[]; restore: () => void } {
     const log = join(stubDir, `ps-reads-${Date.now()}.log`);
     writeFileSync(log, "");
     const savedLcAll = process.env.LC_ALL;
     process.env.ARGENT_PS_STUB = "locale";
     process.env.ARGENT_PS_STUB_LOG = log;
     process.env.ARGENT_PS_STUB_CMD = cmd;
+    if (forced) process.env.ARGENT_PS_STUB_FORCED = forced;
     // The caller's own UTF-8 locale, which this host does have.
     process.env.LC_ALL = "pl_PL.UTF-8";
     return {
@@ -114,6 +126,7 @@ describe("couldBeOurToolServer — host without the forced UTF-8 locale", () => 
       restore: () => {
         delete process.env.ARGENT_PS_STUB_LOG;
         delete process.env.ARGENT_PS_STUB_CMD;
+        delete process.env.ARGENT_PS_STUB_FORCED;
         if (savedLcAll === undefined) delete process.env.LC_ALL;
         else process.env.LC_ALL = savedLcAll;
       },
@@ -129,14 +142,41 @@ describe("couldBeOurToolServer — host without the forced UTF-8 locale", () => 
     const ps = stubPs(`node ${bundle} start`);
     try {
       expect(await launcher.killToolServer(bundle)).toBe(true);
-      expect(ps.reads().slice(0, 2)).toEqual([
-        process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
-        "pl_PL.UTF-8",
-      ]);
+      expect(ps.reads().slice(0, 2)).toEqual([FORCED_LOCALE, "pl_PL.UTF-8"]);
     } finally {
       ps.restore();
     }
     expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
+  });
+
+  it("retries a failed UTF-8 read in the caller's own locale", async () => {
+    const pid = await spawnRecorded(bundlePath);
+    const ps = stubPs(`node ${bundlePath} start`, "fail");
+    try {
+      expect(await launcher.killToolServer(bundlePath)).toBe(true);
+      expect(ps.reads().slice(0, 2)).toEqual([FORCED_LOCALE, "pl_PL.UTF-8"]);
+    } finally {
+      ps.restore();
+    }
+    expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
+  });
+
+  it("does not wait out a second read after one timed out", { timeout: 15_000 }, async () => {
+    const dir = join(stubDir, "zażółć-hang");
+    mkdirSync(dir, { recursive: true });
+    const bundle = join(dir, "tool-server.cjs");
+    copyFileSync(FIXTURE_BUNDLE, bundle);
+    await spawnRecorded(bundle);
+    const ps = stubPs(`node ${bundle} start`, "hang");
+    const started = Date.now();
+    try {
+      expect(await launcher.killToolServer(bundle)).toBe(false);
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(ps.reads()).toHaveLength(1);
+    } finally {
+      ps.restore();
+      await launcher.clearToolsServerState(bundle);
+    }
   });
 
   it("reads an ASCII path once, since no locale changes how ps renders it", async () => {

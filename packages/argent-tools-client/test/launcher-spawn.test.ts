@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -218,6 +218,39 @@ describe("killToolServer — full lifecycle", () => {
         }
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  );
+
+  // win32 has no `ps`, so the guard is deliberately disabled there.
+  it.skipIf(process.platform === "win32")(
+    "leaves alone a process whose bundle path follows a no-break space",
+    async () => {
+      // ps joins argv with plain spaces; a UTF-8 read must not let a no-break
+      // space inside another program's argv pass for that boundary.
+      const decoy = spawn(
+        process.execPath,
+        ["-e", "setInterval(() => {}, 1000)", `xx\u00a0${FAKE_BUNDLE}`, "start"],
+        { stdio: "ignore" }
+      );
+      spawnedPids.push(decoy.pid!);
+      await launcher.writeToolsServerState({
+        port: 1,
+        pid: decoy.pid!,
+        startedAt: new Date().toISOString(),
+        bundlePath: FAKE_BUNDLE,
+        host: "127.0.0.1",
+      });
+      const savedLcAll = process.env.LC_ALL;
+      try {
+        for (const lcAll of ["C", "en_US.UTF-8"]) {
+          process.env.LC_ALL = lcAll;
+          expect(await launcher.killToolServer(FAKE_BUNDLE)).toBe(false);
+        }
+      } finally {
+        if (savedLcAll === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = savedLcAll;
+      }
+      expect(launcher.isToolsServerProcessAlive(decoy.pid!)).toBe(true);
     }
   );
 
