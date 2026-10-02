@@ -445,9 +445,10 @@ const FLOWS_DIR = path.join(".argent", "flows");
 /**
  * Charset every POSIX shell passes through unquoted (shlex.quote's set).
  * Anything outside it — a space above all — would be word-split or interpreted
- * if pasted into a terminal.
+ * if pasted into a terminal. A leading "=" is excluded too: zsh (the macOS
+ * default shell) expands `=name` to the path of the command `name`.
  */
-const SHELL_SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const SHELL_SAFE_ARG = /^(?!=)[A-Za-z0-9_@%+=:,./-]+$/;
 
 /**
  * Quote an argument for splicing into a printed `argent flow run …` command —
