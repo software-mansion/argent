@@ -29,16 +29,28 @@ describe("package manifest", () => {
     expect(pkg.exports?.["./*"]).toBe("./*");
   });
 
-  it("resolves every extensionless deep require that 0.26.0 resolved", () => {
-    // Before the exports map, require() probed `.js`/`.json`; an exports map
-    // resolves only the keys it lists, so each of these needs its own.
+  it("resolves every extensionless deep path that 0.26.0 resolved", () => {
+    // Before the exports map, require() probed `.js`/`.json`, and bundlers and
+    // Bun also `.mjs`/`.cjs`/`.css`; an exports map resolves only the keys it
+    // lists, so each of these needs its own.
     const extensionless: Record<string, string> = {
-      "dist/cli": "dist/cli.js",
-      "dist/bundled-paths": "dist/bundled-paths.js",
-      "dist/fatal-handlers": "dist/fatal-handlers.js",
-      "dist/installer-help": "dist/installer-help.js",
       "assets/manifest": "assets/manifest.json",
+      "assets/trace-processor/engine": "assets/trace-processor/engine.mjs",
       "assets/trace-processor/engine_bundle.node": "assets/trace-processor/engine_bundle.node.js",
+      "bin/argent-simulator-server": "bin/argent-simulator-server.cjs",
+      "dist/bundled-paths": "dist/bundled-paths.js",
+      "dist/cli": "dist/cli.js",
+      "dist/cli-cmds": "dist/cli-cmds.mjs",
+      "dist/fatal-handlers": "dist/fatal-handlers.js",
+      "dist/flow-script-runner": "dist/flow-script-runner.mjs",
+      "dist/flow-script-watchdog-deadline": "dist/flow-script-watchdog-deadline.mjs",
+      "dist/flow-script-watchdog-lifeline": "dist/flow-script-watchdog-lifeline.mjs",
+      "dist/installer": "dist/installer.mjs",
+      "dist/installer-help": "dist/installer-help.js",
+      "dist/mcp-server": "dist/mcp-server.mjs",
+      "dist/preview-ui/theme": "dist/preview-ui/theme.css",
+      "dist/preview-window/main": "dist/preview-window/main.cjs",
+      "dist/tool-server": "dist/tool-server.cjs",
       "package": "package.json",
     };
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-exports-")));
