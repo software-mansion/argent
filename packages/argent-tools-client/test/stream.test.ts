@@ -211,6 +211,105 @@ describe("callTool progress streaming", () => {
   });
 });
 
+describe("callTool abort", () => {
+  it("rejects with an AbortError and sends no request when already aborted", async () => {
+    let invoked = false;
+    await startServer((_req, res) => {
+      invoked = true;
+      res.end("{}");
+    });
+
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}, { signal: AbortSignal.abort() }).catch(
+      (e: unknown) => e
+    );
+    expect((err as Error).name).toBe("AbortError");
+    expect(invoked).toBe(false);
+  });
+
+  it("rejects with the signal's reason while waiting for a buffered reply", async () => {
+    let received!: () => void;
+    const invoked = new Promise<void>((resolve) => (received = resolve));
+    let disconnected!: () => void;
+    const closed = new Promise<void>((resolve) => (disconnected = resolve));
+    // Never answer: the call waits until the client aborts.
+    await startServer((req) => {
+      req.on("close", disconnected);
+      received();
+    });
+
+    const controller = new AbortController();
+    const { callTool } = createToolsClient();
+    const pending = callTool("streamy", {}, { signal: controller.signal });
+    await invoked;
+    controller.abort(new Error("gave up"));
+
+    const err = await pending.catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(ToolInvocationError);
+    expect((err as Error).message).toBe("gave up");
+    // The tool-server sees the disconnect.
+    await closed;
+  });
+
+  it("rejects, not resolves empty, when aborted mid-body", async () => {
+    // Half a JSON body, then stall: the call waits in the body read.
+    await startServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"data":');
+    });
+
+    // Abort only once the POST's headers are in, so the abort hits the body read.
+    const controller = new AbortController();
+    const realFetch = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const res = await realFetch(input, init);
+      if (init?.method === "POST") setImmediate(() => controller.abort());
+      return res;
+    });
+    try {
+      const { callTool } = createToolsClient();
+      await expect(callTool("streamy", {}, { signal: controller.signal })).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("stops reading the stream and fires no more progress events", async () => {
+    let res!: ServerResponse;
+    await startServer((_req, r) => {
+      res = r;
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      // One chunk, two lines: the abort must land between them.
+      res.write(
+        `${JSON.stringify({ event: "progress", data: { index: 0 } })}\n` +
+          `${JSON.stringify({ event: "progress", data: { index: 1 } })}\n`
+      );
+    });
+
+    const controller = new AbortController();
+    const events: unknown[] = [];
+    const { callTool } = createToolsClient();
+    const err = await callTool(
+      "streamy",
+      {},
+      {
+        signal: controller.signal,
+        onProgress: (e) => {
+          events.push(e);
+          controller.abort();
+          res.write(`${JSON.stringify({ event: "progress", data: { index: 2 } })}\n`);
+          res.end(`${JSON.stringify({ event: "result", data: { ok: true } })}\n`);
+        },
+      }
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).name).toBe("AbortError");
+    expect(events).toEqual([{ index: 0 }]);
+  });
+});
+
 describe("errorBodyMessage", () => {
   it("takes the prose only when the body is the validation pair", () => {
     const issues = [{ code: "too_big", path: ["x"], message: "Too big" }];

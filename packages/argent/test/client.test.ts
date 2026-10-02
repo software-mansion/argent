@@ -79,6 +79,33 @@ describe("createArgentClient", () => {
     expect(error).toMatchObject({ message: "bad", code: "C", kind: "validation", issues: [1] });
   });
 
+  it("forwards the abort signal", async () => {
+    callTool.mockResolvedValue({ data: {} });
+    materializeArtifacts.mockResolvedValue({ result: {}, images: [] });
+    const { signal } = new AbortController();
+
+    await createArgentClient().callTool("describe", {}, { signal });
+
+    expect(callTool).toHaveBeenCalledWith("describe", {}, { signal });
+  });
+
+  it("passes an abort through unwrapped and skips materialization", async () => {
+    const controller = new AbortController();
+    const reason = new Error("gave up");
+    // The reply lands, then the caller aborts before the artifacts are read.
+    callTool.mockImplementation(async () => {
+      controller.abort(reason);
+      return { data: { image: "handle" } };
+    });
+
+    const error = await createArgentClient()
+      .callTool("screenshot", {}, { signal: controller.signal })
+      .catch((e: unknown) => e);
+
+    expect(error).toBe(reason);
+    expect(materializeArtifacts).not.toHaveBeenCalled();
+  });
+
   it("stops its own tool-server and reconnects on the next call", async () => {
     readToolsServerState.mockResolvedValue({ pid: 1 });
     const argent = createArgentClient();

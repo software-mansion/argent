@@ -25,11 +25,16 @@ export interface CallToolOptions {
    * an NDJSON stream. A server that answers with plain JSON fires no events.
    */
   onProgress?: (event: unknown) => void;
+  /**
+   * Stop waiting for the call. Every request rejects with the signal's reason,
+   * as `fetch` does, never with a ToolInvocationError.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ToolsClient {
-  fetchTools(): Promise<ToolMeta[]>;
-  fetchTool(name: string): Promise<ToolMeta | null>;
+  fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]>;
+  fetchTool(name: string, opts?: { signal?: AbortSignal }): Promise<ToolMeta | null>;
   callTool(name: string, args: unknown, opts?: CallToolOptions): Promise<ToolInvocationResult>;
   /** Returns the tool-server base URL + auth token, spawning if needed. */
   baseUrl(): Promise<ToolsServerHandle>;
@@ -72,7 +77,8 @@ function authHeaders(token: string | undefined): Record<string, string> {
 /** Read an NDJSON tool-invocation stream, mirroring the buffered path's contract. */
 async function consumeToolStream(
   body: ReadableStream<Uint8Array>,
-  onProgress: (event: unknown) => void
+  onProgress: (event: unknown) => void,
+  signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
   const handleLine = (line: string): void => {
@@ -105,6 +111,8 @@ async function consumeToolStream(
       buffered += decoder.decode(value, { stream: true });
       let newline: number;
       while ((newline = buffered.indexOf("\n")) !== -1) {
+        // fetch errors the body on abort, but not a chunk it already handed over.
+        signal?.throwIfAborted();
         const line = buffered.slice(0, newline);
         buffered = buffered.slice(newline + 1);
         handleLine(line);
@@ -121,6 +129,7 @@ async function consumeToolStream(
   if (!final) {
     throw new Error("tool stream ended without a result — connection lost mid-run?");
   }
+  signal?.throwIfAborted();
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
   return { data, note: final.note };
@@ -161,16 +170,22 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return cached;
   }
 
-  async function fetchTools(): Promise<ToolMeta[]> {
+  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
     const { url, token } = await baseUrl();
-    const res = await fetch(`${url}/tools`, { headers: authHeaders(token) });
+    const res = await fetch(`${url}/tools`, {
+      headers: authHeaders(token),
+      signal: opts?.signal,
+    });
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
   }
 
-  async function fetchTool(name: string): Promise<ToolMeta | null> {
-    const tools = await fetchTools();
+  async function fetchTool(
+    name: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<ToolMeta | null> {
+    const tools = await fetchTools(opts);
     return tools.find((t) => t.name === name) ?? null;
   }
 
@@ -184,7 +199,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (co-located) or from inlined content (remote).
     let finalArgs = args;
-    const meta = await fetchTool(name);
+    const meta = await fetchTool(name, { signal: opts?.signal });
     if (meta?.fileInputs?.length) {
       const { url: routedUrl } = await getResolvedToolsUrl();
       const isRemote = routedUrl !== null;
@@ -202,15 +217,20 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         ...authHeaders(token),
       },
       body: JSON.stringify(finalArgs ?? {}),
+      signal: opts?.signal,
     });
     // The server commits to streaming only after every pre-invoke gate passes —
     // validation errors stay plain JSON with their status codes — so Content-Type
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
     if (opts?.onProgress && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      return consumeToolStream(res.body, opts.onProgress);
+      return consumeToolStream(res.body, opts.onProgress, opts.signal);
     }
-    const json = (await res.json().catch(() => ({}))) as {
+    const json = (await res.json().catch(() => {
+      // An abort while reading the body is not an empty body.
+      opts?.signal?.throwIfAborted();
+      return {};
+    })) as {
       data?: unknown;
       error?: string;
       message?: string;
