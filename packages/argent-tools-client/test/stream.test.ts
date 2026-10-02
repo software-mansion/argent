@@ -237,8 +237,9 @@ describe("callTool abort", () => {
     let disconnected!: () => void;
     const closed = new Promise<void>((resolve) => (disconnected = resolve));
     // Never answer: the call waits until the client aborts.
-    await startServer((req) => {
-      req.on("close", disconnected);
+    // The response never ends, so its close means the client dropped the connection.
+    await startServer((_req, res) => {
+      res.on("close", disconnected);
       received();
     });
 

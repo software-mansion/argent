@@ -126,10 +126,11 @@ async function consumeToolStream(
     throw err;
   }
 
+  // Before the missing-result check: a trailing progress callback may abort.
+  signal?.throwIfAborted();
   if (!final) {
     throw new Error("tool stream ended without a result — connection lost mid-run?");
   }
-  signal?.throwIfAborted();
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
   return { data, note: final.note };
