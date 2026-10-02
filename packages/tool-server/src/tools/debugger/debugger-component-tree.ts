@@ -51,18 +51,27 @@ function rectsOverlap(
  * (portrait-native) axes, and a landscape UI — a rotated device, or an unfolded
  * foldable — is turned on them. `unknown` is an iOS simulator whose orientation
  * could not be read; `ambiguous` a session that two booted simulators of one
- * name could run, with no `udid` to tell them apart; absent is a device whose
+ * name could run, with no `udid` to tell them apart; `mismatched` a `udid`
+ * that is not the app's simulator, in such a session; absent is a device whose
  * touches use the window's axes.
  */
 type TapAxes = UiOrientation | "unknown" | "ambiguous" | "mismatched";
 
+/** What {@link readTapAxes} found, as {@link buildTextTree} takes it. */
+interface TapAxesRead {
+  uiOrientation?: TapAxes;
+  /** The app's simulator, read in place of a `udid` that is another one. */
+  readInsteadOfUdid?: string;
+  /** Another booted simulator has the app's device name, so the `udid` could not be checked. */
+  udidUnchecked?: boolean;
+}
+
 export function buildTextTree(
   data: RawResult,
-  opts: {
+  opts: TapAxesRead & {
     onScreenOnly: boolean;
     maxNodes?: number;
     includeSkipped?: boolean;
-    uiOrientation?: TapAxes;
   }
 ): string {
   const { screenW, screenH, components } = data;
@@ -375,11 +384,22 @@ export function buildTextTree(
       );
     } else if (opts.uiOrientation === "ambiguous" && screenW > screenH) {
       lines.push(
-        "Note: the UI is landscape, and two booted simulators have this device's name, so its orientation could not be read. The tap points are on the UI's axes, so a tap can miss. Call again with the simulator's udid, or use describe for tap points."
+        "Note: the UI is landscape, and two booted simulators have this device's name, so its orientation could not be read. The tap points are on the UI's axes, so a tap can miss. Use describe for tap points, or call again with the udid of the simulator that shows this app."
       );
     } else if (opts.uiOrientation === "unknown" && screenW > screenH) {
       lines.push(
         "Note: the UI is landscape, and its orientation could not be read. The tap points are on the UI's axes, so a tap can miss. Use describe for tap points."
+      );
+    }
+    if (opts.readInsteadOfUdid) {
+      lines.push(
+        `Note: the udid is not the UDID of the simulator that shows this app. The tool used ${opts.readInsteadOfUdid}, the UDID of that simulator.`
+      );
+    }
+    // A wrong udid moves no point while the UI and the simulator read are both portrait.
+    if (opts.udidUnchecked && (screenW > screenH || (turn !== undefined && turn !== "portrait"))) {
+      lines.push(
+        "Note: two booted simulators have this device's name, so the tool could not check that the udid is the simulator that shows this app. If it is another simulator, a tap can miss. Use describe for tap points."
       );
     }
     lines.push("");
@@ -549,38 +569,83 @@ interface DebuggedApp {
 
 const AMBIGUOUS_SIMULATOR = "ambiguous-simulator";
 const MISMATCHED_UDID = "mismatched-udid";
+const UNLISTED_UDID = "unlisted-udid";
+
+/** The simulator to read, and what the result owes the caller about the `udid`. */
+type SimulatorPick = { device: DeviceInfo } & Omit<TapAxesRead, "uiOrientation">;
 
 /**
- * The iOS simulator the session runs on; undefined for any other device. The
- * caller's `udid` decides when given.
+ * The iOS simulator the session runs on; undefined for any other device. A
+ * `udid` is read only when it can be that simulator: the one `device_id`
+ * names, or, for a session keyed by a logicalDeviceId, a booted simulator with
+ * the app's device name. Any other `udid` gives way to the simulator the
+ * session finds by itself, and is mismatched when the session cannot name one.
+ * A `udid` its listing does not have could not be checked.
  */
 async function iosSimulatorOf(
   app: DebuggedApp
-): Promise<DeviceInfo | typeof AMBIGUOUS_SIMULATOR | typeof MISMATCHED_UDID | undefined> {
-  if (!app.udid) return iosSimulatorOfSession(app);
-  const named = resolveDevice(app.udid);
-  if (isIosSimulator(named)) {
-    const own = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
-    if (isIosSimulator(own)) return own.id === named.id ? named : MISMATCHED_UDID;
-    if (isLogicalKeyed(app) && (await isBootedAs(named, app.deviceName))) return named;
+): Promise<
+  | SimulatorPick
+  | typeof AMBIGUOUS_SIMULATOR
+  | typeof MISMATCHED_UDID
+  | typeof UNLISTED_UDID
+  | undefined
+> {
+  if (!app.udid) {
+    const session = await iosSimulatorOfSession(app);
+    return session === AMBIGUOUS_SIMULATOR || !session ? session : { device: session };
   }
-  return (await iosSimulatorOfSession(app)) === undefined ? undefined : MISMATCHED_UDID;
+  const named = resolveDevice(app.udid);
+  const own = resolveDevice(canonicalDeviceId(app.deviceId) ?? app.deviceId);
+  const [listed, session] = await Promise.all([
+    isIosSimulator(named) && !isIosSimulator(own) && isLogicalKeyed(app)
+      ? listedAs(named, app.deviceName)
+      : undefined,
+    iosSimulatorOfSession(app),
+  ]);
+  if (listed === "booted" || listed === "twin") {
+    const sole =
+      session === undefined || (session !== AMBIGUOUS_SIMULATOR && session.id === named.id);
+    return listed === "booted" && sole ? { device: named } : { device: named, udidUnchecked: true };
+  }
+  if (session === AMBIGUOUS_SIMULATOR) return MISMATCHED_UDID;
+  if (session) {
+    return session.id === named.id
+      ? { device: session }
+      : { device: session, readInsteadOfUdid: session.id };
+  }
+  return listed === "unlisted" ? UNLISTED_UDID : undefined;
 }
 
-async function isBootedAs(device: DeviceInfo, name: string): Promise<boolean> {
-  const sim =
-    device.platform === "ios-remote"
-      ? Object.values(
-          (
-            await simctlListDevices({ timeoutMs: ORIENTATION_READ_TIMEOUT_MS }).catch(() => ({
-              devices: {},
-            }))
-          ).devices
-        )
-          .flat()
-          .find((d) => d.udid === stripRemotePrefix(device.id))
-      : await findIosSimulator(device.id);
-  return sim?.state === "Booted" && sim.name === name;
+/**
+ * How the `udid`'s own listing reports it: simctl's for a local simulator,
+ * sim-remote's for a `remote:` one. `twin` is booted with the app's device name
+ * beside another booted `remote:` simulator of that name (the session's own
+ * lookup counts the local ones); `unlisted` is not in the listing, as when the
+ * listing could not be read.
+ */
+async function listedAs(
+  device: DeviceInfo,
+  name: string
+): Promise<"booted" | "twin" | "other" | "unlisted"> {
+  if (device.platform !== "ios-remote") {
+    const sim = await findIosSimulator(device.id);
+    if (!sim) return "unlisted";
+    return sim.state === "Booted" && sim.name === name ? "booted" : "other";
+  }
+  const listing = Object.values(
+    (
+      await simctlListDevices({ timeoutMs: ORIENTATION_READ_TIMEOUT_MS }).catch(() => ({
+        devices: {},
+      }))
+    ).devices
+  ).flat();
+  const sim = listing.find((d) => d.udid === stripRemotePrefix(device.id));
+  if (!sim) return "unlisted";
+  if (sim.state !== "Booted" || sim.name !== name) return "other";
+  return listing.some((d) => d !== sim && d.state === "Booted" && d.name === name)
+    ? "twin"
+    : "booted";
 }
 
 function isLogicalKeyed(app: DebuggedApp): boolean {
@@ -615,26 +680,31 @@ async function iosSimulatorOfSession(
 export async function readTapAxes(
   registry: Pick<Registry, "resolveService">,
   app: DebuggedApp
-): Promise<TapAxes | undefined> {
-  const read = (async (): Promise<TapAxes | undefined> => {
-    const device = await iosSimulatorOf(app);
-    if (device === undefined) return undefined;
-    if (device === AMBIGUOUS_SIMULATOR) return "ambiguous";
-    if (device === MISMATCHED_UDID) return "mismatched";
+): Promise<TapAxesRead> {
+  const read = (async (): Promise<TapAxesRead> => {
+    const pick = await iosSimulatorOf(app);
+    if (pick === undefined) return {};
+    if (pick === AMBIGUOUS_SIMULATOR) return { uiOrientation: "ambiguous" };
+    if (pick === MISMATCHED_UDID) return { uiOrientation: "mismatched" };
+    if (pick === UNLISTED_UDID) return { uiOrientation: "unknown" };
+    const { device, ...udid } = pick;
     const ref = nativeDevtoolsRef(device);
     const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
     const bundleId = await debuggedBundleId(api, app.appName);
-    if (!bundleId) return "unknown";
+    if (!bundleId) return { uiOrientation: "unknown", ...udid };
     const raw = (await api.queryViewHierarchy(bundleId, "ViewHierarchy.getFullHierarchy", {
       fields: ["className"],
       maxDepth: 1,
     })) as { screen?: { interfaceOrientation?: unknown } } | null;
-    return asUiOrientation(raw?.screen?.interfaceOrientation) ?? "unknown";
-  })().catch((): TapAxes => "unknown");
+    return {
+      uiOrientation: asUiOrientation(raw?.screen?.interfaceOrientation) ?? "unknown",
+      ...udid,
+    };
+  })().catch((): TapAxesRead => ({ uiOrientation: "unknown" }));
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<TapAxes>((resolve) => {
-    timer = setTimeout(() => resolve("unknown"), ORIENTATION_READ_TIMEOUT_MS);
+  const timeout = new Promise<TapAxesRead>((resolve) => {
+    timer = setTimeout(() => resolve({ uiOrientation: "unknown" }), ORIENTATION_READ_TIMEOUT_MS);
   });
   try {
     return await Promise.race([read, timeout]);
@@ -654,7 +724,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS simulator UDID from list-devices. Pass it when device_id is a logicalDeviceId (two or more devices share one Metro), so that the tap coordinates of a landscape UI are on the screen's axes. Give the UDID of the simulator that shows the app. The tool uses the UDID only for a booted simulator that has the device name of the app. For an app on an iOS simulator, the result shows a note when the tool does not use the UDID."
+      "iOS simulator UDID from list-devices. Pass it when device_id is a logicalDeviceId (two or more devices share one Metro), so that the tap coordinates of a landscape UI are on the screen's axes. Give the UDID of the simulator that shows the app."
     ),
   onScreenOnly: z
     .boolean()
@@ -756,7 +826,7 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
         onScreenOnly: params.onScreenOnly,
         maxNodes: params.maxNodes,
         includeSkipped: params.includeSkipped,
-        uiOrientation: await tapAxes,
+        ...(await tapAxes),
       });
 
       const deviceLine = [

@@ -1589,7 +1589,22 @@ describe("swipe: pre-dispatch settle", () => {
     expect(result.steps[1].warning).toContain("No read reported the UI's orientation");
   }, 15000);
 
-  it.each(["emulator-5554", "chromium-cdp-9222"])(
+  it("says no read reported the UI's orientation on a remote iOS simulator", async () => {
+    currentTree = () => {
+      throw new Error("tree source down");
+    };
+    await writeFlow("blind-remote", {
+      executionPrerequisite: "",
+      steps: [{ kind: "swipe", direction: "left" }],
+    });
+
+    const result = await run("blind-remote", `remote:${DEVICE}`);
+
+    expect(result.steps[0].status).toBe("pass");
+    expect(result.steps[0].warning).toContain("No read reported the UI's orientation");
+  }, 15000);
+
+  it.each(["emulator-5554", "chromium-cdp-9222", "00008110-000978540290401E"])(
     "says nothing about the UI's orientation on %s, whose touches are on the UI's axes",
     async (device) => {
       currentTree = () => {

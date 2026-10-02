@@ -104,11 +104,13 @@ describe("buildTextTree — tap points on the axes the gesture tools take", () =
     expect(text).toContain("Use describe for tap points.");
   });
 
-  it("asks for the udid when two same-named simulators leave a landscape UI unread", () => {
+  it("points to describe when two same-named simulators leave a landscape UI unread", () => {
     const text = buildTextTree(tree(LANDSCAPE, 0.8, 0.25), { ...base, uiOrientation: "ambiguous" });
     expect(tapOf(text)).toBe("0.80,0.25");
     expect(text).toContain("two booted simulators have this device's name");
-    expect(text).toContain("Call again with the simulator's udid");
+    expect(text).toContain(
+      "Use describe for tap points, or call again with the udid of the simulator that shows this app."
+    );
   });
 
   it("does not warn about a portrait UI that two same-named simulators could run", () => {
@@ -132,6 +134,45 @@ describe("buildTextTree — tap points on the axes the gesture tools take", () =
       "Note: The udid is not the UDID of the simulator that shows this app. Thus, the tool did not use the udid."
     );
     expect(text).not.toContain("The UI is");
+  });
+
+  it.each([
+    ["landscape", LANDSCAPE],
+    ["portrait", PORTRAIT],
+  ])("names the simulator read in place of the udid, on a %s UI", (_shape, screen) => {
+    const text = buildTextTree(tree(screen, 0.8, 0.25), {
+      ...base,
+      uiOrientation: screen === LANDSCAPE ? "landscapeRight" : "portrait",
+      readInsteadOfUdid: SIM_UDID,
+    });
+    expect(tapOf(text)).toBe(screen === LANDSCAPE ? "0.75,0.80" : "0.80,0.25");
+    expect(text).toContain(
+      `Note: the udid is not the UDID of the simulator that shows this app. The tool used ${SIM_UDID}, the UDID of that simulator.`
+    );
+  });
+
+  it.each([
+    ["a landscape UI", LANDSCAPE, "landscapeRight"],
+    ["a portrait UI on a landscape simulator", PORTRAIT, "landscapeRight"],
+    ["a landscape UI on a portrait simulator", LANDSCAPE, "portrait"],
+  ] as const)("says a udid of a shared name could not be checked, on %s", (_case, screen, turn) => {
+    const text = buildTextTree(tree(screen, 0.8, 0.25), {
+      ...base,
+      uiOrientation: turn,
+      udidUnchecked: true,
+    });
+    expect(text).toContain(
+      "Note: two booted simulators have this device's name, so the tool could not check that the udid is the simulator that shows this app."
+    );
+  });
+
+  it("does not warn about an unchecked udid when the UI and the simulator are portrait", () => {
+    const text = buildTextTree(tree(PORTRAIT, 0.8, 0.25), {
+      ...base,
+      uiOrientation: "portrait",
+      udidUnchecked: true,
+    });
+    expect(text).not.toContain("Note:");
   });
 });
 
@@ -182,9 +223,9 @@ describe("readTapAxes", () => {
 
   it("reads nothing for an Android device, whose touches use the window's axes", async () => {
     const { registry } = fakeNative({ connected: [], query: async () => ({}) });
-    expect(
-      await readTapAxes(registry as never, app("emulator-5554", "com.example.app"))
-    ).toBeUndefined();
+    expect(await readTapAxes(registry as never, app("emulator-5554", "com.example.app"))).toEqual(
+      {}
+    );
     expect(registry.resolveService).not.toHaveBeenCalled();
   });
 
@@ -195,7 +236,7 @@ describe("readTapAxes", () => {
     });
     expect(
       await readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone Duo)"))
-    ).toBe("landscapeLeft");
+    ).toEqual({ uiOrientation: "landscapeLeft" });
     expect(api.queryViewHierarchy).toHaveBeenCalledWith(
       "com.example.app",
       "ViewHierarchy.getFullHierarchy",
@@ -209,9 +250,9 @@ describe("readTapAxes", () => {
       active: "com.example.b",
       query: async () => ({ screen: { interfaceOrientation: "portrait" } }),
     });
-    expect(await readTapAxes(registry as never, app(SIM_UDID, "My App (iPhone 16)"))).toBe(
-      "portrait"
-    );
+    expect(await readTapAxes(registry as never, app(SIM_UDID, "My App (iPhone 16)"))).toEqual({
+      uiOrientation: "portrait",
+    });
     expect(api.queryViewHierarchy.mock.calls[0]?.[0]).toBe("com.example.b");
   });
 
@@ -220,9 +261,9 @@ describe("readTapAxes", () => {
       connected: ["com.example.app"],
       query: async () => ({ windows: [] }),
     });
-    expect(await readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone 16)"))).toBe(
-      "unknown"
-    );
+    expect(
+      await readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone 16)"))
+    ).toEqual({ uiOrientation: "unknown" });
   });
 
   it("is unknown when the read fails", async () => {
@@ -232,16 +273,16 @@ describe("readTapAxes", () => {
         throw new Error("Native devtools not connected for bundleId: com.example.app");
       },
     });
-    expect(await readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone 16)"))).toBe(
-      "unknown"
-    );
+    expect(
+      await readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone 16)"))
+    ).toEqual({ uiOrientation: "unknown" });
   });
 
   it("is unknown when no app can be targeted", async () => {
     const { registry } = fakeNative({ connected: [], query: async () => ({}) });
-    expect(await readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone 16)"))).toBe(
-      "unknown"
-    );
+    expect(
+      await readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone 16)"))
+    ).toEqual({ uiOrientation: "unknown" });
   });
 
   it("is unknown when the read does not answer in time", async () => {
@@ -252,7 +293,7 @@ describe("readTapAxes", () => {
     });
     const axes = readTapAxes(registry as never, app(SIM_UDID, "com.example.app (iPhone 16)"));
     await vi.advanceTimersByTimeAsync(3_000);
-    expect(await axes).toBe("unknown");
+    expect(await axes).toEqual({ uiOrientation: "unknown" });
   });
   describe("a session keyed by its logicalDeviceId (two devices share one Metro)", () => {
     const landscape = async () => ({ screen: { interfaceOrientation: "landscapeRight" } });
@@ -272,7 +313,7 @@ describe("readTapAxes", () => {
         registry as never,
         app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID)
       );
-      expect(axes).toBe("landscapeRight");
+      expect(axes).toEqual({ uiOrientation: "landscapeRight" });
       expect(registry.resolveService.mock.calls[0]?.[0]).toContain(
         "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
       );
@@ -294,11 +335,11 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID)
         )
-      ).toBe("ambiguous");
+      ).toEqual({ uiOrientation: "ambiguous" });
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
-    it("reads the simulator the udid names among two of the app's device name", async () => {
+    it("reads the udid among two of the app's device name, and says it could not be checked", async () => {
       simulators.list = [
         { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
         {
@@ -318,7 +359,7 @@ describe("readTapAxes", () => {
           "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
         )
       );
-      expect(axes).toBe("landscapeRight");
+      expect(axes).toEqual({ uiOrientation: "landscapeRight", udidUnchecked: true });
       expect(registry.resolveService).toHaveBeenCalledTimes(1);
       expect(registry.resolveService.mock.calls[0]?.[0]).toContain(
         "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
@@ -339,34 +380,42 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, SIM_UDID)
         )
-      ).toBe("unknown");
+      ).toEqual({ uiOrientation: "unknown" });
       expect(api.queryViewHierarchy).not.toHaveBeenCalled();
     });
 
     it.each([
       ["another device's name", "iPhone Duo", "Booted"],
       ["the app's device name, but is shut down", "iPhone 18 Pro", "Shutdown"],
-    ])("does not read a udid whose simulator has %s", async (_case, name, state) => {
-      simulators.list = [
-        { udid: SIM_UDID, name, state, runtimeKind: "mobile" },
-        {
-          udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
-          name: "iPhone 18 Pro",
-          state: "Booted",
-          runtimeKind: "mobile",
-        },
-      ];
-      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
-      expect(
-        await readTapAxes(
-          registry as never,
-          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, SIM_UDID)
-        )
-      ).toBe("mismatched");
-      expect(registry.resolveService).not.toHaveBeenCalled();
-    });
+    ])(
+      "reads the app's simulator in place of a udid whose simulator has %s",
+      async (_case, name, state) => {
+        simulators.list = [
+          { udid: SIM_UDID, name, state, runtimeKind: "mobile" },
+          {
+            udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+            name: "iPhone 18 Pro",
+            state: "Booted",
+            runtimeKind: "mobile",
+          },
+        ];
+        const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+        expect(
+          await readTapAxes(
+            registry as never,
+            app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, SIM_UDID)
+          )
+        ).toEqual({
+          uiOrientation: "landscapeRight",
+          readInsteadOfUdid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+        });
+        expect(registry.resolveService.mock.calls[0]?.[0]).toContain(
+          "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+        );
+      }
+    );
 
-    it("does not read a udid that no listing knows", async () => {
+    it("reads the app's simulator in place of a udid that no listing knows", async () => {
       simulators.list = [
         { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
       ];
@@ -381,7 +430,48 @@ describe("readTapAxes", () => {
             "00000000-0000-0000-0000-000000000000"
           )
         )
-      ).toBe("mismatched");
+      ).toEqual({ uiOrientation: "landscapeRight", readInsteadOfUdid: SIM_UDID });
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
+    });
+
+    it("is unknown when the simulator listing does not have the udid's simulator", async () => {
+      // An empty listing is what a failed `simctl list` leaves.
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, SIM_UDID)
+        )
+      ).toEqual({ uiOrientation: "unknown" });
+      expect(registry.resolveService).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["another simulator", "8BDBFD47-E557-41BA-926B-2DD39A17A53E"],
+      ["an Android serial", "emulator-5554"],
+    ])("does not read %s when two simulators have the app's device name", async (_case, udid) => {
+      simulators.list = [
+        { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
+        {
+          udid: "A0D5E4C2-9E3A-4E7B-8F0C-2B1F6D7E9A11",
+          name: "iPhone 18 Pro",
+          state: "Booted",
+          runtimeKind: "mobile",
+        },
+        {
+          udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+          name: "iPhone Duo",
+          state: "Booted",
+          runtimeKind: "mobile",
+        },
+      ];
+      const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+      expect(
+        await readTapAxes(
+          registry as never,
+          app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, udid)
+        )
+      ).toEqual({ uiOrientation: "mismatched" });
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
@@ -393,12 +483,46 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, `remote:${SIM_UDID}`)
         )
-      ).toBe("landscapeRight");
+      ).toEqual({ uiOrientation: "landscapeRight" });
       expect(registry.resolveService.mock.calls[0]?.[0]).toContain(`remote:${SIM_UDID}`);
       expect(remoteListing).toHaveBeenCalledWith({ timeoutMs: 3_000 });
     });
 
-    it("does not read a remote simulator of another name", async () => {
+    it.each([
+      [
+        "another remote simulator",
+        [],
+        [{ udid: "A0D5E4C2-9E3A-4E7B-8F0C-2B1F6D7E9A11", name: "iPhone 18 Pro", state: "Booted" }],
+      ],
+      [
+        "a local simulator",
+        [
+          {
+            udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+            name: "iPhone 18 Pro",
+            state: "Booted",
+            runtimeKind: "mobile",
+          },
+        ],
+        [],
+      ],
+    ])(
+      "says a remote udid could not be checked when %s has the app's name",
+      async (_case, local, remote) => {
+        simulators.list = local;
+        simulators.remote = [{ udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted" }, ...remote];
+        const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
+        expect(
+          await readTapAxes(
+            registry as never,
+            app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, `remote:${SIM_UDID}`)
+          )
+        ).toEqual({ uiOrientation: "landscapeRight", udidUnchecked: true });
+        expect(registry.resolveService.mock.calls[0]?.[0]).toContain(`remote:${SIM_UDID}`);
+      }
+    );
+
+    it("reads the app's simulator in place of a remote simulator of another name", async () => {
       simulators.list = [
         {
           udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
@@ -414,11 +538,16 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, `remote:${SIM_UDID}`)
         )
-      ).toBe("mismatched");
-      expect(registry.resolveService).not.toHaveBeenCalled();
+      ).toEqual({
+        uiOrientation: "landscapeRight",
+        readInsteadOfUdid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E",
+      });
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(
+        "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
+      );
     });
 
-    it("ignores a remote udid for an app on Android when sim-remote cannot list", async () => {
+    it("is unknown when sim-remote cannot list the remote udid", async () => {
       remoteListing.mockRejectedValueOnce(new Error("sim-remote: command not found"));
       const { registry } = fakeNative({ connected: ["com.example.app"], query: landscape });
       expect(
@@ -426,7 +555,7 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (sdk_gphone64_arm64)", LOGICAL_ID, `remote:${SIM_UDID}`)
         )
-      ).toBeUndefined();
+      ).toEqual({ uiOrientation: "unknown" });
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
@@ -440,7 +569,7 @@ describe("readTapAxes", () => {
           registry as never,
           app("emulator-5554", "com.example.app (Pixel 9)", undefined, SIM_UDID)
         )
-      ).toBeUndefined();
+      ).toEqual({});
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
@@ -459,12 +588,12 @@ describe("readTapAxes", () => {
             registry as never,
             app(deviceId, "com.example.app (sdk_gphone64_arm64)", logicalDeviceId, SIM_UDID)
           )
-        ).toBeUndefined();
+        ).toEqual({});
         expect(registry.resolveService).not.toHaveBeenCalled();
       }
     );
 
-    it("does not take a udid that is no simulator for an app that runs on one", async () => {
+    it("reads the app's simulator in place of a udid that is no simulator", async () => {
       simulators.list = [
         { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
       ];
@@ -474,8 +603,8 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, "emulator-5554")
         )
-      ).toBe("mismatched");
-      expect(registry.resolveService).not.toHaveBeenCalled();
+      ).toEqual({ uiOrientation: "landscapeRight", readInsteadOfUdid: SIM_UDID });
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
     });
 
     it("reads nothing when the udid names an Android device", async () => {
@@ -485,7 +614,7 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (Pixel 9)", LOGICAL_ID, "emulator-5554")
         )
-      ).toBeUndefined();
+      ).toEqual({});
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
 
@@ -499,7 +628,7 @@ describe("readTapAxes", () => {
           registry as never,
           app(LOGICAL_ID, "com.example.app (sdk_gphone64_arm64)", LOGICAL_ID)
         )
-      ).toBeUndefined();
+      ).toEqual({});
       expect(registry.resolveService).not.toHaveBeenCalled();
     });
   });
@@ -507,7 +636,7 @@ describe("readTapAxes", () => {
   describe("a session connected with a simulator's UDID", () => {
     const landscape = async () => ({ screen: { interfaceOrientation: "landscapeRight" } });
 
-    it("does not read another simulator of the same name when device_id is a simulator's", async () => {
+    it("reads the simulator device_id names in place of another udid", async () => {
       simulators.list = [
         { udid: SIM_UDID, name: "iPhone 18 Pro", state: "Booted", runtimeKind: "mobile" },
         {
@@ -528,8 +657,8 @@ describe("readTapAxes", () => {
             "8BDBFD47-E557-41BA-926B-2DD39A17A53E"
           )
         )
-      ).toBe("mismatched");
-      expect(registry.resolveService).not.toHaveBeenCalled();
+      ).toEqual({ uiOrientation: "landscapeRight", readInsteadOfUdid: SIM_UDID });
+      expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
     });
 
     it("takes a forwarded logicalDeviceId for the simulator UDID it was connected with", async () => {
@@ -550,10 +679,12 @@ describe("readTapAxes", () => {
             registry as never,
             app(LOGICAL_ID, "com.example.app (iPhone 18 Pro)", LOGICAL_ID, udid)
           );
-        expect(await session("8BDBFD47-E557-41BA-926B-2DD39A17A53E")).toBe("mismatched");
-        expect(registry.resolveService).not.toHaveBeenCalled();
-        expect(await session(SIM_UDID)).toBe("landscapeRight");
-        expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
+        expect(await session("8BDBFD47-E557-41BA-926B-2DD39A17A53E")).toEqual({
+          uiOrientation: "landscapeRight",
+          readInsteadOfUdid: SIM_UDID,
+        });
+        expect(await session(SIM_UDID)).toEqual({ uiOrientation: "landscapeRight" });
+        for (const [urn] of registry.resolveService.mock.calls) expect(urn).toContain(SIM_UDID);
       } finally {
         resetDeviceAliases();
       }
@@ -566,7 +697,7 @@ describe("readTapAxes", () => {
           registry as never,
           app(SIM_UDID, "com.example.app (iPhone 18 Pro)", undefined, SIM_UDID)
         )
-      ).toBe("landscapeRight");
+      ).toEqual({ uiOrientation: "landscapeRight" });
       expect(registry.resolveService.mock.calls[0]?.[0]).toContain(SIM_UDID);
     });
   });
