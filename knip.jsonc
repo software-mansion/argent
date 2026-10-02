@@ -76,6 +76,8 @@
     // with no matching declaration is a real bug, not a bundler artifact.
     "packages/argent": {
       "entry": ["scripts/argent-simulator-server.cjs"],
+      // Written by the build (tool-server's src/sdk-tool-args.ts); CI runs knip unbuilt.
+      "ignoreUnresolved": ["./tool-args.generated.js"],
       "ignoreDependencies": [
         // dependencies
         "@fails-components/webtransport",
@@ -136,6 +138,8 @@
       // the runner in front of the script as an `--import` preload by path, and
       // the runner starts each watchdog with `new Worker(url)`.
       "entry": [
+        // Run by the build as `node dist/sdk-tool-args.js`.
+        "src/sdk-tool-args.ts",
         "src/tools/flows/script/flow-script-runner.mjs",
         "src/tools/flows/script/flow-script-watchdog-lifeline.mjs",
         "src/tools/flows/script/flow-script-watchdog-deadline.mjs",
