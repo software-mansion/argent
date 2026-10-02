@@ -89,6 +89,21 @@ describe("spawnToolsServer", () => {
       delete process.env.FAKE_MODE;
     }
   });
+
+  it("rejects with a clear message instead of crashing when `node` is not on PATH", async () => {
+    // Pose as Bun so the launcher falls back to `node` on PATH, then empty PATH.
+    Object.defineProperty(process.versions, "bun", { value: "1.0.0", configurable: true });
+    const savedPath = process.env.PATH;
+    process.env.PATH = TEST_HOME;
+    try {
+      await expect(trackedSpawn()).rejects.toThrow(
+        "Could not start the argent tool-server: `node` was not found on PATH."
+      );
+    } finally {
+      process.env.PATH = savedPath;
+      delete (process.versions as Record<string, string>).bun;
+    }
+  });
 });
 
 describe("killToolServer — full lifecycle", () => {

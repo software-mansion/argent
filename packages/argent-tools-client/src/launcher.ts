@@ -306,7 +306,11 @@ export function spawnToolsServer(
       logFd = fs.openSync("/dev/null", "w");
     }
 
-    const child = spawn("node", [paths.bundlePath, "start"], {
+    // Reuse the running Node binary; Bun, Deno and Electron (whose execPath
+    // launches the app itself) fall back to `node` on PATH.
+    const { bun, deno, electron } = process.versions;
+    const nodeBin = bun || deno || electron ? "node" : process.execPath;
+    const child = spawn(nodeBin, [paths.bundlePath, "start"], {
       detached: true,
       stdio: ["ignore", "pipe", logFd],
       env: buildToolsServerEnv(paths, port, process.env, options),
@@ -316,7 +320,17 @@ export function spawnToolsServer(
 
     const pid = child.pid;
     if (!pid) {
-      reject(new Error("Failed to get PID of spawned tools server"));
+      // A failed spawn emits `error` (ENOENT/EACCES) on the next tick; with no
+      // listener it is an unhandled event that crashes the host process.
+      child.once("error", (err: NodeJS.ErrnoException) =>
+        reject(
+          new Error(
+            err.code === "ENOENT" && nodeBin === "node"
+              ? "Could not start the argent tool-server: `node` was not found on PATH. Install Node.js 20+ or add it to PATH."
+              : `Could not start the argent tool-server: ${err.message}`
+          )
+        )
+      );
       return;
     }
 
