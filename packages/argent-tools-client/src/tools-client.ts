@@ -12,6 +12,8 @@ export interface ToolMeta {
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
+  /** Listed for programmatic callers only; the MCP adapter skips it. */
+  hideFromMcp?: boolean;
 }
 
 export interface ToolInvocationResult {
