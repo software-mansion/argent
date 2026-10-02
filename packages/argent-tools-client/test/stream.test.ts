@@ -265,19 +265,15 @@ describe("callTool abort", () => {
     // Abort only once the POST's headers are in, so the abort hits the body read.
     const controller = new AbortController();
     const realFetch = globalThis.fetch;
-    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const res = await realFetch(input, init);
       if (init?.method === "POST") setImmediate(() => controller.abort());
       return res;
     });
-    try {
-      const { callTool } = createToolsClient();
-      await expect(callTool("streamy", {}, { signal: controller.signal })).rejects.toMatchObject({
-        name: "AbortError",
-      });
-    } finally {
-      spy.mockRestore();
-    }
+    const { callTool } = createToolsClient();
+    await expect(callTool("streamy", {}, { signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
   });
 
   it("stops reading the stream and fires no more progress events", async () => {
