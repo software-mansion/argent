@@ -61,6 +61,7 @@
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",
+    "@argent/configuration-core": "file:../configuration-core",
     "@argent/installer": "file:../argent-installer",
     "@argent/mcp": "file:../argent-mcp",
     "@argent/tools-client": "file:../argent-tools-client",

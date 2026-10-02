@@ -2,28 +2,48 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callTool = vi.fn();
 const materializeArtifacts = vi.fn();
+const createToolsClient = vi.fn();
+const killToolServer = vi.fn();
+const readToolsServerState = vi.fn();
 
 vi.mock("@argent/tools-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/tools-client")>();
   return {
     ...actual,
-    createToolsClient: () => ({
-      fetchTools: async () => [
-        { name: "describe", description: "d", inputSchema: {}, fileInputs: [], alwaysLoad: true },
-      ],
-      callTool,
-      baseUrl: async () => ({ url: "http://127.0.0.1:1", token: "t" }),
-    }),
+    createToolsClient,
     materializeArtifacts,
+    killToolServer,
+    readToolsServerState,
+  };
+});
+
+vi.mock("@argent/configuration-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/configuration-core")>();
+  return {
+    ...actual,
+    FLAG_REGISTRY: [
+      { name: "on-flag", description: "a" },
+      { name: "off-flag", description: "b" },
+    ],
+    isFeatureEnabled: (name: string) => name === "on-flag",
   };
 });
 
 const { ToolInvocationError } = await import("@argent/tools-client");
-const { createArgentClient, ArgentToolError } = await import("../src/client.js");
+const { createArgentClient, ArgentToolError, listFlags } = await import("../src/client.js");
 
 beforeEach(() => {
   callTool.mockReset();
   materializeArtifacts.mockReset();
+  killToolServer.mockReset();
+  readToolsServerState.mockReset();
+  createToolsClient.mockReset().mockImplementation(() => ({
+    fetchTools: async () => [
+      { name: "describe", description: "d", inputSchema: {}, fileInputs: [], alwaysLoad: true },
+    ],
+    callTool,
+    baseUrl: async () => ({ url: "http://127.0.0.1:1", token: "t" }),
+  }));
 });
 
 describe("createArgentClient", () => {
@@ -57,5 +77,27 @@ describe("createArgentClient", () => {
 
     expect(error).toBeInstanceOf(ArgentToolError);
     expect(error).toMatchObject({ message: "bad", code: "C", kind: "validation", issues: [1] });
+  });
+
+  it("stops its own tool-server and reconnects on the next call", async () => {
+    readToolsServerState.mockResolvedValue({ pid: 1 });
+    const argent = createArgentClient();
+
+    expect(await argent.stopServer()).toBe(true);
+    expect(killToolServer).toHaveBeenCalledWith(expect.stringMatching(/tool-server\.cjs$/));
+    // A fresh tools client, so the next call does not reuse the stopped server.
+    expect(createToolsClient).toHaveBeenCalledTimes(2);
+
+    readToolsServerState.mockResolvedValue(null);
+    expect(await argent.stopServer()).toBe(false);
+  });
+});
+
+describe("listFlags", () => {
+  it("reports every registry flag with its effective state", () => {
+    expect(listFlags()).toEqual([
+      { name: "on-flag", description: "a", enabled: true },
+      { name: "off-flag", description: "b", enabled: false },
+    ]);
   });
 });
