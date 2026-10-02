@@ -53,7 +53,7 @@ A validation failure sets `issues`. When the client cannot reach the tool-server
 
 ## TypeScript
 
-The client includes types for the tools of the installed version. TypeScript rejects a tool name that does not exist and arguments that do not match the schema of the tool. You can omit `args` only when the tool has no required arguments. `ArgentToolName` and `ArgentToolArgs` are exported. The type of `data` is `unknown`. To set a different type, give it as the second type argument, for example `callTool<"list-devices", MyDevices>("list-devices")`.
+The client includes types for the tools of the installed version. TypeScript rejects a tool name that does not exist and arguments that do not match the schema of the tool. You can omit `args` only when the tool has no required arguments. `ArgentToolName` and `ArgentToolArgs` are exported. A tool name of type `string`, for example from `listTools()`, needs a cast to `ArgentToolName`. The type of `data` is `unknown`. To set a different type, give it as the second type argument, for example `callTool<"list-devices", MyDevices>("list-devices")`.
 
 The arguments and results of each tool are in the [Tools reference](./tools.mdx). Run `argent tools describe <name>` to see the argument schema of one tool.
 

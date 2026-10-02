@@ -602,8 +602,12 @@ const ESM_BUNDLES = [
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });
 }
-// tsc's map describes its own client.js, which the bundle above replaced.
+// tsc's map describes its own client.js, which the bundle above replaced. The
+// generated tool args are types only, so only their .d.ts ships.
 fs.rmSync(`${CLIENT_OUT_FILE}.map`, { force: true });
+for (const ext of [".js", ".js.map"]) {
+  fs.rmSync(path.join(path.dirname(CLIENT_OUT_FILE), `tool-args.generated${ext}`), { force: true });
+}
 
 for (const a of ASSETS) {
   copyAsset(a);
