@@ -75,7 +75,7 @@ describe("createArgentClient", () => {
     });
 
     const error = await createArgentClient()
-      .callTool("screen-recording-stop", {}, { signal: controller.signal })
+      .callTool("screen-recording-stop", { udid: "U1" }, { signal: controller.signal })
       .catch((e: unknown) => e);
 
     expect(error).toBe(reason);
@@ -87,7 +87,7 @@ describe("createArgentClient", () => {
     );
 
     const error = await createArgentClient()
-      .callTool("describe")
+      .callTool("describe", { udid: "U1" })
       .catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(ArgentToolError);
@@ -114,7 +114,7 @@ describe("createArgentClient", () => {
     });
 
     const error = await createArgentClient()
-      .callTool("screenshot", {}, { signal: controller.signal })
+      .callTool("screenshot", { udid: "U1" }, { signal: controller.signal })
       .catch((e: unknown) => e);
 
     expect(error).toBe(reason);
