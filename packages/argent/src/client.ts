@@ -109,12 +109,12 @@ export function createArgentClient(): ArgentClient {
   ): Promise<ArgentToolResult<T>> {
     try {
       const response = await client.callTool(name, args, options);
-      // Aborted after the reply: skip materialization, which can download files.
+      const { url, token } = await client.baseUrl();
+      // Aborted after the reply: skip materialization, which can copy or download files.
       options?.signal?.throwIfAborted();
       // Same artifact handling as `argent run`: a handle becomes a local path,
       // read in place when the tool-server shares this filesystem and
       // downloaded otherwise.
-      const { url, token } = await client.baseUrl();
       const { result } = await materializeArtifacts(response.data, {
         toolsUrl: url,
         authToken: token,
