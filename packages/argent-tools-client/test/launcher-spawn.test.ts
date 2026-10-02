@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -160,46 +161,65 @@ describe("killToolServer — full lifecycle", () => {
     }
   );
 
-  it("stops a server under a non-ASCII path when the caller has no UTF-8 locale", async () => {
-    // Outside a UTF-8 locale ps escapes non-ASCII bytes (`M-E` on macOS, `?`
-    // on procps), so the identity guard must not depend on the caller's one.
-    const dir = mkdtempSync(join(tmpdir(), "argent-zażółć-"));
-    const bundlePath = join(dir, "tool-server.cjs");
-    copyFileSync(FAKE_BUNDLE, bundlePath);
-    const saved = {
-      LANG: process.env.LANG,
-      LC_ALL: process.env.LC_ALL,
-      LC_CTYPE: process.env.LC_CTYPE,
-    };
+  // The launcher reads ps in this locale; a host without it (glibc with no
+  // C.UTF-8 installed) has no UTF-8 locale left to render the path in.
+  const hasForcedLocale = (() => {
+    if (process.platform === "win32") return true;
     try {
-      const { port, pid } = await launcher.spawnToolsServer(
-        { ...fakePaths(), bundlePath },
-        await launcher.findFreePort()
-      );
-      spawnedPids.push(pid);
-      await launcher.writeToolsServerState({
-        port,
-        pid,
-        startedAt: new Date().toISOString(),
-        bundlePath,
-        host: "127.0.0.1",
+      const charmap = execFileSync("locale", ["charmap"], {
+        encoding: "utf8",
+        env: { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" },
+        stdio: ["ignore", "pipe", "ignore"],
       });
-      delete process.env.LANG;
-      delete process.env.LC_CTYPE;
-      process.env.LC_ALL = "C";
-
-      expect(await launcher.killToolServer(bundlePath)).toBe(true);
-
-      expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
-      expect(await launcher.readToolsServerState(bundlePath)).toBeNull();
-    } finally {
-      for (const [key, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-      rmSync(dir, { recursive: true, force: true });
+      return charmap.trim() === "UTF-8";
+    } catch {
+      return false;
     }
-  });
+  })();
+
+  it.skipIf(!hasForcedLocale)(
+    "stops a server under a non-ASCII path when the caller has no UTF-8 locale",
+    async () => {
+      // Outside a UTF-8 locale ps escapes non-ASCII bytes (`M-E` on macOS, `?`
+      // on procps), so the identity guard must not depend on the caller's one.
+      const dir = mkdtempSync(join(tmpdir(), "argent-zażółć-"));
+      const bundlePath = join(dir, "tool-server.cjs");
+      copyFileSync(FAKE_BUNDLE, bundlePath);
+      const saved = {
+        LANG: process.env.LANG,
+        LC_ALL: process.env.LC_ALL,
+        LC_CTYPE: process.env.LC_CTYPE,
+      };
+      try {
+        const { port, pid } = await launcher.spawnToolsServer(
+          { ...fakePaths(), bundlePath },
+          await launcher.findFreePort()
+        );
+        spawnedPids.push(pid);
+        await launcher.writeToolsServerState({
+          port,
+          pid,
+          startedAt: new Date().toISOString(),
+          bundlePath,
+          host: "127.0.0.1",
+        });
+        delete process.env.LANG;
+        delete process.env.LC_CTYPE;
+        process.env.LC_ALL = "C";
+
+        expect(await launcher.killToolServer(bundlePath)).toBe(true);
+
+        expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
+        expect(await launcher.readToolsServerState(bundlePath)).toBeNull();
+      } finally {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
 
   it("clears state when the recorded pid is already dead before killToolServer is called", async () => {
     const { pid } = await trackedSpawn();
