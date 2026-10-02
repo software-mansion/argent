@@ -593,10 +593,11 @@ const SENSITIVE_TEXT_REFUSED = "refused to set sensitive text";
  * `POST /api/clipboard/text`. Resolves once the device pasteboard holds the
  * text, so a paste keystroke sent afterwards cannot race the fill.
  *
- * The host clipboard is untouched, unless the simulator shares its clipboard
- * with the Mac (Xcode's Shared Clipboard). With `sensitive`, simulator-server
- * refuses text that would reach the Mac clipboard that way, and this resolves
- * `"refused"` without setting anything. Builds without `sensitive` ignore it.
+ * The host clipboard is untouched, unless Device Hub (Xcode 27) has the
+ * simulator open with Use Shared Clipboard on. With `sensitive`,
+ * simulator-server refuses the text on any simulator Device Hub has opened
+ * since it booted, whatever that setting, and this resolves `"refused"`
+ * without setting anything. Builds without `sensitive` ignore it.
  *
  * A simulator-server built without clipboard support — an older build, or a
  * provider's — answers the route with a bare 404, reported as "unsupported"

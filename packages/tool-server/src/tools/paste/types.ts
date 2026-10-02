@@ -13,8 +13,8 @@ export type PasteDispatchParams = PasteParams & { hasSecrets?: boolean };
 export interface PasteResult {
   pasted: true;
   /**
-   * Set when the text was typed instead of pasted: a secret the device
-   * clipboard could not take without the Mac clipboard seeing it.
+   * Set when the text was typed instead of pasted: a secret, on a simulator
+   * Device Hub has opened.
    */
   via?: "keyboard";
 }

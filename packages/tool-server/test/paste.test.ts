@@ -231,6 +231,29 @@ describe("paste tool", () => {
         expect(keys).toEqual([]);
       });
 
+      it.each([
+        ["a newline", "ab\ncd"],
+        ["a carriage return", "ab\rcd"],
+        ["a tab", "ab\tcd"],
+      ])(
+        "is not typed at all when it holds %s, which typing would press as a key",
+        async (_label, value) => {
+          vi.stubEnv("ARGENT_SECRET_APP_PASSWORD", value);
+          fetchMock.mockResolvedValueOnce(jsonResponse(200, REFUSED));
+          const { api, keys } = fakeApi();
+
+          const err = await toolFor(api)
+            .execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" })
+            .catch((e: unknown) => e);
+
+          expect(getFailureSignal(err)?.error_code).toBe(
+            FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+          );
+          expect((err as Error).message).not.toContain(value);
+          expect(keys).toEqual([]);
+        }
+      );
+
       it("is never sent as sensitive when the text holds no placeholder", async () => {
         fetchMock.mockResolvedValueOnce(jsonResponse(200, REFUSED));
         const { api, keys } = fakeApi();

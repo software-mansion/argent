@@ -19,6 +19,13 @@ const CHORD_STEP_MS = 50;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Whether typing `char` enters it as text. A newline or a tab has a key, but
+ * typing it presses Return or Tab, which submits a form or moves the focus,
+ * where a paste would only have inserted it.
+ */
+const typesAsText = (char: string) => !"\n\r\t".includes(char) && !!charToKeyPress(char);
+
+/**
  * An Apple TV simulator is a plain UUID that `resolveDevice` classifies as a
  * simulator, indistinguishable from an iPhone by shape, so the capability
  * matrix cannot exclude it.
@@ -36,10 +43,10 @@ function rejectTv(device: DeviceInfo): never {
  * field's paste action. `setSimulatorClipboardText` resolves only once the
  * device pasteboard holds the text, so the chord cannot race the fill.
  *
- * A secret goes to the clipboard as `sensitive`. When the simulator shares its
- * clipboard with the Mac, simulator-server refuses it rather than let it reach
- * the Mac clipboard, and the secret is typed instead, the way `keyboard` types
- * it.
+ * A secret goes to the clipboard as `sensitive`. On a simulator that Device Hub
+ * (Xcode 27) has opened since it booted, simulator-server refuses it, as Device
+ * Hub can copy that clipboard to the Mac clipboard, and the secret is typed
+ * instead, the way `keyboard` types it.
  */
 async function pasteSimulator(
   registry: Registry,
@@ -51,11 +58,11 @@ async function pasteSimulator(
   if ((await setSimulatorClipboardText(api, params.text, { sensitive })) === "refused") {
     // Checked up front, so nothing is half-typed, and without naming the
     // character, which is part of the secret.
-    if (![...params.text].every((char) => charToKeyPress(char))) {
+    if (![...params.text].every(typesAsText)) {
       throw new InvalidToolInputError(
-        "Paste failed: this simulator shares its clipboard with the Mac, so a secret is typed " +
-          "instead of pasted, and this one has a character the keyboard cannot type. Nothing " +
-          "was typed.",
+        "Paste failed: Device Hub has opened this simulator, so a secret is typed instead of " +
+          "pasted, and this secret holds a newline, a tab or a character the keyboard cannot " +
+          "type. Nothing was typed.",
         {
           error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
           failure_stage: "paste_secret_typed_simulator",
