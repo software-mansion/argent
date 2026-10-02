@@ -152,6 +152,7 @@ describe("callTool client services", () => {
 
     const invoke = invokeRequest();
     expect(invoke.headers.accept).toContain("application/x-ndjson");
+    expect(invoke.headers["accept-encoding"]).toBe("identity");
     expect(invoke.body).toEqual({
       project_root: projectDir,
       name: "root",

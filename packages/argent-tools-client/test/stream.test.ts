@@ -59,8 +59,10 @@ describe("callTool progress streaming", () => {
 
   it("sends the Accept header only when a progress consumer is attached", async () => {
     const accepts: Array<string | undefined> = [];
+    const encodings: Array<string | undefined> = [];
     await startServer((req, res) => {
       accepts.push(req.headers.accept);
+      encodings.push(req.headers["accept-encoding"]);
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ data: { ok: true } }));
     });
@@ -71,6 +73,10 @@ describe("callTool progress streaming", () => {
 
     expect(accepts[0] ?? "").not.toContain("application/x-ndjson");
     expect(accepts[1]).toContain("application/x-ndjson");
+    // A streamed call refuses compression: a compressing proxy would hold the
+    // lines in its buffer. A buffered call keeps fetch's default encodings.
+    expect(encodings[0] ?? "").not.toBe("identity");
+    expect(encodings[1]).toBe("identity");
   });
 
   it("falls back to the buffered path against a pre-streaming server", async () => {

@@ -334,7 +334,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(stream ? { Accept: "application/x-ndjson" } : {}),
+          // A proxy that compresses the stream holds each line until its buffer
+          // fills, so a request line never gets its answer. `identity` keeps the
+          // stream uncompressed end to end.
+          ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
           ...authHeaders(token),
         },
         body: JSON.stringify(finalArgs ?? {}),

@@ -1073,9 +1073,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         res.once("close", () => clientRequests.close(toolInvocationId));
       }
       if (wantsStream) {
+        // Every line must reach the client as soon as it is written: a request
+        // line waits for its answer. `no-transform` asks intermediaries not to
+        // compress the stream, and `X-Accel-Buffering: no` makes nginx pass each
+        // chunk through instead of holding it in its buffers.
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
-          "Cache-Control": "no-cache",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
         });
       }
 

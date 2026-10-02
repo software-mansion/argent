@@ -66,6 +66,8 @@ The client adds a `client_services` parameter to the arguments of a call when al
 
 The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 to a call that carries `client_services` without that header. The tool-server sends a request for an op only when the client listed the op in `ops`.
 
+Each request line must reach the client at once, because the run waits for the answer. For this reason, the client sends `Accept-Encoding: identity` with the call, and the tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. A reverse proxy between the client and the tool-server must pass the stream through as the tool-server writes it. nginx does this with these headers, also with `gzip on`. A proxy that compresses or buffers the stream holds the request line. The tool-server then reports a timeout after 30 s.
+
 When one condition does not hold, the client sends no `client_services`. The tool-server then keeps the behavior of a call without client services.
 
 ## Request: the `client-request` line
