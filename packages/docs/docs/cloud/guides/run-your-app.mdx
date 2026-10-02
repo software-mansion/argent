@@ -35,6 +35,13 @@ sim-remote simctl io <UDID> screenshot shot.png
 sim-remote simctl io <UDID> recordVideo demo.mp4
 ```
 
+A script cannot press Ctrl-C. Use `screen-record` there: `start` returns at once and `stop` writes the file.
+
+```bash
+sim-remote screen-record start <UDID> --show-touches
+sim-remote screen-record stop <UDID> demo.mp4
+```
+
 ## Send a push or open a deep link
 
 `push` reads the payload from a local file or from stdin. `openurl` goes to the machine without changes.
