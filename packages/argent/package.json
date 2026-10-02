@@ -22,7 +22,8 @@
   },
   "scripts": {
     "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
-    "build:dispatcher": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build:dispatcher": "npm run build:tool-args && rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build:tool-args": "tsc --build ../tool-server && node ../tool-server/dist/sdk-tool-args.js src/tool-args.generated.ts",
     "build:bundles": "node scripts/bundle-tools.cjs",
     "sync-readme": "node scripts/sync-readme.cjs",
     "prepack": "node scripts/sync-readme.cjs",
