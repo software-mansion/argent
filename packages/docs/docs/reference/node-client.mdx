@@ -42,6 +42,8 @@ When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the client 
 | `options.onProgress(event)`       | Receives progress events from a long-running tool                                           |
 | `ArgentToolError`                 | The error of a rejected or failed call: `message`, `code?`, `kind?` and `issues?`           |
 
+A validation failure sets `issues`. When the client cannot reach the tool-server, `callTool` and `listTools` throw a plain `Error`, not an `ArgentToolError`.
+
 The arguments and results of each tool are in the [Tools reference](./tools.mdx). Run `argent tools describe <name>` to see the argument schema of one tool.
 
 In `data`, the client replaces each artifact, for example a screenshot or a recording, with the path of a local file. When the tool-server is remote, the client downloads the file first.

@@ -602,6 +602,8 @@ const ESM_BUNDLES = [
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });
 }
+// tsc's map describes its own client.js, which the bundle above replaced.
+fs.rmSync(`${CLIENT_OUT_FILE}.map`, { force: true });
 
 for (const a of ASSETS) {
   copyAsset(a);

@@ -37,9 +37,9 @@ export interface CallToolOptions {
 export class ArgentToolError extends Error {
   /** Stable failure code, when the server sent one. */
   readonly code?: string;
-  /** Failure category, e.g. "validation". */
+  /** Failure category, e.g. "subprocess", when the server sent one. */
   readonly kind?: string;
-  /** Schema issues of a rejected argument object. */
+  /** Schema issues of a rejected argument object; set only on a validation failure. */
   readonly issues?: readonly unknown[];
   constructor(
     message: string,
