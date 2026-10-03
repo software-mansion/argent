@@ -63,15 +63,33 @@ afterEach(async () => {
 });
 
 describe("flow-add-step on a blocked native-devtools precheck", () => {
+  // restart-app runs the udid-only precheck, which blocks on init_failed alone;
+  // the per-app statuses come from a feature tool's bundle-scoped one.
   it.each([
-    ["restart_required", "the app must be restarted through argent for native devtools to attach"],
-    ["service_stale", "Restarting the app cannot change that — restart the tool-server."],
-    ["connect_pending", "It launched moments ago and is still connecting."],
-    ["init_failed", "Native devtools failed to initialize for this udid after 3 attempts."],
-  ])("refuses a restart-app blocked on %s and records nothing", async (status, message) => {
+    [
+      "native-full-hierarchy",
+      "restart_required",
+      "the app must be restarted through argent for native devtools to attach",
+    ],
+    [
+      "native-full-hierarchy",
+      "service_stale",
+      "Restarting the app cannot change that — restart the tool-server.",
+    ],
+    [
+      "native-full-hierarchy",
+      "connect_pending",
+      "It launched moments ago and is still connecting.",
+    ],
+    [
+      "restart-app",
+      "init_failed",
+      "Native devtools failed to initialize for this udid after 3 attempts.",
+    ],
+  ])("refuses a %s blocked on %s and records nothing", async (tool, status, message) => {
     const registry = registryReturning({ status, message });
 
-    const err = await addStep(registry, "restart-app", {
+    const err = await addStep(registry, tool, {
       udid: DEVICE,
       bundleId: BUNDLE,
     }).catch((e: unknown) => e as Error);
@@ -79,7 +97,7 @@ describe("flow-add-step on a blocked native-devtools precheck", () => {
     // The message is the only field carrying the remedy — for service_stale it
     // is the only thing saying NOT to restart the app.
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain(`restart-app did not run (${status}): ${message}`);
+    expect((err as Error).message).toContain(`${tool} did not run (${status}): ${message}`);
     expect((err as Error).message).toContain("nothing was recorded");
     expect(await recordedSteps()).toEqual([]);
   });

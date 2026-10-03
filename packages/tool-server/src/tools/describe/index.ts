@@ -100,7 +100,10 @@ function makeDescribeExecute(
           : withDescription(
               withBootCaveatOncePerDevice(
                 device.id,
-                await describeIos(registry, device, params, { isTvOs: false })
+                await describeIos(registry, device, params, {
+                  isTvOs: false,
+                  hintReachesAgent: true,
+                })
               )
             ),
     },
@@ -118,7 +121,7 @@ function makeDescribeExecute(
         withDescription(
           withBootCaveatOncePerDevice(
             device.id,
-            await describeIos(registry, device, params, { isTvOs: false })
+            await describeIos(registry, device, params, { isTvOs: false, hintReachesAgent: true })
           )
         ),
     },
