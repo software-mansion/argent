@@ -1,6 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { adbShell, shellQuote, isAndroidTv, ensureMetroReverse } from "../../../utils/adb";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 // `am start -W` always prints a `Status:` banner, so a positive match on
@@ -101,6 +101,9 @@ export const androidImpl: PlatformImpl<
 > = {
   requires: ["adb"],
   handler: async (_services, params) => {
+    // Before the process starts, not after: an RN app reads Metro at startup,
+    // so a reverse asserted later is a reverse the app already missed.
+    await ensureMetroReverse(params.udid);
     // Resolve a concrete component on every path so the launch can use
     // `am start -W`, which blocks until the activity is drawn; otherwise
     // describe/tap can race a still-forking process.

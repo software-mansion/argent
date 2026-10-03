@@ -54,14 +54,14 @@ npx react-native run-ios --simulator="<name>"        # iOS (or --udid <UDID>)
 npx react-native run-android --deviceId=<adb-serial> # Android
 ```
 
-**Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops.
+**Android only**: these CLI commands start the app themselves, outside argent, so run `adb -s <serial> reverse tcp:8081 tcp:8081` after install to let the device reach Metro on your host. A later `launch-app` / `restart-app` asserts the reverse on its own.
 
 **Agent checklist:**
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
 - [ ] If the device isn't booted yet: use `boot-device` with the iOS `udid` or Android `avdName`. Refer to the `argent-ios-simulator-setup` / `argent-android-emulator-setup` skill.
-- [ ] Android: `adb -s <serial> reverse tcp:8081 tcp:8081` done.
+- [ ] Android, when the CLI started the app: `adb -s <serial> reverse tcp:8081 tcp:8081` done.
 
 ---
 
