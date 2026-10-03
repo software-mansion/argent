@@ -143,7 +143,12 @@ describe("text matches: execution", () => {
         status: "fail",
         target: `id=status ${testCase.targetExpectation}`,
       });
-      expect(result.steps[0]?.reason).toContain(`wanted to ${testCase.reasonExpectation}`);
+      expect(result.steps[0]).toMatchObject({
+        reason: `element matched id="status" but its text did not ${testCase.reasonExpectation}`,
+        expected: testCase.expectedText,
+        actual: "Actual",
+      });
+      expect(result.steps[0]?.hint).toBeUndefined();
     }
   }, 10_000);
 
@@ -193,7 +198,7 @@ describe("text matches: execution", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("anchoring with ^…$ gives the equals analog; the reason shows text and pattern", async () => {
+  it("anchoring with ^…$ gives the equals analog; the report shows text and pattern", async () => {
     currentTree = () => screen([label("Taps: 42", { identifier: "counter" })]);
     await writeFlow("anchored", {
       executionPrerequisite: "",
@@ -211,8 +216,15 @@ describe("text matches: execution", () => {
     const result = await run("anchored");
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0]?.reason).toContain('its text was "Taps: 42"');
-    expect(result.steps[0]?.reason).toContain("wanted to match /^Taps: \\d$/");
+    expect(result.steps[0]).toMatchObject({
+      reason: 'element matched id="counter" but its text did not match /^Taps: \\d$/',
+      expected: "^Taps: \\d$",
+      // The renderers print `expected` in slash delimiters on this marker. Without
+      // it they quote the pattern as a literal and double every backslash, so the
+      // printed pattern matches a backslash followed by `d`.
+      expectedKind: "pattern",
+      actual: "Taps: 42",
+    });
   });
 
   it("is case-sensitive, unlike contains/equals", async () => {

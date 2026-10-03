@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import {
   materializeArtifacts,
   isArtifactHandle,
+  renderFlowStepDetails,
+  type FlowStepDetails,
   type MaterializeContext,
 } from "@argent/tools-client";
 
@@ -186,7 +188,7 @@ export async function screenshotDiffToMcpContent(
   return blocks;
 }
 
-export type FlowStepResult = {
+export type FlowStepResult = FlowStepDetails & {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
@@ -265,6 +267,16 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
+/**
+ * The step's detail lines as one block, under its line and indented to the
+ * step's depth; undefined when it carries none.
+ */
+function stepDetailText(step: FlowStepResult): string | undefined {
+  const indent = `  ${stepIndent(step.depth)}`;
+  const lines = renderFlowStepDetails(step).map((line) => `${indent}${line}`);
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
   if (step.tool) return step.tool;
@@ -311,6 +323,8 @@ export async function flowRunToMcpContent(
       type: "text",
       text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${timing}${suffix}${warning}`,
     });
+    const details = stepDetailText(step);
+    if (details !== undefined) blocks.push({ type: "text", text: details });
 
     const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
     const scriptLogTruncated = step.scriptLogTruncated === true;

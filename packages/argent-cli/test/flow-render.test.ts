@@ -6,6 +6,7 @@ import {
   renderSummary,
   renderArtifactLines,
   renderUnderStepLine,
+  renderStepLines,
   renderFailedSteps,
   renderBatchSummary,
   renderFailedFlows,
@@ -86,7 +87,7 @@ describe("flow report rendering", () => {
         continue;
       }
       n++;
-      live.push(renderStepLine(s, n, report.flow));
+      live.push(...renderStepLines(s, n, report.flow));
     }
 
     // Every live line appears verbatim in the buffered output (which adds the
@@ -250,6 +251,120 @@ describe("flow report rendering", () => {
     }
   });
 
+  it("renderStepLines prints expected, actual and hint under the label, values quoted and aligned", () => {
+    // How each value is spelled is the shared renderer's (tools-client); this
+    // pins where the CLI puts the lines.
+    const step: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      target: 'text "Total"',
+      reason: "text did not match",
+      expected: "$12.00",
+      actual: "$10.00",
+      hint: "the cart may still be loading",
+    };
+    const lines = renderStepLines(step, 3, "f");
+    expect(lines).toEqual([
+      '  ✗  3 assert text "Total" — text did not match',
+      '       expected: "$12.00"',
+      '       actual:   "$10.00"',
+      "       hint: the cart may still be loading",
+    ]);
+    expect(lines[1]!.indexOf('"')).toBe(lines[2]!.indexOf('"'));
+    expect(lines[1]!.indexOf("expected")).toBe(lines[0]!.indexOf("assert"));
+  });
+
+  it("renderStepLines keeps the detail lines under the label when nested and past step 99", () => {
+    // The number column widens at 100+ and the label shifts with depth; each
+    // detail line has to move with both.
+    const step: StepReport = {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      target: 'text "Total"',
+      expected: "$12.00",
+      actual: "$10.00",
+      indeterminate: true,
+      hint: "wait for the cart",
+    };
+    for (const n of [3, 100, 1000]) {
+      for (const depth of [undefined, 1, 2]) {
+        const [label, ...details] = renderStepLines({ ...step, depth }, n, "f");
+        const labelCol = label!.indexOf("assert");
+        expect(details).toHaveLength(4);
+        for (const line of details) expect(line.search(/\S/)).toBe(labelCol);
+      }
+    }
+    expect(renderStepLines({ ...step, depth: 2 }, 1000, "f")).toEqual([
+      '  ✗ 1000     assert text "Total"',
+      '             expected: "$12.00"',
+      '             actual:   "$10.00"',
+      "             indeterminate: the check did not run",
+      "             hint: wait for the cart",
+    ]);
+    expect(renderStepLines({ ...step, depth: 1 }, 100, "f").slice(0, 2)).toEqual([
+      '  ✗ 100   assert text "Total"',
+      '          expected: "$12.00"',
+    ]);
+  });
+
+  it("buffered report prints detail lines under the step and its warning, before its artifacts", () => {
+    const out = renderReport(
+      mkReport([
+        { index: 0, kind: "launch", status: "pass" },
+        {
+          index: 1,
+          kind: "assert",
+          status: "fail",
+          target: 'text "Total"',
+          reason: "text did not match",
+          expected: "$12.00",
+          actual: "$10.00",
+          hint: "the cart may still be loading",
+        },
+        {
+          index: 2,
+          kind: "snapshot",
+          status: "fail",
+          reason: "diff 3.10% > 0.5%",
+          target: '"home"',
+          warning: "baseline seeded",
+          expected: "≤ 0.5%",
+          actual: "3.10%",
+          hint: "an animation may still be running",
+          artifacts: { diff: "/tmp/d.png" },
+        },
+        { index: 3, kind: "tap", status: "skip", target: '"Pay"' },
+      ])
+    );
+    expect(out).toBe(
+      [
+        'Flow "checkout" on UDID-1',
+        "  ✓  1 launch",
+        '  ✗  2 assert text "Total" — text did not match',
+        '       expected: "$12.00"',
+        '       actual:   "$10.00"',
+        "       hint: the cart may still be loading",
+        '  ✗  3 snapshot "home" — diff 3.10% > 0.5%',
+        "       ⚠ baseline seeded",
+        "       expected: ≤ 0.5%",
+        "       actual:   3.10%",
+        "       hint: an animation may still be running",
+        "       diff: /tmp/d.png",
+        '  ·  4 tap "Pay"',
+        "",
+        '  ✗ step 2 assert text "Total"',
+        "    text did not match",
+        '    expected: "$12.00"',
+        '    actual:   "$10.00"',
+        "    hint: the cart may still be loading",
+        "",
+        "FAIL — 1 passed, 2 failed, 0 errored, 1 skipped, 1 warning",
+      ].join("\n")
+    );
+  });
+
   it("renderSummary carries the device only when asked (live tail)", () => {
     const report = mkReport(STEPS);
     expect(renderSummary(report)).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
@@ -315,6 +430,46 @@ describe("flow report rendering", () => {
       "       ⚠ the screen never held still",
     ]);
     expect(renderSummary(report)).toContain("1 warning");
+  });
+
+  it("renderFailedSteps prints detail lines under the step and its warning, before its artifacts", () => {
+    const report = mkReport([
+      { index: 0, kind: "launch", status: "pass" },
+      {
+        index: 1,
+        kind: "assert",
+        status: "fail",
+        target: 'text "Total"',
+        reason: "text did not match",
+        expected: "$12.00",
+        actual: "$10.00",
+        hint: "the cart may still be loading",
+      },
+      {
+        index: 2,
+        kind: "snapshot",
+        status: "error",
+        reason: "diff 3.10% > 0.5%",
+        target: '"home"',
+        warning: "baseline seeded",
+        expected: "≤ 0.5%",
+        actual: "3.10%",
+        hint: "an animation may still be running",
+        artifacts: { diff: "/tmp/d.png" },
+      },
+    ]);
+    expect(renderFailedSteps(report)).toEqual([
+      '  ✗  2 assert text "Total" — text did not match',
+      '       expected: "$12.00"',
+      '       actual:   "$10.00"',
+      "       hint: the cart may still be loading",
+      '  ✗  3 snapshot "home" — diff 3.10% > 0.5%',
+      "       ⚠ baseline seeded",
+      "       expected: ≤ 0.5%",
+      "       actual:   3.10%",
+      "       hint: an animation may still be running",
+      "       diff: /tmp/d.png",
+    ]);
   });
 
   it("renderStepLine puts the step time between the label and the reason", () => {
@@ -409,6 +564,31 @@ describe("failure recap", () => {
   it("says so when a failed report has no failing step", () => {
     const report = mkReport([{ index: 0, kind: "tap", status: "skip" }], { ok: false });
     expect(summarizeFailure(report)).toEqual({ headline: "failed with no failing step" });
+  });
+
+  it("carries the failing step's expected, actual and hint under its reason, one line each", () => {
+    const report = mkReport([
+      { index: 0, kind: "tap", status: "pass" },
+      {
+        index: 1,
+        kind: "assert",
+        status: "fail",
+        target: "id=count matches /^Taps: \\d+$/",
+        reason: 'element matched id="count" but its text did not match /^Taps: \\d+$/',
+        expected: "^Taps: \\d+$",
+        expectedKind: "pattern",
+        actual: "Taps:\n0",
+        hint: 'the element\'s own text is "0"',
+      },
+    ]);
+    expect(renderSingleFailure(report)).toEqual([
+      "",
+      "  ✗ step 2 assert id=count matches /^Taps: \\d+$/",
+      '    element matched id="count" but its text did not match /^Taps: \\d+$/',
+      "    expected: /^Taps: \\d+$/",
+      '    actual:   "Taps:\\n0"',
+      '    hint: the element\'s own text is "0"',
+    ]);
   });
 
   it("prints nothing when no flow failed", () => {
