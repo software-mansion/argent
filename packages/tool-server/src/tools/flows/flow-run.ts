@@ -7,6 +7,7 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   getFailureSignal,
+  SELECTABLE_PLATFORMS,
   isLiveServiceState,
   wrapFailure,
 } from "@argent/registry";
@@ -36,7 +37,6 @@ import {
   type FlowFile,
   type FlowStep,
   type Launch,
-  SELECTABLE_PLATFORMS,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
