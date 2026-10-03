@@ -66,6 +66,13 @@ export {
 } from "./artifacts.js";
 
 export {
+  resolveOutPath,
+  writeOutFile,
+  type OutPathResolution,
+  type OutWriteResult,
+} from "./out-path.js";
+
+export {
   prepareFileInputs,
   applyClientFileDirectives,
   FILE_INPUT_MARKER,

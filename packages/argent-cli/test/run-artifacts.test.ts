@@ -63,6 +63,13 @@ function startServer(state: ServerState): Promise<{ url: string; close: () => Pr
       res.end(state.artifactBytes);
       return;
     }
+    // 200 with a body that is not an image, the way a captive proxy or an error
+    // page answers a legacy media URL.
+    if (url === "/not-an-image" && req.method === "GET") {
+      res.setHeader("content-type", "text/html");
+      res.end("<html>gateway error</html>");
+      return;
+    }
     res.statusCode = 404;
     res.end("not found");
   });
@@ -188,6 +195,268 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(state.artifactHits).toBe(1); // legacy fetch of result.url
     expect(fs.readFileSync(outPath)).toEqual(PNG);
     expect(logs.join("\n")).toContain("Saved screenshot: /host/legacy.png");
+  });
+
+  // `--out` is stripped before the schema parser, so the tool's own `out` property
+  // is reachable only through `--args` / `--out-json`. Those spellings used to
+  // travel to a tool that never reads them and write nothing, silently.
+  it("honors the tool's own `out` property when it arrives through --args", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const outPath = join(outDir, "from-args.png");
+
+    await run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: outPath })], opts);
+
+    expect(fs.readFileSync(outPath)).toEqual(PNG);
+    expect(logs.join("\n")).toContain(`Wrote: ${outPath}`);
+  });
+
+  it("honors the tool's own `out` property when it arrives through --out-json", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const outPath = join(outDir, "from-out-json.png");
+
+    await run(
+      ["screenshot", "--args", '{"udid":"SIM-1"}', "--out-json", JSON.stringify(outPath)],
+      opts
+    );
+
+    expect(fs.readFileSync(outPath)).toEqual(PNG);
+    expect(logs.join("\n")).toContain(`Wrote: ${outPath}`);
+  });
+
+  it("lets an explicit --out win over an `out` carried in the payload", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const flagPath = join(outDir, "flag.png");
+    const payloadPath = join(outDir, "payload.png");
+
+    await run(
+      [
+        "screenshot",
+        "--args",
+        JSON.stringify({ udid: "SIM-1", out: payloadPath }),
+        "--out",
+        flagPath,
+      ],
+      opts
+    );
+
+    expect(fs.readFileSync(flagPath)).toEqual(PNG);
+    expect(fs.existsSync(payloadPath)).toBe(false);
+    expect(logs.join("\n")).toContain(`Wrote: ${flagPath}`);
+  });
+
+  // An empty `--out` used to survive as "" and outrank the payload `out` it beats on
+  // precedence, so neither destination was written and nothing said so.
+  it("refuses an empty --out instead of letting it silence the payload `out`", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const payloadPath = join(outDir, "payload.png");
+
+    await expect(
+      run(
+        ["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: payloadPath }), "--out="],
+        opts
+      )
+    ).rejects.toThrow("process.exit(2)");
+
+    expect(errs.join("\n")).toContain("--out requires a path");
+    expect(fs.existsSync(payloadPath)).toBe(false);
+  });
+
+  // `path.resolve` reads a leading space as a relative path, so an untrimmed value
+  // buried the PNG under a directory literally named " " and `Wrote:` named neither.
+  it("trims --out so a padded path is not resolved as a relative one", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const outPath = join(outDir, "padded.png");
+
+    await run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", ` ${outPath} `], opts);
+
+    expect(fs.readFileSync(outPath)).toEqual(PNG);
+    expect(fs.existsSync(join(process.cwd(), " "))).toBe(false);
+    expect(logs.join("\n")).toContain(`Wrote: ${outPath}`);
+  });
+
+  // `out` reaches the payload only inside shell-quoted JSON, where no shell ever
+  // expands `~` — so taking it literally makes a directory named `~` in the cwd.
+  it("expands `~` in a payload `out`, like the MCP writer does", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const home = await mkdtemp(join(tmpdir(), "cli-home-"));
+    // `os.homedir()` reads libuv's environ, which Node keeps in step with
+    // `process.env` on the main thread — the same redirect temp-home.ts uses.
+    const realHome = process.env.HOME;
+    process.env.HOME = home;
+    // A cwd the test owns, so "no directory named `~` was created" is an
+    // assertion about this run and not about whatever else litters the package.
+    const cwd = process.cwd();
+    process.chdir(outDir);
+
+    try {
+      await run(
+        ["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: "~/kept.png" })],
+        opts
+      );
+
+      expect(fs.readFileSync(join(home, "kept.png"))).toEqual(PNG);
+      expect(fs.readdirSync(process.cwd())).not.toContain("~");
+      expect(logs.join("\n")).toContain(`Wrote: ${join(home, "kept.png")}`);
+    } finally {
+      process.chdir(cwd);
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  // `path.resolve` drops the trailing separator, so this would have made a regular
+  // file named `shots` and blocked every later write underneath it.
+  it("refuses a directory-shaped `out` rather than making a file of that name", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const dirShaped = `${join(outDir, "shots")}/`;
+
+    await expect(
+      run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: dirShaped })], opts)
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(errs.join("\n")).toContain("names the file to write, not a directory");
+    expect(fs.existsSync(join(outDir, "shots"))).toBe(false);
+  });
+
+  it("reports the absolute path it wrote, not the relative spelling it was given", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const cwd = process.cwd();
+    process.chdir(outDir);
+
+    try {
+      await run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", "./rel.png"], opts);
+      // `/var` is a symlink on macOS, so anchor on the cwd the process actually has.
+      expect(logs.join("\n")).toContain(`Wrote: ${join(process.cwd(), "rel.png")}`);
+      expect(logs.join("\n")).not.toContain("Wrote: ./rel.png");
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  // No handle and no legacy `url` — the destination cannot be written, so saying
+  // `Wrote:` would hand back whatever an earlier run left there as this capture.
+  it("fails the save when no image came back rather than reporting a write", async () => {
+    state.screenshotData = { image: null };
+    const outPath = join(outDir, "stale.png");
+    await writeFile(outPath, Buffer.from("an earlier run's baseline"));
+
+    await expect(
+      run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", outPath], opts)
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(errs.join("\n")).toContain(`Could not save to ${outPath}`);
+    expect(errs.join("\n")).toContain("stale");
+    expect(logs.join("\n")).not.toContain("Wrote:");
+    expect(fs.readFileSync(outPath).toString()).toBe("an earlier run's baseline");
+  });
+
+  it("fails the same way when the destination came from the payload `out`", async () => {
+    state.screenshotData = { image: null };
+    const outPath = join(outDir, "stale-payload.png");
+
+    await expect(
+      run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: outPath })], opts)
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(errs.join("\n")).toContain(`Could not save to ${outPath}`);
+    expect(logs.join("\n")).not.toContain("Wrote:");
+  });
+
+  // The capture is the expensive half and it already succeeded; exiting without
+  // naming it leaves the caller no way to reach the PNG sitting in the cache.
+  it("still reports where the capture landed when the save fails", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    // A regular file stands where the parent directory would have to be.
+    const blocker = join(outDir, "blocker");
+    await writeFile(blocker, "not a directory");
+
+    await expect(
+      run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", join(blocker, "shot.png")], opts)
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(logs.join("\n")).toContain(`Saved screenshot: ${handle.hostPath}`);
+    expect(errs.join("\n")).toContain("Could not save to");
+    expect(logs.join("\n")).not.toContain("Wrote:");
+  });
+
+  // failInvocation's contract for every other rejected run: `--json | jq` on a
+  // failure reads an empty stream and a non-zero status. A save failure printing
+  // the result on stdout would hand jq a parse of a run that did not do what it
+  // was asked.
+  // A legacy media URL is plain HTTP: a proxy or an error page answers 200 with
+  // HTML, and writing that under `out` hands screenshot-diff a non-image baseline.
+  it("refuses to write legacy bytes that are not a PNG", async () => {
+    state.screenshotData = { url: `${server.url}/not-an-image`, path: "/host/shot.png" };
+    const out = join(outDir, "legacy.png");
+
+    await expect(
+      run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", out], opts)
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(errs.join("\n")).toContain("not a PNG");
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
+  it("--json: a failed save leaves stdout empty and reports on stderr", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const blocker = join(outDir, "blocker");
+    await writeFile(blocker, "not a directory");
+
+    await expect(
+      run(
+        ["screenshot", "--args", '{"udid":"SIM-1"}', "--out", join(blocker, "shot.png"), "--json"],
+        opts
+      )
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(logs).toEqual([]);
+    const reported = JSON.parse(errs.join("\n"));
+    expect(reported.error).toContain("Could not save to");
+    // The capture succeeded, so the scratch path it left has to survive.
+    expect(JSON.stringify(reported.result)).toContain(handle.hostPath);
+  });
+
+  // `out`'s describe tells the caller to pass on the absolute path it reports
+  // rather than the relative spelling they typed, so `--json` has to name it
+  // somewhere — stderr, since stdout is one parseable object.
+  it("--json: stdout stays one object and the destination is named on stderr", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const out = join(outDir, "shot.png");
+
+    await run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", out, "--json"], opts);
+
+    expect(() => JSON.parse(logs.join("\n"))).not.toThrow();
+    expect(logs.join("\n")).not.toContain("Wrote:");
+    expect(errs.join("\n")).toContain(`Wrote: ${out}`);
+    expect(fs.readFileSync(out)).toEqual(PNG);
+  });
+
+  it("reports the absolute destination under --json when `out` was relative", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const cwd = process.cwd();
+    process.chdir(outDir);
+    try {
+      await run(
+        ["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: "./rel.png" }), "--json"],
+        opts
+      );
+      expect(errs.join("\n")).toContain(`Wrote: ${join(process.cwd(), "rel.png")}`);
+    } finally {
+      process.chdir(cwd);
+    }
   });
 
   it("screenshot --json prints the materialized result with a local path, not a handle", async () => {
