@@ -256,6 +256,32 @@ describe("view-network-request-details (chromium branch)", () => {
     expect(details.response.body).toBe('{"ok":true}');
   });
 
+  it.each([
+    { size: 1000, cut: false, returns: "whole, as it is at the 1000-char limit" },
+    { size: 1001, cut: true, returns: "cut to 1000 chars with its size, one char past the limit" },
+  ])("returns a request body of $size chars $returns", async ({ size, cut }) => {
+    const postData = "p".repeat(size);
+    const record = rec({ requestId: "r2", method: "POST", url: "https://x.test/api", postData });
+    const services = {
+      chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(services, {
+      device_id: "chromium-cdp-9222",
+      port: 8081,
+      requestId: "r2",
+      includeBody: true,
+    })) as { request: { postData?: string } };
+
+    if (cut) {
+      expect(details.request.postData).toBe(
+        `[TRUNCATED — original size: ${size} chars]\n${"p".repeat(1000)}...`
+      );
+    } else {
+      expect(details.request.postData).toBe(postData);
+    }
+  });
+
   it("returns an error string when the requestId is unknown", async () => {
     const services = {
       chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => undefined } } },
