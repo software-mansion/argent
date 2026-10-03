@@ -22,6 +22,7 @@ import {
   isDeclaredLocally,
   isGloballyInstalled,
   probeLocalInstall,
+  realpathOrSelf,
   resolveInstallMode,
   removeInstallRecord,
   resolveProjectRoot,
@@ -31,13 +32,94 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
+import { npmGlobalPackagePath } from "./global-prefix.js";
 import { removeCliRecordFor } from "./cli-record.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
-import { PACKAGE_NAME } from "./constants.js";
+import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 
 type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
+
+/** True for a path that exists, a symlink whose target no longer does included. */
+function pathPresent(target: string): boolean {
+  try {
+    fs.lstatSync(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why an exit-0 removal removed nothing, or null when it did remove something.
+ * `npm uninstall -g` prints "up to date" and `bun remove -g` saves a lockfile,
+ * both exiting 0 whether or not they had anything to take away, so only the
+ * directory {@link globalRemovalWitness} names tells the two apart — and it has
+ * to be read before the command as well as after, because gone from both means
+ * `bin` never owned the argent PATH answers with.
+ */
+function unremovedReason(bin: string, entry: string, ownedBefore: boolean): string | null {
+  if (!ownedBefore) {
+    return (
+      `${bin} has nothing at ${entry}, so it removed nothing. The ${MCP_BINARY_NAME} on your ` +
+      `PATH came from somewhere else — another package manager, a Nix or Homebrew wrapper, ` +
+      `a project's node_modules, or an install under a different npm prefix — and has to be ` +
+      `removed with whatever installed it.`
+    );
+  }
+  if (!pathPresent(entry)) return null;
+  return `${bin} reported success but ${PACKAGE_NAME} is still at ${entry}.`;
+}
+
+/** Any global install still on this machine — PATH's answer, or npm's. */
+function globalInstallRemains(): boolean {
+  return isGloballyInstalled() || globalPackageOwnedByNpm() !== null;
+}
+
+/**
+ * The project's own install, still there when the run is over. Re-running
+ * {@link probeLocalInstall} would not answer: Node's module resolution serves
+ * the second call from a cache that outlives the removal. Yarn PnP has no
+ * directory to look at, so its manifest answers.
+ */
+function localInstallRemains(
+  projectRoot: string,
+  probe: ReturnType<typeof probeLocalInstall>
+): boolean {
+  if (probe.packageDir !== null) return pathPresent(probe.packageDir);
+  return probe.installed && isDeclaredLocally(projectRoot);
+}
+
+/**
+ * The directory npm holds argent in, resolved through any link it made, or null
+ * when npm has nothing there or cannot be asked.
+ */
+function globalPackageOwnedByNpm(): string | null {
+  const entry = npmGlobalPackagePath();
+  if (entry === null || !pathPresent(entry)) return null;
+  try {
+    return fs.realpathSync(entry);
+  } catch {
+    // A link whose source is gone: npm still owns the entry it made.
+    return entry;
+  }
+}
+
+/**
+ * The directory whose survival separates a removal that took nothing away from
+ * one that did, or null when `cmd`'s manager leaves none to watch. npm's own
+ * global directory when npm is the one being asked; for every other manager,
+ * whose global layout {@link npmGlobalPackagePath} cannot name, the package
+ * PATH resolves to — except when that is this project's own copy, which `npm
+ * run`, `pnpm exec` and direnv put first on PATH and no global removal touches.
+ */
+function globalRemovalWitness(cmd: ShellCommand, localPackageDir: string | null): string | null {
+  if (cmd.bin === "npm") return npmGlobalPackagePath();
+  const root = getGloballyInstalledPackageRoot();
+  if (root === null) return null;
+  return localPackageDir !== null && realpathOrSelf(localPackageDir) === root ? null : root;
+}
 
 const UNINSTALL_TOOLSERVER_STOP_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.UNINSTALL_TOOLSERVER_STOP_FAILED,
@@ -357,7 +439,6 @@ export async function uninstall(args: string[]): Promise<void> {
   let shouldPrune = nonInteractive;
   let hasPrunedContent = false;
   let hasUninstalledPackage = false;
-  let hasUninstalledGlobalPackage = false;
 
   try {
     p.intro(pc.bgRed(pc.white(" argent uninstall ")));
@@ -383,7 +464,15 @@ export async function uninstall(args: string[]): Promise<void> {
     // Decided before anything is mutated, so an invalid flag or a cancelled
     // coexistence prompt aborts cleanly.
     const uninstallLocalProbe = probeLocalInstall(projectRoot);
-    const globalPresent = isGloballyInstalled();
+    // PATH answers with whatever comes first, which is not the same question as
+    // "is there a global install to remove": the prefix recovery `argent init`
+    // performs installs into a bin directory the user's shells do not know about
+    // yet, so npm's own global directory has to be asked too. Only where npm is
+    // the manager that would be asked to remove it — `pnpm remove -g` cannot
+    // take away what npm installed, and would report success for doing nothing.
+    const uninstallPm = detectPackageManager();
+    const npmGlobalPackage = uninstallPm === "npm" ? globalPackageOwnedByNpm() : null;
+    const globalPresent = isGloballyInstalled() || npmGlobalPackage !== null;
     const localPresent = installMode === "local" && uninstallLocalProbe.installed;
     const targetFlags = parseTargetFlags(args);
     // Default to the install that is actually PRESENT: a local-mode record whose
@@ -646,10 +735,14 @@ export async function uninstall(args: string[]): Promise<void> {
       if (!globalPresent) return null;
       return {
         kind: "global",
-        cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
+        cmd: globalUninstallCommand(uninstallPm, PACKAGE_NAME),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
-        installDir: getGloballyInstalledPackageRoot(),
+        // npm's own answer first: it is the directory the command will empty,
+        // where PATH names whichever copy comes first — stopping that one's
+        // tool-server takes down an install nobody asked to touch, and leaves
+        // the removed install's server running on files that are gone.
+        installDir: npmGlobalPackage ?? getGloballyInstalledPackageRoot(),
       };
     };
 
@@ -668,6 +761,11 @@ export async function uninstall(args: string[]): Promise<void> {
       );
     }
 
+    // Removals that did not happen, in the order they were attempted. Both a
+    // no-op and a thrown command land here: the run still owes the user an
+    // outro, and the other targets it was asked to remove are still worth
+    // removing.
+    const unremoved: Array<"local" | "global"> = [];
     for (const removable of removables) {
       let shouldRemove = nonInteractive || removePreconfirmed;
       if (!nonInteractive && !removePreconfirmed) {
@@ -692,12 +790,27 @@ export async function uninstall(args: string[]): Promise<void> {
         throw err;
       }
 
+      // Read before the command as well as after — see unremovedReason.
+      const entry =
+        removable.kind === "global"
+          ? globalRemovalWitness(removable.cmd, uninstallLocalProbe.packageDir)
+          : null;
+      const ownedBefore = entry !== null && pathPresent(entry);
+
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
+        const reason =
+          entry === null ? null : unremovedReason(removable.cmd.bin, entry, ownedBefore);
+        if (reason !== null) {
+          // Not thrown: the command itself did not fail, and the other targets
+          // this run was asked to remove are still worth removing.
+          p.log.error(`The ${removable.kind} package was not removed. ${reason}`);
+          unremoved.push(removable.kind);
+          continue;
+        }
         p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
-        if (removable.kind === "global") hasUninstalledGlobalPackage = true;
 
         // Must go with the install even when pruning was declined, or a stale
         // mode:"local" record keeps `update`/`uninstall` targeting a gone devDependency.
@@ -715,19 +828,25 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(
-          hasPrunedContent,
-          hasUninstalledPackage,
-          UNINSTALL_PACKAGE_ACTION_FAILED
-        );
-        return;
+        unremoved.push(removable.kind);
       }
     }
 
-    await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
-    // Only once no global install is left behind: clearing machine-wide state out
-    // from under an installation the user kept would be wrong.
-    if (hasUninstalledGlobalPackage || (hasUninstalledPackage && !isGloballyInstalled())) {
+    await finalizeUninstallTelemetry(
+      hasPrunedContent,
+      hasUninstalledPackage,
+      unremoved.length > 0 ? UNINSTALL_PACKAGE_ACTION_FAILED : undefined
+    );
+    // Only once nothing is left behind, globally or in this project: clearing
+    // machine-wide state out from under an installation the user kept would be
+    // wrong, and one run can remove the global install while the local removal
+    // throws. npm's directory as well as PATH — a global install the user's
+    // shells cannot see yet is still an installation they kept.
+    if (
+      hasUninstalledPackage &&
+      !globalInstallRemains() &&
+      !localInstallRemains(projectRoot, uninstallLocalProbe)
+    ) {
       try {
         await resetLocalTelemetryState();
       } catch {
@@ -735,7 +854,17 @@ export async function uninstall(args: string[]): Promise<void> {
       }
     }
 
-    p.outro(pc.green("argent has been removed."));
+    const stillThere = unremoved.map((kind) =>
+      kind === "global" ? "globally" : "in this project"
+    );
+    p.outro(
+      stillThere.length > 0
+        ? pc.yellow(
+            `${MCP_BINARY_NAME} is still installed ${stillThere.join(" and ")} — ` +
+              `see the error above.`
+          )
+        : pc.green("argent has been removed.")
+    );
   } catch (err) {
     await finalizeUninstallTelemetry(
       hasPrunedContent,

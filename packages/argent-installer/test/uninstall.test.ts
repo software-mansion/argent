@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
+import { log, outro } from "@clack/prompts";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -75,8 +76,30 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
-  childProcessMock.execSync.mockImplementation(() => "/usr/local/bin/argent\n");
-  childProcessMock.execFileSync.mockImplementation(() => undefined);
+  // A successful `uninstall -g` takes argent off PATH — the post-command check
+  // reads that back, so the default mocks have to move together or a passing
+  // removal looks like npm's silent no-op.
+  let globalOnPath = true;
+  childProcessMock.execSync.mockImplementation(() => {
+    if (!globalOnPath) throw new Error("not found");
+    return "/usr/local/bin/argent\n";
+  });
+  childProcessMock.execFileSync.mockImplementation(((
+    _bin: string,
+    args: string[],
+    opts?: { cwd?: string }
+  ) => {
+    if (!Array.isArray(args)) return undefined;
+    if (args.includes("uninstall") && args.includes("-g")) globalOnPath = false;
+    // A local removal takes the devDependency off disk, and the run reads that
+    // back too — left in place it is a removal that removed nothing.
+    else if (args.includes("uninstall") && opts?.cwd !== undefined)
+      fs.rmSync(path.join(opts.cwd, "node_modules", "@swmansion", "argent"), {
+        recursive: true,
+        force: true,
+      });
+    return undefined;
+  }) as never);
 });
 
 afterEach(() => {
@@ -231,6 +254,206 @@ describe("uninstall — telemetry consent preservation", () => {
 });
 
 // ── MCP entry removal across all adapters ─────────────────────────────────────
+
+// `argent init`'s prefix recovery writes a prefix into npm's user config, which
+// an inherited npm_config_prefix outranks. npm then uninstalls from a prefix
+// this install does not live under, prints "up to date" and exits 0.
+describe("uninstall — a global removal npm did not perform", () => {
+  let savedHome: string | undefined;
+  let packageDir: string;
+  let binPath: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    packageDir = path.join(tmpDir, "npm-global", "lib", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(packageDir, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    binPath = path.join(tmpDir, "npm-global", "bin", "argent");
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.symlinkSync(path.join(packageDir, "dist", "cli.js"), binPath);
+    childProcessMock.execSync.mockImplementation(() => {
+      if (!fs.existsSync(binPath)) throw new Error("not found");
+      return `${binPath}\n`;
+    });
+    // The verification asks npm where its global directory is; the tests below
+    // decide what the removal leaves in it.
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.includes("root") && args.includes("-g"))
+        return `${path.dirname(path.dirname(packageDir))}\n`;
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("does not report a removal that left the package where it was", async () => {
+    // The default mock above removes nothing — npm's no-op exit 0.
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["uninstall", "-g"]),
+      expect.anything()
+    );
+    expect(fs.existsSync(packageDir)).toBe(true);
+    const successes = vi.mocked(log.success).mock.calls.map(([m]) => m as string);
+    expect(successes).not.toContain("Removed global package.");
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("is still at"))).toBe(true);
+    // Machine-wide state must survive an install that is still on PATH.
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
+  it("reports the removal once the package is actually gone", async () => {
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g"))
+        return `${path.dirname(path.dirname(packageDir))}\n`;
+      if (args.includes("uninstall") && args.includes("-g")) {
+        fs.rmSync(packageDir, { recursive: true, force: true });
+        fs.rmSync(binPath, { force: true });
+      }
+      return undefined;
+    }) as never);
+
+    await uninstall(["--yes"]);
+
+    const successes = vi.mocked(log.success).mock.calls.map(([m]) => m as string);
+    expect(successes).toContain("Removed global package.");
+    expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalled();
+  });
+});
+
+describe("uninstall — a global install linked at its source", () => {
+  // `npm install -g <folder>` (and `npm link`) make the global entry a symlink,
+  // so the package root the PATH probe resolves is the developer's checkout —
+  // untouched by the removal, and no evidence the removal failed.
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const sourceDir = path.join(tmpDir, "checkout");
+    writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(sourceDir, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const entry = path.join(tmpDir, "npm-global", "lib", "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.symlinkSync(sourceDir, entry);
+    const binPath = path.join(tmpDir, "npm-global", "bin", "argent");
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.symlinkSync(path.join(sourceDir, "dist", "cli.js"), binPath);
+    childProcessMock.execSync.mockImplementation(() => {
+      if (!fs.existsSync(binPath)) throw new Error("not found");
+      return `${binPath}\n`;
+    });
+    // npm removes the two links it made and leaves the checkout alone.
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${path.dirname(entry)}/..\n`;
+      if (args.includes("uninstall") && args.includes("-g")) {
+        fs.rmSync(entry, { force: true });
+        fs.rmSync(binPath, { force: true });
+      }
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("reports the removal even though the linked source directory survives", async () => {
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(tmpDir, "checkout", "package.json"))).toBe(true);
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("is still at"))).toBe(false);
+    const successes = vi.mocked(log.success).mock.calls.map(([m]) => m as string);
+    expect(successes).toContain("Removed global package.");
+    expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalled();
+  });
+});
+
+describe("uninstall — a second argent further down PATH", () => {
+  // `which -a argent` answers for the whole PATH, so a project's
+  // node_modules/.bin/argent (what `npm run` and direnv put there) outlives a
+  // global removal and must not be read as the global one surviving.
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalPkg = path.join(
+      tmpDir,
+      "npm-global",
+      "lib",
+      "node_modules",
+      "@swmansion",
+      "argent"
+    );
+    writeFile(
+      path.join(globalPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(globalPkg, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const globalBin = path.join(tmpDir, "npm-global", "bin", "argent");
+    fs.mkdirSync(path.dirname(globalBin), { recursive: true });
+    fs.symlinkSync(path.join(globalPkg, "dist", "cli.js"), globalBin);
+
+    const localPkg = path.join(tmpDir, "proj", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(localPkg, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const localBin = path.join(tmpDir, "proj", "node_modules", ".bin", "argent");
+    fs.mkdirSync(path.dirname(localBin), { recursive: true });
+    fs.symlinkSync(path.join(localPkg, "dist", "cli.js"), localBin);
+
+    // The global install comes first, the project shim second — PATH order.
+    childProcessMock.execSync.mockImplementation(
+      () => [globalBin, localBin].filter((b) => fs.existsSync(b)).join("\n") + "\n"
+    );
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g"))
+        return `${path.dirname(path.dirname(globalPkg))}\n`;
+      if (args.includes("uninstall") && args.includes("-g")) {
+        fs.rmSync(globalPkg, { recursive: true, force: true });
+        fs.rmSync(globalBin, { force: true });
+      }
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("reports the global removal even though the project shim is still on PATH", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("global uninstall failed"))).toBe(false);
+    const successes = vi.mocked(log.success).mock.calls.map(([m]) => m as string);
+    expect(successes).toContain("Removed global package.");
+  });
+});
 
 describe("uninstall — MCP entry removal", () => {
   for (const adapter of ALL_ADAPTERS) {
@@ -528,7 +751,10 @@ describe("uninstall — local (committable) mode package removal", () => {
 
     // No -g call even though the mocked PATH probe reports a global install —
     // local mode must never nuke the user's shared global tool.
-    const globalCall = calls.find(([, args]) => Array.isArray(args) && args.includes("-g"));
+    // `uninstall` as well as `-g`: the verification asks `npm root -g` too.
+    const globalCall = calls.find(
+      ([, args]) => Array.isArray(args) && args.includes("-g") && args.includes("uninstall")
+    );
     expect(globalCall).toBeFalsy();
 
     expect(telemetryMock.track).toHaveBeenCalledWith(
@@ -678,7 +904,7 @@ describe("uninstall — scoped config cleanup", () => {
     expect(hasArgentEntry(globalCursor)).toBe(true);
 
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
-    expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
+    expect(calls.some(([, args]) => args.includes("-g") && args.includes("uninstall"))).toBe(false);
   });
 
   it("--global keeps the committed project entries and the local-mode record", async () => {
@@ -694,7 +920,8 @@ describe("uninstall — scoped config cleanup", () => {
     // …while the removed global install is unwired and uninstalled.
     expect(hasArgentEntry(globalCursor)).toBe(false);
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
-    expect(calls.some(([, args]) => args.includes("-g"))).toBe(true);
+    // `uninstall` as well as `-g`: the verification asks `npm root -g` too.
+    expect(calls.some(([, args]) => args.includes("-g") && args.includes("uninstall"))).toBe(true);
   });
 
   it("fresh clone --yes (record, dep not materialized) removes the present global but keeps committed team files", async () => {
@@ -707,9 +934,719 @@ describe("uninstall — scoped config cleanup", () => {
     // The present global install was the target: unwired and uninstalled…
     expect(hasArgentEntry(globalCursor)).toBe(false);
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
-    expect(calls.some(([, args]) => args.includes("-g"))).toBe(true);
+    // `uninstall` as well as `-g`: the verification asks `npm root -g` too.
+    expect(calls.some(([, args]) => args.includes("-g") && args.includes("uninstall"))).toBe(true);
     // …while the not-yet-materialized local mode's committed files survive.
     expect(hasArgentEntry(projectMcp)).toBe(true);
     expect(fs.existsSync(path.join(projDir, ".argent", "install.json"))).toBe(true);
+  });
+});
+
+describe("uninstall — a project shim ahead of the global install on PATH", () => {
+  // `npm run`, `npx` and direnv all prepend node_modules/.bin, so the first
+  // `which -a argent` hit is the project's copy — which npm's global removal
+  // neither touches nor should be read as the global one surviving.
+  let savedHome: string | undefined;
+  let globalPkg: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    globalPkg = path.join(globalRoot, "@swmansion", "argent");
+    writeFile(
+      path.join(globalPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(globalPkg, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const globalBin = path.join(tmpDir, "npm-global", "bin", "argent");
+    fs.mkdirSync(path.dirname(globalBin), { recursive: true });
+    fs.symlinkSync(path.join(globalPkg, "dist", "cli.js"), globalBin);
+
+    const localPkg = path.join(tmpDir, "proj", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(localPkg, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const localBin = path.join(tmpDir, "proj", "node_modules", ".bin", "argent");
+    fs.mkdirSync(path.dirname(localBin), { recursive: true });
+    fs.symlinkSync(path.join(localPkg, "dist", "cli.js"), localBin);
+
+    // The project shim first, the global install second.
+    childProcessMock.execSync.mockImplementation(
+      () => [localBin, globalBin].filter((b) => fs.existsSync(b)).join("\n") + "\n"
+    );
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
+      if (args.includes("uninstall") && args.includes("-g")) {
+        fs.rmSync(globalPkg, { recursive: true, force: true });
+        fs.rmSync(globalBin, { force: true });
+      }
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("reports the removal npm performed, not the shim PATH still answers with", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(globalPkg)).toBe(false);
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("global uninstall failed"))).toBe(false);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    // The shim is an argent the user still has, so the machine-wide state it
+    // runs under stays: removing the global package is not the last word on
+    // whether anything is left.
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
+  it("stops the tool server of the install it removed, not the shim's", async () => {
+    const removed = fs.realpathSync(globalPkg);
+    const shim = fs.realpathSync(path.join(tmpDir, "proj", "node_modules", "@swmansion", "argent"));
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(removed);
+    expect(toolsClientMock.killToolServerForInstallDir).not.toHaveBeenCalledWith(shim);
+  });
+});
+
+describe("uninstall — an argent npm did not install", () => {
+  // A pnpm shim, a Nix profile wrapper or a Homebrew link puts argent on PATH
+  // with no npm-owned package behind it. `npm uninstall -g` exits 0 having done
+  // nothing, and the machine-wide reset below must not fire under an install
+  // that is still there.
+  let savedHome: string | undefined;
+  let shim: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    // A shell script, not a symlink: nothing resolves it back to a package.
+    shim = path.join(tmpDir, "pnpm-home", "bin", "argent");
+    writeFile(shim, '#!/bin/sh\nexec node /elsewhere/cli.js "$@"\n');
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    fs.mkdirSync(globalRoot, { recursive: true });
+    childProcessMock.execSync.mockImplementation(() => `${shim}\n`);
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.includes("root") && args.includes("-g"))
+        return `${globalRoot}\n`;
+      return undefined; // `npm uninstall -g` prints "up to date" and exits 0.
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("does not announce a removal npm could not have made", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(shim)).toBe(true);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).not.toContain(
+      "Removed global package."
+    );
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+        has_uninstalled_package: false,
+      })
+    );
+    // The closing line is the last thing the user reads, so it cannot say the
+    // removal happened.
+    expect(vi.mocked(outro).mock.lastCall?.[0]).toContain("still installed globally");
+  });
+
+  it("still removes the project devDependency it was also asked to remove", async () => {
+    // The global target is listed first, so giving up on it would take the
+    // local removal with it.
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^9.9.9" } })
+    );
+    writeFile(
+      path.join(tmpDir, "node_modules", "@swmansion", "argent", "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+
+    await uninstall(["--yes", "--global", "--local"]);
+
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed local package."
+    );
+    expect(vi.mocked(log.error).mock.calls.map(([m]) => m as string)).toContainEqual(
+      expect.stringContaining("npm has nothing at")
+    );
+  });
+});
+
+describe("uninstall — a link whose source was deleted", () => {
+  // `npm install -g <folder>` then `rm -rf` the checkout: the global entry is a
+  // dangling symlink, still npm's to remove.
+  let savedHome: string | undefined;
+  let entry: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    entry = path.join(globalRoot, "@swmansion", "argent");
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.symlinkSync(path.join(tmpDir, "deleted-checkout"), entry);
+    childProcessMock.execSync.mockImplementation(() => `${tmpDir}/npm-global/bin/argent\n`);
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
+      if (args.includes("uninstall") && args.includes("-g")) fs.rmSync(entry, { force: true });
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("reports the removal instead of denying npm ever had it", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    // realpath throws on it, so the entry npm made is the only directory left
+    // to scope the teardown to.
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(entry);
+  });
+});
+
+describe("uninstall — a removal the package manager refused", () => {
+  // `npm uninstall -g` under a read-only prefix exits 243/EACCES — the machine
+  // class this whole preflight exists for. The run still owes the user the
+  // other removal it was asked for, and an outro either way.
+  let savedHome: string | undefined;
+  let localPkg: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    writeFile(
+      path.join(globalRoot, "@swmansion", "argent", "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent" })
+    );
+    localPkg = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
+      if (args.includes("uninstall") && args.includes("-g")) throw new Error("EACCES");
+      if (args.includes("uninstall")) fs.rmSync(localPkg, { recursive: true, force: true });
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("still removes the other target, and says which one is left", async () => {
+    await uninstall(["--yes", "--global", "--local"]);
+
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("global uninstall failed"))).toBe(true);
+    expect(fs.existsSync(localPkg)).toBe(false);
+    expect(
+      vi
+        .mocked(outro)
+        .mock.calls.map(([m]) => m as string)
+        .join("")
+    ).toContain("still installed globally");
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ error_code: "UNINSTALL_PACKAGE_ACTION_FAILED" })
+    );
+  });
+});
+
+describe("uninstall — npm's directory asked on a run that would remove with pnpm", () => {
+  // `pnpm dlx @swmansion/argent uninstall`: npm's global directory is not a
+  // place `pnpm remove -g` can reach, so finding an install there is not
+  // finding one this run can take away.
+  let savedHome: string | undefined;
+  let globalPkg: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    process.env.npm_config_user_agent = "pnpm/9.1.0 npm/? node/v22.0.0 darwin arm64";
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    globalPkg = path.join(globalRoot, "@swmansion", "argent");
+    writeFile(
+      path.join(globalPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    childProcessMock.execSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      Array.isArray(args) && args.includes("root") && args.includes("-g")
+        ? `${globalRoot}\n`
+        : undefined) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    delete process.env.npm_config_user_agent;
+  });
+
+  it("does not report removing what pnpm was never going to reach", async () => {
+    await uninstall(["--yes"]);
+
+    const ran = (childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>).some(
+      ([bin, args]) => bin === "pnpm" && Array.isArray(args) && args.includes("-g")
+    );
+    expect(ran).toBe(false);
+    expect(fs.existsSync(globalPkg)).toBe(true);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).not.toContain(
+      "Removed global package."
+    );
+  });
+});
+
+describe("uninstall — machine-wide state under a global install only npm can see", () => {
+  // The install `argent init`'s prefix recovery makes: PATH cannot see it until
+  // the user adds its bin directory, and removing the project's devDependency
+  // must not clear the telemetry identity out from under it.
+  let savedHome: string | undefined;
+  let localPkg: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    writeFile(
+      path.join(globalRoot, "@swmansion", "argent", "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent" })
+    );
+    localPkg = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    childProcessMock.execSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
+      if (args.includes("uninstall") && !args.includes("-g"))
+        fs.rmSync(localPkg, { recursive: true, force: true });
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("keeps the telemetry identity the global install still answers for", async () => {
+    await uninstall(["--yes", "--local"]);
+
+    expect(fs.existsSync(localPkg)).toBe(false);
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+});
+
+describe("uninstall — npm answers for a global directory it holds nothing in", () => {
+  // `npm root -g` names a directory whether or not anything is under it, so the
+  // answer alone is not an install to remove.
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    fs.mkdirSync(globalRoot, { recursive: true });
+    childProcessMock.execSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      Array.isArray(args) && args.includes("root") && args.includes("-g")
+        ? `${globalRoot}\n`
+        : undefined) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("finds nothing to remove rather than offering a removal of nothing", async () => {
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["uninstall", "-g"])
+    );
+    expect(
+      vi
+        .mocked(log.info)
+        .mock.calls.map(([m]) => m as string)
+        .join("")
+    ).toContain("no matching @swmansion/argent install detected");
+  });
+});
+
+describe("uninstall — a global install another package manager owns", () => {
+  // pnpm's global directory has a shape argent cannot name, so its removal is
+  // not judged against npm's — which holds nothing, and would read as a no-op.
+  let savedHome: string | undefined;
+  let savedAgentHere: string | undefined;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedAgentHere = process.env.npm_config_user_agent;
+    process.env.HOME = tmpDir;
+    process.env.npm_config_user_agent = "pnpm/10.0.0 npm/? node/v24.0.0 darwin arm64";
+    const pnpmPkg = path.join(tmpDir, "pnpm-global", "5", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(pnpmPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    const bin = path.join(tmpDir, "pnpm-home", "argent");
+    writeFile(bin, "#!/bin/sh\n");
+    fs.mkdirSync(path.join(tmpDir, "npm-global", "lib", "node_modules"), { recursive: true });
+    childProcessMock.execSync.mockImplementation(() => `${bin}\n`);
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.includes("root") && args.includes("-g"))
+        return `${path.join(tmpDir, "npm-global", "lib", "node_modules")}\n`;
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedAgentHere === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgentHere;
+  });
+
+  it("reports the removal pnpm made rather than what npm's directory holds", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "pnpm",
+      expect.arrayContaining(["remove", "-g"]),
+      expect.anything()
+    );
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+  });
+});
+
+describe("uninstall — a global removal bun did not perform", () => {
+  // `bun remove -g` exits 0 for a package its global store never held, saving a
+  // lockfile and taking nothing away. npm's directory cannot answer for it, so
+  // what the bin on PATH resolves to has to.
+  let savedHome: string | undefined;
+  let savedAgentHere: string | undefined;
+  let packageDir: string;
+  let binPath: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedAgentHere = process.env.npm_config_user_agent;
+    process.env.HOME = tmpDir;
+    process.env.npm_config_user_agent = "bun/1.3.10 npm/? node/v24.0.0 darwin arm64";
+    // bun's real layout: <BUN_INSTALL>/bin/<name> links into the global store.
+    packageDir = path.join(
+      tmpDir,
+      "bun",
+      "install",
+      "global",
+      "node_modules",
+      "@swmansion",
+      "argent"
+    );
+    writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(packageDir, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    binPath = path.join(tmpDir, "bun", "bin", "argent");
+    fs.mkdirSync(path.dirname(binPath), { recursive: true });
+    fs.symlinkSync(path.join(packageDir, "dist", "cli.js"), binPath);
+    // npm's own global directory holds nothing: only bun's store is the answer.
+    fs.mkdirSync(path.join(tmpDir, "npm-global", "lib", "node_modules"), { recursive: true });
+    childProcessMock.execSync.mockImplementation(() => {
+      if (!fs.existsSync(binPath)) throw new Error("not found");
+      return `${binPath}\n`;
+    });
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      Array.isArray(args) && args.includes("root") && args.includes("-g")
+        ? `${path.join(tmpDir, "npm-global", "lib", "node_modules")}\n`
+        : undefined) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedAgentHere === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgentHere;
+  });
+
+  it("does not report a removal that left the package in bun's store", async () => {
+    // The default mock above removes nothing — bun's exit 0 over an empty store.
+    await uninstall(["--yes", "--global"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "bun",
+      expect.arrayContaining(["remove", "-g", "@swmansion/argent"]),
+      expect.anything()
+    );
+    expect(fs.existsSync(packageDir)).toBe(true);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).not.toContain(
+      "Removed global package."
+    );
+    expect(vi.mocked(log.error).mock.calls.map(([m]) => m as string)).toContainEqual(
+      `The global package was not removed. bun reported success but @swmansion/argent is ` +
+        `still at ${fs.realpathSync(packageDir)}.`
+    );
+    // The closing line is the last thing the user reads, so it cannot say the
+    // removal happened.
+    expect(vi.mocked(outro).mock.lastCall?.[0]).toContain("still installed globally");
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
+  it("reports the removal once bun's store no longer holds it", async () => {
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g"))
+        return `${path.join(tmpDir, "npm-global", "lib", "node_modules")}\n`;
+      if (args.includes("remove") && args.includes("-g")) {
+        fs.rmSync(packageDir, { recursive: true, force: true });
+        fs.rmSync(binPath, { force: true });
+      }
+      return undefined;
+    }) as never);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    expect(vi.mocked(outro).mock.lastCall?.[0]).toContain("argent has been removed.");
+    expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalled();
+  });
+});
+
+describe("uninstall — the global went and the local removal did not", () => {
+  // Both targets in one run. The global removal succeeding says nothing about
+  // the machine-wide state: the project's own install is still on disk.
+  let savedHome: string | undefined;
+  let globalPkg: string;
+  let localPkg: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    globalPkg = path.join(globalRoot, "@swmansion", "argent");
+    writeFile(
+      path.join(globalPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    localPkg = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    // Nothing on PATH, and npm's directory is emptied by the removal, so the
+    // surviving local install is the only thing the gate can be held by.
+    childProcessMock.execSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
+      if (args.includes("uninstall") && args.includes("-g")) {
+        fs.rmSync(globalPkg, { recursive: true, force: true });
+        return undefined;
+      }
+      if (args.includes("uninstall")) throw new Error("EACCES");
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("keeps the telemetry identity the surviving local install answers for", async () => {
+    await uninstall(["--yes", "--global", "--local"]);
+
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    expect(vi.mocked(log.error).mock.calls.map(([m]) => m as string)).toContainEqual(
+      expect.stringContaining("local uninstall failed")
+    );
+    expect(fs.existsSync(globalPkg)).toBe(false);
+    expect(fs.existsSync(localPkg)).toBe(true);
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+    expect(vi.mocked(outro).mock.lastCall?.[0]).toContain("still installed in this project");
+  });
+});
+
+describe("uninstall — a global install the shells cannot see yet", () => {
+  // What `argent init`'s prefix recovery leaves behind: installed under a new
+  // prefix whose bin directory is not on PATH until the user adds the line.
+  let savedHome: string | undefined;
+  let packageDir: string;
+  let realPackageDir: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    packageDir = path.join(globalRoot, "@swmansion", "argent");
+    writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    realPackageDir = fs.realpathSync(packageDir);
+    // Nothing on PATH at all.
+    childProcessMock.execSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
+      if (args.includes("uninstall") && args.includes("-g"))
+        fs.rmSync(packageDir, { recursive: true, force: true });
+      return undefined;
+    }) as never);
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  it("removes what npm owns instead of reporting nothing to remove", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(packageDir)).toBe(false);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    // The teardown needs a directory to scope itself to, and PATH has none.
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(realPackageDir);
+  });
+});
+
+describe("uninstall — a project shim ahead of a global install another manager owns", () => {
+  // Same shim `npm run`/`pnpm exec`/direnv puts first on PATH, but the manager
+  // is pnpm: its global layout has no name argent can check, so PATH is the only
+  // witness left — and the copy PATH names here is one no global removal touches.
+  let savedHome: string | undefined;
+  let savedAgentHere: string | undefined;
+  let pnpmPkg: string;
+  let projDirHere: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedAgentHere = process.env.npm_config_user_agent;
+    process.env.HOME = tmpDir;
+    process.env.npm_config_user_agent = "pnpm/10.0.0 npm/? node/v24.0.0 darwin arm64";
+    pnpmPkg = path.join(tmpDir, "pnpm-global", "5", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(pnpmPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+
+    projDirHere = path.join(tmpDir, "proj");
+    const localPkg = path.join(projDirHere, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(localPkg, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const localBin = path.join(projDirHere, "node_modules", ".bin", "argent");
+    fs.mkdirSync(path.dirname(localBin), { recursive: true });
+    fs.symlinkSync(path.join(localPkg, "dist", "cli.js"), localBin);
+
+    childProcessMock.execSync.mockImplementation(() => `${localBin}\n`);
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g"))
+        return `${path.join(tmpDir, "npm-global", "lib", "node_modules")}\n`;
+      if (args.includes("remove") && args.includes("-g"))
+        fs.rmSync(pnpmPkg, { recursive: true, force: true });
+      return undefined;
+    }) as never);
+    process.chdir(projDirHere);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedAgentHere === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgentHere;
+  });
+
+  it("does not read the surviving project copy as the global removal failing", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(pnpmPkg)).toBe(false);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("The global package was not removed"))).toBe(false);
   });
 });
