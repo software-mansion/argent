@@ -17,7 +17,9 @@ export type {
   DeviceInfo,
   ToolCapability,
   ToolDependency,
+  GatedOperation,
 } from "./types";
+export { GATED_OPERATIONS } from "./types";
 export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
 export type {
   ArtifactHandle,

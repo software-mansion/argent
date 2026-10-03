@@ -65,6 +65,11 @@ export interface BuildToolsServerEnvOptions {
    * unauthenticated (`argent server start --no-auth`).
    */
   token?: string;
+  /**
+   * Absolute path to an operator server policy, exported as
+   * `ARGENT_SERVER_POLICY` (`argent server start --policy`).
+   */
+  policyPath?: string;
 }
 
 export function buildToolsServerEnv(
@@ -84,6 +89,7 @@ export function buildToolsServerEnv(
     env.ARGENT_IDLE_TIMEOUT_MINUTES = String(options.idleTimeoutMinutes);
   }
   if (options.token) env[AUTH_TOKEN_ENV] = options.token;
+  if (options.policyPath) env.ARGENT_SERVER_POLICY = options.policyPath;
   if (paths.installKind) env.ARGENT_INSTALL_KIND = paths.installKind;
   if (paths.installProjectRoot) env.ARGENT_PROJECT_ROOT = paths.installProjectRoot;
   return env;

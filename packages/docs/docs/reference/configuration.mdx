@@ -178,6 +178,56 @@ echo 'APP_PASSWORD=...' >> ~/.argent/secrets.env
 argent secrets
 ```
 
+## Server policy
+
+A server policy limits what the clients of a tool-server can do. The operator of the tool-server writes the policy as a JSON file. The policy can allow a list of devices, allow or deny tools, and deny operations. Use a server policy when other machines connect to the tool-server with `argent link`.
+
+```json
+{
+  "version": 1,
+  "devices": { "allow": ["8F1C2D3E-4B5A-6978-8090-A1B2C3D4E5F6"] },
+  "tools": { "deny": ["update-argent"] },
+  "operations": { "deny": ["device-shutdown", "flow-scripts"] }
+}
+```
+
+Start the tool-server with the policy:
+
+```bash
+argent server start --host 0.0.0.0 --policy ./argent-policy.json
+```
+
+The `--policy` option sets the `ARGENT_SERVER_POLICY` variable for the tool-server. The tool-server reads the file one time, when it starts. The tool-server does not start when the file is not valid. Restart the tool-server after you change the file.
+
+| Key               | Description                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `version`         | Must be `1`                                                                                                       |
+| `devices.allow`   | The device ids that the clients can use: an iOS `udid`, an Android or Vega `serial`, or the `id` of other devices |
+| `tools.allow`     | The only tools that the clients can call. Use `allow` or `deny`, not both                                         |
+| `tools.deny`      | The tools that the clients cannot call                                                                            |
+| `operations.deny` | The operations that no tool can do: `device-shutdown`, `flow-scripts`                                             |
+
+The tool-server applies the policy to every tool call. This includes the tool calls that a flow or `run-sequence` makes.
+
+With `devices.allow`:
+
+- `list-devices` shows only the allowed devices. The list of AVDs is empty.
+- A tool call that names another device fails.
+- `boot-device` cannot start a device by `avdName`, `vvdImage` or `electronAppPath`. Start the allowed device by its id.
+- The preview window cannot show or shut down another device.
+- The debugger, network and React profiler tools fail. These tools reach the app through Metro, and Argent cannot match a Metro target to a device id.
+
+The operations:
+
+| Operation         | Effect when denied                                                                                                                                                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `device-shutdown` | No tool and no preview action shuts down a device. `boot-device` with `force` fails. When the screen of a running emulator does not respond, `boot-device` fails and does not restart the emulator. Argent Lens does not shut down its devices at the end of a session |
+| `flow-scripts`    | `flow-add-script` fails, and a flow with a `script` step fails at that step. A script runs any code on the machine of the tool-server, so a policy cannot limit what a script does                                                                                     |
+
+A call that the policy denies fails with the error code `SERVER_POLICY_DENIED` and the HTTP status `403`. Do not retry the call. Use an allowed tool and device, or ask the operator to change the policy.
+
+`boot-device` stops an Android emulator that it started when the boot fails, also when the policy denies `device-shutdown`. That emulator did not run before the call.
+
 ## Environment variables
 
 An environment variable changes the behavior of the process that reads it. Export the variable before you start that process. Most variables apply to the tool-server. Restart the tool-server with `argent server stop` after a change.
@@ -189,6 +239,7 @@ An environment variable changes the behavior of the process that reads it. Expor
 | `ARGENT_PORT`                 | `3001`                               | The port the tool-server listens on                                                                     |
 | `ARGENT_HOST`                 | `127.0.0.1`                          | The address the tool-server binds to                                                                    |
 | `ARGENT_IDLE_TIMEOUT_MINUTES` | `0`                                  | Minutes without a request after which the tool-server exits. `0` disables the timeout                   |
+| `ARGENT_SERVER_POLICY`        | unset                                | Path of the [server policy](#server-policy) file. `argent server start --policy` sets it                |
 | `ARGENT_EVENT_LOG`            | `~/.argent/tool-server-events.jsonl` | Path of the event log that the `tool-server-event-log` flag writes                                      |
 | `ARGENT_SCREENSHOT_SCALE`     | `0.25`                               | Scale factor of a captured screenshot, between `0.01` and `1`. A smaller value returns a smaller image. |
 | `ARGENT_CHROMIUM_PORTS`       | empty                                | Comma-separated CDP ports that Argent probes for Chromium apps, in addition to `9222`                   |

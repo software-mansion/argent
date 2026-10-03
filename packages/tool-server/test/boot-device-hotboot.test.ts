@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import type { Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 
 // Parametrize platform-dependent assertions so a single CI runner exercises
 // both branches. Without this, macOS CI never tests the linux branch and
@@ -76,6 +76,7 @@ vi.mock("@argent/configuration-core", async () => {
   return { ...actual, isFlagEnabled: () => false };
 });
 
+import { installServerPolicy, parseServerPolicy } from "../src/server-policy";
 import {
   __resetInFlightBootsForTesting,
   createBootDeviceTool,
@@ -718,6 +719,87 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
       expect(spawnMock.mock.calls[0]![1]).toContain("-no-snapshot-load");
       expect(result).toMatchObject({ serial: "emulator-5556" });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a wedged pre-existing AVD running when the server policy denies device-shutdown", async () => {
+    // The fast-path's BUG GUARD: if a long-running emulator drifts into the
+    // sticky-blank screencap state, returning that serial unchanged would
+    // hand the caller a device whose screenshots are silently all-zero.
+    // The guard kills the wedged emulator and falls through to a fresh boot.
+    // Fake timers: assertScreencapAlive polls for firstRealFrameHot (8 s)
+    // before declaring a wedge, then the cold-boot fallback parks on its own
+    // setTimeout cadence. Without fake timers this would real-time wait.
+    // The reuse path's kill shuts down an emulator this call did not start, so a
+    // policy that denies device-shutdown refuses instead of cold-booting.
+    installServerPolicy(
+      parseServerPolicy(
+        { version: 1, operations: { deny: ["device-shutdown"] } },
+        "/etc/argent/policy.json"
+      )
+    );
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(false); // force the cold-boot path post-kill
+      let killed = false;
+      let spawned = false;
+      spawnMock.mockImplementation(() => {
+        spawned = true;
+        return fakeChild();
+      });
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "adb" && args[0] === "version")
+          return { stdout: "Android Debug Bridge\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+        if (cmd === "emulator" && args[0] === "-list-avds")
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices") {
+          // Pre-kill: wedged emulator-5554 is listed. After kill but before
+          // the cold-boot spawn registers: empty (so emulator-5556 is *new*
+          // when it appears). Post-spawn: emulator-5556 is listed.
+          let line = "";
+          if (!killed) line = "emulator-5554\tdevice\n";
+          else if (spawned) line = "emulator-5556\tdevice\n";
+          return { stdout: `List of devices attached\n${line}`, stderr: "" };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
+          return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
+          killed = true;
+          return { stdout: "OK\n", stderr: "" };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          const serial = args[1];
+          const shellCmd = args[3] ?? "";
+          if (shellCmd === "getprop ro.boot.qemu.avd_name")
+            return { stdout: "Pixel_7_API_34\n", stderr: "" };
+          if (shellCmd.startsWith("getprop sys.boot_completed"))
+            return { stdout: "1\n", stderr: "" };
+          if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+          if (shellCmd === "pm path android")
+            return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+          if (shellCmd.startsWith("screencap")) {
+            // Wedged frame on the original serial; healthy on the respawn.
+            return { stdout: serial === "emulator-5554" ? "0\n" : "1\n", stderr: "" };
+          }
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      const tool = createBootDeviceTool(registry);
+      const resultP = tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const outcome = resultP.then(
+        () => undefined,
+        (err: unknown) => getFailureSignal(err)?.error_code
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await outcome).toBe(FAILURE_CODES.SERVER_POLICY_DENIED);
+      expect(killed).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      installServerPolicy(undefined);
       vi.useRealTimers();
     }
   });

@@ -11,6 +11,7 @@ import { resolveDevice } from "./utils/device-info";
 import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "./utils/foldable";
 import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
+import { isDeviceAllowed } from "./server-policy";
 import { listDevicesTool } from "./tools/devices/list-devices";
 import {
   variantProposalStore,
@@ -52,6 +53,15 @@ function wsUrlFromHttp(httpUrl: string): string {
 
 export function createPreviewRouter(registry: Registry): Router {
   const router = express.Router();
+
+  // Routes that name a device by :udid answer only for devices the operator's
+  // server policy allows; this subtree is tokenless.
+  router.param("udid", (_req, res, next, udid) => {
+    if (isDeviceAllowed(String(udid))) return next();
+    res
+      .status(403)
+      .json({ error: `Device "${udid}" is not allowed by this tool-server's policy.` });
+  });
 
   // Last round for which `lens:preview_opened` was emitted. Round numbers only
   // ever increase, so "!= last" collapses repeated signals for one round (several
@@ -322,6 +332,12 @@ export function createPreviewRouter(registry: Registry): Router {
     const udid = typeof req.body?.udid === "string" ? req.body.udid : "";
     if (!udid) {
       res.status(400).json({ error: "Missing `udid`." });
+      return;
+    }
+    if (!isDeviceAllowed(udid)) {
+      res
+        .status(403)
+        .json({ error: `Device "${udid}" is not allowed by this tool-server's policy.` });
       return;
     }
     // iOS-only: a stopped iOS simulator still appears in `list-devices` (state

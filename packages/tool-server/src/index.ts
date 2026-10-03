@@ -26,6 +26,11 @@ import {
   type RoundAbandonedStats,
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
+import {
+  assertPolicyToolsRegistered,
+  installServerPolicy,
+  loadServerPolicy,
+} from "./server-policy";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 
 const PROCESS_TIMEOUT_MS = 5_000;
@@ -161,6 +166,22 @@ export function start(): void {
   const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
 
   const registry = createRegistry();
+  // An unreadable or invalid policy stops startup: the server never runs with a
+  // weaker policy than its operator named.
+  try {
+    const serverPolicy = loadServerPolicy();
+    if (serverPolicy) {
+      assertPolicyToolsRegistered(serverPolicy, (id) => registry.getTool(id) !== undefined);
+    }
+    installServerPolicy(serverPolicy);
+  } catch (err) {
+    writeAndExit(
+      process.stderr,
+      `[tool-server] ${err instanceof Error ? err.message : String(err)}\n`,
+      1
+    );
+    return;
+  }
   attachRegistryLogger(registry);
   let eventLog: ReturnType<typeof createToolServerEventLog> | null = null;
   if (isFlagEnabled("tool-server-event-log")) {

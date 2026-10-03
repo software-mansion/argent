@@ -14,6 +14,7 @@ import {
   simctlPrefix,
   type DeviceSetPath,
 } from "./ios-device-sets";
+import { isDeviceAllowed } from "../server-policy";
 
 const execFileAsync = promisify(execFile);
 
@@ -191,6 +192,8 @@ export function startSimulatorWatcher(registry: Registry): {
       // xcrun unavailable or transient error — skip this tick
       return;
     }
+    // A simulator outside the operator's server policy is never armed.
+    booted = new Set([...booted].filter((udid) => isDeviceAllowed(udid)));
 
     /**
      * Before the init pass, so a granted claim re-resolves into attach mode on
