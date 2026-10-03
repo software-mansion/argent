@@ -37,6 +37,7 @@ import {
   copyDir,
   dirExists,
   detectPackageManager,
+  detectGlobalPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
@@ -975,6 +976,141 @@ describe("detectProjectPackageManager", () => {
     // must NOT bleed through the .git boundary, so the walk stops and falls
     // back to the (pinned-unset) agent default.
     expect(detectProjectPackageManager(repo)).toBe("npm");
+  });
+});
+
+// ── detectGlobalPackageManager ────────────────────────────────────────────────
+// The global install's own on-disk location must beat npm_config_user_agent —
+// a bare `argent update` carries no user agent at all (#1207).
+
+describe("detectGlobalPackageManager", () => {
+  const original = process.env.npm_config_user_agent;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = original;
+  });
+
+  it("returns pnpm for a pnpm global install layout (.../pnpm/global/...)", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "/home/user/.local/share/pnpm/global/5/node_modules/@swmansion/argent";
+    expect(detectGlobalPackageManager(root)).toBe("pnpm");
+  });
+
+  it("returns pnpm for a .pnpm content-addressable store path", () => {
+    delete process.env.npm_config_user_agent;
+    const root =
+      "/home/user/project/node_modules/.pnpm/@swmansion+argent@1.0.0/node_modules/@swmansion/argent";
+    expect(detectGlobalPackageManager(root)).toBe("pnpm");
+  });
+
+  it("returns pnpm when the root is contained in PNPM_HOME, even off the usual layout", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "/custom/pnpm-home/some/other/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(root, { PNPM_HOME: "/custom/pnpm-home" } as NodeJS.ProcessEnv)
+    ).toBe("pnpm");
+  });
+
+  it("does not match PNPM_HOME as a bare string prefix (sibling directory)", () => {
+    delete process.env.npm_config_user_agent;
+    // "/custom/pnpm-home-2" starts with the string "/custom/pnpm-home" but is
+    // NOT contained in it — a naive startsWith(pnpmHome) would false-positive.
+    const root = "/custom/pnpm-home-2/node_modules/@swmansion/argent";
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    expect(
+      detectGlobalPackageManager(root, { PNPM_HOME: "/custom/pnpm-home" } as NodeJS.ProcessEnv)
+    ).toBe("npm");
+  });
+
+  it("treats a root outside pnpm, yarn and bun global dirs as npm's, whatever launched argent", () => {
+    // `pnpm dlx @swmansion/argent update` on an npm-owned install must not
+    // run `pnpm add -g` and leave a second copy behind.
+    process.env.npm_config_user_agent = "pnpm/9.0.0";
+    const root = "/usr/lib/node_modules/@swmansion/argent";
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "linux")).toBe("npm");
+  });
+
+  it("returns yarn for a yarn classic global install", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/home/user/.config/yarn/global/node_modules/@swmansion/argent";
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "linux")).toBe("yarn");
+  });
+
+  it("returns yarn for a yarn classic global install on Windows", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root =
+      "C:\\Users\\me\\AppData\\Local\\Yarn\\Data\\global\\node_modules\\@swmansion\\argent";
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "win32")).toBe("yarn");
+  });
+
+  it("returns bun for a bun global install", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/home/user/.bun/install/global/node_modules/@swmansion/argent";
+    expect(detectGlobalPackageManager(root, {} as NodeJS.ProcessEnv, "linux")).toBe("bun");
+  });
+
+  it("returns bun for a root inside BUN_INSTALL_GLOBAL_DIR", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/opt/argent-bun/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(
+        root,
+        { BUN_INSTALL_GLOBAL_DIR: "/opt/argent-bun" } as NodeJS.ProcessEnv,
+        "linux"
+      )
+    ).toBe("bun");
+  });
+
+  it("returns bun for a root under a moved BUN_INSTALL", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    const root = "/opt/bun/install/global/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(root, { BUN_INSTALL: "/opt/bun" } as NodeJS.ProcessEnv, "linux")
+    ).toBe("bun");
+  });
+
+  it("does not match BUN_INSTALL_GLOBAL_DIR as a bare string prefix", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "/opt/argent-bun-2/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(
+        root,
+        { BUN_INSTALL_GLOBAL_DIR: "/opt/argent-bun" } as NodeJS.ProcessEnv,
+        "linux"
+      )
+    ).toBe("npm");
+  });
+
+  it("matches PNPM_HOME without case sensitivity on Windows", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "C:\\Tools\\ArgentPnpm\\global\\v11\\abc\\node_modules\\@swmansion\\argent";
+    expect(
+      detectGlobalPackageManager(
+        root,
+        { PNPM_HOME: "c:\\tools\\argentpnpm" } as NodeJS.ProcessEnv,
+        "win32"
+      )
+    ).toBe("pnpm");
+  });
+
+  it("keeps the PNPM_HOME match case-sensitive on POSIX", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "/Custom/Home/node_modules/@swmansion/argent";
+    expect(
+      detectGlobalPackageManager(root, { PNPM_HOME: "/custom/home" } as NodeJS.ProcessEnv, "linux")
+    ).toBe("npm");
+  });
+
+  it("falls back to the user agent when the root is null", () => {
+    process.env.npm_config_user_agent = "yarn/4.0.0";
+    expect(detectGlobalPackageManager(null)).toBe("yarn");
+  });
+
+  it("normalizes backslashes so a Windows-style pnpm path still matches", () => {
+    delete process.env.npm_config_user_agent;
+    const root = "C:\\Users\\me\\AppData\\Local\\pnpm\\global\\5\\node_modules\\@swmansion\\argent";
+    expect(detectGlobalPackageManager(root)).toBe("pnpm");
   });
 });
 

@@ -61,7 +61,14 @@ vi.mock("../src/update-target.js", () => ({
 }));
 // Mutable install topology read through the utils mock — tests flip these to
 // stage "the global install landed at v99" or "no global install at all".
-const topologyState = vi.hoisted(() => ({ globalInstalled: true, globalVersion: "1.0.0" }));
+// globalPackageRoot defaults to null (unresolvable — matches the real
+// function against the fake execSync path below), so existing tests are
+// unaffected; a pnpm-ownership test overrides it to a pnpm-looking path.
+const topologyState = vi.hoisted(() => ({
+  globalInstalled: true,
+  globalVersion: "1.0.0",
+  globalPackageRoot: null as string | null,
+}));
 
 vi.mock("../src/utils.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/utils.js")>();
@@ -69,6 +76,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     ...original,
     isGloballyInstalled: vi.fn(() => topologyState.globalInstalled),
     getGloballyInstalledVersion: vi.fn(() => topologyState.globalVersion),
+    getGloballyInstalledPackageRoot: vi.fn(() => topologyState.globalPackageRoot),
   };
 });
 
@@ -95,6 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   topologyState.globalInstalled = true;
   topologyState.globalVersion = "1.0.0";
+  topologyState.globalPackageRoot = null;
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
   originalCwd = process.cwd();
   // Sandbox HOME: the accepted-update path runs the real config refresh, which
@@ -390,5 +399,33 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     ).mcpServers.argent;
     expect(entry.command).toBe("argent");
     expect(entry.args).toEqual(["mcp"]);
+  });
+});
+
+describe("update — global install owned by pnpm, not the launcher's user agent", () => {
+  it("builds `pnpm add -g ...`, even with no npm_config_user_agent set (#1207)", async () => {
+    // The bug: a bare `argent update` (no npx/pnpm dlx wrapper) carries no
+    // npm_config_user_agent at all — detectPackageManager() alone would
+    // default to npm even though the install actually lives under pnpm's
+    // global store. getGloballyInstalledPackageRoot() reporting that path is
+    // what must steer the command instead.
+    topologyState.globalPackageRoot =
+      "/home/user/.local/share/pnpm/global/5/node_modules/@swmansion/argent";
+    childProcessMock.execFileSync.mockImplementationOnce((() => {
+      topologyState.globalVersion = "99.0.0";
+      return undefined;
+    }) as never);
+
+    await update(["--yes"]);
+
+    const pnpmCalls = (
+      childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>
+    ).filter(([bin]) => bin === "pnpm");
+    expect(pnpmCalls).toHaveLength(1);
+    expect(pnpmCalls[0]![1]).toEqual(["add", "-g", "@swmansion/argent@99.0.0"]);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_update_complete",
+      expect.anything()
+    );
   });
 });

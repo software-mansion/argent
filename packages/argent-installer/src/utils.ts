@@ -21,6 +21,7 @@ export {
   formatShellCommand,
   shellQuotePath,
   detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,

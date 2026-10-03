@@ -23,6 +23,7 @@ import {
   isGloballyInstalled,
   isNewerVersion,
   detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
@@ -292,7 +293,15 @@ export async function update(args: string[]): Promise<void> {
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
+    // Global mode: the install's OWN location decides the package manager, not
+    // npm_config_user_agent — a bare `argent update` carries no user agent at
+    // all, so that would default to npm even for a pnpm-owned install (#1207).
+    const pm =
+      mode === "local"
+        ? detectProjectPackageManager(projectRoot)
+        : globallyInstalled
+          ? detectGlobalPackageManager(getGloballyInstalledPackageRoot())
+          : detectPackageManager();
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;
@@ -412,9 +421,10 @@ export async function update(args: string[]): Promise<void> {
         if (installDirToStop) {
           await killToolServerForInstallDir(installDirToStop);
         } else if (mode === "global") {
-          // The global package root can be unresolvable (Windows .cmd-wrapper
-          // layouts — see getGloballyInstalledPackageRoot). Fall back to the
-          // legacy single-slot record, which only older argent versions write.
+          // The global package root can still be unresolvable (an unreadable or
+          // unparseable shim — see getGloballyInstalledPackageRoot). Fall back
+          // to the legacy single-slot record, which only older argent versions
+          // write.
           await killToolServer();
         }
       } catch (err) {

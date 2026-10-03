@@ -139,6 +139,37 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
   });
 
+  it("removes a pnpm-owned global install with pnpm, read through its bin shim (#1207)", async () => {
+    // pnpm's global bin is a cmd-shim script, not a symlink into the package.
+    const pkgDir = path.join(
+      tmpDir,
+      "pnpm",
+      "global",
+      "v11",
+      "abc",
+      "node_modules",
+      "@swmansion",
+      "argent"
+    );
+    writeFile(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "0.25.2" })
+    );
+    const shim = path.join(tmpDir, "pnpm", "argent");
+    writeFile(shim, `#!/bin/sh\n# cmd-shim-target=${path.join(pkgDir, "dist", "cli.js")}\n`);
+    childProcessMock.execSync.mockImplementation(() => `${shim}\n`);
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "pnpm",
+      expect.arrayContaining(["remove", "-g", "@swmansion/argent"]),
+      expect.any(Object)
+    );
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(pkgDir);
+  });
+
   it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
     process.chdir(tmpDir);
 
