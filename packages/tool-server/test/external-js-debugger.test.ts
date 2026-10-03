@@ -9,6 +9,12 @@ import {
   __resetProviderWarningsForTesting,
   makeExternalId,
 } from "../src/utils/external-devices";
+import { scopeTempHome } from "./helpers/temp-home";
+
+// This file resolves the real blueprint, so every case builds a LogFileWriter,
+// whose constructor sweeps day-old logs out of `os.homedir()/.argent/tmp`.
+// Registered before the hooks below, which is what the helper asks for.
+scopeTempHome();
 
 /**
  * React Native admits one debugger per device and evicts the incumbent

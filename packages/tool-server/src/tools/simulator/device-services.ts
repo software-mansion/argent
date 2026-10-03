@@ -179,14 +179,16 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
  * Of `urns`, the port-keyed sessions no device-scoped teardown could ever name,
  * whatever ids it was given.
  *
- * On a Metro serving two or more devices, `selectTarget` refuses to guess which
- * target a udid or serial means and makes the caller re-target with the
- * `logicalDeviceId` Metro echoed — an opaque per-connection handle
- * `list-devices` never mints, which the debugger URN then embeds. A teardown
- * scoped to real device ids leaves that session holding its CDP socket, a bound
- * loopback server and a log file handle, while the caller's serial still
- * matches the device's OTHER services and so is not reported `unmatched`
- * either.
+ * `JsRuntimeDebugger`'s URN embeds the id the caller CONNECTED with, and on a
+ * Metro serving two or more devices that cannot be a UDID or serial:
+ * `selectTarget` refuses to guess which target a device id means and instructs
+ * the caller to re-target with the `logicalDeviceId` Metro echoed — an opaque
+ * id the app derives, which `list-devices` never mints, and the only id that
+ * then resolves the session. A teardown scoped to real device ids therefore leaves
+ * that session holding its CDP socket to Metro, a bound loopback console
+ * server and a log file handle; and because the caller's serial still matches
+ * that device's OTHER services, the serial is not reported `unmatched` either,
+ * so the whole thing reads as a clean machine.
  *
  * Which ids those are is recorded by the connect that minted the URN, not
  * inferred from it (see {@link isLogicalKeyedDevice}). A session another agent
