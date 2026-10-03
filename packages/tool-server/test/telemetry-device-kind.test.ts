@@ -28,6 +28,7 @@ describe("attributeDeviceForTelemetry", () => {
     ["emulator-5554", { platform: "android", device_kind: "emulator" }],
     ["chromium-cdp-9222", { platform: "chromium", device_kind: "app" }],
     ["amazon-1a2b3c", { platform: "vega", device_kind: "vvd" }],
+    ["harmony-emulator-Phone_1", { platform: "harmony", device_kind: "emulator" }],
     // Android hardware: USB serials with a digit and a letter, non-loopback ip:port.
     ["R5CT12345678", { platform: "android", device_kind: "device" }],
     ["HT82A0203045", { platform: "android", device_kind: "device" }],
@@ -58,6 +59,15 @@ describe("attributeDeviceForTelemetry", () => {
     "0123456789ABCDEF0123456789ABCDEF", // 32-hex, over the 20-char cap
   ])("%s carries the fallback platform but no kind", (id) => {
     expect(attributeDeviceForTelemetry(id)).toEqual({ platform: "android" });
+  });
+
+  it.each([
+    // A `hdc` connect key names a phone on USB and a booted emulator in the same
+    // breath, so neither spelling may be counted as hardware.
+    "harmony-025DEK236V035771",
+    "harmony-127.0.0.1:5555",
+  ])("%s carries the harmony platform but no kind", (id) => {
+    expect(attributeDeviceForTelemetry(id)).toEqual({ platform: "harmony" });
   });
 
   it("classifyDeviceForTelemetry is the platform half of the same classifier", () => {

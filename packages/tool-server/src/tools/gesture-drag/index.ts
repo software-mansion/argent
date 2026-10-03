@@ -79,7 +79,7 @@ export const gestureDragTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ failureSignal }) => `Failed to drag: ${failureSignal.error_code}`,
   },
   description: `Press the left mouse button at a start point, move to an end point, and release — a desktop mouse drag in a Chromium app. All positions are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe, except that a coordinate of exactly 1.0 lands one pixel inside the window edge (gesture-tap maps it to the edge itself). Interpolates mouse-move events at ~60fps over durationMs for a natural drag (a momentum-free drag samples more finely when durationMs is short, so its ease-out has a curve).
-Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop — use gesture-scroll for lists/pages. Chromium only — on iOS/Android use gesture-swipe.
+Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop — use gesture-scroll for lists/pages. Chromium only — on iOS, Android and HarmonyOS use gesture-swipe.
 Pass momentum:false for a momentum-free drag that decelerates into the release, so apps that compute a fling from the pointer stream read ~0 velocity and the drag ends where it was aimed instead of flinging past it (a durationMs under ~100ms is too short for the deceleration to suppress the fling entirely). Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "drag drop slider mouse press move release chromium select",

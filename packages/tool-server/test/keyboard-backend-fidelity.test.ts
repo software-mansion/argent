@@ -305,6 +305,11 @@ describe("keyboard backends — emit exactly the action they were given", () => 
   // the case-preservation property this file's iOS section covers as "shifts only
   // the character that needs it", which on android has no modifier to observe and
   // shows up only as the literal command line, and the unknown-key 400's name.
+  //
+  // No harmony section either, for the same reason: `uitest uiInput` is a remote
+  // command line, and keyboard-harmony.test.ts pins the keyID sent for every
+  // supported key, the verbatim text, and the unknown-key 400's name — alongside
+  // the display guard no other backend has.
 
   describe("vega", () => {
     it("injects the text it was given, and nothing else", async () => {

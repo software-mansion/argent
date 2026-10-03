@@ -27,7 +27,8 @@ let treeDelayMs = 0;
  */
 let treeHint: string | undefined;
 let treeShouldRestart: boolean | undefined;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     // Pinned to the source this call started against, not to whatever the
     // module-level `currentTree` holds when the delay elapses. A read the

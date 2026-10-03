@@ -29,18 +29,25 @@ export async function fetchFlowTree(
   device: DeviceInfo,
   target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
-  return FLOW_TREE_SOURCES[device.platform](registry, device, target);
+  const source = FLOW_TREE_SOURCES[device.platform];
+  if (!source) {
+    throw new Error(`ui-tree matching is not supported on platform "${device.platform}"`);
+  }
+  return source(registry, device, target);
 }
 
+type FlowTreeSource = (
+  registry: Registry,
+  device: DeviceInfo,
+  target?: FlowTreeTarget
+) => Promise<DescribeTreeData>;
+
 /**
- * The source {@link fetchFlowTree} reads on each platform. Total by type: a
- * `Platform` added without a source here is a compile error, not a read that
- * quietly degrades at runtime.
+ * The source {@link fetchFlowTree} reads on each platform, or `null` where flows
+ * have none. Total by type: a `Platform` added without an entry here is a
+ * compile error, so having no source is a decision rather than an omission.
  */
-const FLOW_TREE_SOURCES: Record<
-  Platform,
-  (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
-> = {
+const FLOW_TREE_SOURCES: Record<Platform, FlowTreeSource | null> = {
   // Simulator iOS uses the injected hierarchy and an optional target.
   // Physical devices use the XCUITest runner tree.
   "ios": (registry, device, target) =>
@@ -56,4 +63,17 @@ const FLOW_TREE_SOURCES: Record<
   "android": (registry, device) => queryAndroidFullHierarchy(registry, device),
   "chromium": (registry, device) => queryChromiumTree(registry, device),
   "vega": (_registry, device) => queryVegaTree(device),
+  // No flow adapter for the `uitest dumpLayout` tree: coordinate steps and
+  // `snapshot` run, selector steps error.
+  "harmony": null,
 };
+
+/**
+ * Whether a platform has a flow tree source at all. The distinction a caller
+ * needs is "structurally absent" versus "down": with no source every read fails
+ * by construction, so a best-effort caller would otherwise report a degradation
+ * on every gesture of every run there — see `settleForGesture`.
+ */
+export function supportsFlowTree(platform: Platform): boolean {
+  return FLOW_TREE_SOURCES[platform] !== null;
+}
