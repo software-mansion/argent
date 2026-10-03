@@ -98,6 +98,10 @@ export async function emulatorSupportsFlag(
       // this await has no deadline of its own.
       killSignal: "SIGKILL",
       maxBuffer: 8 * 1024 * 1024,
+      // No-op off Windows. On Windows, a console-subsystem child (emulator.exe)
+      // spawned from a console-less parent (the detached tool-server) otherwise
+      // gets its own popup console window — see runAdb below for the same fix.
+      windowsHide: true,
     });
     output = stdout + stderr;
   } catch (err) {
@@ -207,6 +211,12 @@ export async function runAdb(
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
+      // Every gesture-tap / screenshot / describe call on Android routes
+      // through here. Without this, each one pops a fresh console window on
+      // Windows — adb.exe is a console-subsystem binary, and the tool-server
+      // (a detached background process with no console of its own) is exactly
+      // the parent shape Windows does that for. No-op on macOS/Linux.
+      windowsHide: true,
     });
     return { stdout, stderr };
   } catch (err) {
@@ -228,6 +238,8 @@ async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "buffer",
+      // See runAdb above — same popup-console fix, same no-op off Windows.
+      windowsHide: true,
     });
     return stdout as unknown as Buffer;
   } catch (err) {
@@ -671,6 +683,7 @@ export async function listAvds(): Promise<AvdInfo[]> {
     const { stdout } = await execFileAsync(emulatorPath, ["-list-avds"], {
       timeout: 5_000,
       killSignal: "SIGKILL",
+      windowsHide: true,
     });
     return stdout
       .split("\n")
@@ -715,6 +728,7 @@ export async function checkSnapshotLoadable(
       timeout: options.timeoutMs ?? 10_000,
       killSignal: "SIGKILL",
       maxBuffer: 4 * 1024 * 1024,
+      windowsHide: true,
     });
     const tail = stdout.split("\n").slice(-6).join("\n");
     // "WARNING | change of renderer detected" is noise; real incompatibility
