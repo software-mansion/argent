@@ -703,10 +703,11 @@ async function claimExportDirName(
  * copied role's path in the report so the renderers and `--json` print the
  * durable location instead of a temp path. Failure-only: a clean pass carries
  * no artifacts, and a seeded baseline is already durable under
- * `__baselines__/`. Best-effort per file — a copy error warns on stderr and
- * leaves the source path in place; artifact export must never change a run's
- * verdict. Names that fail `SAFE_ARTIFACT_NAME` are skipped before any
- * materialization, so nothing is downloaded for a step that won't be written.
+ * `__baselines__/`. Best-effort per snapshot and per file — a read or a copy
+ * that throws warns on stderr and leaves the source path in place; artifact
+ * export must never change a run's verdict. Names that fail
+ * `SAFE_ARTIFACT_NAME` are skipped before any materialization, so nothing is
+ * downloaded for a step that won't be written.
  */
 export async function exportFailureArtifacts(
   report: FlowReport,
@@ -738,8 +739,17 @@ export async function exportFailureArtifacts(
     const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
     if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
     // Materialize only this snapshot's artifacts — never the whole report.
-    const { result } = await materializeArtifacts(s.artifacts, ctx);
-    s.artifacts = result as Record<string, unknown>;
+    try {
+      const { result } = await materializeArtifacts(s.artifacts, ctx);
+      s.artifacts = result as Record<string, unknown>;
+    } catch (err) {
+      // A capture this host can stat but not read rejects the whole call.
+      console.error(
+        `warning: could not read the ${key} artifacts of ${flowPath}: ` +
+          (err instanceof Error ? err.message : String(err))
+      );
+      continue;
+    }
     for (const [role, value] of Object.entries(s.artifacts)) {
       if (typeof value !== "string") continue; // null = failed materialization
       if (dir === null) {
@@ -1243,14 +1253,23 @@ async function runFlowDirectory(
       stopped = true;
       continue;
     }
-    // Key exports by the flow's subdirectory so recursive same-stem flows
-    // cannot clobber each other (exportFailureArtifacts keys by stem only).
-    await exportAndResolveArtifacts(
-      report,
-      outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
-      flowPath,
-      baseUrl
-    );
+    try {
+      // Key exports by the flow's subdirectory so recursive same-stem flows
+      // cannot clobber each other (exportFailureArtifacts keys by stem only).
+      await exportAndResolveArtifacts(
+        report,
+        outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
+        flowPath,
+        baseUrl
+      );
+    } catch (err) {
+      // The report already holds the verdict, so the flow keeps it.
+      console.error(
+        `warning: could not export artifacts for ${flowPath}: ` +
+          (err instanceof Error ? err.message : String(err))
+      );
+      resolveArtifactDisplayPaths(report);
+    }
     results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
     if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
     if (!args.json) {

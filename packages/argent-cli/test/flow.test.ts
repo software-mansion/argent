@@ -1504,6 +1504,37 @@ describe("argent flow run", () => {
     });
   });
 
+  it("prints the report of a single run when a failed snapshot's artifacts cannot be read", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            snapshotKey: "home__ios-390x844",
+            artifacts: { current: handle("/srv/cache/current.png") },
+          },
+        ],
+      }),
+    });
+    materializeArtifactsMock.mockRejectedValueOnce(new Error("EACCES: permission denied"));
+
+    await expect(
+      flow(["run", checkoutPath, "--json", "--output", "flow-artifacts"], opts)
+    ).rejects.toThrow("process.exit:1");
+
+    expect(errs).toEqual([
+      `warning: could not read the home__ios-390x844 artifacts of ${checkoutPath}: EACCES: permission denied`,
+    ]);
+    expect(JSON.parse(logs.join("\n")).steps[0].artifacts).toEqual({
+      current: "/srv/cache/current.png",
+    });
+  });
+
   it("emits string artifact paths in --json without --output (hostPath, or filename)", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
@@ -2253,6 +2284,96 @@ describe("argent flow run <dir>", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
     expect(errs.join("\n")).toContain('"a-login.yaml" did not produce a run report');
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("exports the other snapshots and runs the next flow when one snapshot's artifacts cannot be read", async () => {
+    const captures = path.join(tempRoot, "captures");
+    await fsp.mkdir(captures, { recursive: true });
+    await fsp.writeFile(path.join(captures, "one.png"), "one");
+    await fsp.writeFile(path.join(captures, "three.png"), "three");
+    const snapshot = (index: number, key: string): StepFixture => ({
+      index,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: key,
+      artifacts: { current: handle(`/srv/cache/${key}.png`) },
+    });
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 3,
+        steps: [snapshot(0, "one"), snapshot(1, "two"), snapshot(2, "three")],
+      }),
+    });
+    materializeArtifactsMock
+      .mockResolvedValueOnce({ result: { current: path.join(captures, "one.png") }, images: [] })
+      .mockRejectedValueOnce(new Error("EACCES: permission denied"))
+      .mockResolvedValueOnce({ result: { current: path.join(captures, "three.png") }, images: [] });
+    const output = path.join(tempRoot, "out-unreadable-snapshot");
+
+    await expect(flow(["run", flowsDir, "--json", "--output", output], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(errs).toEqual([
+      `warning: could not read the two artifacts of ${path.join(flowsDir, "a-login.yaml")}: EACCES: permission denied`,
+    ]);
+    const aggregate = JSON.parse(logs.join("\n"));
+    expect(aggregate).toMatchObject({ ok: false, total: 2, passed: 1, failed: 1, skipped: 0 });
+    // The unreadable capture stays where the server left it; its neighbours
+    // land under --output.
+    expect(aggregate.flows[0].report.steps.map((s: StepFixture) => s.artifacts?.current)).toEqual([
+      path.join(output, "a-login", "one-current.png"),
+      "/srv/cache/two.png",
+      path.join(output, "a-login", "three-current.png"),
+    ]);
+    expect(await fsp.readFile(path.join(output, "a-login", "three-current.png"), "utf8")).toBe(
+      "three"
+    );
+    expect(aggregate.flows[1]).toMatchObject({ path: "b-checkout.yaml", status: "pass" });
+  });
+
+  it("emits the --json aggregate with every report when an artifact export throws", async () => {
+    const failed = (current: unknown): Record<string, unknown> =>
+      report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            snapshotKey: "home__ios-390x844",
+            artifacts: { current },
+          },
+        ],
+      });
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: failed(handle("/srv/cache/current.png")),
+    });
+    toolsClientMock.baseUrl.mockRejectedValueOnce(new Error("artifact fetch died"));
+
+    await expect(
+      flow(
+        ["run", flowsDir, "--json", "--output", path.join(tempRoot, "out-export-throw-json")],
+        opts
+      )
+    ).rejects.toThrow("process.exit:1");
+
+    // stdout stays parseable: a consumer piping into `jq` still gets the
+    // ledger, each flow under the verdict of its own report and each artifact
+    // as a path.
+    const aggregate = JSON.parse(logs.join("\n"));
+    expect(aggregate).toMatchObject({ ok: false, total: 2, passed: 1, failed: 1, skipped: 0 });
+    expect(aggregate.flows).toEqual([
+      { path: "a-login.yaml", status: "fail", report: failed("/srv/cache/current.png") },
+      { path: "b-checkout.yaml", status: "pass", report: report() },
+    ]);
+    expect(errs).toEqual([
+      `warning: could not export artifacts for ${path.join(flowsDir, "a-login.yaml")}: artifact fetch died`,
+    ]);
   });
 
   it("ends a failed batch with the failed flows, each with a command that runs it alone", async () => {
