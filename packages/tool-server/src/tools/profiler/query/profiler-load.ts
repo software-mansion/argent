@@ -16,7 +16,6 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
@@ -500,7 +499,12 @@ Fails if the session_id is not found or required XML files are missing from disk
   zodSchema,
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  // Physical iPhones load the xctrace sessions ios-launch-time-profile writes.
+  capability: {
+    apple: { simulator: true, device: true },
+    appleRemote: { simulator: true },
+    android: { emulator: true, device: true, unknown: true },
+  },
   // load_native re-parses the whole export, which can outlast the 30s MCP fetch
   // timeout; an aborted call is replayed, not cancelled.
   longRunning: true,

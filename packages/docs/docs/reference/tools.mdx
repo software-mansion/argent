@@ -40,7 +40,7 @@ Argent drives a foldable iOS simulator, for example the iPhone Duo. `list-device
 - Unfolded, the UI is landscape. `rotate` sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI.
 - If Argent cannot find the active panel, it uses the cover panel. The tool result then has a warning.
 
-Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
+Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent does not select a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
 ## Inspecting the screen
 
@@ -123,6 +123,35 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
+
+## iOS launch performance
+
+| Tool                      | Description                                                   |
+| ------------------------- | ------------------------------------------------------------- |
+| `ios-launch-time-measure` | Build the app and measure five launches with XCTest           |
+| `ios-launch-time-profile` | Build the app and record an App Launch trace with Instruments |
+
+Both tools accept `workspace_path`, an absolute path to the app project root. Argent finds one `.xcworkspace` or `.xcodeproj` at the root or in `ios/`. Set `xcode_container` to select a different workspace or project inside the root. Argent selects the scheme in this order: the only scheme, the only scheme that CocoaPods did not generate, the scheme with the name of the workspace or project. Set `scheme` when none of these applies. Argent uses the iOS app target of the scheme and ignores watchOS apps and App Clips. Argent stops when the scheme has multiple iOS app targets.
+
+Both tools build the app in Release. Set `configuration` only when the Release configuration of the project has another name, for example `Production`. Argent stops when Xcode does not resolve the app to this configuration. The Argent UI test runner is always built in Release.
+
+Both tools require `device_id` to select a connected iPhone. Set `allow_simulator: true` to use a booted simulator when no selected iPhone is available. Simulator timings use Mac hardware. Both tools build the app with its original bundle ID. Argent tries automatic signing and waits briefly for device unlock or trust actions. If the original bundle ID cannot be provisioned, Argent stops and reports the signing error.
+
+`ios-launch-time-measure` builds the Argent UI test runner in Release. The runner uses `XCTApplicationLaunchMetric` for five samples. Apple's metric includes the first frame and extended launch tasks. The result includes `averageMs`, `samplesMs`, and the `.xcresult` path.
+
+If Argent already has an active UI test runner on the selected iPhone, `ios-launch-time-measure` stops before the build. Run `stop-simulator-server` for that device, then retry the measurement.
+
+`ios-launch-time-profile` accepts `duration_seconds` from 5 to 60, with a default of 8. It records with the Instruments App Launch template. Argent ends the launch at the end of the `Launching - Initial Frame Rendering` phase. The result includes these fields:
+
+- `launchMs`: the time from the start of the app process to the end of the first frame.
+- `phases`: the lifecycle phases before the first frame, in milliseconds from the start of the trace.
+- `firstFrameEndMs`: the end of the launch, in milliseconds from the start of the trace.
+- `tracePath` and `exports`: the `.trace` bundle and the lifecycle and dyld XML exports.
+- `profilerSession`: a native profiler session with the CPU samples up to the first frame, and the path of its XML file.
+
+Load the session with `profiler-load` in `load_native` mode. Then run `profiler-stack-query` in `thread_breakdown` mode with `thread: "Main Thread"` to see the hot functions. The session file is an xctrace XML export, so the agent can also read it directly. Work after the first frame, such as the JavaScript bundle of a React Native app, is not part of the launch. Use the React profiler for that work.
+
+Both tools run the app once and stop it before the measured launch. The measured launch starts a new process. Usually this is a warm launch, but iOS can remove the app from memory, so Argent cannot guarantee it. The tools do not measure a cold launch after a restart or a background resume. Argent saves logs and results under `<workspace_path>/.argent/traces/<datetime>/`. It reuses DerivedData under `~/.argent/build-cache/ios-launch-time/` and `~/.argent/build-cache/ios-launch-time-runner/`, outside the app project. Both tools require a USB cable to the iPhone. See [iOS launch performance](/docs/features/ios-launch-performance).
 
 ## Flows
 

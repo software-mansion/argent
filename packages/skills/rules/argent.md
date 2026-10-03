@@ -155,7 +155,7 @@ When: To measure performance of specific components, to find app-wide bottleneck
 
 NATIVE PROFILING
 Use skill: `argent-native-profiler`
-When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). iOS only today; Android on the roadmap. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
+When: Profiling native performance (CPU hotspots, UI hangs, memory leaks) or measuring iOS app launch time in any app. iOS only today; Android on the roadmap. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
 
 PERFORMANCE OPTIMIZATION
 Use skill: `argent-react-native-optimization`

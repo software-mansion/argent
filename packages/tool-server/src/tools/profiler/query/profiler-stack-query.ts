@@ -20,7 +20,7 @@ import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const zodSchema = z.object({
-  device_id: metroDeviceIdParam("iOS Simulator UDID or Android serial."),
+  device_id: metroDeviceIdParam("iOS UDID or Android serial."),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe(
@@ -63,7 +63,7 @@ const stackQueryMode = {
 function getIosParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
     throw new FailureError(
-      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first.",
+      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze, or profiler-load, first.",
       {
         error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
         failure_stage: "profiler_stack_query_load_data",
@@ -432,7 +432,7 @@ export const profilerStackQueryTool: ToolDefinition<Params, string> = {
     failedMsg: ({ failureSignal }) => `Failed to query native stacks: ${failureSignal.error_code}`,
   },
   description: `Query native profiler trace data for iterative investigation of native performance.
-Requires native-profiler-stop → native-profiler-analyze to have been called first.
+Requires native-profiler-analyze, or profiler-load with load_native, to have been called first.
 Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls a specific native function and what it calls.
@@ -442,9 +442,10 @@ Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
-  // No chromium entry: it has no native trace capture.
+  // No chromium entry: it has no native trace capture. Physical iPhones only
+  // reach it through profiler-load of an ios-launch-time-profile session.
   capability: {
-    apple: { simulator: true },
+    apple: { simulator: true, device: true },
     android: { emulator: true, device: true, unknown: true },
   },
   // The Android branch re-queries the .pftrace, so a cold trace-processor engine

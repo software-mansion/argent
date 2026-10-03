@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-optimization
-description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to argent-react-native-profiler for measurement.
+description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup / TTI (including iOS launch time). Delegates to argent-react-native-profiler for measurement.
 ---
 
 ## Rules
@@ -52,6 +52,15 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 ### Phase 4: Verify no regressions
 
 Navigate every screen and UI flow within scope, confirm each renders without errors. If no scope was specified, verify the entire app — cover all reachable screens via `argent-device-interact`. Use `debugger-log-registry` to check for runtime errors (if it returns `status: "not_connected"` there is no log file — follow its `guidance` to reconnect first) and take screenshots to check for red/yellow error screens. Check for regressions introduced by fixes (e.g., fewer re-renders but higher CPU, or new jank in a different screen). Main agent only.
+
+## Startup time (TTI)
+
+TTI is made of two parts. Measure both; neither alone is TTI.
+
+1. **Native launch (iOS)** — process start to the first native frame, before the React Native runtime is created. Measure and profile it with `ios-launch-time-measure` and `ios-launch-time-profile`; follow §7 of `argent-native-profiler`.
+2. **React Native startup** — runtime creation, bundle load and evaluation, first meaningful render. Measure with `argent-react-native-profiler` (`react-profiler-start` before reload, CPU profile of bundle evaluation, commits up to the first usable screen).
+
+Report each part separately and their sum as the TTI estimate. Re-measure the part you changed and confirm the other did not regress.
 
 ## App-wide optimization
 
