@@ -47,6 +47,7 @@ import {
   deriveSelector,
   selectorToFrame,
   frameContains,
+  selectorSchema,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -71,6 +72,18 @@ const zodSchema = z.object({
     .optional()
     .describe(
       'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
+    ),
+  selector: selectorSchema
+    .optional()
+    .describe(
+      "For a `gesture-tap` only: the selector to RECORD for this tap, when you already know it " +
+        "from the discovery call that gave you the coordinates. Give at least one of " +
+        "`identifier` / `text` / `role`. The coordinates still dispatch the tap; this only " +
+        "decides what the step matches on at replay, replacing what the recorder would otherwise " +
+        "infer from the tapped element (identifier, then text, then role). It is checked, not " +
+        "trusted: a selector that matches nothing on this screen, or that resolves to an element " +
+        "not covering the tapped point, is rejected and the step keeps coordinates with a warning " +
+        "naming the reason."
     ),
   delayMs: z
     .number()
@@ -605,12 +618,16 @@ async function probeAgainstRunnerTree(
  * device used to truncate away, which left `nodeAtPoint` to pick its `testID`
  * container, is now present and is the smaller frame under the tap.
  */
-function roleOnlySelectorWarning(selector: Selector): string | undefined {
+function roleOnlySelectorWarning(selector: Selector, supplied: boolean): string | undefined {
   if (selector.role === undefined || selector.identifier !== undefined) return undefined;
   if (selector.text !== undefined || selector.textMatches !== undefined) return undefined;
+  // A supplied role-only selector says nothing about what the element carries.
+  const lead = supplied
+    ? `the selector you passed ${describeSelector(selector)} matches by role alone`
+    : `selector ${describeSelector(selector)} matches by role alone (the tapped element has no id ` +
+      `or visible text)`;
   return (
-    `selector ${describeSelector(selector)} matches by role alone (the tapped element has no id ` +
-    `or visible text) — replay takes whichever element of that role ranks first, so re-record ` +
+    `${lead} — replay takes whichever element of that role ranks first, so re-record ` +
     `against a labelled element if that is not reliably this one`
   );
 }
@@ -649,7 +666,8 @@ async function captureTapSelector(
   registry: Registry,
   session: RecordingSession,
   udid: string,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  supplied?: Selector
 ): Promise<{ selector?: Selector; warning?: string }> {
   try {
     const device = resolveDevice(udid);
@@ -659,33 +677,41 @@ async function captureTapSelector(
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
-    const node = nodeAtPoint(tree, point);
-    if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-    const selector = deriveSelector(node);
-    if (!selector)
-      return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
+    // A supplied selector skips derivation but NOT the two checks below: the
+    // caller read it off the agent-facing describe tree, which is not the tree
+    // replay resolves against, so "I already know it" is not evidence it
+    // resolves here.
+    let selector = supplied;
+    if (!selector) {
+      const node = nodeAtPoint(tree, point);
+      if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
+      selector = deriveSelector(node) ?? undefined;
+      if (!selector)
+        return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
+    }
     // Replay resolves through selectorToFrame, whose ranking (exact match →
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
     // silently retarget and coordinates are safer. Ranked in the reading order
     // replay will rank in: the UI's, on a landscape UI.
+    const whose = supplied ? "the selector you passed" : "selector";
     const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (!resolved) {
-      // Defensive: a selector derived from a visible node matches that node
-      // under matchNode's semantics, so this should be unreachable. Kept in
-      // case derivation and matching drift apart again.
+      // Unreachable for a DERIVED selector — one taken from a visible node
+      // matches that node under matchNode's semantics — but the ordinary way a
+      // supplied one fails, since it was written against a different tree.
       return {
-        warning: `selector ${describeSelector(selector)} matches no element on this screen; kept coordinates (brittle)`,
+        warning: `${whose} ${describeSelector(selector)} matches no element on this screen; kept coordinates (brittle)`,
       };
     }
     if (!frameContains(resolved, point.x, point.y)) {
       return {
-        warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
+        warning: `${whose} ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
     const warnings = [
-      roleOnlySelectorWarning(selector),
+      roleOnlySelectorWarning(selector, supplied !== undefined),
       fallbackSourceWarning(source, device.platform),
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
@@ -1246,12 +1272,30 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof args.x === "number" &&
         typeof args.y === "number";
 
+      // Refused rather than ignored: `selector` only reaches the recorder on the
+      // tap path, so accepting it anywhere else would record a step that quietly
+      // matches on something the caller never asked for. `delayMs` is named
+      // because it is the non-obvious half — it suppresses selector capture, so
+      // a tap carrying one is not a tap for this purpose.
+      if (params.selector && !isTap) {
+        const why =
+          params.command !== "gesture-tap"
+            ? `\`selector\` applies to a recorded \`gesture-tap\`, not to \`${params.command}\`.`
+            : params.delayMs !== undefined
+              ? "A `gesture-tap` recorded with `delayMs` keeps its coordinates, so `selector` would be dropped. Record the tap without `delayMs`."
+              : "`selector` needs a `gesture-tap` whose args carry `udid`, `x` and `y`.";
+        return recordNothing(session, why);
+      }
+
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, session, args.udid as string, {
-          x: args.x as number,
-          y: args.y as number,
-        });
+        captured = await captureTapSelector(
+          registry,
+          session,
+          args.udid as string,
+          { x: args.x as number, y: args.y as number },
+          params.selector
+        );
       }
 
       let toolResult: unknown;
