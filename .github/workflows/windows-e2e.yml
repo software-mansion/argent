@@ -32,10 +32,17 @@ on:
       - "packages/tool-server/src/utils/vega-cli.ts"
       - "packages/tool-server/src/utils/chromium-discovery.ts"
       - "packages/tool-server/src/tools/simulator/stop-metro.ts"
+      - "packages/tool-server/src/tools/flows/script/flow-script-interpreter.ts"
+      - "packages/tool-server/src/tools/flows/script/flow-script-executor.ts"
+      - "packages/tool-server/src/tools/flows/script/flow-script-runner.mjs"
+      - "packages/tool-server/src/tools/flows/script/flow-script-watchdog-deadline.mjs"
+      - "packages/tool-server/src/tools/flows/script/flow-script-watchdog-lifeline.mjs"
+      - "packages/tool-server/src/tools/flows/script/flow-script-protocol.ts"
+      - "packages/tool-server/src/tools/flows/flow-script-step.ts"
+      - "packages/tool-server/src/tools/flows/flow-utils.ts"
+      - "packages/tool-server/src/tools/flows/flow-add-script.ts"
       - "packages/tool-server/src/tools/devices/boot-device.ts"
       - "packages/tool-server/src/utils/device-shutdown.ts"
-      # The unit tests this job runs — editing one must re-run it here, and so
-      # must editing the config or a setup file every one of them loads.
       - "packages/tool-server/vitest.config.ts"
       - "packages/tool-server/test/setup/**"
       - "packages/tool-server/test/command-on-path.test.ts"
@@ -45,6 +52,18 @@ on:
       - "packages/tool-server/test/http-dep-gate.test.ts"
       - "packages/tool-server/test/stop-metro-netstat.test.ts"
       - "packages/tool-server/test/device-shutdown.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-interpreter.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-bash.test.ts"
+      - "packages/tool-server/test/flows/script/flow-script-bash-sweep.test.ts"
+      - "packages/tool-server/test/helpers/host-bash.ts"
+      - "packages/tool-server/test/helpers/flow-script-workspace.ts"
+      - "packages/configuration-core/src/**"
+      - "packages/registry/src/**"
+      - "packages/tool-server/src/utils/capability.ts"
+      - "packages/tool-server/src/utils/electron-env.ts"
+      - "packages/tool-server/src/utils/format-error.ts"
+      - "packages/tool-server/src/utils/secrets.ts"
+      - "packages/tool-server/src/utils/timing.ts"
       - "packages/native-devtools-ios/src/index.ts"
       - "packages/native-devtools-ios/test/index.test.ts"
       - "packages/argent/scripts/bundle-tools.cjs"
@@ -96,6 +115,9 @@ jobs:
           test/http-dep-gate.test.ts
           test/stop-metro-netstat.test.ts
           test/device-shutdown.test.ts
+          test/flows/script/flow-script-interpreter.test.ts
+          test/flows/script/flow-script-bash.test.ts
+          test/flows/script/flow-script-bash-sweep.test.ts
 
       - name: Resolver unit tests on Windows (native-devtools-ios)
         working-directory: packages/native-devtools-ios

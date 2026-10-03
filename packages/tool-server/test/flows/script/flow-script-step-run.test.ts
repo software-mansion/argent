@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
@@ -6,12 +6,7 @@ import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { stepRequiresDevice } from "../../../src/tools/flows/flow-device";
-
-/**
- * The `script:` step in a run; the executor's own behaviour is covered beside
- * it, in flow-script-run.test.ts. Real child processes, hence the generous
- * timeout.
- */
+import { resolveHostBash } from "../../helpers/host-bash";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -48,6 +43,27 @@ async function write(relative: string, contents: string): Promise<string> {
 
 function flow(name: string, yaml: string): Promise<string> {
   return write(path.join(".argent", "flows", `${name}.yaml`), yaml);
+}
+
+function markPath(mark: string): string {
+  return path.join(root, `${mark}.mark`);
+}
+
+function markingScript(relative: string, mark: string, expression?: string): Promise<string> {
+  return write(
+    relative,
+    `import fs from "node:fs";\n` +
+      `fs.writeFileSync(${JSON.stringify(markPath(mark))}, ` +
+      `String(${expression ?? JSON.stringify(mark)}));`
+  );
+}
+
+function readMark(mark: string): string | undefined {
+  try {
+    return fsSync.readFileSync(markPath(mark), "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 function boundaryCtx(flowPath: string): ToolContext {
@@ -96,6 +112,17 @@ async function until(predicate: () => boolean, label: string, timeoutMs = 15_000
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`timed out waiting for ${label}`);
+}
+
+let noBash: string | undefined;
+
+beforeAll(async () => {
+  const found = await resolveHostBash();
+  if (!("path" in found)) noBash = found.problem;
+});
+
+function skipWithoutBash(ctx: { skip: (note?: string) => void }): void {
+  if (noBash) ctx.skip(`this host has no bash to run a .sh step with: ${noBash}`);
 }
 
 beforeEach(async () => {
@@ -177,6 +204,99 @@ describe("a script step in a run", () => {
   it("classifies as needing no device", () => {
     const registry = mockRegistry().registry;
     expect(stepRequiresDevice(registry, { kind: "script", path: "seed.mjs" })).toBe(false);
+    expect(stepRequiresDevice(registry, { kind: "script", path: "seed.sh" })).toBe(false);
+  });
+});
+
+describe("a bash step in a run", () => {
+  it("runs the .sh, passes, and carries what it printed into the report", async (ctx) => {
+    skipWithoutBash(ctx);
+    await write(
+      "scripts/seed.sh",
+      `set -euo pipefail\n` +
+        `echo "seeded order 4711"\n` +
+        `echo "and a warning" >&2\n` +
+        `printf 'ran' > ${JSON.stringify(markPath("seed-sh"))}\n`
+    );
+    await flow("seed-sh", "steps:\n  - script: { path: ../../scripts/seed.sh }\n");
+
+    const { result, invokeTool } = await runFlow("seed-sh");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0]).toMatchObject({
+      kind: "script",
+      status: "pass",
+      target: "../../scripts/seed.sh",
+    });
+    expect(result.steps[0]!.scriptLog).toContain("seeded order 4711");
+    expect(result.steps[0]!.scriptLog).toContain("and a warning");
+    expect(result.steps[0]!.scriptLogTruncated).toBeUndefined();
+    expect(readMark("seed-sh")).toBe("ran");
+    expect(result.device).toBe("");
+    expect(listedDevices(invokeTool)).toBe(false);
+  });
+
+  it("stops the flow on a failing .sh and carries its reason into the report", async (ctx) => {
+    skipWithoutBash(ctx);
+    await write("scripts/boom.sh", `echo "seed API returned 500" >&2\nexit 1\n`);
+    await flow(
+      "boom-sh",
+      "steps:\n" +
+        "  - script: { path: ../../scripts/boom.sh }\n" +
+        "  - echo: never reached\n" +
+        "  - wait: 1\n"
+    );
+
+    const { result } = await runFlow("boom-sh");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(result.steps[0]!.reason).toContain("seed API returned 500");
+    expect(result.steps[0]!.scriptLog).toContain("seed API returned 500");
+    expect(result.steps.slice(1).map((s) => [s.kind, s.status])).toEqual([
+      ["echo", "skip"],
+      ["wait", "skip"],
+    ]);
+  });
+
+  it("runs a .mjs and a .sh in one flow", async (ctx) => {
+    skipWithoutBash(ctx);
+    await markingScript("scripts/first.mjs", "mixed-mjs");
+    await write("scripts/second.sh", `printf 'ran' > ${JSON.stringify(markPath("mixed-sh"))}\n`);
+    await flow(
+      "mixed",
+      "steps:\n" +
+        "  - script: { path: ../../scripts/first.mjs }\n" +
+        "  - script: { path: ../../scripts/second.sh }\n"
+    );
+
+    const { result } = await runFlow("mixed");
+
+    expect(result.steps.map((s) => s.status)).toEqual(["pass", "pass"]);
+    expect(readMark("mixed-mjs")).toBe("mixed-mjs");
+    expect(readMark("mixed-sh")).toBe("ran");
+  });
+
+  it("picks the interpreter from the file a symlink resolves to", async () => {
+    await markingScript("scripts/real.mjs", "aliased");
+    fsSync.symlinkSync("real.mjs", path.join(root, "scripts", "aliased.sh"));
+    await flow("aliased", "steps:\n  - script: { path: ../../scripts/aliased.sh }\n");
+
+    const { result } = await runFlow("aliased");
+
+    expect(result.steps[0]).toMatchObject({ status: "pass" });
+    expect(readMark("aliased")).toBe("aliased");
+  });
+
+  it("reports a looping .sh stopped at its time limit as an error", async (ctx) => {
+    skipWithoutBash(ctx);
+    await write("scripts/slow.sh", `while true; do sleep 1; done\n`);
+    await flow("slow-sh", "steps:\n  - script: { path: ../../scripts/slow.sh, timeout: 800 }\n");
+
+    const { result } = await runFlow("slow-sh");
+
+    expect(result.steps[0]).toMatchObject({ status: "error" });
+    expect(result.steps[0]!.reason).toMatch(/did not finish within its 800ms time limit/);
   });
 });
 
@@ -201,13 +321,10 @@ describe("a script step that fails", () => {
       ["wait", "skip"],
     ]);
     expect(result.failed).toBe(1);
-    expect(result.skipped).toBe(1); // echo is narration and is not counted
+    expect(result.skipped).toBe(1);
   });
 
   it("names the file, the line and the frames a bare node run would print", async () => {
-    // Without them the step's whole diagnostic is one sentence: a throw writes
-    // nothing to stderr, so there is no log either, and CI has nothing to
-    // re-run against.
     await write(
       "scripts/deep.mjs",
       "function inner(o) { return o.id; }\nfunction outer() { return inner(undefined); }\nouter();\n"
@@ -219,17 +336,12 @@ describe("a script step that fails", () => {
     const reason = result.steps[0]!.reason!;
     expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
     expect(reason).toContain("Cannot read properties of undefined");
-    // Project-relative, so the frames fit the step line the reason rides on.
     expect(reason).toContain("at inner (scripts/deep.mjs:1:30)");
     expect(reason).toContain("at outer (scripts/deep.mjs:2:27)");
-    // Still one line: the frames are escaped like any other break in a reason.
     expect(reason).not.toMatch(/[\n\r]/);
   });
 
   it("leaves the host's own frames out of the reason", async () => {
-    // A stack ends in the ESM loader and the runner that preloaded the script.
-    // Those name no line the author can open, and they would crowd out the
-    // frames that do.
     await write("scripts/boom2.mjs", `throw new Error("seed API returned 500");`);
     await flow("boom2", "steps:\n  - script: { path: ../../scripts/boom2.mjs }\n");
 
@@ -257,9 +369,6 @@ describe("a script step that fails", () => {
   });
 
   it("keeps a multi-line throw message on the step's own line", async () => {
-    // The ordinary shape of a rethrown API error. Raw, the JSON body lands at
-    // column 0 under the `✗` line, outside the step framing every renderer is
-    // built on — one line per step, reason interpolated straight in.
     await write(
       "scripts/rethrow.mjs",
       "throw new Error(`POST /orders returned 409\n" +
@@ -272,16 +381,11 @@ describe("a script step that fails", () => {
     const reason = result.steps[0]!.reason!;
     expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
     expect(reason).not.toMatch(/[\n\r\t]/);
-    // Escaped, not stripped: the message is still readable and the breaks are
-    // still recoverable.
     expect(reason).toContain("POST /orders returned 409\\n");
     expect(reason).toContain("duplicate_order");
   });
 
   it("denies a script the framing needed to forge a run verdict", async () => {
-    // The step's reason is the only text on a report line that the script
-    // itself writes. Given a raw newline it can put a whole summary line of its
-    // own below a failed step and above the real one.
     await write(
       "scripts/forge.mjs",
       "throw new Error(`seed failed\\n\\nPASS — 3 passed, 0 failed, 0 errored, 0 skipped`);"
@@ -342,8 +446,6 @@ describe("a script path is checked at its own step", () => {
   });
 
   it("reports a path that walks THROUGH a file as an ordinary missing file", async () => {
-    // The kernel answers ENOTDIR, not ENOENT, when a directory component of the
-    // path is a regular file. Nothing is there either way, so both read alike.
     await write("scripts/seed.mjs", `console.log("ok");`);
     await flow("through", "steps:\n  - script: { path: ../../scripts/seed.mjs/inner.mjs }\n");
 
@@ -391,13 +493,6 @@ describe("a script path is checked at its own step", () => {
   });
 
   it("refuses a mis-cased path, quoting the spelling on disk", async () => {
-    // The one authoring error a local run cannot find: APFS and NTFS open
-    // `CreateUser.mjs` for a file really named `createUser.mjs`, and the same
-    // tree then fails with ENOENT on Linux CI.
-    //
-    // Ungated, because the VERDICT is not the filesystem's: classifyOnDiskSpelling
-    // compares the supplied basename against readdir's own entries, lowercased,
-    // so the refusal reproduces on a case-sensitive host too.
     await write("scripts/createUser.mjs", `console.log("ok");`);
     await flow("cased", "steps:\n  - script: { path: ../../scripts/CreateUser.mjs }\n");
 
@@ -408,6 +503,32 @@ describe("a script path is checked at its own step", () => {
       'Script path "../../scripts/CreateUser.mjs" has the wrong letter case'
     );
     expect(result.steps[0]!.reason).toContain('Use "../../scripts/createUser.mjs"');
+  });
+
+  it("refuses a mis-cased .sh the same way", async () => {
+    await write("scripts/createUser.sh", `exit 0\n`);
+    await flow("cased-sh", "steps:\n  - script: { path: ../../scripts/CreateUser.sh }\n");
+
+    const { result } = await runFlow("cased-sh");
+
+    expect(result.steps[0]).toMatchObject({ status: "error" });
+    expect(result.steps[0]!.reason).toContain(
+      'Script path "../../scripts/CreateUser.sh" has the wrong letter case'
+    );
+    expect(result.steps[0]!.reason).toContain('Use "../../scripts/createUser.sh"');
+  });
+
+  it("asks for a rename when the spelling on disk is one no `script` path may name", async () => {
+    await write("scripts/ALT.SH", `exit 0\n`);
+    await flow("noncase-sh", "steps:\n  - script: { path: ../../scripts/alt.sh }\n");
+
+    const { result } = await runFlow("noncase-sh");
+
+    expect(result.steps[0]).toMatchObject({ status: "error" });
+    expect(result.steps[0]!.reason).toContain(
+      'Script path "../../scripts/alt.sh" has the wrong letter case'
+    );
+    expect(result.steps[0]!.reason).toContain('Rename "ALT.SH" to "alt.sh"');
   });
 
   it("refuses a mis-cased spelling of a script reached through a cross-directory symlink", async () => {
@@ -556,13 +677,6 @@ describe("where a script path resolves", () => {
 });
 
 describe("which project root a script runs from", () => {
-  /**
-   * `flow-add-script` runs the script with the RECORDING's `project_root`; the
-   * runner uses the ROOT run's. A fragment recorded in one project and composed
-   * by a flow in another therefore runs its script somewhere else than where it
-   * was recorded — which is what the tool's "it ran here as a replay of this
-   * flow will" is qualified against.
-   */
   it("gives a composed fragment's script the ROOT run's project root", async () => {
     const composer = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-composer-"));
     try {
@@ -574,7 +688,6 @@ describe("which project root a script runs from", () => {
       await flow("frag", "steps:\n  - script: { path: ../../scripts/where.mjs }\n");
       const composed = path.join(composer, ".argent", "flows", "main.yaml");
       await fs.mkdir(path.dirname(composed), { recursive: true });
-      // `run:` is always relative to the flow file that names it.
       const target = path
         .relative(path.dirname(composed), path.join(root, ".argent", "flows", "frag.yaml"))
         .split(path.sep)
@@ -586,8 +699,6 @@ describe("which project root a script runs from", () => {
       expect(fsSync.existsSync(path.join(root, "where.txt"))).toBe(true);
       await fs.rm(path.join(root, "where.txt"));
 
-      // A flow that uses `run:` resolves a device even when every leaf is a
-      // script — see "still resolves a device when the same flow uses run:".
       const { registry } = mockRegistry({ booted: [DEVICE] });
       const composedRun = await run(registry, {
         project_root: composer,
@@ -665,6 +776,31 @@ describe("a script step in an uploaded flow", () => {
     ).rejects.toThrow(/script is not on this host/i);
   });
 
+  it("is rejected naming a .sh step just as it names a .mjs one", async () => {
+    const uploaded = await write(
+      "materialized-upload.yaml",
+      "steps:\n  - script: { path: seed.sh }\n"
+    );
+    const { registry } = mockRegistry({ booted: [DEVICE] });
+
+    await expect(
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: root, flow_file: uploaded, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(/script: \{ path: seed\.sh \}/);
+  });
+
   it("is rejected from inside a when: block that would not fire", async () => {
     const uploaded = await write(
       "materialized-upload.yaml",
@@ -738,10 +874,6 @@ describe("cancelling a run that contains a script step", () => {
   });
 
   it("says the run was cancelled on the steps after the script, not just under it", async () => {
-    // The script's `error` stops the run, so the steps below it take the
-    // hard-stop path rather than the abort guard every other cancelled step
-    // uses. They still have to say why they did not run: a cancellation is not
-    // collateral of a step that failed.
     const marker = path.join(root, "started-2.txt");
     await write(
       "scripts/slow.mjs",
