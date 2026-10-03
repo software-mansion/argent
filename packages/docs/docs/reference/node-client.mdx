@@ -40,7 +40,7 @@ When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the client 
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `createArgentClient()`            | Returns an `ArgentClient`                                                                                                                                         |
 | `listTools(options?)`             | Returns the tools: `name`, `description` and `inputSchema` (a JSON Schema of the arguments)                                                                       |
-| `callTool(name, args?, options?)` | Calls one tool and returns `{ data, note? }`                                                                                                                      |
+| `callTool(name, args?, options?)` | Calls one tool and returns `{ data, note? }`. See [TypeScript](#typescript)                                                                                       |
 | `options.onProgress(event)`       | Receives progress events from a long-running tool                                                                                                                 |
 | `options.signal`                  | An `AbortSignal`. When it aborts, the client stops the call. `listTools` also accepts it                                                                          |
 | `stopServer()`                    | Stops the local tool-server of the installed package, like `argent server stop`. Returns `false` when no tool-server runs. The next call starts a new tool-server |
@@ -50,6 +50,10 @@ When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the client 
 When `options.signal` aborts, the call throws the reason of the signal, not an `ArgentToolError`. The client closes the connection, and the tool-server then aborts the signal of the tool. Some tools, for example `run-sequence` and `await-ui-element`, stop. Other tools continue to the end. If the tool-server is not running, the call starts it first. An abort during the start takes effect when the start is complete.
 
 A validation failure sets `issues`. When the client cannot reach the tool-server, `callTool` and `listTools` throw a plain `Error`, not an `ArgentToolError`.
+
+## TypeScript
+
+The client includes types for the tools of the installed version. TypeScript rejects a tool name that does not exist and arguments that do not match the schema of the tool. You can omit `args` only when the tool has no required arguments. `ArgentToolName` and `ArgentToolArgs` are exported. A tool name of type `string`, for example from `listTools()`, needs a cast to `ArgentToolName`. The type of `data` is `unknown`. To set a different type, give it as the second type argument, for example `callTool<"list-devices", MyDevices>("list-devices")`.
 
 The arguments and results of each tool are in the [Tools reference](./tools.mdx). Run `argent tools describe <name>` to see the argument schema of one tool.
 

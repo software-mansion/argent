@@ -15,6 +15,10 @@ import {
   ToolInvocationError,
 } from "@argent/tools-client";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
+import type { ArgentToolArgs } from "./tool-args.generated.js";
+
+export type { ArgentToolArgs };
+export type ArgentToolName = keyof ArgentToolArgs;
 
 export interface ArgentTool {
   name: string;
@@ -73,12 +77,17 @@ export function listFlags(): ArgentFlag[] {
   }));
 }
 
+/** `args` may be omitted only when the tool has no required argument. */
+type CallToolParams<N extends ArgentToolName> =
+  Record<never, never> extends ArgentToolArgs[N]
+    ? [args?: ArgentToolArgs[N], options?: CallToolOptions]
+    : [args: ArgentToolArgs[N], options?: CallToolOptions];
+
 export interface ArgentClient {
   listTools(options?: { signal?: AbortSignal }): Promise<ArgentTool[]>;
-  callTool<T = unknown>(
-    name: string,
-    args?: Record<string, unknown>,
-    options?: CallToolOptions
+  callTool<N extends ArgentToolName, T = unknown>(
+    name: N,
+    ...params: CallToolParams<N>
   ): Promise<ArgentToolResult<T>>;
   /**
    * Stop this install's local tool-server, like `argent server stop`. The next
