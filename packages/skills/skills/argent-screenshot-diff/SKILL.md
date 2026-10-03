@@ -23,38 +23,42 @@ Use `screenshot-diff` when pixel comparison can answer the verification question
 
 ## 3. Capture Rules
 
-Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block so the full-size PNG is not loaded into context:
+`screenshot-diff` captures both sides itself, by the same path for each, and puts no capture into context. Stage the baseline with the tool rather than with a separate `screenshot` call:
 
 ```json
-{ "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
+{ "captureBaseline": true, "udid": "<UDID>" }
 ```
 
-Capture the stable baseline before the relevant interaction or before editing whenever feasible. Compare it to the post-change or post-interaction screen after the app reloads, rebuilds, or reaches the state under test.
+Use `screenshot` for UI context and state checks, not for baselines.
+
+Stage the baseline on the stable state before the relevant interaction or before editing whenever feasible. Compare after the app reloads, rebuilds, or reaches the state under test. A staged baseline stays available for the device until another staging call for that device replaces it, or the tool-server stops; every comparison against it reports its capture time and age, so re-stage when the age no longer matches the state you meant to compare.
 
 ## 4. Parameters
 
-Provide `udid` and exactly one input for the baseline side and exactly one input for the current side:
+Provide `udid`. Give the baseline side and the current side one input each, except on a staging call, which gives the baseline side only:
 
-- Common UI regression flow: saved baseline plus live current -> `baselinePath`, `captureCurrent: true`, `udid`, `outputDir`.
+- Stage a baseline for later -> `captureBaseline: true`, `udid`. No current side, no comparison, no diff images.
+- Common UI regression flow, after staging -> `captureCurrent: true`, `udid`, `outputDir`. No baseline side: it resolves the baseline staged for this `udid`.
 - Both screenshots already saved -> `baselinePath`, `currentPath`, `udid`, `outputDir`.
-- Rare fixture flow: live baseline plus saved current -> `captureBaseline: true`, `currentPath`, `udid`, `outputDir`.
-- Do not combine `captureBaseline: true` with `captureCurrent: true`, or provide both a path and live capture flag for the same side.
+- Saved baseline plus live current -> `baselinePath`, `captureCurrent: true`, `udid`, `outputDir`.
+- Rare fixture flow: live baseline plus saved current -> `captureBaseline: true`, `currentPath`, `udid`, `outputDir`. A current side makes this an immediate comparison, not a staging call.
+- Do not combine `captureBaseline: true` with `captureCurrent: true`, or provide both a path and a live capture flag for the same side.
+- Comparing without a baseline side fails when nothing is staged for that `udid`. Baselines are per device: one device's staged baseline is never used for another.
 
 ## 5. Deterministic Flow
 
 1. Navigate to the known-good state.
-2. Capture a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`; keep the returned `path`.
+2. Stage the baseline: `screenshot-diff` with `captureBaseline: true` and `udid`.
 3. Perform the interaction, apply the code change and navigate to the state under test.
-4. Call `screenshot-diff` with the saved `baselinePath`, `captureCurrent: true`, `udid`, and `outputDir`.
-5. Inspect the summary and artifact paths, then combine the diff with normal visual inspection and any structural/runtime evidence needed for the assertion.
+4. Compare: `screenshot-diff` with `captureCurrent: true`, `udid`, and `outputDir`.
+5. Read the `staged_baseline` line at the top of the summary to confirm the baseline's capture time matches the state you meant to compare, then combine the diff with normal visual inspection and any structural/runtime evidence needed for the assertion.
 
 ```json
-{
-  "baselinePath": "/tmp/baseline.png",
-  "captureCurrent": true,
-  "udid": "<UDID>",
-  "outputDir": "/tmp/argent-diff"
-}
+{ "captureBaseline": true, "udid": "<UDID>" }
+```
+
+```json
+{ "captureCurrent": true, "udid": "<UDID>", "outputDir": "/tmp/argent-diff" }
 ```
 
 If both images are already saved, use file paths for both sides:
