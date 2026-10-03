@@ -18,7 +18,10 @@ import { once } from "node:events";
 
 const runAdb = vi.fn(async (..._a: unknown[]) => ({ stdout: "", stderr: "", code: 0 }));
 const emulatorSerial = vi.fn();
-vi.mock("../src/utils/adb", () => ({ runAdb: (...a: unknown[]) => runAdb(...a) }));
+vi.mock("../src/utils/adb", () => ({
+  runAdb: (...a: unknown[]) => runAdb(...a),
+  adbForward: async () => "",
+}));
 vi.mock("../src/utils/vega-automation", () => ({
   emulatorSerial: (...a: unknown[]) => emulatorSerial(...a),
 }));

@@ -12,7 +12,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { helperManifest } from "@argent/native-devtools-android";
-import { runAdb } from "../utils/adb";
+import { adbForward, runAdb } from "../utils/adb";
 import { resolveAndroidBinary } from "../utils/android-binary";
 import { ensureAndroidDevtoolsInstalled } from "../utils/android-helper-install";
 import {
@@ -161,12 +161,10 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
 
       // `tcp:0` makes adb pick a free local port and print it on stdout.
       try {
-        const { stdout } = await runAdb(["-s", serial, "forward", "tcp:0", `tcp:${devicePort}`], {
-          timeoutMs: 5_000,
-        });
-        const lpMatch = ADB_FORWARD_PORT_MARKER.exec(stdout.trim());
+        const printed = await adbForward(serial, 0, devicePort, { timeoutMs: 5_000 });
+        const lpMatch = ADB_FORWARD_PORT_MARKER.exec(printed);
         if (!lpMatch) {
-          throw new FailureError(`adb forward returned unexpected output: ${stdout.trim()}`, {
+          throw new FailureError(`adb forward returned unexpected output: ${printed}`, {
             error_code: FAILURE_CODES.ANDROID_DEVTOOLS_ADB_FORWARD_UNEXPECTED,
             failure_stage: "android_devtools_adb_forward",
             failure_area: "tool_server",

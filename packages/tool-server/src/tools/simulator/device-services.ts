@@ -12,6 +12,7 @@ import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profi
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
+import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
 
 /**
@@ -56,6 +57,14 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
 ];
 
 /**
+ * Namespaces whose URN appends the app after the device id:
+ * `<Namespace>:<deviceId>:<package>`. The LAST colon separates them: an
+ * Android package name cannot contain one, while a wireless adb serial
+ * (`AndroidNetworkInspector:192.168.1.5:5555:com.example`) can.
+ */
+const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
+
+/**
  * Every namespace whose service belongs to exactly one device. Membership is
  * "does `dispose()` reap a resource that outlives the call", with two
  * exceptions: `AndroidTvControl` is stateless adb shell-outs with a no-op
@@ -86,6 +95,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   SCREEN_RECORDING_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
+  ...APP_KEYED_NAMESPACES,
 ];
 
 /**
@@ -114,11 +124,16 @@ export function transportNamespacesForPlatform(platform: string): readonly strin
 
 /**
  * The device-id portion of `urn` if it belongs to `namespace`, else undefined.
- * Accounts for the two URN shapes (see {@link PORT_KEYED_NAMESPACES}).
+ * Accounts for the three URN shapes (see {@link PORT_KEYED_NAMESPACES} and
+ * {@link APP_KEYED_NAMESPACES}).
  */
 function deviceIdPortion(urn: string, namespace: string): string | undefined {
   if (!urn.startsWith(`${namespace}:`)) return undefined;
   const tail = urn.slice(namespace.length + 1);
+  if (APP_KEYED_NAMESPACES.includes(namespace)) {
+    const beforeApp = tail.lastIndexOf(":");
+    return beforeApp < 0 ? undefined : tail.slice(0, beforeApp);
+  }
   if (!PORT_KEYED_NAMESPACES.includes(namespace)) return tail;
   const afterPort = tail.indexOf(":");
   return afterPort < 0 ? undefined : tail.slice(afterPort + 1);

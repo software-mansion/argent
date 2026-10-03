@@ -263,6 +263,42 @@ export async function adbExecOutBinary(
   return runAdbBinary(["-s", serial, "exec-out", shellCommand], options);
 }
 
+/**
+ * With `hostPort` 0 adb picks a free host port and prints it, and that output
+ * is what this returns; it is empty otherwise.
+ */
+export async function adbForward(
+  serial: string,
+  hostPort: number,
+  devicePort: number,
+  options: { timeoutMs?: number } = {}
+): Promise<string> {
+  const { stdout } = await runAdb(
+    ["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${devicePort}`],
+    options
+  );
+  return stdout.trim();
+}
+
+export async function adbReverse(
+  serial: string,
+  devicePort: number,
+  hostPort: number,
+  options: { timeoutMs?: number } = {}
+): Promise<void> {
+  await runAdb(["-s", serial, "reverse", `tcp:${devicePort}`, `tcp:${hostPort}`], options);
+}
+
+export async function removeAdbReverse(serial: string, devicePort: number): Promise<void> {
+  try {
+    await runAdb(["-s", serial, "reverse", "--remove", `tcp:${devicePort}`], {
+      timeoutMs: 5_000,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
 interface AndroidDevice {
   serial: string;
   state: string;
