@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 import {
   createToolsClient,
-  getResolvedToolsUrl,
   isArtifactHandle,
   materializeArtifacts,
   ToolInvocationError,
@@ -131,8 +130,10 @@ file, or a device it cannot resolve. A transport failure, a rejection the server
 does not mark as validation, or a reply that is not a report stops the batch and
 counts the remaining flows skipped.
 
-Runs require the auto-started local tool server;
-ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
+The CLI sends a run to its tool-server: the local one that starts
+automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
+a link, a flow with run:, script:, snapshot: or nested tool: flow-execute
+steps does not run. The tool-server rejects it before the first step.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
@@ -1019,32 +1020,6 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
   return found.sort();
 }
 
-/**
- * CLI runs rely on the caller and tool-server sharing a filesystem: the runner
- * resolves `run:` targets against each containing flow file's directory and
- * reads/writes `__baselines__` beside the canonicalized root YAML — all on the
- * tool server's disk. The flow-execute tool stays remotely callable; only CLI
- * routing that cannot guarantee the shared filesystem is refused, deliberately
- * including single-file flows that could run remotely, since the CLI cannot
- * tell them apart without parsing the flow. Returns the refusal with its
- * recovery hint when remote routing is configured.
- */
-async function requireLocalToolServer(): Promise<string | undefined> {
-  const routing = await getResolvedToolsUrl();
-  if (routing.source === "none") return undefined;
-  // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
-  // env var re-routes through the shadowed link — the same refusal with the
-  // other source, so name both steps up front.
-  const recovery =
-    routing.source === "env"
-      ? routing.shadowedLink
-        ? "Unset ARGENT_TOOLS_URL and run `argent unlink`, then try again — " +
-          `a link to ${routing.shadowedLink.url} is also configured and takes over once the env var is unset.`
-        : "Unset ARGENT_TOOLS_URL and try again."
-      : "Run `argent unlink` and try again.";
-  return `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`;
-}
-
 /** One flow-execute payload builder so single and batch runs cannot drift. */
 function buildRunPayload(
   flowPath: string,
@@ -1077,10 +1052,21 @@ function failureSignal(err: unknown): { error_code?: string; error_kind?: string
   };
 }
 
+/**
+ * A failure that produced no report, as the one record every machine mode
+ * carries it by: --json-stream writes it on stdout, --json on stderr, so one
+ * reader parses both.
+ */
+function errorRecord(
+  err: unknown,
+  message = err instanceof Error ? err.message : String(err)
+): Record<string, unknown> {
+  return { event: "error", error: message, ...failureSignal(err) };
+}
+
 /** Mirror a tool invocation failure without putting human text on stdout. */
 function writeJsonStreamError(err: unknown): void {
-  const message = err instanceof Error ? err.message : String(err);
-  writeJsonStreamRecord({ event: "error", error: message, ...failureSignal(err) });
+  writeJsonStreamRecord(errorRecord(err));
 }
 
 /**
@@ -1170,24 +1156,26 @@ async function runFlowDirectory(
   projectRoot: string,
   options: FlowCommandOptions
 ): Promise<void> {
+  // Discovery fails before any call, so there is no aggregate to print: under
+  // --json the reason goes to stderr as the record --json-stream would carry,
+  // and stdout stays empty rather than holding prose where a document is due.
+  const reject = (message: string): Promise<never> => {
+    console.error(args.json ? JSON.stringify(errorRecord(message)) : message);
+    return exitAfterFlush(2);
+  };
   let flows: string[];
   try {
     flows = await collectFlowFiles(dir, args.recursive);
   } catch {
-    console.error(`Could not read flow directory: ${dir}`);
-    return exitAfterFlush(2);
+    return reject(`Could not read flow directory: ${dir}`);
   }
   if (flows.length === 0) {
-    console.error(`No flows found in ${dir}`);
-    if (!args.recursive) console.error("Pass -r/--recursive to include subdirectories.");
-    return exitAfterFlush(2);
+    return reject(
+      `No flows found in ${dir}` +
+        (args.recursive ? "" : "\nPass -r/--recursive to include subdirectories.")
+    );
   }
 
-  const refusal = await requireLocalToolServer();
-  if (refusal) {
-    console.error(refusal);
-    return exitAfterFlush(2);
-  }
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
@@ -1319,12 +1307,6 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     printHelp(jsonStream);
     return;
   }
-  const fail = (message: string, code: number, err: unknown = message): Promise<never> => {
-    if (jsonStream) writeJsonStreamError(err);
-    console.error(message);
-    return exitAfterFlush(code);
-  };
-
   let args: ReturnType<typeof parseRunArgs>;
   try {
     args = parseRunArgs(rest);
@@ -1345,6 +1327,16 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     printHelp(jsonStream);
     return exitAfterFlush(2);
   }
+
+  // A failure with no report. --json-stream mirrors it on stdout as a record
+  // and keeps the human line on stderr; --json owns stdout for the report
+  // alone, so its stderr carries the same record instead of prose, and one
+  // reader parses both modes.
+  const fail = (message: string, code: number, err: unknown = message): Promise<never> => {
+    if (jsonStream) writeJsonStreamError(err);
+    console.error(args.json ? JSON.stringify(errorRecord(err, message)) : message);
+    return exitAfterFlush(code);
+  };
 
   const projectRoot = process.cwd();
   // From here a name is indistinguishable from a path the user typed: one set
@@ -1551,9 +1543,6 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       2
     );
   }
-
-  const refusal = await requireLocalToolServer();
-  if (refusal) return fail(refusal, 2);
 
   const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
 

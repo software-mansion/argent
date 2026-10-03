@@ -982,45 +982,25 @@ describe("argent flow run", () => {
     }
   );
 
-  it.each([
-    ["env", "Unset ARGENT_TOOLS_URL"],
-    ["link", "argent unlink"],
-  ] as const)("rejects %s routing without invoking flow-execute", async (source, recovery) => {
-    getResolvedToolsUrlMock.mockResolvedValue({
-      url: "http://example.test:4141",
-      source,
-    });
+  it.each(["env", "link"] as const)(
+    "sends flow_path to flow-execute over %s routing",
+    async (source) => {
+      // The server decides what a routed run can do: an uploaded flow that is
+      // self-contained runs, one that reads beside its file is refused there.
+      // The CLI no longer consults the routing at all.
+      getResolvedToolsUrlMock.mockResolvedValue({ url: "http://example.test:4141", source });
 
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+      await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
 
-    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
-    expect(errs.join("\n")).toContain(recovery);
-    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-  });
-
-  it("names both recoveries when env routing shadows an existing link", async () => {
-    // Unsetting only ARGENT_TOOLS_URL would re-route through the shadowed link
-    // and produce a second refusal — the message must instruct both steps.
-    getResolvedToolsUrlMock.mockResolvedValue({
-      url: "http://example.test:4141",
-      source: "env",
-      shadowedLink: {
-        url: "http://linked.test:5252",
-        host: "linked.test",
-        port: 5252,
-        createdAt: "2026-07-31T00:00:00.000Z",
-      },
-    });
-
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
-
-    const out = errs.join("\n");
-    expect(out).toContain("requires the auto-started local tool server; env routing is configured");
-    expect(out).toContain("Unset ARGENT_TOOLS_URL");
-    expect(out).toContain("argent unlink");
-    expect(out).toContain("http://linked.test:5252");
-    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-  });
+      expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+      expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("flow-execute");
+      expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
+        flow_path: checkoutPath,
+        project_root: process.cwd(),
+        prerequisiteAcknowledged: true,
+      });
+    }
+  );
 
   it("lists runnable YAML paths without consulting remote routing", async () => {
     const listRoot = path.join(tempRoot, "list-project");
@@ -1346,6 +1326,28 @@ describe("argent flow run", () => {
       },
     ]);
     expect(errs).toEqual(["invalid flow"]);
+  });
+
+  it("prints a JSON error object on stderr when the server rejects the flow under --json", async () => {
+    // --json owns stdout for the report alone, so a run with no report leaves
+    // it empty and carries the same record --json-stream would, on stderr.
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("invalid flow", {
+        errorCode: "FLOW_FILE_INVALID",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual([]);
+    expect(errs).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error: "invalid flow",
+      error_code: "FLOW_FILE_INVALID",
+      error_kind: "validation",
+    });
   });
 
   it("rejects --json with --json-stream without writing human text to stdout", async () => {
@@ -1786,9 +1788,7 @@ describe("argent flow run", () => {
       "filename (minus .yaml) names the run's report and artifacts"
     );
     expect(logs.join("\n")).toContain('contain only letters, numbers, "_", or "-"');
-    expect(logs.join("\n")).toContain(
-      "ARGENT_TOOLS_URL and `argent link` routing are not supported"
-    );
+    expect(logs.join("\n")).toContain("the one that `argent link` or ARGENT_TOOLS_URL names");
     expect(logs.join("\n")).toContain("--json-stream");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -2533,13 +2533,32 @@ describe("argent flow run <dir>", () => {
     expect(errs.join("\n")).not.toContain("subdirectories");
   });
 
-  it("rejects remote routing before running any flow in the directory", async () => {
+  it("prints a JSON error object on stderr for a directory with no flows under --json", async () => {
+    const emptyDir = path.join(tempRoot, "empty-json");
+    await fsp.mkdir(emptyDir, { recursive: true });
+
+    await expect(flow(["run", emptyDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error: `No flows found in ${emptyDir}\nPass -r/--recursive to include subdirectories.`,
+    });
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("runs every flow in the directory over remote routing", async () => {
     getResolvedToolsUrlMock.mockResolvedValue({ url: "http://example.test:4141", source: "env" });
 
-    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
 
-    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
-    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(toolsClientMock.callTool.mock.calls.map((c) => c[0])).toEqual([
+      "flow-execute",
+      "flow-execute",
+    ]);
+    expect(logs.join("\n")).toContain("2 passed");
   });
 
   it("prints only the aggregate object with --json, tagging infra failures and skips", async () => {

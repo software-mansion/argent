@@ -63,8 +63,8 @@ interface ResolvedFlowRelativeFile {
  * the tool-server user can read it, which is the reach the front door already
  * grants: an operator can point `flow_path` at any YAML on the host.
  *
- * An uploaded flow — the one route that carries untrusted content — cannot name
- * a target of its OWN: `assertUploadSelfContained` rejects every `run:` and
+ * An uploaded flow — the route that carries untrusted content, by `name` and
+ * by `flow_path` alike — cannot name a target of its OWN: `assertUploadSelfContained` rejects every `run:` and
  * `script:` step it declares, and a recording whose files are not on this host
  * is refused by `flow-add-script` before it gets here. It does still ARRIVE
  * here, through a nested `tool: flow-execute` naming a flow already on this
