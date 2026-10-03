@@ -35,7 +35,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   const coordinateSpace = coordinateSpaceForSummary(result.imageSize);
 
   const lines: string[] = ["Screenshot diff summary", "", "Overall:"];
-  lines.push(`- status: ${status}`);
+  lines.push(statusLine(status));
 
   if (result.sizeNormalization) {
     // Placed directly under the status so it frames every figure below it; the
@@ -107,6 +107,18 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   }
 
   return lines.join("\n");
+}
+
+function statusLine(status: SummaryStatus): string {
+  return `- status: ${status}`;
+}
+
+/**
+ * The summary is the only place a tool result carries the status, so callers
+ * that need it read it back out of the text written here.
+ */
+export function summaryReportsDimensionMismatch(summary: string): boolean {
+  return summary.split("\n").includes(statusLine("dimension_mismatch"));
 }
 
 function screenshotDiffStatus(result: ScreenshotDiffSummaryInput): SummaryStatus {
