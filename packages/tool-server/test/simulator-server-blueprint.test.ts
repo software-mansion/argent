@@ -441,6 +441,114 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
   });
 });
 
+describe("simulatorServerBlueprint.factory — a child that never becomes ready reports why", () => {
+  beforeEach(async () => {
+    spawnMock.mockReset();
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    const { __resetDepCacheForTests, __primeDepCacheForTests } =
+      await import("../src/utils/check-deps");
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The real message the shipped binary prints when the emulator's gRPC
+  // discovery files are not under the tool-server's cache dir — the dominant
+  // cause of SIMULATOR_SERVER_READY_EXITED in production. `failure_exit_code`
+  // is 1 for every one of them, so the stderr text is the only thing that
+  // separates this from any other early exit.
+  const REAL_STDERR =
+    'Error: emulator "emulator-5554" not found among running emulators ' +
+    "(a token-less `-grpc` launch omits grpc.token; check avd/running/*.ini)";
+
+  it("carries the child's stderr into the READY_EXITED failure", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    await new Promise((r) => process.nextTick(r));
+    fakeProc.stderr.push(`${REAL_STDERR}\n`);
+    await new Promise((r) => process.nextTick(r));
+    fakeProc.emit("exit", 1, null);
+
+    await expect(factoryPromise).rejects.toThrow(/not found among running emulators/);
+    await expect(factoryPromise).rejects.toThrow(/grpc\.token/);
+  });
+
+  it("keeps only the tail of a flooding child, so one error cannot carry a log dump", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    await new Promise((r) => process.nextTick(r));
+    fakeProc.stderr.push(`${"x".repeat(64 * 1024)}\n${REAL_STDERR}\n`);
+    await new Promise((r) => process.nextTick(r));
+    fakeProc.emit("exit", 1, null);
+
+    const err = await factoryPromise.then(
+      () => {
+        throw new Error("expected the factory to reject");
+      },
+      (e: Error) => e
+    );
+    // The newest lines survive — that is where the cause is — and the message
+    // stays bounded.
+    expect(err.message).toMatch(/not found among running emulators/);
+    expect(err.message.length).toBeLessThan(1024);
+  });
+
+  it("still reports a bare early exit when the child printed nothing", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    await new Promise((r) => process.nextTick(r));
+    fakeProc.emit("exit", 1, null);
+
+    await expect(factoryPromise).rejects.toThrow(/exited/);
+  });
+
+  it("carries the child's stderr into the READY_TIMEOUT failure of a child that hangs", async () => {
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    vi.useFakeTimers();
+    try {
+      const fakeProc = makeFakeProc();
+      spawnMock.mockReturnValue(fakeProc);
+
+      const device = androidDevice("emulator-5554");
+      const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+      const settled = factoryPromise.catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      fakeProc.stderr.push(
+        "[2026-09-23T16:23:35Z INFO  simulator_server::media_handler] waiting for emulator\n"
+      );
+      fakeProc.stderr.push(REAL_STDERR);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const error = (await settled) as Error;
+      expect(error.message).toBe(
+        `Timed out waiting for simulator-server to become ready:\n${REAL_STDERR}`
+      );
+      expect(getFailureSignal(error)).toMatchObject({
+        error_code: "SIMULATOR_SERVER_READY_TIMEOUT",
+      });
+      expect(fakeProc.kill).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("simulatorServerBlueprint.recoverable — self-heal a wedged sim-server", () => {
   const apiUrl = "http://127.0.0.1:58710";
 

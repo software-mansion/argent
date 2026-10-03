@@ -380,7 +380,7 @@ async function spawnSimulatorServerProcess(
 
     const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     // The binary explains a failed start on stderr (e.g. "Error: Failed to find
-    // any running emulator"), so keep the last lines for the rejection below.
+    // any running emulator"), so keep the last lines for the rejections below.
     const stderrTail: string[] = [];
     let partialLine = "";
     // Routine lines are dropped here, not when the message is built, so a burst
@@ -455,17 +455,23 @@ async function spawnSimulatorServerProcess(
     });
 
     const timer = setTimeout(() => {
+      keepLine(partialLine);
+      partialLine = "";
+      const reason = stderrTail.join("\n");
       settle(
         () =>
           reject(
-            new FailureError("Timed out waiting for simulator-server to become ready", {
-              error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_TIMEOUT,
-              failure_stage: "simulator_server_spawn_ready",
-              failure_area: "tool_server",
-              error_kind: "timeout",
-              failure_command: "simulator_server",
-              failure_signal: "SIGKILL",
-            })
+            new FailureError(
+              `Timed out waiting for simulator-server to become ready${reason ? `:\n${reason}` : ""}`,
+              {
+                error_code: FAILURE_CODES.SIMULATOR_SERVER_READY_TIMEOUT,
+                failure_stage: "simulator_server_spawn_ready",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+                failure_command: "simulator_server",
+                failure_signal: "SIGKILL",
+              }
+            )
           ),
         () => proc.kill()
       );

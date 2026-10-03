@@ -274,6 +274,7 @@ describe("GET /tools progressive-loading metadata", () => {
       platform: "android",
       device_kind: "emulator",
       invalid_params: ["unrecognized_keys"],
+      invalid_param_issues: ["unrecognized_keys"],
     });
   });
 
