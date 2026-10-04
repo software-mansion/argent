@@ -251,7 +251,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
     await cdp.connect();
 
-    const sourceMaps = new SourceMapsRegistry();
+    const sourceMaps = new SourceMapsRegistry(metro.projectRoot);
 
     cdp.events.on("scriptParsed", (script) => {
       sourceMaps.registerFromScriptParsed(script.url, script.scriptId, script.sourceMapURL);
@@ -297,7 +297,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
     const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
-    const logWriter = new LogFileWriter(port);
+    // The registry is passed by reference: scripts parsed later (lazy chunks, Fast
+    // Refresh) register into it and become available to subsequent log writes.
+    const logWriter = new LogFileWriter(port, sourceMaps);
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
