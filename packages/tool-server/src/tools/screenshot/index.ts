@@ -15,6 +15,7 @@ import {
 } from "./dropped-geometry";
 import {
   getScreenshotScale,
+  getScreenshotScaleOverride,
   httpScreenshot,
   resolveCapturePanel,
 } from "../../utils/simulator-client";
@@ -51,6 +52,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android. " +
+        "On Apple TV, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
         "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
@@ -124,16 +126,24 @@ async function iosPhysicalScreenshot(
 }
 
 /**
+ * Long side of an Apple TV capture with no scale requested. A pixel size, not a
+ * fraction: 4K and 1080p simulators render the same layout, so one fraction
+ * leaves the 1080p capture half as legible. Below this, Haiku 4.5 starts
+ * misreading Settings values (71% correct at 480).
+ */
+const TV_DEFAULT_LONG_SIDE = 576;
+
+/**
  * tvOS screenshot path: simulator-server has no tvOS backend, so capture with
- * `xcrun simctl io <udid> screenshot` and downscale via `sips` to match the
- * iOS/Android scale behaviour.
+ * `xcrun simctl io <udid> screenshot` and downscale via `sips`. An undefined
+ * `scale` downscales to {@link TV_DEFAULT_LONG_SIDE}.
  *
  * Exported for the flow settle, which captures for motion detection rather than
  * for an artifact and so cannot go through the tool.
  */
 export async function tvScreenshot(
   udid: string,
-  scale: number,
+  scale: number | undefined,
   signal: AbortSignal | undefined
 ): Promise<string> {
   const file = path.join(
@@ -148,7 +158,7 @@ export async function tvScreenshot(
   // `sips -Z` caps the longest *actual* side, and capture size isn't fixed (4K
   // sim is 3840 wide, non-4K is 1920), so scale against the real dimensions — a
   // hardcoded 3840 would double the scale on a 1920 capture.
-  if (scale < 1.0) {
+  if (scale === undefined || scale < 1.0) {
     await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
       signal,
     }).catch(() => {
@@ -159,9 +169,10 @@ export async function tvScreenshot(
   return file;
 }
 
-// Longest actual side × scale, falling back to the 4K long side if the
-// dimension probe fails.
-export async function tvTargetLongSide(file: string, scale: number): Promise<number> {
+// Longest actual side × scale (or TV_DEFAULT_LONG_SIDE, never upscaling, when
+// scale is undefined), falling back to the 4K long side if the dimension probe
+// fails.
+export async function tvTargetLongSide(file: string, scale: number | undefined): Promise<number> {
   let longSide = 3840;
 
   try {
@@ -176,7 +187,9 @@ export async function tvTargetLongSide(file: string, scale: number): Promise<num
     /* probe failed — keep the 4K fallback */
   }
 
-  return Math.round(longSide * scale);
+  return scale === undefined
+    ? Math.min(TV_DEFAULT_LONG_SIDE, longSide)
+    : Math.round(longSide * scale);
 }
 
 /**
@@ -264,7 +277,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // Shape alone can't tell tvOS from iOS, and tvOS has no simulator-server
       // backend.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
-        const pngPath = await tvScreenshot(params.udid, scale, signal);
+        const pngPath = await tvScreenshot(
+          params.udid,
+          params.scale ?? getScreenshotScaleOverride(),
+          signal
+        );
         const image = await requireArtifacts(ctx).register({
           hostPath: pngPath,
           kind: "screenshot",

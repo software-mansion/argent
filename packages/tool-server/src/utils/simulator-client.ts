@@ -713,23 +713,27 @@ async function simulatorPost<T>(
 /** One warning per distinct value: the parse runs on every capture. */
 let warnedScaleValue: string | undefined;
 
-export function getScreenshotScale(): number {
+/** `ARGENT_SCREENSHOT_SCALE` when set to a valid scale, otherwise undefined. */
+export function getScreenshotScaleOverride(): number | undefined {
   const v = process.env.ARGENT_SCREENSHOT_SCALE;
-  if (v) {
-    const n = parseFloat(v);
-    // Below the floor the `scale` parameter enforces, a capture rounds towards
-    // zero pixels and screenshot-diff reports the resulting dimension mismatch
-    // as if the screens differed.
-    if (!Number.isNaN(n) && n >= 0.01 && n <= 1) return n;
-    if (v !== warnedScaleValue) {
-      warnedScaleValue = v;
-      console.warn(
-        `[screenshot] Ignoring ARGENT_SCREENSHOT_SCALE=${v}: expected a number between 0.01 and 1.0. ` +
-          `Using ${DEFAULT_SCREENSHOT_SCALE}.`
-      );
-    }
+  if (!v) return undefined;
+  const n = parseFloat(v);
+  // Below the floor the `scale` parameter enforces, a capture rounds towards
+  // zero pixels and screenshot-diff reports the resulting dimension mismatch
+  // as if the screens differed.
+  if (!Number.isNaN(n) && n >= 0.01 && n <= 1) return n;
+  if (v !== warnedScaleValue) {
+    warnedScaleValue = v;
+    console.warn(
+      `[screenshot] Ignoring ARGENT_SCREENSHOT_SCALE=${v}: expected a number between 0.01 and 1.0. ` +
+        `Using the default.`
+    );
   }
-  return DEFAULT_SCREENSHOT_SCALE;
+  return undefined;
+}
+
+export function getScreenshotScale(): number {
+  return getScreenshotScaleOverride() ?? DEFAULT_SCREENSHOT_SCALE;
 }
 
 /**
