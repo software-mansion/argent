@@ -3,9 +3,9 @@
  *
  * {@link prepareFileInputs} interpolates each `fileInputs` spec advertised by
  * `GET /tools`, stats the file on THIS machine, and replaces the target arg
- * with a `__argentFileInput` wrapper. The tool-server resolves it against ITS
- * filesystem — in place when co-located, else from the inlined base64, which
- * is sent only for remote tool-servers so local sessions skip the encoding.
+ * with a `__argentFileInput` wrapper. The tool-server materializes the inlined
+ * base64, which is sent only to a routed tool-server so local sessions skip the
+ * encoding; without it, the tool-server reads the path in place.
  *
  * {@link applyClientFileDirectives} is the reverse: a `__argentClientFile`
  * directive (e.g. a recorded flow YAML) is written here, constrained to

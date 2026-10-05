@@ -782,6 +782,9 @@ const NESTED_RECORDER_TOOLS: Record<string, string> = {
     "directly when the walkthrough is complete.",
 };
 
+/** The tools that write a flow file; a replayed flow refuses them when it arrives as an upload. */
+export const RECORDING_TOOL_IDS: ReadonlySet<string> = new Set(Object.keys(NESTED_RECORDER_TOOLS));
+
 /**
  * Keyed on the error's identity and its `toolId`, so a tool that ran and
  * reported its own "not found" is not read as the command being absent.

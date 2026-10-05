@@ -507,6 +507,92 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(res.body.error).toContain("  - step 2: run: frag.yaml");
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
+
+  it.skipIf(process.platform === "win32")(
+    "names a Windows client path instead of calling it relative",
+    async () => {
+      // `C:\...` is absolute on the client that wrote it, so "must be
+      // absolute" would send its user hunting for a mistake they did not make.
+      const yaml = serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } }],
+      });
+      const wrapper = uploadedWrapper("C:\\work\\proj\\.argent\\flows\\basic.yaml", yaml);
+
+      for (const [root, quoted] of [
+        ["C:\\work\\proj", `project_root "C:\\work\\proj"`],
+        [projectRoot, `flow_path "C:\\work\\proj\\.argent\\flows\\basic.yaml"`],
+      ] as const) {
+        const res = await supertest(handle.app)
+          .post("/tools/flow-execute")
+          .send({ project_root: root, device: DEVICE, flow_path: wrapper });
+
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain(`${quoted} is a Windows path`);
+        expect(res.body.error).not.toMatch(/must be an absolute|must be absolute/);
+      }
+      expect(steps.invokeTool).not.toHaveBeenCalled();
+    }
+  );
+
+  /** A flow on this host plus the wrapper a client with a mirrored copy of it sends. */
+  async function mirroredUpload(hostYaml: string, clientYaml: string) {
+    const hostPath = path.join(projectRoot, ".argent", "flows", "mirrored.yaml");
+    await fs.mkdir(path.dirname(hostPath), { recursive: true });
+    await fs.writeFile(hostPath, hostYaml, "utf8");
+    const st = await fs.stat(hostPath);
+    return {
+      __argentFileInput: true,
+      path: hostPath,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      content: Buffer.from(clientYaml, "utf8").toString("base64"),
+    };
+  }
+
+  it("runs the uploaded content, not a host copy that matches its size and mtime", async () => {
+    const flowWith = (message: string) =>
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message }] });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: await mirroredUpload(flowWith("server"), flowWith("client")),
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      flow: "mirrored",
+      steps: [{ kind: "echo", status: "pass", message: "client" }],
+    });
+  });
+
+  it("rejects an uploaded flow that composes even when this host has a mirrored copy of it", async () => {
+    // The fragment beside the host copy may be older than the client's, so
+    // a matching root file is no reason to run this host's siblings.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "frag.yaml" },
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+    const wire = await mirroredUpload(yaml, yaml);
+    await fs.writeFile(
+      path.join(path.dirname(wire.path), "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "stale" }] }),
+      "utf8"
+    );
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({ project_root: projectRoot, device: DEVICE, flow_path: wire });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error_code).toBe("FLOW_FILE_INVALID");
+    expect(res.body.error).toContain("  - step 1: run: frag.yaml");
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("flow-read-prerequisite flow_path over HTTP", () => {
@@ -605,5 +691,26 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       flow: "saved-only",
       executionPrerequisite: "App on home screen",
     });
+  });
+
+  it("reads an uploaded flow_path, as flow-execute runs one", async () => {
+    // Over a link both tools get the same uploaded copy, so the prerequisite an
+    // agent reads belongs to the flow that will run.
+    const yaml = serializeFlow({ executionPrerequisite: "be logged in", steps: [] });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({
+        project_root: projectRoot,
+        flow_path: {
+          __argentFileInput: true,
+          path: "/client/.argent/flows/remote.yaml",
+          size: Buffer.byteLength(yaml, "utf8"),
+          mtimeMs: 1_790_000_000_000,
+          content: Buffer.from(yaml, "utf8").toString("base64"),
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ flow: "remote", executionPrerequisite: "be logged in" });
   });
 });
