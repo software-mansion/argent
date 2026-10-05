@@ -65,11 +65,11 @@ async function isRunning(executable: string): Promise<boolean> {
 }
 
 async function survivesLaunch(executable: string): Promise<boolean> {
-  for (let waited = 0; waited < LAUNCH_WATCH_MS; waited += LAUNCH_POLL_MS) {
+  for (let waited = 0; ; waited += LAUNCH_POLL_MS) {
     if (!(await isRunning(executable))) return false;
+    if (waited >= LAUNCH_WATCH_MS) return true;
     await new Promise((resolve) => setTimeout(resolve, LAUNCH_POLL_MS));
   }
-  return isRunning(executable);
 }
 
 /**

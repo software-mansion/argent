@@ -80,6 +80,17 @@ describe("launchSimulatorApp", () => {
     expect(psCalls()).toBe(watched);
   });
 
+  it("records a crash at the end of the watch window", async () => {
+    appRunning = true;
+    const result = launchSimulatorApp(APP, launch);
+    await vi.advanceTimersByTimeAsync(1_900);
+    appRunning = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(result).resolves.toBe(true);
+    expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
+  });
+
   it("launches a crashing app once for parallel callers", async () => {
     const results = Promise.all([launchSimulatorApp(APP, launch), launchSimulatorApp(APP, launch)]);
     await vi.advanceTimersByTimeAsync(5_000);
