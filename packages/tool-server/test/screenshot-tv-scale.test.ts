@@ -117,6 +117,13 @@ describe("screenshot tool on an Apple TV simulator", () => {
     expect(await zTargetsFor({})).toEqual(["1920"]);
   });
 
+  it("ignores an invalid ARGENT_SCREENSHOT_SCALE and keeps the 576 px default", async () => {
+    process.env[ENV] = "abc";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await zTargetsFor({})).toEqual(["576"]);
+    warn.mockRestore();
+  });
+
   it("honours an explicit scale over the env override", async () => {
     process.env[ENV] = "0.5";
     expect(await zTargetsFor({ scale: 0.25 })).toEqual(["960"]);
