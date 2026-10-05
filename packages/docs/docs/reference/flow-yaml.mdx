@@ -418,9 +418,11 @@ When a single flow run fails its steps, Argent prints the first step that failed
 
 `--json` and `--json-stream` print no header, no outcome line, no `Failed flows` section and no summary.
 
-A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server sends them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each flow. Each entry holds the `path` and the `status`. An entry holds `report` when the flow produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report — a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. An entry with the status `skip` holds neither, because Argent made no call for that flow. `--json-stream` puts the same two fields on its `error` record.
 
-A single flow run with `--json` writes the report of that flow. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server sends them. `--json-stream` writes the same object on stdout.
+A single flow run with `--json` writes the report of that flow. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` writes the same object on stdout.
+
+With `--json`, Argent writes nothing but these objects on stderr, one on each line: one for each flow that failed without a report in a directory run, and one for a usage error, such as an unknown flag. A usage error prints no help text and gives exit code 2.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
@@ -438,7 +440,9 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 The tool-server runs the uploaded copy even when it has a file at the same path, for example over a link to `127.0.0.1`, because only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place and all step kinds run.
 
-A rejected flow gives exit code 1. With `--json`, the CLI writes one JSON object on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next flow and keeps the rejected flow in its `flows` array.
+A rejected flow gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected flow on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next flow and keeps the rejected flow in its `flows` array.
+
+When the tool-server that `argent link` or `ARGENT_TOOLS_URL` names does not answer, no flow runs. The CLI prints the address of that tool-server, the setting that names it, and the reason, for example `connection refused`, and gives exit code 2. The JSON object holds `"error_code": "TOOL_SERVER_UNREACHABLE"` and `"error_kind": "network"`. A directory run stops at the first flow and marks the other flows as skipped.
 
 ## Remote runs
 
