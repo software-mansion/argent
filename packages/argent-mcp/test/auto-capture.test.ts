@@ -177,7 +177,7 @@ describe("auto-capture after tv-remote", () => {
   it("captures the screen and the focus tree after a TV remote press", () => {
     expect(shouldAutoScreenshot("mcp__argent__tv-remote")).toBe(true);
     expect(shouldAutoDescribe("mcp__argent__tv-remote")).toBe(true);
-    expect(getAutoScreenshotDelayMs("tv-remote")).toBe(1500);
+    expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["tv-remote"]).toBe(1500);
   });
 });
 
