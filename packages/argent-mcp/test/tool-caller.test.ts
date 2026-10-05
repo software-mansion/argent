@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 // The tools client builds its ~/.argent paths from homedir() at module load.
 // HOME is redirected before the import, so no case can reach the developer's
@@ -163,7 +164,7 @@ let appPath: string;
 
 beforeEach(async () => {
   stub = await startStub();
-  appPath = join(TEST_HOME, `MyApp-${Date.now()}.app`);
+  appPath = join(TEST_HOME, `MyApp-${randomUUID()}.app`);
   mkdirSync(appPath);
   writeFileSync(join(appPath, "Info.plist"), "<plist/>");
 });
@@ -448,6 +449,17 @@ describe("createToolCaller", () => {
       expect(reconnect).not.toHaveBeenCalled();
     } finally {
       await dropping.close();
+    }
+  });
+
+  it("names a tool-server URL without http:// at once, without a retry", async () => {
+    for (const url of ["127.0.0.1:3001", "localhost:3001"]) {
+      const { fetchTools, reconnect } = caller({ getHandle: () => ({ url, token: "" }) });
+
+      await expect(fetchTools()).rejects.toThrow(
+        `Failed to parse URL from ${url}/tools: expected an http:// or https:// URL`
+      );
+      expect(reconnect).not.toHaveBeenCalled();
     }
   });
 

@@ -71,6 +71,22 @@ interface ToolCaller {
   ): Promise<{ result: unknown; outputHint?: string; note?: string }>;
 }
 
+// A tool-server URL without `http://` either fails `new URL`, whose error names
+// no input, or parses with the host as its scheme (`localhost:3001`), which
+// fetch then refuses without naming it. Name the value to fix in both cases.
+function parseUrl(url: string): URL {
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // Reported below.
+  }
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+    throw new TypeError(`Failed to parse URL from ${url}: expected an http:// or https:// URL`);
+  }
+  return parsed;
+}
+
 /**
  * The adapter's call path: the tools client's `callTool` (file-input upload,
  * error mapping, client-file directives) wrapped in the adapter's retry loop,
@@ -82,8 +98,8 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
   // A retry after a local respawn must reach the new server, so each attempt
   // re-reads the handle for the origin and the token.
   function rebase(url: string): string {
-    const target = new URL(url);
-    const current = new URL(deps.getHandle().url);
+    const target = parseUrl(url);
+    const current = parseUrl(deps.getHandle().url);
     target.protocol = current.protocol;
     target.host = current.host;
     return target.toString();
@@ -100,15 +116,18 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
 
   const client = createToolsClient({
     baseUrl: async () => ({ ...deps.getHandle(), remote: deps.remote }),
-    fetchImpl: (url, init, meta) =>
-      fetchWithReconnect(() => rebase(url), deps.reconnect, {
+    fetchImpl: async (url, init, meta) => {
+      // A retry cannot fix a URL that does not parse, so fail at once.
+      parseUrl(url);
+      return fetchWithReconnect(() => rebase(url), deps.reconnect, {
         init: () => withHeaders(init),
         // A call that carried an upload is sent once and never aborted: the
         // tool-server consumes the upload when it reads the call, so a second
         // attempt could only fail.
         fetchTimeoutMs: meta.longRunning || meta.carriesUpload ? null : timeout,
         maxRetries: meta.carriesUpload ? 0 : undefined,
-      }),
+      });
+    },
   });
 
   return {
