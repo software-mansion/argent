@@ -53,7 +53,7 @@ interface ToolCallerDeps {
   reconnect: () => Promise<void>;
   /** Headers added to every attempt, beside the auth header. */
   extraHeaders: () => Record<string, string>;
-  /** Per-attempt timeout for a tool that is not `longRunning`. */
+  /** Per-attempt timeout for a call that is not `longRunning` and carries no upload. */
   fetchTimeoutMs?: number;
 }
 
@@ -97,7 +97,11 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
     fetchImpl: (url, init, meta) =>
       fetchWithReconnect(() => rebase(url), deps.reconnect, {
         init: () => withHeaders(init),
-        fetchTimeoutMs: meta.longRunning ? null : timeout,
+        // A call that carried an upload is sent once and never aborted: the
+        // tool-server consumes the upload when it reads the call, so a second
+        // attempt could only fail.
+        fetchTimeoutMs: meta.longRunning || meta.carriesUpload ? null : timeout,
+        maxRetries: meta.carriesUpload ? 0 : undefined,
       }),
   });
 

@@ -65,11 +65,17 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-/** A stub tool-server. The routes in `dropFirst` destroy the socket of their first request. */
-async function startStub(opts: { dropFirst?: string[] } = {}): Promise<Stub> {
+/**
+ * A stub tool-server. The routes in `dropFirst` destroy the socket of their
+ * first request after they read it. As on the real tool-server, a call that
+ * names an upload consumes it when its body is read, and `reinstall-app` waits
+ * `installMs` before it answers.
+ */
+async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}): Promise<Stub> {
   const dropFirst = new Set(opts.dropFirst ?? ["/tools/fast"]);
   const requests: Recorded[] = [];
   const calls = new Map<string, number>();
+  const uploads = new Set<string>();
   let slowPlainCalls = 0;
   const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
@@ -77,6 +83,11 @@ async function startStub(opts: { dropFirst?: string[] } = {}): Promise<Stub> {
     requests.push({ method: req.method ?? "", url, headers: req.headers, body });
     const nth = (calls.get(url) ?? 0) + 1;
     calls.set(url, nth);
+    const named =
+      url === "/tools/reinstall-app"
+        ? (JSON.parse(body) as { appPath?: { uploadId?: string } }).appPath?.uploadId
+        : undefined;
+    const consumed = named !== undefined && uploads.delete(named);
     if (dropFirst.has(url) && nth === 1) {
       req.socket.destroy();
       return;
@@ -86,9 +97,20 @@ async function startStub(opts: { dropFirst?: string[] } = {}): Promise<Stub> {
       res.end(JSON.stringify(payload));
     };
     if (req.method === "GET" && url === "/tools") return json(200, LISTING);
-    if (req.method === "POST" && url === "/upload") return json(200, { uploadId: "u-1" });
+    if (req.method === "POST" && url === "/upload") {
+      const uploadId = `u-${uploads.size + 1}`;
+      uploads.add(uploadId);
+      return json(200, { uploadId });
+    }
     if (req.method === "POST" && url === "/tools/reinstall-app") {
-      return json(200, { data: { reinstalled: true, bundleId: "x" } });
+      if (named !== undefined && !consumed) {
+        return json(422, { error: `Upload "${named}" was not found on the tool-server` });
+      }
+      setTimeout(
+        () => json(200, { data: { reinstalled: true, bundleId: "x" } }),
+        opts.installMs ?? 0
+      );
+      return;
     }
     if (req.method === "POST" && url === "/tools/slow") {
       setTimeout(() => json(200, { data: { ok: true } }), 80);
@@ -305,7 +327,30 @@ describe("createToolCaller", () => {
     }
   });
 
-  it("retries a call that carried an upload without uploading again", async () => {
+  it("waits for a call that carried an upload instead of aborting and sending it again", async () => {
+    const slow = await startStub({ installMs: 80 });
+    try {
+      vi.stubEnv("ARGENT_TOOLS_URL", slow.url);
+      // The install outlasts this per-attempt timeout. A retry would name an
+      // upload that the stub already consumed.
+      const { callTool, reconnect } = caller({
+        getHandle: () => ({ url: slow.url, token: "tok" }),
+        fetchTimeoutMs: 40,
+      });
+
+      await expect(
+        callTool("reinstall-app", { udid: "u", bundleId: "x", appPath })
+      ).resolves.toEqual({ result: { reinstalled: true, bundleId: "x" } });
+
+      expect(slow.requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+      expect(slow.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it("sends a call that carried an upload once, even when its connection drops", async () => {
     const dropping = await startStub({ dropFirst: ["/tools/reinstall-app"] });
     try {
       vi.stubEnv("ARGENT_TOOLS_URL", dropping.url);
@@ -313,19 +358,15 @@ describe("createToolCaller", () => {
         getHandle: () => ({ url: dropping.url, token: "tok" }),
       });
 
+      // The stub consumed the upload before the connection dropped, so a
+      // second attempt would only get "not found".
       await expect(
         callTool("reinstall-app", { udid: "u", bundleId: "x", appPath })
-      ).resolves.toEqual({ result: { reinstalled: true, bundleId: "x" } });
+      ).rejects.toThrow("fetch failed");
 
-      const uploads = dropping.requests.filter((r) => r.url === "/upload");
-      const posts = dropping.requests.filter((r) => r.url === "/tools/reinstall-app");
-      expect(uploads).toHaveLength(1);
-      expect(posts).toHaveLength(2);
-      expect(reconnect).toHaveBeenCalledTimes(1);
-      const ids = posts.map(
-        (r) => (JSON.parse(r.body) as { appPath: { uploadId?: string } }).appPath.uploadId
-      );
-      expect(ids).toEqual(["u-1", "u-1"]);
+      expect(dropping.requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+      expect(dropping.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1);
+      expect(reconnect).not.toHaveBeenCalled();
     } finally {
       await dropping.close();
     }

@@ -112,12 +112,13 @@ describe("createToolsClient options", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenNthCalledWith(1, `${url}/tools`, expect.any(Object), {
       longRunning: false,
+      carriesUpload: false,
     });
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
       `${url}/tools/slow`,
       expect.objectContaining({ method: "POST" }),
-      { longRunning: true }
+      { longRunning: true, carriesUpload: false }
     );
   });
 
@@ -139,6 +140,13 @@ describe("createToolsClient options", () => {
       `${url}/tools/reinstall-app`,
     ]);
     expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+    // The tool call names the upload, which the tool-server consumes once.
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      `${url}/tools/reinstall-app`,
+      expect.objectContaining({ method: "POST" }),
+      { longRunning: false, carriesUpload: true }
+    );
   });
 
   it("returns outputHint from the listing on the buffered and the streamed path", async () => {

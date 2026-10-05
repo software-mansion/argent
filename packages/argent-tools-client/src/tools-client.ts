@@ -1,6 +1,12 @@
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
-import { prepareFileInputs, applyClientFileDirectives, type FileInputSpec } from "./file-inputs.js";
+import {
+  prepareFileInputs,
+  applyClientFileDirectives,
+  FILE_INPUT_MARKER,
+  type FileInputSpec,
+  type FileInputWire,
+} from "./file-inputs.js";
 
 export interface ToolMeta {
   name: string;
@@ -52,10 +58,16 @@ export interface CreateToolsClientOptions {
    * Override the fetch used for GET /tools and POST /tools/:name, so a caller
    * can wrap retries and a per-attempt timeout around each request.
    * `meta.longRunning` is the tool's flag from the listing (false for GET
-   * /tools), so the caller can disable its timeout. POST /upload keeps the
-   * global fetch.
+   * /tools), so the caller can disable its timeout. `meta.carriesUpload` is true
+   * when the body names an upload: the tool-server consumes an upload on the
+   * first request that reaches it, so the caller must not abort or resend that
+   * request. POST /upload keeps the global fetch.
    */
-  fetchImpl?: (url: string, init: RequestInit, meta: { longRunning: boolean }) => Promise<Response>;
+  fetchImpl?: (
+    url: string,
+    init: RequestInit,
+    meta: { longRunning: boolean; carriesUpload: boolean }
+  ) => Promise<Response>;
 }
 
 /**
@@ -158,6 +170,15 @@ export function errorBodyMessage(body: {
   return body.error ?? body.message;
 }
 
+/** True when a prepared argument names an upload that the tool-server will consume. */
+function carriesUpload(args: unknown): boolean {
+  if (typeof args !== "object" || args === null) return false;
+  return Object.values(args).some((value) => {
+    const wire = value as Partial<FileInputWire> | null;
+    return wire?.[FILE_INPUT_MARKER] === true && typeof wire.uploadId === "string";
+  });
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -186,7 +207,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const res = await doFetch(
       `${url}/tools`,
       { headers: authHeaders(token) },
-      { longRunning: false }
+      { longRunning: false, carriesUpload: false }
     );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
@@ -229,7 +250,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         },
         body: JSON.stringify(finalArgs ?? {}),
       },
-      { longRunning: meta?.longRunning === true }
+      { longRunning: meta?.longRunning === true, carriesUpload: carriesUpload(finalArgs) }
     );
     // The server commits to streaming only after every pre-invoke gate passes —
     // validation errors stay plain JSON with their status codes — so Content-Type
