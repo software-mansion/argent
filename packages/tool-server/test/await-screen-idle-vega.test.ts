@@ -7,8 +7,21 @@ vi.mock("../src/utils/vega-inspect", () => ({
   fetchVegaPageSource: (...a: unknown[]) => fetchVegaPageSource(...a),
 }));
 
+let adbInstalled = true;
+vi.mock("../src/utils/android-binary", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/android-binary")>();
+  return {
+    ...actual,
+    resolveAndroidBinary: async () => (adbInstalled ? "/usr/bin/adb" : null),
+  };
+});
+
 import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
-import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import {
+  DependencyMissingError,
+  __primeDepCacheForTests,
+  __resetDepCacheForTests,
+} from "../src/utils/check-deps";
 
 const PAGE_SOURCE = readFileSync(join(__dirname, "fixtures", "vega-page-source.xml"), "utf8");
 const VEGA_SERIAL = "amazon-4e311aa3932a35be";
@@ -16,6 +29,7 @@ const VEGA_SERIAL = "amazon-4e311aa3932a35be";
 describe("await-screen-idle on Vega", () => {
   beforeEach(() => {
     fetchVegaPageSource.mockReset();
+    adbInstalled = true;
     __resetDepCacheForTests();
     __primeDepCacheForTests(["adb"]);
   });
@@ -44,5 +58,16 @@ describe("await-screen-idle on Vega", () => {
     );
 
     expect(result.settled).toBe(false);
+  });
+
+  it("fails fast with the adb install hint when adb is missing", async () => {
+    __resetDepCacheForTests();
+    adbInstalled = false;
+    const tool = createAwaitScreenIdleTool({} as any);
+
+    await expect(
+      tool.execute({}, { udid: VEGA_SERIAL, timeoutMs: 2000, pollIntervalMs: 10, minStableMs: 20 })
+    ).rejects.toBeInstanceOf(DependencyMissingError);
+    expect(fetchVegaPageSource).not.toHaveBeenCalled();
   });
 });

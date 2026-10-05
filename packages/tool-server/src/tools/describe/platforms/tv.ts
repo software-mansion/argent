@@ -130,8 +130,8 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
 
   // Still empty: on Apple TV the daemon may hold a stale primaryApp cache from a
   // killed app, and a fresh daemon rebinds to the current foreground app.
-  // Skipped on Android TV, where `recycleAx` is a no-op and the re-probe would
-  // only repeat the dump the retry loop already found empty.
+  // Skipped on Android TV, where `recycleAx` is a no-op and `api.describe()` is
+  // a raw dump that dies beside the helper.
   if (isEmpty(res) && device.platform !== "android") {
     await api.recycleAx();
     res = await api.describe();
