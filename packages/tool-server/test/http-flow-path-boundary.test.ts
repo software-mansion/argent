@@ -692,4 +692,25 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       executionPrerequisite: "App on home screen",
     });
   });
+
+  it("reads an uploaded flow_path, as flow-execute runs one", async () => {
+    // Over a link both tools get the same uploaded copy, so the prerequisite an
+    // agent reads belongs to the flow that will run.
+    const yaml = serializeFlow({ executionPrerequisite: "be logged in", steps: [] });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({
+        project_root: projectRoot,
+        flow_path: {
+          __argentFileInput: true,
+          path: "/client/.argent/flows/remote.yaml",
+          size: Buffer.byteLength(yaml, "utf8"),
+          mtimeMs: 1_790_000_000_000,
+          content: Buffer.from(yaml, "utf8").toString("base64"),
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ flow: "remote", executionPrerequisite: "be logged in" });
+  });
 });

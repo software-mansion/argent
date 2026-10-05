@@ -2810,14 +2810,13 @@ function flowNameOf(clientPath: string): string {
 
 /**
  * Resolve the flow YAML source a tool reads. An explicit `flow_path` is accepted
- * only when the file-input boundary resolved the exact client path in place on
- * this host AND matched the client-recorded stat (`statVerified`) — presence
- * alone is satisfiable by a hand-crafted stat-less wrapper, so it is not
- * containment. Uploaded explicit paths are rejected: the uploaded root YAML
- * would lose sibling `run:` files, baseline reads, and baseline write-back. A
- * remote `name` call uploads the same way and is accepted below, so this
- * rejection only keeps `flow_path`, whose whole contract is that those resolve
- * beside the caller's YAML, from silently meaning a temp directory instead.
+ * in two shapes. An upload (`viaUpload`) is a temp file this process wrote from
+ * the client's content; it runs under the client's spelling, and execute()
+ * refuses it when its steps need the files beside it, which the upload does not
+ * carry (assertUploadSelfContained). A host path is accepted only when the
+ * file-input boundary resolved the exact client path in place on this host AND
+ * matched the client-recorded stat (`statVerified`) — presence alone is
+ * satisfiable by a hand-crafted stat-less wrapper, so it is not containment.
  *
  * With no `flow_path` or `flow_file`, derive the saved-flow path from
  * project_root + name. When `flow_file` is set it must be one of the two shapes
@@ -2969,8 +2968,8 @@ export async function resolveFlowSource(
   // this process cannot read. That temp dir is also what a run takes flowsDir
   // from, where `run:` targets and `__baselines__/` are not — the same contract
   // as an uploaded flow_path above: a self-contained flow runs, and execute()
-  // refuses one that composes, scripts or snapshots before any step, naming the
-  // missing co-location rather than a missing fragment or baseline.
+  // refuses one whose steps use files on the client before any step, naming
+  // those steps rather than a missing fragment or baseline.
   if (params.flow_file && fileInput?.viaUpload)
     return { filePath: params.flow_file, flowName, viaUpload: true };
   if (
