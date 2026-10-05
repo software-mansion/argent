@@ -38,6 +38,7 @@ import {
   type FlowStep,
   type Launch,
   SELECTABLE_PLATFORMS,
+  windowsPathRefusal,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
@@ -2721,6 +2722,15 @@ function assertFlowPathShape(flowPath: string): void {
   // against the tool server's working directory, which is not the caller's.
   // `argent flow list` prints relative paths, so this is the spelling an agent
   // is most likely to pass back.
+  const windows = windowsPathRefusal("flow_path", flowPath);
+  if (windows) {
+    throw new FailureError(windows, {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_path_absolute",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
   if (!path.isAbsolute(flowPath)) {
     throw new FailureError(
       `Invalid flow_path "${flowPath}": flow paths must be absolute — a relative path ` +

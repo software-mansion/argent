@@ -32,10 +32,36 @@ import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
 /**
+ * The refusal for a Windows client path on a macOS or Linux tool-server, which
+ * reads `C:\work` as relative: the path is absolute where it was written, so
+ * "must be absolute" would blame its author for a mistake they did not make.
+ * Undefined for every other path.
+ */
+export function windowsPathRefusal(label: string, value: string): string | undefined {
+  if (process.platform === "win32" || path.isAbsolute(value) || !path.win32.isAbsolute(value)) {
+    return undefined;
+  }
+  return (
+    `${label} "${value}" is a Windows path. A tool-server on macOS or Linux cannot open ` +
+    `Windows paths. Use argent on the computer that runs the tool-server, or start the ` +
+    `tool-server on the Windows computer.`
+  );
+}
+
+/**
  * Validate a caller-supplied `project_root`. Absolute and no ".." are what keep
  * a recording's files inside the project the agent named.
  */
 export function assertValidProjectRoot(root: string): void {
+  const windows = windowsPathRefusal("project_root", root);
+  if (windows) {
+    throw new FailureError(windows, {
+      error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
+      failure_stage: "flow_project_root_set",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
   if (!path.isAbsolute(root)) {
     throw new FailureError(
       `project_root must be an absolute path (got "${root}"). ` +

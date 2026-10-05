@@ -508,6 +508,33 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it.skipIf(process.platform === "win32")(
+    "names a Windows client path instead of calling it relative",
+    async () => {
+      // `C:\...` is absolute on the client that wrote it, so "must be
+      // absolute" would send its user hunting for a mistake they did not make.
+      const yaml = serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "from windows" }],
+      });
+      const wrapper = uploadedWrapper("C:\\work\\proj\\.argent\\flows\\basic.yaml", yaml);
+
+      for (const [root, quoted] of [
+        ["C:\\work\\proj", `project_root "C:\\work\\proj"`],
+        [projectRoot, `flow_path "C:\\work\\proj\\.argent\\flows\\basic.yaml"`],
+      ] as const) {
+        const res = await supertest(handle.app)
+          .post("/tools/flow-execute")
+          .send({ project_root: root, device: DEVICE, flow_path: wrapper });
+
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain(`${quoted} is a Windows path`);
+        expect(res.body.error).not.toMatch(/must be an absolute|must be absolute/);
+      }
+      expect(steps.invokeTool).not.toHaveBeenCalled();
+    }
+  );
+
   /** A flow on this host plus the wrapper a client with a mirrored copy of it sends. */
   async function mirroredUpload(hostYaml: string, clientYaml: string) {
     const hostPath = path.join(projectRoot, ".argent", "flows", "mirrored.yaml");
