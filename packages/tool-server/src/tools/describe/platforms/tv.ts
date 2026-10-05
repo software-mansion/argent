@@ -39,9 +39,9 @@ const ANDROID_FOCUS_EMPTY_HINT =
   "these screens even though the labels aren't enumerable, so you can drive blind + screenshot " +
   "to confirm.";
 
-// Once running (the wait tools start it), the android-devtools helper holds the
-// device's only UiAutomation connection and every `uiautomator dump` dies
-// `Killed` — so read through the helper, and dump only where it cannot run.
+// A running android-devtools helper holds the device's only UiAutomation
+// connection, so a `uiautomator dump` beside it dies `Killed`. Read through the
+// helper; the dump is the fallback when the helper read fails.
 async function readAndroidTvFocus(
   registry: Registry,
   device: DeviceInfo,
@@ -110,7 +110,7 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
 
   // Ride out a brief post-launch transition window (see EMPTY_RETRY_*). Apple TV
   // only: on Android TV an empty focus set is steady state for react-native-tvos
-  // screens, not a transition, so retrying would just burn uiautomator dumps
+  // screens, not a transition, so retrying would just burn reads
   // before the empty-focus fallback below.
   let res =
     device.platform === "android"

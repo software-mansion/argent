@@ -8,18 +8,18 @@ description: Control and inspect TV apps via argent — Apple TV (tvOS), Android
 ## Critical
 
 - A TV is **focus-driven, not touch-driven.** Drive every interaction with `describe` + `tv-remote` + `keyboard`; never use `gesture-*` / coordinate taps — they don't apply on any TV platform.
-- **Always `describe` before navigating** to find the live cursor and your target — never guess focus from a screenshot. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
+- **Always read the focus view before navigating** (`describe`, or the tree the last action returned) to find the live cursor and your target — never guess focus from a screenshot. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
 - Pass the `udid` from `list-devices` — an Apple TV simulator UDID or an Android TV / Vega `serial`. Dispatch is automatic from the id; the same tools drive all three.
 
 ## The navigation loop
 
 1. `describe` — find the cursor and your target (returns the focused element + all focusable ones, not a tap tree).
-2. `tv-remote` — move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; count rows/columns from the frames to build the path.
+2. `tv-remote` — move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; count rows/columns from the list order (and, on Vega, the frames) to build the path.
 3. Read where focus landed from the focus view returned under `--- Elements after action (describe) ---`; call `describe` only when that section is missing. On a miss, repeat.
 
 ## Tools
 
-- `describe {udid}` — focus view: the focused / `[selected]` element + focusable elements with labels and normalized frames. Call it before the first press on a screen; `tv-remote`, `keyboard` and `launch-app` return it after the action. Empty tree → see the per-platform notes.
+- `describe {udid}` — focus view: the focused / `[selected]` element + focusable elements with labels (plus normalized frames on Vega). Call it before the first press on a screen; `tv-remote`, `keyboard` and `launch-app` return it after the action. Empty tree → see the per-platform notes.
 - `tv-remote {udid, button}` — D-pad / remote. `button` is one key **or a whole path** (run in one call). Keys: `up`/`down`/`left`/`right`, `select`, `back`, `menu`, `home`, `playPause`, plus media keys `rewind`/`fastForward`/`next`/`previous`/`volumeUp`/`volumeDown`/`mute`. Single: `{button:"down"}`; repeat: `{button:"down", repeat:3}`; path: `{button:["up","right","select"]}`.
 - `keyboard {udid, text}` — type into the focused field (focus it with `tv-remote` first). One call carries `text` or `key`, never both — to type and then press a key, send two `keyboard` steps in one `run-sequence`. Named `key` presses (e.g. `{key:"enter"}`) work on Vega; on Apple TV / Android TV move focus with `tv-remote` instead.
 - `launch-app` / `restart-app` / `reinstall-app {udid, bundleId}` — `bundleId` from the app manifest. Vega `reinstall-app` takes `appPath` = a `.vpkg`.
