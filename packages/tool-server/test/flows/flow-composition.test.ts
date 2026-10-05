@@ -18,7 +18,7 @@ import {
   NATIVE_READY_TIMEOUT_MS,
   type FlowRunResult,
 } from "../../src/tools/flows/flow-run";
-import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 
@@ -1820,6 +1820,7 @@ describe("flow composition (run:)", () => {
           { kind: "echo", message: "before" },
           { kind: "run", flow: "frag.yaml" },
           { kind: "echo", message: "between" },
+          { kind: "script", path: "seed.mjs" },
           { kind: "snapshot", name: "title", maxMismatch: 0.5 },
         ],
       }),
@@ -1849,8 +1850,14 @@ describe("flow composition (run:)", () => {
     expect(err).toBeInstanceOf(Error);
     const message = (err as Error).message;
     expect(message).toContain("not self-contained");
-    expect(message).toContain("  - step 2: run: frag.yaml\n  - step 4: snapshot: title");
-    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
+    expect(message).toContain(
+      "  - step 2: run: frag.yaml\n  - step 4: script: { path: seed.mjs }\n  - step 5: snapshot: title"
+    );
+    // validation is what lets a directory run move on to the next flow.
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_run_composition",
+      error_kind: "validation",
+    });
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
   });
@@ -1902,9 +1909,69 @@ describe("flow composition (run:)", () => {
     const message = (err as Error).message;
     expect(message).toContain("not self-contained");
     expect(message).toContain("  - step 2: tool: flow-execute (name: login)");
-    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_nested_flow",
+      error_kind: "validation",
+    });
     // Preflight, not mid-run: neither the tap nor the nested run was dispatched.
     expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  /** Run an uploaded flow with these steps and return what it threw. */
+  async function rejectUpload(steps: FlowStep[], registry = mockRegistry()): Promise<unknown> {
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(uploadedPath, serializeFlow({ executionPrerequisite: "", steps }), "utf8");
+    return createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+  }
+
+  it("rejects an uploaded flow whose nested tool: flow-execute names a flow_path", async () => {
+    const registry = mockRegistry();
+    const err = await rejectUpload(
+      [
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { flow_path: "/client/.argent/flows/login.yaml", project_root: "/client" },
+        },
+      ],
+      registry
+    );
+    expect((err as Error).message).toContain(
+      "  - step 2: tool: flow-execute (flow_path: /client/.argent/flows/login.yaml)"
+    );
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("files an upload whose first offending step is a script under the script stage", async () => {
+    const err = await rejectUpload([
+      { kind: "echo", message: "before" },
+      { kind: "script", path: "seed.mjs" },
+      { kind: "run", flow: "frag.yaml" },
+    ]);
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_script_step",
+      error_kind: "validation",
+    });
   });
 
   it("rejects an uploaded flow whose tool: steps take files or record a flow", async () => {
