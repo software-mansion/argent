@@ -50,7 +50,7 @@ const zodSchema = z.object({
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android. " +
+      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android, 0.15 for Apple TV/Vega. " +
         "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
@@ -220,8 +220,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
     services: () => ({}),
     async execute(_services, params, ctx) {
       const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
-      const scale = params.scale ?? getScreenshotScale();
       const device = resolveDevice(params.udid);
+      // Determine if device is a TV (tvOS simulator or Vega) for platform-specific defaults
+      const isTV = device.platform === "vega" ||
+        (device.platform === "ios" && (await isTvOsSimulator(params.udid)));
+      const scale = params.scale ?? getScreenshotScale(isTV);
 
       // Chromium captures via CDP — no simulator-server.
       if (device.platform === "chromium") {

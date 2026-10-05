@@ -27,9 +27,20 @@ describe("getScreenshotScale", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("uses a valid env override verbatim", () => {
+  it("defaults to 0.15 for TV when the env var is unset", () => {
+    delete process.env[ENV];
+    expect(getScreenshotScale(true)).toBe(0.15);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("uses a valid env override verbatim for non-TV", () => {
     process.env[ENV] = "0.5";
     expect(getScreenshotScale()).toBe(0.5);
+  });
+
+  it("uses a valid env override verbatim for TV", () => {
+    process.env[ENV] = "0.5";
+    expect(getScreenshotScale(true)).toBe(0.5);
   });
 
   it("accepts the 1.0 boundary", () => {
@@ -48,10 +59,20 @@ describe("getScreenshotScale", () => {
     expect(getScreenshotScale()).toBe(0.25);
   });
 
+  it.each(["0.009", "1e-3", "0.0001"])("falls back to 0.15 below the floor for TV for %j", (value) => {
+    process.env[ENV] = value;
+    expect(getScreenshotScale(true)).toBe(0.15);
+  });
+
   // Rejected rather than producing a zero-pixel or upscaled capture.
   it.each(["0", "-0.5", "1.5", "abc", ""])("falls back to 0.25 for %j", (value) => {
     process.env[ENV] = value;
     expect(getScreenshotScale()).toBe(0.25);
+  });
+
+  it.each(["0", "-0.5", "1.5", "abc", ""])("falls back to 0.15 for TV for %j", (value) => {
+    process.env[ENV] = value;
+    expect(getScreenshotScale(true)).toBe(0.15);
   });
 
   it("names the ignored value and the accepted range, once per value", () => {
@@ -60,6 +81,15 @@ describe("getScreenshotScale", () => {
     expect(getScreenshotScale()).toBe(0.25);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain("ARGENT_SCREENSHOT_SCALE=30");
+    expect(warn.mock.calls[0][0]).toContain("between 0.01 and 1.0");
+  });
+
+  it("names the ignored value and the accepted range for TV", () => {
+    process.env[ENV] = "2";
+    expect(getScreenshotScale(true)).toBe(0.15);
+    expect(getScreenshotScale(true)).toBe(0.15);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("ARGENT_SCREENSHOT_SCALE=2");
     expect(warn.mock.calls[0][0]).toContain("between 0.01 and 1.0");
   });
 });

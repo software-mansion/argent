@@ -27,6 +27,10 @@ import { pathToFileURL } from "node:url";
 // selected-tab underline (#878).
 const DEFAULT_SCREENSHOT_SCALE = 0.25;
 
+// Apple TV and Vega (Fire TV) have large, high-resolution screens with
+// highly legible text. Lower scale reduces context cost without sacrificing readability.
+const DEFAULT_SCREENSHOT_SCALE_TV = 0.15;
+
 // A simulator-server captures from its live frame stream, so it answers HTTP 200
 // `{ error: "no image to export" }` until the first frame lands — reliably so for
 // a backgrounded simulator when more than one is booted
@@ -713,7 +717,7 @@ async function simulatorPost<T>(
 /** One warning per distinct value: the parse runs on every capture. */
 let warnedScaleValue: string | undefined;
 
-export function getScreenshotScale(): number {
+export function getScreenshotScale(isTV?: boolean): number {
   const v = process.env.ARGENT_SCREENSHOT_SCALE;
   if (v) {
     const n = parseFloat(v);
@@ -725,11 +729,11 @@ export function getScreenshotScale(): number {
       warnedScaleValue = v;
       console.warn(
         `[screenshot] Ignoring ARGENT_SCREENSHOT_SCALE=${v}: expected a number between 0.01 and 1.0. ` +
-          `Using ${DEFAULT_SCREENSHOT_SCALE}.`
+          `Using ${isTV ? DEFAULT_SCREENSHOT_SCALE_TV : DEFAULT_SCREENSHOT_SCALE}.`
       );
     }
   }
-  return DEFAULT_SCREENSHOT_SCALE;
+  return isTV ? DEFAULT_SCREENSHOT_SCALE_TV : DEFAULT_SCREENSHOT_SCALE;
 }
 
 /**

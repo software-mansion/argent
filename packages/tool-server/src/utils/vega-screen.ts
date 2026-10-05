@@ -51,11 +51,11 @@ async function captureViaEmulatorConsole(opts: { scale?: number }): Promise<stri
 
 /**
  * Downscale a decoded RGBA PNG, reusing the other platforms' default
- * (`getScreenshotScale()`, which parses `ARGENT_SCREENSHOT_SCALE`) and
+ * (`getScreenshotScale(true)` for TV, which parses `ARGENT_SCREENSHOT_SCALE`) and
  * screenshot-diff's lanczos3 resampler, so Vega captures match them.
  */
 function scalePng(src: PNG, scale?: number): PNG {
-  const s = scale ?? getScreenshotScale();
+  const s = scale ?? getScreenshotScale(true);
   if (s >= 1) return src;
   const outW = Math.max(1, Math.round(src.width * s));
   const outH = Math.max(1, Math.round(src.height * s));
