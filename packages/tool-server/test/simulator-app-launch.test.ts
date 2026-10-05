@@ -14,11 +14,16 @@ import { launchSimulatorApp } from "../src/utils/simulator-app-launch";
 
 const APP = "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app";
 const EXECUTABLE = `${APP}/Contents/MacOS/Simulator`;
+// Always running beside the app on a real host, and also named like it.
+const CORE_SIMULATOR_SERVICE =
+  "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/XPCServices/com.apple.CoreSimulator.CoreSimulatorService.xpc/Contents/MacOS/com.apple.CoreSimulator.CoreSimulatorService";
 
 let home: string;
 let originalHome: string | undefined;
 let coreSimulatorBuild: string;
 let appRunning: boolean;
+let psExecutable: string;
+let psFails: boolean;
 let launch: Mock<() => Promise<unknown>>;
 
 const psCalls = () => mockExecFile.mock.calls.filter(([file]) => file === "ps").length;
@@ -28,7 +33,7 @@ const verdicts = () =>
 // Runs a launch to completion, stepping past the post-launch watch.
 async function run(): Promise<boolean> {
   const result = launchSimulatorApp(APP, launch);
-  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.advanceTimersByTimeAsync(10_000);
   return result;
 }
 
@@ -39,6 +44,8 @@ beforeEach(() => {
   process.env.HOME = home;
   coreSimulatorBuild = "1166";
   appRunning = false;
+  psExecutable = EXECUTABLE;
+  psFails = false;
   launch = vi.fn(async (): Promise<unknown> => undefined);
   mockExecFile.mockReset().mockImplementation((...args: unknown[]) => {
     const [file, argv] = args as [string, string[]];
@@ -47,7 +54,11 @@ beforeEach(() => {
     if (file === "plutil") {
       stdout = argv.at(-1)!.startsWith(APP) ? "1042.1\n" : `${coreSimulatorBuild}\n`;
     } else if (file === "ps") {
-      stdout = `/sbin/launchd\n${appRunning ? `${EXECUTABLE}\n` : ""}`;
+      if (psFails) {
+        callback(new Error("ps failed"));
+        return {};
+      }
+      stdout = `/sbin/launchd\n${CORE_SIMULATOR_SERVICE}\n${appRunning ? `${psExecutable}\n` : ""}`;
     }
     callback(null, { stdout, stderr: "" });
     return {};
@@ -83,9 +94,9 @@ describe("launchSimulatorApp", () => {
   it("records a crash at the end of the watch window", async () => {
     appRunning = true;
     const result = launchSimulatorApp(APP, launch);
-    await vi.advanceTimersByTimeAsync(1_900);
+    await vi.advanceTimersByTimeAsync(4_900);
     appRunning = false;
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     await expect(result).resolves.toBe(true);
     expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
@@ -93,7 +104,7 @@ describe("launchSimulatorApp", () => {
 
   it("launches a crashing app once for parallel callers", async () => {
     const results = Promise.all([launchSimulatorApp(APP, launch), launchSimulatorApp(APP, launch)]);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     await expect(results).resolves.toEqual([true, false]);
     expect(launch).toHaveBeenCalledTimes(1);
@@ -106,6 +117,42 @@ describe("launchSimulatorApp", () => {
 
     await expect(run()).resolves.toBe(true);
     expect(launch).toHaveBeenCalledTimes(2);
+    expect(verdicts()).toEqual({
+      [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes",
+      [`${APP} 1042.1 / CoreSimulator 1200`]: "runs",
+    });
+  });
+
+  it("matches the running app whatever case ps prints its path in", async () => {
+    appRunning = true;
+    psExecutable = EXECUTABLE.toLowerCase();
+
+    await run();
+    expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "runs" });
+  });
+
+  it("records nothing when the process list cannot be read", async () => {
+    psFails = true;
+
+    await expect(run()).resolves.toBe(true);
+    expect(fs.existsSync(path.join(home, ".argent", "simulator-app-launch.json"))).toBe(false);
+  });
+
+  it("still reports the launch when the record cannot be written", async () => {
+    fs.writeFileSync(path.join(home, ".argent"), "not a directory");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await expect(run()).resolves.toBe(true);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("could not record"));
+    stderr.mockRestore();
+  });
+
+  it("treats an unreadable record as empty", async () => {
+    fs.mkdirSync(path.join(home, ".argent"));
+    fs.writeFileSync(path.join(home, ".argent", "simulator-app-launch.json"), "null");
+
+    await expect(run()).resolves.toBe(true);
+    expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
   });
 
   it("launches without a record when the builds cannot be read", async () => {

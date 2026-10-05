@@ -556,7 +556,7 @@ async function openSimulatorWindow(udid: string): Promise<void> {
     );
     if (!launched) {
       process.stderr.write(
-        `[boot-device ${udid.slice(0, 8)}] not opening ${simulatorApp}: it crashed at launch against the installed CoreSimulator; the device runs headless.\n`
+        `[boot-device ${udid.slice(0, 8)}] not opening ${simulatorApp}: it exited right after an earlier launch, so the device runs without a window. Delete ~/.argent/simulator-app-launch.json to try again.\n`
       );
     }
     return;
