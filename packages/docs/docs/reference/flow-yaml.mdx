@@ -434,13 +434,13 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 | `run:`, `script:`, `snapshot:`, `tool: flow-execute` | The tool-server rejects the flow before the first step. The error lists each such step |
 | A relative `launch: { chromium: <path> }`            | The launch fails. Use an absolute path on the tool-server                              |
 
-The client and the tool-server can share one disk, for example over a link to `127.0.0.1`. Then the tool-server reads the file in place and all step kinds run.
+The tool-server runs the uploaded copy even when it has a file at the same path, for example over a link to `127.0.0.1`, because only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place and all step kinds run.
 
 A rejected flow gives exit code 1. With `--json`, the CLI writes one JSON object on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next flow and keeps the rejected flow in its `flows` array.
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. When the tool-server runs on another computer, both sources send only that one file. Argent checks the whole flow before it runs the first step. It rejects a flow with a `run:`, `script:`, `snapshot:` or `tool: flow-execute` step at any depth. The error lists each such step. When the client and the tool-server share one disk, the tool-server reads the file in place and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks the whole flow before it runs the first step. It rejects a flow with a `run:`, `script:`, `snapshot:` or `tool: flow-execute` step at any depth. The error lists each such step. Without a link, the tool-server reads the file in place and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 

@@ -6,9 +6,10 @@
  * server-readable string *before* zod validation, so tools always execute
  * against a local path:
  *
- * - co-located client: the wrapper's path matches on this host's own
+ * - unlinked client: the wrapper's path matches on this host's own
  *   filesystem and is used in place — zero copies.
- * - remote client: `kind: "file"` content is materialized into a temp file;
+ * - linked client: `kind: "file"` content is materialized into a temp file,
+ *   even when the path also matches on this host;
  *   `kind: "directory"` fails with remote-mode guidance (a tree can't ride in
  *   a tool call); `kind: "tar-upload"` is extracted from a streamed tar
  *   whenever `uploadId` is set, even if the path also exists on this host;
@@ -224,6 +225,19 @@ async function resolveOne(
     );
   }
 
+  // The client inlines content only when it is linked, and then its bytes are
+  // the latest: a host file that matches the stat may be a mirrored copy (cp -p
+  // and tar keep size and mtime) of an older revision, beside siblings that are
+  // older still. Like a tar-upload's uploadId, uploaded content wins.
+  if (spec.kind === "file" && typeof wire.content === "string") {
+    const { filePath, dir } = await materializeUpload(wire);
+    tempDirs.push(dir);
+    return {
+      value: filePath,
+      meta: { clientPath: wire.path, presentOnHost: probe.present, viaUpload: true },
+    };
+  }
+
   if (meta.presentOnHost) {
     return { value: wire.path, meta };
   }
@@ -235,12 +249,6 @@ async function resolveOne(
         `uploaded with the call — when the tool-server runs on a different machine, pass a ` +
         `path that exists on that machine (e.g. the server-side checkout of the project).`
     );
-  }
-
-  if (typeof wire.content === "string") {
-    const { filePath, dir } = await materializeUpload(wire);
-    tempDirs.push(dir);
-    return { value: filePath, meta: { ...meta, viaUpload: true } };
   }
 
   if (wire.contentOmitted === "size-limit") {

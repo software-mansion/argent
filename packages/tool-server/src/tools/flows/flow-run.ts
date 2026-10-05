@@ -110,7 +110,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. When the tool-server runs on another computer, the argent client uploads the file. An uploaded flow must be self-contained: no run:, script:, snapshot: or nested tool: flow-execute steps. When the client and the tool-server share one disk, the tool-server reads the file in place and all step kinds run."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link, the argent client uploads the file and the tool-server runs the uploaded copy. An uploaded flow must be self-contained: no run:, script:, snapshot: or nested tool: flow-execute steps. Without a link, the tool-server reads the file in place and all step kinds run."
       ),
     device: z
       .string()
@@ -1250,12 +1250,11 @@ function assertUploadSelfContained(flow: FlowFile): void {
   }
   if (offending.length === 0) return;
   throw new FailureError(
-    `This flow is not self-contained, and it arrived as an upload from a client that does ` +
-      `not share a filesystem with this tool-server. The steps below read files that stayed ` +
-      `on the client:\n` +
+    `This flow is not self-contained, and it arrived as an upload over a link. The steps ` +
+      `below read files that stayed on the client:\n` +
       offending.map((o) => `  - ${o.line}`).join("\n") +
-      `\nRun the flow on the same computer as the tool-server: without a link, or over a ` +
-      `link to 127.0.0.1 with the project on this disk.`,
+      `\nRun the flow on the computer that runs the tool-server, with no link and no ` +
+      `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.`,
     {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: UPLOAD_STAGE_BY_KIND[offending[0]!.kind],
@@ -1736,8 +1735,8 @@ async function bootChromiumForFlow(
   if (viaUpload && !path.isAbsolute(spec.path)) {
     throw new FailureError(
       `A relative chromium app path ("${spec.path}") resolves against the flow file's ` +
-        `directory, which requires a co-located client and tool server — an uploaded flow ` +
-        `has no real flow directory on this host. Use an absolute tool-server path instead.`,
+        `directory, which requires a run without a link — an uploaded flow has no real ` +
+        `flow directory on this host. Use an absolute tool-server path instead.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_upload_chromium_app_path",

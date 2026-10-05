@@ -31,7 +31,7 @@ export interface FileInputWire {
    * Absolute path on the CLIENT machine. Also probed on the tool-server's own
    * filesystem — a hit (existence for directories, size/mtime match for files)
    * means client and server are co-located (or share a checkout) and the path
-   * is used in place with no copy.
+   * is used in place with no copy, unless the wrapper carries `content`.
    */
   path: string;
   /** stat of `path` on the client, for the server-side co-location probe. */
@@ -40,7 +40,8 @@ export interface FileInputWire {
   /**
    * Base64 file bytes, inlined only when the client is routed to an external
    * tool-server (`argent link` / ARGENT_TOOLS_URL), so unlinked local calls
-   * never pay the encoding cost.
+   * never pay the encoding cost. When present, the server uses these bytes
+   * even if a host file at `path` matches the stat.
    */
   content?: string;
   /**
