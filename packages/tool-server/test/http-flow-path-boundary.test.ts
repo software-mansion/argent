@@ -515,7 +515,7 @@ describe("flow-execute flow_path over HTTP", () => {
       // absolute" would send its user hunting for a mistake they did not make.
       const yaml = serializeFlow({
         executionPrerequisite: "",
-        steps: [{ kind: "echo", message: "from windows" }],
+        steps: [{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } }],
       });
       const wrapper = uploadedWrapper("C:\\work\\proj\\.argent\\flows\\basic.yaml", yaml);
 

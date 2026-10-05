@@ -6,14 +6,16 @@
  * server-readable string *before* zod validation, so tools always execute
  * against a local path:
  *
- * - unlinked client: the wrapper's path matches on this host's own
- *   filesystem and is used in place — zero copies.
- * - linked client: `kind: "file"` content is materialized into a temp file,
- *   even when the path also matches on this host;
- *   `kind: "directory"` fails with remote-mode guidance (a tree can't ride in
- *   a tool call); `kind: "tar-upload"` is extracted from a streamed tar
- *   whenever `uploadId` is set, even if the path also exists on this host;
- *   `kind: "probe"` passes through and only reports presence.
+ * - `kind: "file"`: inlined content (sent only by a linked client) is
+ *   materialized into a temp file, even when the path also matches on this
+ *   host; without content, a path that matches on this host's own filesystem
+ *   is used in place — zero copies.
+ * - `kind: "tar-upload"` is extracted from a streamed tar whenever `uploadId`
+ *   is set, even if the path also exists on this host, and otherwise used in
+ *   place.
+ * - `kind: "directory"` is used in place, and fails with remote-mode guidance
+ *   when absent here (a tree can't ride in a tool call).
+ * - `kind: "probe"` passes through and only reports presence.
  *
  * Plain string args (older clients, direct invocations) pass through untouched.
  */

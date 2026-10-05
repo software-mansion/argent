@@ -182,7 +182,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const { url, token } = await baseUrl();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
-    // server can read them in place (co-located) or from inlined content (remote).
+    // server can read them in place (local) or from inlined content (routed).
     let finalArgs = args;
     const meta = await fetchTool(name);
     if (meta?.fileInputs?.length) {

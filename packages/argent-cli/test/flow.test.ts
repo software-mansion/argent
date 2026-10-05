@@ -2392,9 +2392,11 @@ describe("argent flow run <dir>", () => {
 
   it("writes a rejected flow's message on stderr as a record under --json", async () => {
     const message =
-      "This flow is not self-contained. The steps below read files that stayed on the client:\n" +
+      "This flow is not self-contained, and it arrived as an upload. The steps below read or " +
+      "write project files, which stay on the client:\n" +
       "  - step 1: run: frag.yaml\n" +
-      "Run the flow on the same computer as the tool-server.";
+      "Run the flow on the computer that runs the tool-server, with no link and no " +
+      "ARGENT_TOOLS_URL, so that the tool-server reads the files in place.";
     toolsClientMock.callTool
       .mockRejectedValueOnce(
         new ToolInvocationError(message, {

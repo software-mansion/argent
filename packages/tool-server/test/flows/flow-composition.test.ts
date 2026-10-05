@@ -7,7 +7,6 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   getFailureSignal,
-  type FileInputSpec,
   type Registry,
 } from "@argent/registry";
 import {
@@ -21,6 +20,8 @@ import {
 import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import { reinstallAppTool } from "../../src/tools/reinstall-app";
+import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
 
 // Stub the snapshot differ: the baseline-anchoring test asserts only WHERE the
 // runner points it (root flowsDir + root flow name), not the diffing itself.
@@ -1420,8 +1421,8 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-SHOUTY-FILE");
   });
 
-  it("rejects run: composition when the root flow was uploaded (no shared filesystem)", async () => {
-    // A remote client's flow arrives as content and is materialized to a temp
+  it("rejects run: composition when the root flow was uploaded", async () => {
+    // A linked client's flow arrives as content and is materialized to a temp
     // file — the files its run: paths reference stayed on the client, and a
     // same-named file on the server must never be read in their place. The
     // rejection is a preflight contract error, so no step (e.g. a leading
@@ -1683,13 +1684,12 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("allows run: composition for a co-located flow_file resolved in place", async () => {
-    // The everyday co-located client: the flow_file boundary resolves the
-    // exact ${project_root}/.argent/flows/${name}.yaml path on a shared
-    // filesystem (presentOnHost, NOT an upload). This return is what carries
-    // the whole feature — misclassifying it as an upload would reject every
-    // local run: composition with the co-located contract error, so the
-    // upload-rejection tests above need this inverse pin.
+  it("allows run: composition for a flow_file resolved in place", async () => {
+    // The everyday unlinked client: the flow_file boundary resolves the exact
+    // ${project_root}/.argent/flows/${name}.yaml path in place (presentOnHost,
+    // NOT an upload). This return is what carries the whole feature —
+    // misclassifying it as an upload would reject every local run:
+    // composition, so the upload-rejection tests above need this inverse pin.
     await writeFlow("login", {
       executionPrerequisite: "",
       steps: [{ kind: "echo", message: "composed fragment ran" }],
@@ -1962,6 +1962,24 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("files an upload whose first offending step records a flow under the recording stage", async () => {
+    const err = await rejectUpload([
+      {
+        kind: "tool",
+        name: "flow-start-recording",
+        args: { name: "rec", project_root: "/client" },
+      },
+      { kind: "run", flow: "frag.yaml" },
+    ]);
+    expect((err as Error).message).toContain(
+      "  - step 1: tool: flow-start-recording (records a flow)\n  - step 2: run: frag.yaml"
+    );
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_recording_tool",
+      error_kind: "validation",
+    });
+  });
+
   it("files an upload whose first offending step is a script under the script stage", async () => {
     const err = await rejectUpload([
       { kind: "echo", message: "before" },
@@ -2004,18 +2022,12 @@ describe("flow composition (run:)", () => {
       "utf8"
     );
 
-    const fileInputs: Record<string, FileInputSpec[]> = {
-      "screenshot-diff": [
-        { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
-        { target: "currentPath", path: "${currentPath}", kind: "file", optional: true },
-        { target: "outputDir", path: "${outputDir}", kind: "probe", optional: true },
-      ],
-      "reinstall-app": [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
+    const tools: Record<string, { fileInputs?: unknown }> = {
+      "screenshot-diff": screenshotDiffTool,
+      "reinstall-app": reinstallAppTool,
     };
     const registry = mockRegistry();
-    vi.mocked(registry.getTool).mockImplementation(
-      (id: string) => ({ fileInputs: fileInputs[id] }) as never
-    );
+    vi.mocked(registry.getTool).mockImplementation((id: string) => tools[id] as never);
     const err = await createRunFlowTool(registry)
       .execute(
         {},
@@ -2040,7 +2052,7 @@ describe("flow composition (run:)", () => {
     expect(message).toContain(
       "  - step 2: tool: screenshot-diff (/client/base.png, /client/now.png)\n" +
         "  - step 4: tool: reinstall-app (/client/app.apk)\n" +
-        "  - step 5: tool: flow-add-step (records a flow on the tool-server)\n"
+        "  - step 5: tool: flow-add-step (records a flow)\n"
     );
     expect(message).not.toContain("step 3");
     expect(getFailureSignal(err)).toMatchObject({
@@ -2050,9 +2062,9 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("allows a snapshot step for a co-located flow_file resolved in place", async () => {
+  it("allows a snapshot step for a flow_file resolved in place", async () => {
     // The inverse pin for the snapshot upload rejection above: the everyday
-    // co-located client (presentOnHost, NOT an upload) keeps its durable
+    // unlinked client (presentOnHost, NOT an upload) keeps its durable
     // baseline directory beside the flow file, so the snapshot path still runs.
     await writeFlow("main", {
       executionPrerequisite: "",

@@ -113,7 +113,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link, the argent client uploads the file and the tool-server runs the uploaded copy. An uploaded flow must be self-contained: no run:, script: or snapshot: steps, and no tool: steps that take a file or record a flow. Without a link, the tool-server reads the file in place and all step kinds run."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file and the tool-server runs the uploaded copy. An uploaded flow must be self-contained: no run:, script: or snapshot: steps, and no tool: steps that take a file or record a flow. Without a link, the tool-server reads the file in place and all step kinds run."
       ),
     device: z
       .string()
@@ -1236,8 +1236,8 @@ function toolStepFilePaths(registry: Registry, tool: string, args: Record<string
  * Reject an uploaded root flow that is not self-contained — one with a `run:`,
  * `script:` or `snapshot` step, or a `tool:` step that takes a file or records
  * a flow, at any depth — before anything executes, so a mid-run or
- * guard-gated error cannot execute half the flow first. All of them use files
- * on the client: a run: step's referenced files, a script step's `.mjs` (and
+ * guard-gated error cannot execute half the flow first. All of them read or
+ * write project files, which stay on the client: a run: step's referenced files, a script step's `.mjs` (and
  * whatever it imports), a snapshot's baselines (against a per-call temp
  * materialization a plain snapshot can only fail, while updateBaselines writes
  * PNGs no later run can find), the flow a nested `flow-execute` names under the
@@ -1271,7 +1271,7 @@ function assertUploadSelfContained(registry: Registry, flow: FlowFile): void {
     } else if (step.kind === "tool" && RECORDING_TOOL_IDS.has(step.name)) {
       offending.push({
         kind: "recording",
-        line: `${where}: tool: ${step.name} (records a flow on the tool-server)`,
+        line: `${where}: tool: ${step.name} (records a flow)`,
       });
     } else if (step.kind === "tool") {
       const paths = toolStepFilePaths(registry, step.name, step.args);
@@ -1285,8 +1285,8 @@ function assertUploadSelfContained(registry: Registry, flow: FlowFile): void {
   }
   if (offending.length === 0) return;
   throw new FailureError(
-    `This flow is not self-contained, and it arrived as an upload over a link. The steps ` +
-      `below use files on the client, which the upload does not carry:\n` +
+    `This flow is not self-contained, and it arrived as an upload. The steps below read ` +
+      `or write project files, which stay on the client:\n` +
       offending.map((o) => `  - ${o.line}`).join("\n") +
       `\nRun the flow on the computer that runs the tool-server, with no link and no ` +
       `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.`,
@@ -1770,8 +1770,8 @@ async function bootChromiumForFlow(
   if (viaUpload && !path.isAbsolute(spec.path)) {
     throw new FailureError(
       `A relative chromium app path ("${spec.path}") resolves against the flow file's ` +
-        `directory, which requires a run without a link — an uploaded flow has no real ` +
-        `flow directory on this host. Use an absolute tool-server path instead.`,
+        `directory, which requires a run with no link and no ARGENT_TOOLS_URL — an uploaded ` +
+        `flow has no real flow directory on this host. Use an absolute tool-server path instead.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_upload_chromium_app_path",
@@ -2821,9 +2821,9 @@ function flowNameOf(clientPath: string): string {
  * With no `flow_path` or `flow_file`, derive the saved-flow path from
  * project_root + name. When `flow_file` is set it must be one of the two shapes
  * its file-input boundary legitimately produces: the exact
- * `${project_root}/.argent/flows/${name}.yaml` path (co-located client), or a
+ * `${project_root}/.argent/flows/${name}.yaml` path (an unlinked client), or a
  * temp file THIS server materialized from uploaded content
- * (`fileInput.viaUpload` — remote client). Anything else is rejected: the schema
+ * (`fileInput.viaUpload` — a linked client). Anything else is rejected: the schema
  * marks `flow_file` internal, and honoring an arbitrary path would let a caller
  * execute (and, under --update-baselines, write PNGs next to) any YAML on the
  * host through a parameter no caller is supposed to set — `flow_path`, gated on
