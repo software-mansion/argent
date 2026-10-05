@@ -59,6 +59,12 @@ vi.mock("../src/blueprints/ax-service", () => ({
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
+// The launch-crash record lives in the real ~/.argent; its own suite covers it.
+const launchSimulatorAppMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/utils/simulator-app-launch", () => ({
+  launchSimulatorApp: (...args: unknown[]) => launchSimulatorAppMock(...args),
+}));
+
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
@@ -86,6 +92,12 @@ describe("boot-device — iOS path", () => {
       return {} as never;
     });
     existsSyncMock.mockReset().mockImplementation((path: string) => path === SIMULATOR_APP);
+    launchSimulatorAppMock
+      .mockReset()
+      .mockImplementation(async (_app: string, launch: () => Promise<unknown>) => {
+        await launch();
+        return true;
+      });
     // Default state: 11111111 + 33333333 Shutdown (happy path), 22222222
     // Booted (kickstart-fallback path). Individual tests override.
     listIosSimulatorsMock.mockReset().mockResolvedValue([
@@ -278,6 +290,16 @@ describe("boot-device — iOS path", () => {
         booted: true,
       });
       expect(openCalls()).toEqual([["open", ["-a", SIMULATOR_APP]]]);
+    });
+
+    it("does not open a Simulator.app on record as crashing at launch", async () => {
+      launchSimulatorAppMock.mockResolvedValue(false);
+
+      await expect(createBootDeviceTool(registry).execute!({}, { udid })).resolves.toMatchObject({
+        booted: true,
+      });
+      expect(launchSimulatorAppMock).toHaveBeenCalledWith(SIMULATOR_APP, expect.any(Function));
+      expect(openCalls()).toEqual([]);
     });
 
     it("bounds the GUI lookups with a timeout", async () => {
