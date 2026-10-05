@@ -29,7 +29,7 @@ const EMPTY_HINT =
   "exposes focus once its JS bundle has loaded. If it stays empty, take a screenshot to confirm " +
   "what's actually on screen.";
 
-// Android TV reads focus from the OS accessibility tree (uiautomator), which
+// Android TV reads focus from the OS accessibility tree, which
 // does not expose focus driven by react-native-tvos's own focus engine — so the
 // focus view can be empty on a screen that visibly has selectable tiles.
 const ANDROID_FOCUS_EMPTY_HINT =
@@ -51,7 +51,12 @@ async function readAndroidTvFocus(
     const ref = androidDevtoolsRef(device);
     const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
     return tvFocusViewFromXml((await devtools.getHierarchy()).xml);
-  } catch {
+  } catch (err) {
+    console.debug(
+      `[describe.tv] devtools helper failed, falling back to uiautomator dump: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
     return api.describe();
   }
 }
@@ -133,7 +138,7 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   }
 
   // Android TV with a still-empty focus engine: fall back to the full
-  // uiautomator tree so describe stays useful on RN-focus-engine screens.
+  // UI tree so describe stays useful on RN-focus-engine screens.
   if (isEmpty(res) && device.platform === "android") {
     // The dispatcher routed us here via isAndroidTv, so pass isTv through to
     // skip a redundant probe. Let a capture failure propagate: describeAndroid
