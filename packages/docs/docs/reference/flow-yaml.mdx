@@ -444,7 +444,7 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 | A `tool:` step that records a flow, for example `flow-add-step`                                                        | The tool-server rejects the flow before the first step    |
 | A relative `launch: { chromium: <path> }`                                                                              | The launch fails. Use an absolute path on the tool-server |
 
-The error of a rejected flow lists each such step.
+For each rejection in the table, the error lists the steps that caused it.
 
 The tool-server runs the uploaded copy even when it has a file at the same path. This is also true over a link to `127.0.0.1`. Only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place, and all step kinds run.
 

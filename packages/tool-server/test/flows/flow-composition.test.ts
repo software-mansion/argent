@@ -2009,7 +2009,8 @@ describe("flow composition (run:)", () => {
             name: "screenshot-diff",
             args: { baselinePath: "/client/base.png", currentPath: "/client/now.png" },
           },
-          // Captures both images on the device, so no file crosses the link.
+          // Fills none of the declared file inputs, so the check does not list it
+          // (screenshot-diff itself refuses this call when it runs).
           {
             kind: "tool",
             name: "screenshot-diff",
