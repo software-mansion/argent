@@ -7,6 +7,7 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   getFailureSignal,
+  interpolateFileInputPath,
   isLiveServiceState,
   wrapFailure,
 } from "@argent/registry";
@@ -40,6 +41,7 @@ import {
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
+import { RECORDING_TOOL_IDS } from "./flow-add-step";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
@@ -110,7 +112,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link, the argent client uploads the file and the tool-server runs the uploaded copy. An uploaded flow must be self-contained: no run:, script:, snapshot: or nested tool: flow-execute steps. Without a link, the tool-server reads the file in place and all step kinds run."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link, the argent client uploads the file and the tool-server runs the uploaded copy. An uploaded flow must be self-contained: no run:, script: or snapshot: steps, and no tool: steps that take a file or record a flow. Without a link, the tool-server reads the file in place and all step kinds run."
       ),
     device: z
       .string()
@@ -1203,6 +1205,8 @@ const UPLOAD_STAGE_BY_KIND = {
   script: "flow_upload_script_step",
   snapshot: "flow_upload_snapshot_baseline",
   nested: "flow_upload_nested_flow",
+  toolFile: "flow_upload_tool_file_input",
+  recording: "flow_upload_recording_tool",
 } as const;
 
 /** The flow a nested `tool: flow-execute` step names, quoted in the refusal's step list. */
@@ -1213,26 +1217,43 @@ function nestedFlowRef(args: Record<string, unknown>): string {
 }
 
 /**
+ * The paths a `tool:` step's args fill in for the file inputs its tool
+ * declares: a spec applies when every `${param}` it names is a non-empty
+ * string and no superseding source is set, as when the client wraps a call.
+ */
+function toolStepFilePaths(registry: Registry, tool: string, args: Record<string, unknown>) {
+  const paths: string[] = [];
+  for (const spec of registry.getTool(tool)?.fileInputs ?? []) {
+    if (spec.skipWhenSet !== undefined && args[spec.skipWhenSet] !== undefined) continue;
+    const filled = interpolateFileInputPath(spec.path, args);
+    if (filled !== null) paths.push(filled);
+  }
+  return paths;
+}
+
+/**
  * Reject an uploaded root flow that is not self-contained — one with a `run:`,
- * `script:` or `snapshot` step, or a nested `tool: flow-execute`, at any depth —
- * before anything executes, so a mid-run or guard-gated error cannot execute
- * half the flow first. All four read files that stayed on the client: a run:
- * step's referenced files, a script step's `.mjs` (and whatever it imports), a
- * snapshot's baselines (against a per-call temp materialization a plain snapshot
- * can only fail, while updateBaselines writes PNGs no later run can find), and
- * the flow a nested `flow-execute` names under the client's project_root. That
- * last one is the raw step the recorder keeps for every nested flow in a remote
- * recording (see captureRunTarget); {@link invokeSubTool} forwards no file
- * inputs, so the nested run would open the client's path on THIS host — ENOENT
- * after the earlier steps drove the device, or, when the same path exists here,
- * the server's own copy reported as a pass.
+ * `script:` or `snapshot` step, or a `tool:` step that takes a file or records
+ * a flow, at any depth — before anything executes, so a mid-run or
+ * guard-gated error cannot execute half the flow first. All of them use files
+ * on the client: a run: step's referenced files, a script step's `.mjs` (and
+ * whatever it imports), a snapshot's baselines (against a per-call temp
+ * materialization a plain snapshot can only fail, while updateBaselines writes
+ * PNGs no later run can find), the flow a nested `flow-execute` names under the
+ * client's project_root, the file arguments of any other tool, and the flow a
+ * recording tool writes. A nested `flow-execute` is the raw step the recorder
+ * keeps for every nested flow in a remote recording (see captureRunTarget).
+ * {@link invokeSubTool} forwards no file inputs, so a `tool:` step opens the
+ * client's path on THIS host — ENOENT after the earlier steps drove the device,
+ * or, when the same path exists here, the server's own file reported as a pass
+ * (and reinstall-app uninstalls the app before its install fails).
  *
  * Every offending step is listed, in walk order, so the author sees the whole
  * repair at once rather than one step per run. The stage is the first
- * offender's, and the four stay distinct: each names a different file the
+ * offender's, and the stages stay distinct: each names a different file the
  * link does not carry, and each is lifted on its own once it does.
  */
-function assertUploadSelfContained(flow: FlowFile): void {
+function assertUploadSelfContained(registry: Registry, flow: FlowFile): void {
   const offending: { kind: keyof typeof UPLOAD_STAGE_BY_KIND; line: string }[] = [];
   for (const { step, where } of walkSteps(flow.steps)) {
     if (step.kind === "run") {
@@ -1246,12 +1267,25 @@ function assertUploadSelfContained(flow: FlowFile): void {
         kind: "nested",
         line: `${where}: tool: flow-execute${nestedFlowRef(step.args)}`,
       });
+    } else if (step.kind === "tool" && RECORDING_TOOL_IDS.has(step.name)) {
+      offending.push({
+        kind: "recording",
+        line: `${where}: tool: ${step.name} (records a flow on the tool-server)`,
+      });
+    } else if (step.kind === "tool") {
+      const paths = toolStepFilePaths(registry, step.name, step.args);
+      if (paths.length > 0) {
+        offending.push({
+          kind: "toolFile",
+          line: `${where}: tool: ${step.name} (${paths.join(", ")})`,
+        });
+      }
     }
   }
   if (offending.length === 0) return;
   throw new FailureError(
     `This flow is not self-contained, and it arrived as an upload over a link. The steps ` +
-      `below read files that stayed on the client:\n` +
+      `below use files on the client, which the upload does not carry:\n` +
       offending.map((o) => `  - ${o.line}`).join("\n") +
       `\nRun the flow on the computer that runs the tool-server, with no link and no ` +
       `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.`,
@@ -1300,7 +1334,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       const canonicalPath = await canonicalFlowPath(filePath);
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
-      if (viaUpload) assertUploadSelfContained(flow);
+      if (viaUpload) assertUploadSelfContained(registry, flow);
       // Refused before the prerequisite handshake and before any step touches
       // the device: a mid-run refusal would land after earlier steps had already
       // driven it (see findRetiredToolArg).

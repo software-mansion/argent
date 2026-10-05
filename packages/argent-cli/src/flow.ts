@@ -133,8 +133,8 @@ counts the remaining flows skipped.
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
 a link, the CLI uploads the flow file, and the tool-server rejects a flow with
-run:, script:, snapshot: or nested tool: flow-execute steps before the first
-step. Without a link, all step kinds run.
+run:, script: or snapshot: steps, or with tool: steps that take a file or
+record a flow, before the first step. Without a link, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or

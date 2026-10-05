@@ -7,6 +7,7 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   getFailureSignal,
+  type FileInputSpec,
   type Registry,
 } from "@argent/registry";
 import {
@@ -1903,6 +1904,82 @@ describe("flow composition (run:)", () => {
     expect(message).toContain("  - step 2: tool: flow-execute (name: login)");
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
     // Preflight, not mid-run: neither the tap nor the nested run was dispatched.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects an uploaded flow whose tool: steps take files or record a flow", async () => {
+    // A tool: step gets its arguments as plain strings, so a file argument
+    // names a client path that this host opens on its own disk: ENOENT after
+    // the earlier steps drove the device, or the server's own file reported
+    // as a pass. reinstall-app uninstalls the app before it fails.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { baselinePath: "/client/base.png", currentPath: "/client/now.png" },
+          },
+          // Captures both images on the device, so no file crosses the link.
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { captureBaseline: true, captureCurrent: true },
+          },
+          { kind: "tool", name: "reinstall-app", args: { appPath: "/client/app.apk" } },
+          { kind: "tool", name: "flow-add-step", args: { name: "rec", command: "tap" } },
+        ],
+      }),
+      "utf8"
+    );
+
+    const fileInputs: Record<string, FileInputSpec[]> = {
+      "screenshot-diff": [
+        { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
+        { target: "currentPath", path: "${currentPath}", kind: "file", optional: true },
+        { target: "outputDir", path: "${outputDir}", kind: "probe", optional: true },
+      ],
+      "reinstall-app": [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
+    };
+    const registry = mockRegistry();
+    vi.mocked(registry.getTool).mockImplementation(
+      (id: string) => ({ fileInputs: fileInputs[id] }) as never
+    );
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "  - step 2: tool: screenshot-diff (/client/base.png, /client/now.png)\n" +
+        "  - step 4: tool: reinstall-app (/client/app.apk)\n" +
+        "  - step 5: tool: flow-add-step (records a flow on the tool-server)\n"
+    );
+    expect(message).not.toContain("step 3");
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_tool_file_input",
+      error_kind: "validation",
+    });
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 

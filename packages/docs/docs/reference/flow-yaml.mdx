@@ -428,11 +428,13 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 `argent link` routes the CLI to a tool-server on another computer. `argent flow run` then uploads the flow file with the call. The tool-server receives only that file. The files beside the flow file stay on the client.
 
-| Flow content                                         | Over a link                                                                            |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Directives that drive the device, `echo`, `when`     | Runs                                                                                   |
-| `run:`, `script:`, `snapshot:`, `tool: flow-execute` | The tool-server rejects the flow before the first step. The error lists each such step |
-| A relative `launch: { chromium: <path> }`            | The launch fails. Use an absolute path on the tool-server                              |
+| Flow content                                                                                                              | Over a link                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Directives that drive the device, `echo`, `when`                                                                          | Runs                                                                                   |
+| `run:`, `script:`, `snapshot:`                                                                                            | The tool-server rejects the flow before the first step. The error lists each such step |
+| A `tool:` step with a file argument, for example `screenshot-diff` with `baselinePath`, `reinstall-app` or `flow-execute` | The tool-server rejects the flow before the first step                                 |
+| A `tool:` step that records a flow, for example `flow-add-step`                                                           | The tool-server rejects the flow before the first step                                 |
+| A relative `launch: { chromium: <path> }`                                                                                 | The launch fails. Use an absolute path on the tool-server                              |
 
 The tool-server runs the uploaded copy even when it has a file at the same path, for example over a link to `127.0.0.1`, because only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place and all step kinds run.
 
@@ -440,7 +442,7 @@ A rejected flow gives exit code 1. With `--json`, the CLI writes one JSON object
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks the whole flow before it runs the first step. It rejects a flow with a `run:`, `script:`, `snapshot:` or `tool: flow-execute` step at any depth. The error lists each such step. Without a link, the tool-server reads the file in place and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks the whole flow before it runs the first step. It rejects a flow with a `run:`, `script:` or `snapshot:` step, or with a `tool:` step that takes a file or records a flow, at any depth. The error lists each such step. Without a link, the tool-server reads the file in place and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 
