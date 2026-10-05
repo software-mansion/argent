@@ -4,8 +4,10 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { ToolsServerPaths } from "@argent/tools-client";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -14,6 +16,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 // HOME is redirected before the import: the tools client, the telemetry notice
 // and the flags all build their paths from homedir() at module load.
 let startMcpServer: typeof import("../src/mcp-server.js").startMcpServer;
+let toolsClient: typeof import("@argent/tools-client");
 let TEST_HOME: string;
 const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
 
@@ -23,6 +26,7 @@ beforeAll(async () => {
   process.env.USERPROFILE = TEST_HOME;
   vi.resetModules();
   ({ startMcpServer } = await import("../src/mcp-server.js"));
+  toolsClient = await import("@argent/tools-client");
 });
 
 afterAll(() => {
@@ -40,6 +44,13 @@ interface Recorded {
   body: string;
 }
 
+interface Stub {
+  url: string;
+  port: number;
+  requests: Recorded[];
+  close: () => Promise<void>;
+}
+
 const LISTING = {
   tools: [
     {
@@ -53,15 +64,10 @@ const LISTING = {
   ],
 };
 
-let server: http.Server;
-let url: string;
-let requests: Recorded[];
-let client: Client;
-let appPath: string;
-
-beforeEach(async () => {
-  requests = [];
-  server = http.createServer((req, res) => {
+/** A stub tool-server. With `token`, a request without that bearer token gets 401. */
+async function startStub(token?: string): Promise<Stub> {
+  const requests: Recorded[] = [];
+  const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
@@ -72,6 +78,9 @@ beforeEach(async () => {
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(payload));
       };
+      if (token !== undefined && req.headers.authorization !== `Bearer ${token}`) {
+        return json(401, { error: "unauthorized" });
+      }
       if (req.method === "GET" && reqUrl === "/tools") return json(200, LISTING);
       if (req.method === "POST" && reqUrl === "/upload") return json(200, { uploadId: "u-1" });
       if (req.method === "POST" && reqUrl === "/tools/reinstall-app") {
@@ -85,28 +94,33 @@ beforeEach(async () => {
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  // Remote-routed, so the adapter neither spawns a tool-server nor starts the
-  // local health check, and the tools client uploads file inputs.
-  vi.stubEnv("ARGENT_TOOLS_URL", url);
-  vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    port,
+    requests,
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
 
-  appPath = join(TEST_HOME, `MyApp-${Date.now()}.app`);
+async function connect(paths: ToolsServerPaths): Promise<Client> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await startMcpServer({ paths, transport: serverTransport });
+  const client = new Client({ name: "probe", version: "1" });
+  await client.connect(clientTransport);
+  return client;
+}
+
+function makeApp(): string {
+  const appPath = join(TEST_HOME, `MyApp-${randomUUID()}.app`);
   mkdirSync(appPath);
   writeFileSync(join(appPath, "Info.plist"), "<plist/>");
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await startMcpServer({ paths: {} as never, transport: serverTransport });
-  client = new Client({ name: "probe", version: "1" });
-  await client.connect(clientTransport);
-});
-
-afterEach(async () => {
-  await client.close();
-  vi.unstubAllEnvs();
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-});
+  return appPath;
+}
 
 function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
   const content = result.content as Array<{ type: string; text?: string }>;
@@ -117,6 +131,28 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
 }
 
 describe("startMcpServer tool calls", () => {
+  let stub: Stub;
+  let requests: Recorded[];
+  let client: Client;
+  let appPath: string;
+
+  beforeEach(async () => {
+    stub = await startStub();
+    requests = stub.requests;
+    // Remote-routed, so the adapter neither spawns a tool-server nor starts the
+    // local health check, and the tools client uploads file inputs.
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+    appPath = makeApp();
+    client = await connect({} as never);
+  });
+
+  afterEach(async () => {
+    await client.close();
+    vi.unstubAllEnvs();
+    await stub.close();
+  });
+
   it("lists the tools of the tool-server", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(["reinstall-app", "reject", "noted"]);
@@ -154,5 +190,79 @@ describe("startMcpServer tool calls", () => {
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
     expect(textOf(result)).toContain('"ok": true');
+  });
+});
+
+describe("startMcpServer with a local tool-server", () => {
+  // No link and no ARGENT_TOOLS_URL: the adapter finds its tool-server through
+  // the state file of its bundle, as an editor session does. The record names
+  // this process's pid with `managed: "cli"`, so the launcher reuses it and
+  // never signals it. The bundle does not exist, so the launcher cannot spawn.
+  const paths: ToolsServerPaths = {
+    bundlePath: "",
+    simulatorServerDir: "",
+    nativeDevtoolsDir: "",
+  };
+  let stubs: Stub[];
+  let client: Client;
+
+  async function startRecordedStub(token: string): Promise<Stub> {
+    const stub = await startStub(token);
+    stubs.push(stub);
+    await toolsClient.writeToolsServerState({
+      port: stub.port,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      bundlePath: paths.bundlePath,
+      host: "127.0.0.1",
+      token,
+      managed: "cli",
+    });
+    return stub;
+  }
+
+  const postsTo = (stub: Stub, path: string) =>
+    stub.requests.filter((r) => r.method === "POST" && r.url === path);
+
+  beforeEach(async () => {
+    stubs = [];
+    paths.bundlePath = join(TEST_HOME, `missing-${randomUUID()}`, "tool-server.cjs");
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+  });
+
+  afterEach(async () => {
+    await client.close();
+    vi.unstubAllEnvs();
+    await toolsClient.clearToolsServerState(paths.bundlePath);
+    for (const stub of stubs) await stub.close();
+  });
+
+  it("sends the token of the local tool-server", async () => {
+    const first = await startRecordedStub("tok-1");
+    client = await connect(paths);
+
+    const result = await client.callTool({ name: "noted", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    const calls = postsTo(first, "/tools/noted");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.headers.authorization).toBe("Bearer tok-1");
+  });
+
+  it("sends a call to the tool-server that replaced a dead one, with its new token", async () => {
+    const first = await startRecordedStub("tok-1");
+    client = await connect(paths);
+    // The local tool-server dies and a new one takes its place on another port.
+    const second = await startRecordedStub("tok-2");
+    await first.close();
+
+    const result = await client.callTool({ name: "noted", arguments: {} });
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('"ok": true');
+    const calls = postsTo(second, "/tools/noted");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.headers.authorization).toBe("Bearer tok-2");
   });
 });
