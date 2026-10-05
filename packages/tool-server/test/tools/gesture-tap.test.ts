@@ -7,12 +7,15 @@ interface TouchCmd {
   type: "Down" | "Move" | "Up";
   x: number;
   y: number;
+  screen?: number;
 }
 const sent: TouchCmd[] = [];
+// What `sendCommand` reports back: a foldable names the screen a touch went to.
+let outcome: { screen?: number } = {};
 vi.mock("../../src/utils/simulator-client", () => ({
   sendCommand: async (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);
-    return {};
+    return outcome;
   },
 }));
 
@@ -37,6 +40,7 @@ function runnerRig() {
 
 beforeEach(() => {
   sent.length = 0;
+  outcome = {};
 });
 
 describe("gesture-tap", () => {
@@ -50,6 +54,21 @@ describe("gesture-tap", () => {
     expect(sent.map((e) => e.type)).toEqual(["Down", "Up", "Down", "Up", "Down", "Up"]);
     // Every tap lands on the same point — a multi-tap, not a gesture path.
     expect(sent.every((e) => e.x === 0.4 && e.y === 0.6)).toBe(true);
+    // A device that is not foldable reports no screen, so none is named.
+    expect(sent.some((e) => "screen" in e)).toBe(false);
+  });
+
+  it("on a foldable, resolves the panel on the first tap and names it on the rest", async () => {
+    outcome = { screen: 3 };
+    await gestureTapTool.execute(touchServices, { udid: "X", x: 0.4, y: 0.6, clickCount: 3 });
+    expect(sent.map((e) => [e.type, e.screen])).toEqual([
+      ["Down", undefined],
+      ["Up", undefined],
+      ["Down", 3],
+      ["Up", 3],
+      ["Down", 3],
+      ["Up", 3],
+    ]);
   });
 
   it("physical iOS: a multi-tap rides ONE runner command carrying numberOfTaps", async () => {

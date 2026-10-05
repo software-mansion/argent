@@ -70,12 +70,14 @@ export interface AXServiceApi {
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
   /**
-   * The display id of the panel the guest renders to (1 the cover panel, 3
-   * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
-   * Null when the daemon names none, as on a device with one panel. Answered
-   * in a few milliseconds; every touch of a foldable asks it
-   * (`utils/foldable.ts`), so its budget is short. A daemon build that
-   * predates the command answers an error.
+   * The display id of the front app's window (1 the cover panel, 3 the inner
+   * one on the iPhone Duo): the panel `describe` reads its tree on, and the
+   * panel the guest renders to, except that with Expo Go or an Expo
+   * development build in front it is the main screen whichever panel is lit
+   * (`utils/foldable.ts` has CoreDevice confirm a main screen). Null when the
+   * daemon names none, as on a device with one panel. Answered in a few
+   * milliseconds; every touch of a foldable asks it, so its budget is short.
+   * A daemon build that predates the command answers an error.
    */
   livePanel(): Promise<number | null>;
 }
