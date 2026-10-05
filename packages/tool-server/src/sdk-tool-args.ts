@@ -18,7 +18,7 @@ function doc(schema: Schema, indent: string): string {
   return `${indent}/** ${schema.description.replaceAll("*/", "*\\/")} */\n`;
 }
 
-function toType(schema: Schema, indent = ""): string {
+export function toType(schema: Schema, indent = ""): string {
   if ("const" in schema) return JSON.stringify(schema.const);
   if (schema.enum) return schema.enum.map((v: unknown) => JSON.stringify(v)).join(" | ");
   if (schema.anyOf ?? schema.oneOf)
