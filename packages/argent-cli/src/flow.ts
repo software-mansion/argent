@@ -1156,11 +1156,15 @@ async function runFlowDirectory(
   projectRoot: string,
   options: FlowCommandOptions
 ): Promise<void> {
-  // Discovery fails before any call, so there is no aggregate to print: under
-  // --json the reason goes to stderr as the record --json-stream would carry,
-  // and stdout stays empty rather than holding prose where a document is due.
+  // Under --json stdout holds the aggregate alone, so each failure goes to
+  // stderr as the record --json-stream would carry, never as prose.
+  const printError = (message: string, err: unknown = message): void => {
+    console.error(args.json ? JSON.stringify(errorRecord(err, message)) : message);
+  };
+  // Discovery fails before any call, so there is no aggregate to print, and
+  // stdout stays empty rather than holding prose where a document is due.
   const reject = (message: string): Promise<never> => {
-    console.error(args.json ? JSON.stringify(errorRecord(message)) : message);
+    printError(message);
     return exitAfterFlush(2);
   };
   let flows: string[];
@@ -1215,7 +1219,7 @@ async function runFlowDirectory(
       // still counts it failed and names nothing. Verdict before detail, as the
       // single-flow runner prints them, so a merged log reads the same way.
       if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
-      console.error(message);
+      printError(message, err);
       results.push({ path: rel, status: "fail", error: message, ...failureSignal(err) });
       failures.push({ path: rel, headline: verdict, detail: message, rerun });
       if (!rejectedThisFlowOnly) stopped = true;
@@ -1225,7 +1229,7 @@ async function runFlowDirectory(
       const message = `"${rel}" did not produce a run report.`;
       const verdict = "did not finish (no run report)";
       if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
-      console.error(message);
+      printError(message);
       results.push({ path: rel, status: "fail", error: message });
       failures.push({ path: rel, headline: verdict, detail: message, rerun });
       stopped = true;
@@ -1295,11 +1299,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  // Once streaming is requested stdout belongs exclusively to NDJSON, so help
-  // goes to stderr as the diagnostic it is.
-  const jsonStream = rest.some(
-    (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
-  );
+  // The output mode is read off raw argv, since parsing can fail on a later
+  // token. Once streaming is requested stdout belongs exclusively to NDJSON,
+  // so help goes to stderr as the diagnostic it is. --json reads stderr as
+  // records, so a usage error there is the record alone, with no help.
+  const flagGiven = (flag: string): boolean =>
+    rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
+  const jsonStream = flagGiven("--json-stream");
+  const json = !jsonStream && flagGiven("--json");
   // Checked before parseRunArgs so --help wins even when it trails a
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
@@ -1307,25 +1314,29 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     printHelp(jsonStream);
     return;
   }
+  const usageError = (message: string, prose: string): Promise<never> => {
+    if (json) {
+      console.error(JSON.stringify(errorRecord(message)));
+      return exitAfterFlush(2);
+    }
+    if (jsonStream) writeJsonStreamError(message);
+    console.error(prose);
+    printHelp(jsonStream);
+    return exitAfterFlush(2);
+  };
   let args: ReturnType<typeof parseRunArgs>;
   try {
     args = parseRunArgs(rest);
   } catch (err) {
     if (err instanceof FlagParseException) {
-      if (jsonStream) writeJsonStreamError(err);
-      console.error(`Error: ${err.message}\n`);
-      printHelp(jsonStream);
-      return exitAfterFlush(2);
+      return usageError(err.message, `Error: ${err.message}\n`);
     }
     throw err;
   }
   if (!args.flowRef) {
     const message =
       "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.";
-    if (jsonStream) writeJsonStreamError(message);
-    console.error(message);
-    printHelp(jsonStream);
-    return exitAfterFlush(2);
+    return usageError(message, message);
   }
 
   // A failure with no report. --json-stream mirrors it on stdout as a record

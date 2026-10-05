@@ -483,6 +483,24 @@ describe("argent flow run", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
+  // A --json reader parses stderr as records, so a usage error there is one
+  // record and no help, whichever token the parser stopped at.
+  it.each([
+    [["run", "checkout", "--json", "--device"], "--device requires a value"],
+    [["run", "checkout", "--json", "--bogus"], "Unknown flag: --bogus"],
+    [
+      ["run", "--json"],
+      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.",
+    ],
+  ])("writes only an error record for the usage error in %j", async (argv, message) => {
+    await expect(flow(argv, opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.join("\n").split("\n")).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({ event: "error", error: message });
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
   it("runs a saved flow named on the command line from .argent/flows", async () => {
     const runRoot = await fsp.realpath(tempRoot);
     const previousCwd = process.cwd();
@@ -2201,6 +2219,38 @@ describe("argent flow run <dir>", () => {
       status: "fail",
       error: '"a-login.yaml" did not produce a run report.',
     });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: '"a-login.yaml" did not produce a run report.' },
+    ]);
+  });
+
+  it("writes a rejected flow's message on stderr as a record under --json", async () => {
+    const message =
+      "This flow is not self-contained. The steps below read files that stayed on the client:\n" +
+      "  - step 1: run: frag.yaml\n" +
+      "Run the flow on the same computer as the tool-server.";
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(message, {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: false, passed: 1, failed: 1 });
+    // Every stderr line parses: the multi-line prose arrives escaped inside one record.
+    const lines = errs.join("\n").split("\n");
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: message,
+        error_code: "FLOW_FILE_INVALID",
+        error_kind: "validation",
+      },
+    ]);
   });
 
   // A report the renderers cannot walk costs the batch twice over: the throw
