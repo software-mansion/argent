@@ -146,3 +146,47 @@ describe("describe (TV) — Android skips the focus-engine retries", () => {
     expect(res.hint).toMatch(/Android TV focus engine/i);
   });
 });
+
+describe("describe (Android TV) — reads through the android-devtools helper", () => {
+  // A running helper holds the device's only UiAutomation connection, so a
+  // `uiautomator dump` (api.describe) beside it dies `Killed`.
+  const HELPER_XML =
+    `<?xml version='1.0'?><hierarchy rotation="0">` +
+    `<node class="android.widget.Button" content-desc="Play" text="" focusable="true" focused="true" enabled="true" package="com.example.tv" />` +
+    `<node class="android.widget.TextView" content-desc="Settings" text="" focusable="true" focused="false" enabled="true" package="com.example.tv" />` +
+    `</hierarchy>`;
+
+  function routedRegistry(api: TvControlApi, helper: () => Promise<unknown>) {
+    return {
+      resolveService: vi.fn(async (urn: string) =>
+        urn.startsWith("AndroidDevtools:") ? helper() : api
+      ),
+    } as never;
+  }
+
+  it("takes the focus view from the helper without a uiautomator dump", async () => {
+    const describeFn = vi.fn().mockResolvedValue(empty);
+    const registry = routedRegistry(makeApi(describeFn), async () => ({
+      getHierarchy: async () => ({ xml: HELPER_XML }),
+    }));
+
+    const res = await describeTv(registry, ANDROID_TV_DEVICE);
+
+    expect(describeFn).not.toHaveBeenCalled();
+    expect(res.description).toContain("App: com.example.tv");
+    expect(res.description).toContain("Focused: Play [button]");
+    expect(res.description).toContain("Focusable (2):");
+  });
+
+  it("falls back to the uiautomator dump when the helper cannot start", async () => {
+    const describeFn = vi.fn().mockResolvedValue(populated);
+    const registry = routedRegistry(makeApi(describeFn), async () => {
+      throw new Error("helper APK not installable");
+    });
+
+    const res = await describeTv(registry, ANDROID_TV_DEVICE);
+
+    expect(describeFn).toHaveBeenCalledTimes(1);
+    expect(res.description).toContain("Focused: Home");
+  });
+});

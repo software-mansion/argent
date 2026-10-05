@@ -19,6 +19,7 @@ import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
+import { describeVega, vegaRequires } from "../describe/platforms/vega";
 
 const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 
@@ -30,7 +31,9 @@ const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
+    ),
   timeoutMs: z
     .number()
     .int()
@@ -72,6 +75,7 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 // Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
@@ -112,6 +116,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
     }
+    if (device.platform === "vega") {
+      return describeVega(device.id);
+    }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
 
@@ -148,6 +155,7 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
+      else if (device.platform === "vega") await ensureDeps(vegaRequires);
 
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
       const isTvOs =

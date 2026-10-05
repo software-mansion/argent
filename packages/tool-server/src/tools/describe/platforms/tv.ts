@@ -3,6 +3,8 @@ import type { DescribeResult } from "../contract";
 import { formatDescribeTree } from "../format-tree";
 import { resolveTvApi } from "../../tv/tv-service";
 import { describeAndroid } from "./android";
+import { tvFocusViewFromXml } from "../../../blueprints/android-tv-control";
+import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../../blueprints/android-devtools";
 import type {
   TvControlApi,
   TvDescribeResponse,
@@ -36,6 +38,23 @@ const ANDROID_FOCUS_EMPTY_HINT =
   "Falling back to the full UI tree below. `tv-remote` (direction/select) still moves focus on " +
   "these screens even though the labels aren't enumerable, so you can drive blind + screenshot " +
   "to confirm.";
+
+// Once running (the wait tools start it), the android-devtools helper holds the
+// device's only UiAutomation connection and every `uiautomator dump` dies
+// `Killed` — so read through the helper, and dump only where it cannot run.
+async function readAndroidTvFocus(
+  registry: Registry,
+  device: DeviceInfo,
+  api: TvControlApi
+): Promise<TvDescribeResponse> {
+  try {
+    const ref = androidDevtoolsRef(device);
+    const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+    return tvFocusViewFromXml((await devtools.getHierarchy()).xml);
+  } catch {
+    return api.describe();
+  }
+}
 
 function isEmpty(res: TvDescribeResponse): boolean {
   return res.focusable.length === 0 && !res.focused;
@@ -93,7 +112,10 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   // only: on Android TV an empty focus set is steady state for react-native-tvos
   // screens, not a transition, so retrying would just burn uiautomator dumps
   // before the empty-focus fallback below.
-  let res = await api.describe();
+  let res =
+    device.platform === "android"
+      ? await readAndroidTvFocus(registry, device, api)
+      : await api.describe();
   if (device.platform !== "android") {
     for (let attempt = 1; attempt < EMPTY_RETRY_ATTEMPTS && isEmpty(res); attempt++) {
       await sleep(EMPTY_RETRY_DELAY_MS);

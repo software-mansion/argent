@@ -173,6 +173,14 @@ describe("autoDescribeEnabled", () => {
   });
 });
 
+describe("auto-capture after tv-remote", () => {
+  it("captures the screen and the focus tree after a TV remote press", () => {
+    expect(shouldAutoScreenshot("mcp__argent__tv-remote")).toBe(true);
+    expect(shouldAutoDescribe("mcp__argent__tv-remote")).toBe(true);
+    expect(getAutoScreenshotDelayMs("tv-remote")).toBe(1500);
+  });
+});
+
 describe("shouldAutoDescribe", () => {
   it("is true for every listed tool, with or without a client prefix", () => {
     for (const tool of AUTO_DESCRIBE_TOOLS) {
