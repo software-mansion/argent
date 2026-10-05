@@ -13,8 +13,10 @@ import type { ToolsServerPaths } from "@argent/tools-client";
 // against a stub tool-server, so the adapter's own call handling is exercised:
 // the listing, a tool call that must upload, an error answer and the note.
 //
-// HOME is redirected before the import: the tools client, the telemetry notice
-// and the flags all build their paths from homedir() at module load.
+// HOME is redirected before the import: the tools client builds its state and
+// link paths from homedir() at module load, and the local cases write their
+// state file there. The telemetry notice and the flags read HOME on each call,
+// so the redirect covers them as well.
 let startMcpServer: typeof import("../src/mcp-server.js").startMcpServer;
 let toolsClient: typeof import("@argent/tools-client");
 let TEST_HOME: string;

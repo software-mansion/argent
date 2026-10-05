@@ -5,9 +5,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The tools client captures ~/.argent/link.json from homedir() at module load.
-// HOME is redirected before the import, so a developer's real link cannot turn
-// the co-located cases into remote ones.
+// The tools client builds its ~/.argent paths from homedir() at module load.
+// HOME is redirected before the import, so no case can reach the developer's
+// real link or tool-server state.
 let createToolCaller: typeof import("../src/tool-caller.js").createToolCaller;
 let TEST_HOME: string;
 const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
