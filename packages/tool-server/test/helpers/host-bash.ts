@@ -7,8 +7,9 @@ import { resolveBashInterpreter } from "../../src/tools/flows/script/flow-script
  * a developer machine with no bash skips those files with the reason rather
  * than failing on it.
  *
- * Asked exactly the way the steps below ask it - same resolver, same
- * environment, same home directory. A gate that reads a home of its own answers
+ * Asked the way the steps in the files that call it ask it - same resolver,
+ * same environment, same home directory, though not from a step's working
+ * directory. A gate that reads a home of its own answers
  * about a bash the steps never run under: a developer who took this feature's
  * own advice and pinned a bash globally had the gate approve the host's 5.3
  * while every step ran under the pinned 3.2, and a global pin at a path that
@@ -22,6 +23,7 @@ import { resolveBashInterpreter } from "../../src/tools/flows/script/flow-script
  */
 export async function resolveHostBash(): Promise<{ path: string } | { problem: string }> {
   const found = await resolveBashInterpreter(buildChildEnv(undefined));
+  // No abort signal is passed, so nothing cancels this lookup.
   if ("cancelled" in found) return { problem: "the bash lookup was cancelled" };
   if (!("path" in found) && process.env.CI) {
     throw new Error(

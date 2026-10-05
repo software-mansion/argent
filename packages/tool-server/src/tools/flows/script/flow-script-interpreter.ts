@@ -3,9 +3,10 @@
  *
  * Not memoized, for the reason the executor's bounds are not: `scripts.bash` is
  * configuration, and editing it takes effect on the next request. The lookup
- * shells out twice — once through `commandOnPath` for the PATH answer, once to
- * ask the candidate for its own version — and costs a few milliseconds against
- * a step that already starts a process.
+ * shells out once for each candidate that passes the file checks, to ask it for
+ * its own version - and, with `scripts.bash` unset, also through
+ * `commandOnPath` for the PATH answer (for `git` too on Windows) - and costs a
+ * few milliseconds against a step that already starts a process.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -65,8 +66,8 @@ const BASH_PROBE_SETTLE_MS = 250;
  * `exec`ing a real bash, and a tail window lost it to a wrapper that RUNS bash
  * and then prints — to clean up, or to exit with bash's own status — where 4058
  * trailing characters passed and 4059 was refused as "not a bash". On the
- * search path the same cut is silent: the step ran under the NEXT candidate,
- * which on a Mac is Apple's 3.2.
+ * search path the same cut sent the step to the NEXT candidate, which on a Mac
+ * is Apple's 3.2.
  *
  * So nothing is windowed. `BASH_PROBE_COMMAND` puts the marker alone on a line
  * of its own, the lines are read as they arrive, and only the unfinished last
@@ -84,6 +85,18 @@ const BASH_PROBE_STDERR_CHARS = 300;
 
 const POSIX_FIXED_LOCATIONS = ["/bin/bash", "/usr/bin/bash"];
 
+/**
+ * The configured bash, or `undefined` when the key is unset.
+ *
+ * No project anchor, and no working directory: `scripts.bash` takes the GLOBAL
+ * scope alone, and the global document hangs off the home directory rather than
+ * off any project. `readScopeValue` gates reads on a key's `scopes`, so a
+ * committed project `.argent/config.json` naming this key is not read — which
+ * is the point of the scope. The value is an absolute path judged against
+ * `process.platform`, so no one spelling suits a mixed-OS team: a committed one
+ * refused every `.sh` step for whoever did not share the committer's OS, and
+ * shadowed the working bash they had pinned themselves.
+ */
 function configuredBash(): string | undefined {
   return getConfigValueByKey(BASH_CONFIG_KEY) as string | undefined;
 }
@@ -117,6 +130,11 @@ export async function resolveBashInterpreter(
   probeCwd?: string
 ): Promise<{ path: string; note?: string } | { problem: string } | { cancelled: true }> {
   if (signal?.aborted) return { cancelled: true };
+  // Asked before the value, not instead of it: a file that cannot be read hands
+  // back an empty document, so `scripts.bash` reads as unset and the step went
+  // to whatever bash the PATH offered with nothing anywhere saying the
+  // configuration had been lost. A `chmod`, and a hand edit that left the JSON
+  // broken, both land here.
   const lost = configDocumentProblem("global");
   const configured = configuredBash();
   if (configured !== undefined) {
@@ -134,10 +152,18 @@ export async function resolveBashInterpreter(
       : { path: configured };
   }
 
+  // Each rejection is kept, not just acted on. A host that HAS a bash which
+  // fails the run probe reached `notFoundMessage` otherwise, and that message
+  // is written for the case where nothing exists: it says to install bash,
+  // while `which bash` answers on the same host. The reason that would name the
+  // real problem existed here and was thrown away.
   const rejected: string[] = [];
   for (const candidate of await bashSearchPath()) {
     const shape = interpreterProblem(candidate);
     if (shape) {
+      // Only about a file that is really there. A fixed location this host
+      // simply lacks is not news - macOS has no `/usr/bin/bash` - and the WSL
+      // launcher is named by the message itself.
       if (!shape.startsWith("is the WSL launcher") && fileExists(candidate)) {
         rejected.push(`${candidate} ${shape}`);
       }
@@ -146,6 +172,8 @@ export async function resolveBashInterpreter(
     const problem = await notBashProblem(candidate, probeEnv, signal, probeCwd);
     if (signal?.aborted) return { cancelled: true };
     if (!problem) {
+      // A refusal the step would otherwise never mention: it ran under the
+      // candidate that came next, which on a Mac is Apple's 3.2 at /bin/bash.
       const notes = [
         ...(rejected.length > 0 ? [refusedFirstNote(candidate, rejected)] : []),
         ...(lost ? [lostConfigNote(lost)] : []),
@@ -173,6 +201,22 @@ function lostConfigNote(problem: string): string {
   );
 }
 
+/**
+ * Whether the candidate is really a bash, asked by running it. The static
+ * checks above pass any executable file, and the three properties that follow
+ * make a wrong one invisible rather than red: `$ARGENT_OUTPUT` already holds
+ * the document the parent seeded, so a program that never reads the script
+ * leaves a file the parent accepts; the child's stdout and stderr only become
+ * the step's log, so the wrong program's own words sit under a step that
+ * passed; and an exit code of 0 is a pass. A wrapper that pins a bash version and forgets to forward its
+ * arguments is the realistic shape — bash with no file to run reads stdin, gets
+ * end of file, and exits 0 — and it would report every `.sh` step green while
+ * running none of them.
+ *
+ * `BASH_VERSION` rather than the exit status, because that is what separates
+ * bash from the shells that would run the file with different word-splitting
+ * and array semantics: zsh, ksh and dash answer this with an empty version.
+ */
 async function notBashProblem(
   candidate: string,
   probeEnv: NodeJS.ProcessEnv,
@@ -182,6 +226,12 @@ async function notBashProblem(
   const answer = await askForBashVersion(candidate, probeEnv, signal, cwd);
   if (answer.answered) return null;
   if (answer.signal) {
+    // Which of the two happened, because the remedy is not the same one. A
+    // candidate this check stopped is a slow or hanging one; a candidate that
+    // died from a signal nothing here sent - a wrapper that segfaults, one the
+    // kernel killed for its memory, one that kills itself - answers in
+    // milliseconds, and a sentence about a five-second wait sends its operator
+    // looking for a slow candidate instead.
     return answer.stoppedByCheck
       ? `did not answer when it was asked for its version within ` +
           `${BASH_PROBE_TIMEOUT_MS / 1_000} seconds, and was stopped with ${answer.signal}`
@@ -195,6 +245,24 @@ async function notBashProblem(
   );
 }
 
+/**
+ * One run of the candidate, bounded on every axis — because nothing else here
+ * is. This is the only place a `.sh` step can wait before it has a process to
+ * time out, so a probe that does not settle is a flow run that never finishes.
+ *
+ * The bounds, one per way a candidate can fail to answer. Its environment is the
+ * step's own, so the check and the step ask the same question. Its standard
+ * input is the null device, the same end of file the step gives the script — without it
+ * the wrapper this check exists for reads an open pipe until the timeout, and
+ * answers in five seconds what it can answer at once. Its standard output is
+ * read a line at a time and nothing but the answer is kept, so a candidate that
+ * streams costs the timeout rather than the heap and no amount of output on
+ * either side of the answer can push it out. A candidate still alive at the
+ * timeout is asked to stop and then killed, rather than asked once and waited
+ * on. And the answer is taken at the candidate's OWN exit, with a short window
+ * for the read behind it, rather than at the close of a pipe whatever it
+ * started still holds.
+ */
 function askForBashVersion(
   candidate: string,
   probeEnv: NodeJS.ProcessEnv,
@@ -213,14 +281,14 @@ function askForBashVersion(
       child = spawn(candidate, ["-c", BASH_PROBE_COMMAND], {
         // The environment the STEP's bash gets, not the tool server's. The two
         // diverged in both directions: `BASH_ENV` is deliberately outside the
-        // step allowlist - it is the one variable that changes what a
-        // non-interactive `bash -c` does - so a host that exported it had every
-        // candidate refused for a file the step's bash could never have read,
-        // and the remedy the refusal names went through the same probe; and in
-        // the other direction the candidate is an arbitrary executable named
-        // `bash`, and inheriting here handed it the bearer token, the port and
-        // every `ARGENT_SECRET_*` value the allowlist exists to keep out of a
-        // script's reach.
+        // step allowlist - it is the variable that makes a non-interactive
+        // `bash -c` source a file before it runs the command - so a host that
+        // exported it had every candidate refused for a file the step's bash
+        // could never have read, and the remedy the refusal names went through
+        // the same probe; and in the other direction the candidate is an
+        // arbitrary executable named `bash`, and inheriting here handed it the
+        // bearer token, the port and every `ARGENT_SECRET_*` value the
+        // allowlist exists to keep out of a script's reach.
         env: probeEnv,
         // The step's own directory, for the same reason: a version-manager
         // shim picks its bash from the directory it starts in - asdf reads
@@ -228,7 +296,13 @@ function askForBashVersion(
         // directory was refused while the step would have run it as bash 5,
         // and the search went on to /bin/bash.
         cwd,
+        // stderr for the refusal to quote, because that is where a shim says
+        // why it ran no bash.
         stdio: ["ignore", "pipe", "pipe"],
+        // A group of the candidate's own on POSIX, so the stops below reach
+        // what IT started. A shim that backgrounds a job was re-parented to pid
+        // 1 and outlived the whole flow run otherwise. Windows has no group, so
+        // there the stops reach the candidate alone.
         detached: process.platform !== "win32",
         windowsHide: true,
       });
@@ -236,8 +310,13 @@ function askForBashVersion(
       resolve({ answered: false, signal: null, stoppedByCheck: false, failure: firstLine(err) });
       return;
     }
+    // The unfinished last line, and whether the answer has been seen. Never the
+    // output: a candidate is an arbitrary program, and how much it prints is
+    // its own business.
     let pending = "";
     let answered = false;
+    // The head of the first stderr line that was not blank, and of the line
+    // still arriving.
     let firstErr = "";
     let pendingErr = "";
     let settled = false;
@@ -249,9 +328,14 @@ function askForBashVersion(
       const stoppedByCheck = killedWith !== null;
       for (const timer of timers) clearTimeout(timer);
       signal_?.removeEventListener("abort", onAbort);
+      // This end of the pipe, and the handle behind it: a candidate that is
+      // still running is one nothing waits for any more, and either would keep
+      // the tool server's own loop alive for it.
       child.stdout?.destroy();
       child.stderr?.destroy();
       child.unref();
+      // The last line, which a candidate that exits without a trailing newline
+      // leaves here.
       if (BASH_PROBE_MARKER.test(pending)) answered = true;
       const stderr = (firstErr || pendingErr).trim();
       resolve({
@@ -262,6 +346,11 @@ function askForBashVersion(
         ...(stderr ? { stderr } : {}),
       });
     };
+    // The abort the request carries, which this lookup is the one place a `.sh`
+    // step can wait before it has a process to time out. Without it a flow of N
+    // bash steps was un-cancellable for about six seconds each - the probe's
+    // own timeout plus its force grace, paid per candidate - which matters
+    // against a 30 s client budget.
     const onAbort = () => {
       killedWith = "SIGKILL";
       stopCandidate(child, "SIGKILL");
@@ -275,6 +364,7 @@ function askForBashVersion(
       for (const line of lines) {
         if (BASH_PROBE_MARKER.test(line)) answered = true;
       }
+      // The HEAD of an unfinished line, because that is where a marker starts.
       if (pending.length > BASH_PROBE_MAX_CHARS) {
         pending = pending.slice(0, BASH_PROBE_MAX_CHARS);
       }
@@ -328,6 +418,11 @@ function askForBashVersion(
   });
 }
 
+/**
+ * The candidate and everything it started. The group first, because a shim's
+ * own child is the process that outlived the call; the candidate alone after
+ * it, for a platform or a moment where there is no group to name.
+ */
 function stopCandidate(child: ChildProcess, signal: NodeJS.Signals): void {
   const pid = child.pid;
   if (pid !== undefined && process.platform !== "win32") {
@@ -348,11 +443,24 @@ function firstLine(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).split("\n")[0] ?? "";
 }
 
+/**
+ * The ordered candidates the resolver tries when `scripts.bash` is unset, before
+ * any of them is checked against the filesystem. Exported so the Windows rules —
+ * the `%SystemRoot%` skip and the Git-derived path — can be pinned on a POSIX
+ * host, where no `C:\…` file can exist to be found.
+ */
 export async function bashSearchPath(): Promise<string[]> {
   const onPath = await commandOnPath("bash", isUsableCandidate);
   return withoutRepeats([...(onPath ? [onPath] : []), ...(await fixedLocations())]);
 }
 
+/**
+ * One entry per file. In the default Windows layout the derivation below and
+ * the `%ProgramFiles%` rung name the same `bash.exe`, and every candidate costs
+ * a run of it — so a candidate refused there was probed twice, up to six
+ * seconds each, and named twice in the refusal. Windows spells a path
+ * case-insensitively, so that is how the two are compared there.
+ */
 function withoutRepeats(candidates: string[]): string[] {
   const seen = new Set<string>();
   return candidates.filter((candidate) => {
@@ -429,6 +537,11 @@ function isUsableCandidate(candidate: string): boolean {
   return !underSystemRoot(candidate);
 }
 
+/**
+ * Explicit win32 semantics under win32 rather than the running platform's, so
+ * the Windows rules are correct on a real Windows host and unit-testable on
+ * POSIX CI — the same shape `commandOnPath` uses for its CWD check.
+ */
 function platformPath(): typeof pathWin32 {
   return process.platform === "win32" ? pathWin32 : path.posix;
 }
@@ -446,8 +559,8 @@ function underSystemRoot(candidate: string): boolean {
  * Every name the same file answers to, because the test above is a comparison
  * of strings and Windows gives one file several. `\\?\` is the extended-length
  * prefix, which `path.resolve` keeps and so never matches the plain root; and
- * `C:\WINDOW~1\System32\bash.exe` is the 8.3 short name, which no lexical rule
- * can expand — only the filesystem knows it, and it answers through
+ * an 8.3 short name such as `C:\PROGRA~1\Git\bin\bash.exe` is one no lexical
+ * rule can expand — only the filesystem knows it, and it answers through
  * `realpath.native`. A name that resolves to nothing is left as written: the
  * existence check below is what reports it.
  */

@@ -44,6 +44,15 @@ function bashAtPathOfLength(bash: string, chars: number): string {
   return link;
 }
 
+/**
+ * `scripts.bash` for the duration of `body`, in a home directory of the test's
+ * own.
+ *
+ * The GLOBAL document, because that is the only scope the key takes: a helper
+ * that wrote `<ws>/.argent/config.json` pinned nothing — `readScopeValue`
+ * returns before a project file is read — so the case below ran under the
+ * host's ordinary short bash path and never reached the branch it exists for.
+ */
 async function withPinnedBash<T>(bash: string, body: () => Promise<T>): Promise<T> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "argent-redaction-home-"));
   const real = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -70,8 +79,20 @@ function executor(options: FlowScriptExecutorOptions = {}) {
   return new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000, ...options });
 }
 
+/**
+ * A bash step reaches redaction through a different channel from a `.mjs` one:
+ * its failure text, on a non-zero exit, ends with a line the script wrote to
+ * stderr - normally the last one that is not blank - which the parent reads off
+ * the pipe and appends to the runner's exit line, and its
+ * document is a file rather than a value the runner encoded.
+ */
 describe("flow script executor — redaction of a bash step", () => {
   const SECRET: FlowScriptSecret = { name: "API_KEY", value: "s3cr3t-token-value" };
+  /**
+   * How much of that stderr line the reason keeps, in step with
+   * `STDERR_REASON_LINE_CHARS` in `flow-script-executor.ts`, which does not
+   * export it.
+   */
   const STDERR_LINE_CHARS = 1_000;
 
   let noBash: string | undefined;
@@ -129,8 +150,18 @@ describe("flow script executor — redaction of a bash step", () => {
     expect(JSON.stringify(result.output)).toContain("API_KEY");
   }, 30_000);
 
+  // A secret cut in half by a truncation is not a secret any scrub can find:
+  // what is left is a PREFIX of one, which matches nothing. The parent drops
+  // that tail wherever an omission marker ends the text, and the cut that keeps
+  // only the head of a long stderr line ends the reason with one. This runs a
+  // real script through the cut, the join and the redaction together, so a
+  // marker the redaction stopped recognising fails here rather than leaking
+  // there.
   it("drops the half of a secret the stderr line's cut left behind", async () => {
     const ws = workspace();
+    // The padding stops ten characters short of the line cap, so the cut lands
+    // INSIDE the secret and what survives is a prefix of one. One line, written
+    // in three pieces, so it reaches the parent in more than one read.
     const pad = STDERR_LINE_CHARS - 10;
     const tail = 2_000;
     const script = ws.write(
@@ -151,23 +182,27 @@ describe("flow script executor — redaction of a bash step", () => {
 
     const message = result.failure?.message ?? "";
     expect(result.failure?.kind).toBe("exit");
+    // Every prefix of the value, down to the shortest that is still the
+    // secret's own: none of them may survive the cut.
     for (let n = SECRET.value.length; n > 3; n -= 1) {
       expect(message).not.toContain(SECRET.value.slice(0, n));
     }
+    // The half is counted with what the cut dropped, so the marker counts
+    // everything from the secret on.
     const marker = `x… [${SECRET.value.length + tail} more characters omitted]`;
     expect(message.slice(-marker.length)).toBe(marker);
+    // The log keeps the whole line, and so the whole value to replace.
     expect(result.log).not.toContain(SECRET.value);
     expect(result.log).toContain("x{{secret:API_KEY}}y");
   }, 30_000);
 
   /**
    * The interpreter path rides in the exit line in front of the stderr line,
-   * and it is the one term in the message nothing bounds. A ceiling it can push
-   * the message past cuts the line's own marker off the end — the marker the
-   * parent reads to find where the line was cut, and so where half a secret
-   * may be left. This is the same straddling secret as above, under a bash
-   * whose path is as long as the whole line the reason keeps: the marker at
-   * the end must still be the line's own, counting the half it dropped.
+   * and it is the one term in the message nothing bounds. This is the same
+   * straddling secret as above, under a bash whose path is as long as the whole
+   * line the reason keeps: the long exit line in front must not move the
+   * marker at the end, which must still be the line's own, counting the half
+   * it dropped.
    *
    * POSIX only. The path is a symlink of 1,000 characters, and Windows refuses
    * both without a per-machine opt-in.
@@ -176,6 +211,7 @@ describe("flow script executor — redaction of a bash step", () => {
     "keeps the stderr line's own marker when the interpreter path is long",
     async () => {
       const ws = workspace();
+      // Inside PATH_MAX, which is 1024 on macOS.
       const pinned = bashAtPathOfLength(hostBash, STDERR_LINE_CHARS);
 
       const pad = STDERR_LINE_CHARS - 10;
@@ -200,6 +236,8 @@ describe("flow script executor — redaction of a bash step", () => {
 
       const message = result.failure?.message ?? "";
       expect(result.failure?.kind).toBe("exit");
+      // The pin is what makes the exit line long, so a pin that did not apply
+      // leaves this case asserting nothing the one above does not.
       expect(message).toContain(pinned);
       expect(message.length).toBeLessThanOrEqual(SCRIPT_MAX_FAILURE_MESSAGE_CHARS);
       const marker = `x… [${SECRET.value.length + tail} more characters omitted]`;
@@ -406,6 +444,10 @@ describe("flow script executor — redaction", () => {
 
   it("keeps a secret that straddles the failure-message ceiling out of the report", async () => {
     const ws = workspace();
+    // The clamp is the child's, and the child has no secret list to clamp
+    // around. The trailing run is what forces a clamp at all; the padding puts
+    // the cut about nine characters into the value, leaving a prefix no
+    // whole-value replacement can match.
     const script = ws.write(
       "long-throw.mjs",
       `throw new Error(

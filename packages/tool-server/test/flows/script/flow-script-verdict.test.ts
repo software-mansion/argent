@@ -107,6 +107,14 @@ const VERDICTS: Record<FlowScriptFailureKind, "fail" | "error"> = {
   invalid: "error",
 };
 
+/**
+ * Whether each failure leaves the author something to clean up, judged from the
+ * KIND alone — the answer for a failure the executor did not mark `beforeFork`.
+ * Total over the kinds, like {@link VERDICTS}: the dangerous mapping is a kind
+ * whose script could have started being told "nothing ran", and a table listing
+ * only some kinds stays green while a kind moves in or out of the never-forked
+ * set.
+ */
 const RAN: Record<FlowScriptFailureKind, ScriptRan> = {
   queue: "no",
   spawn: "no",
@@ -122,12 +130,14 @@ const RAN: Record<FlowScriptFailureKind, ScriptRan> = {
   heap: "yes",
 };
 
+/** The move each answer asks the author to make. */
 const NEXT_MOVE: Record<ScriptRan, string> = {
   yes: "Check or restore its changes before you retry",
   no: "Fix the reason before you retry",
   unknown: "Check its changes before you retry",
 };
 
+/** How the same answer opens, anchored so a later "failed" cannot match it. */
 const LEAD: Record<ScriptRan, string> = {
   yes: "failed",
   no: "did not run",
@@ -220,6 +230,15 @@ describe("the recorder reports the verdict the runner will", () => {
   it.each(Object.entries(RAN) as [FlowScriptFailureKind, ScriptRan][])(
     "tells the author whether a %s failure left anything behind",
     async (kind, ran) => {
+      // The executor answers three of its failures before the script could start, so
+      // "there is a result" does not mean "something ran", and telling an
+      // author to clean up after a queue that was full sends them hunting for
+      // state that was never created. `cancelled` counts as ran only once the
+      // executor has NOT marked it `beforeFork` - the half of that kind which
+      // stopped a process that was already running. `protocol` is the runner
+      // failing around the script - almost always before the script began, but
+      // reachable from a script that has already done its work, so it claims
+      // neither.
       executeMock.mockResolvedValue(outcome({ failure: { kind, message: `the ${kind} message` } }));
 
       const recorded = await recordScript();
@@ -227,6 +246,8 @@ describe("the recorder reports the verdict the runner will", () => {
       expect(recorded.status).not.toBe("pass");
       expect(recorded.message).toContain(NEXT_MOVE[ran]);
       expect(recorded.message).toContain(headline(ran));
+      // The headline is the clause an agent acts on first, so it may not answer
+      // "is there state to check?" differently from the move that follows it.
       for (const other of Object.keys(NEXT_MOVE) as ScriptRan[]) {
         if (other !== ran) expect(recorded.message).not.toContain(headline(other));
       }
@@ -234,6 +255,10 @@ describe("the recorder reports the verdict the runner will", () => {
     }
   );
 
+  // The executor's own answer outranks the table above: `cancelled` is the one
+  // kind whose answer turns on which side of the fork it came from, and the
+  // executor marks the failures it raised before there was a child to run
+  // anything.
   it.each(Object.keys(RAN) as FlowScriptFailureKind[])(
     "believes the executor over the kind when a %s failure never forked",
     async (kind) => {
@@ -283,6 +308,10 @@ describe("the recorder reports the verdict the runner will", () => {
   });
 });
 
+// The executor runs what it is told and never looks at an extension, so this is
+// the one place the language is decided for a step. Both routes to it — the
+// runner and the recorder — go through `runFlowScriptStep`, so pinning it here
+// pins it for both.
 describe("which interpreter the step asks the executor for", () => {
   it.each([
     ["seed.mjs", "node"],
@@ -301,6 +330,13 @@ describe("which interpreter the step asks the executor for", () => {
     expect(executedRequest().interpreter).toBe(interpreter);
   });
 
+  // The language comes off the CANONICAL file, so a `.sh` that is a symlink to
+  // a `.mjs` runs under node and the reverse runs under bash. A canonical path
+  // with NO extension is the one case the target cannot answer -
+  // `seed.sh -> ../tools/seed` is an ordinary way to name a script - and the
+  // step's own spelling stands in, which the parser holds to one of the two.
+  // Without that fallback a passing bash step became a `load` failure with a
+  // stack pointing into a shell file.
   it.each([
     ["an extensionless target", "extensionless", "seed", "bash"],
     ["a target of the other language", "other-language", "seed.mjs", "node"],

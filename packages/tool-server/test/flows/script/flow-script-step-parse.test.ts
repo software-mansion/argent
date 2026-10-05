@@ -132,6 +132,10 @@ describe("script step rejections", () => {
     ]);
   });
 
+  // The literals above read 100 because the shared bound does. Parse and the
+  // executor floor the same value from the same constant, so a change to it
+  // moves both at once — pinned here so a second literal cannot reappear and
+  // let the two drift apart while every fixed-number case still passes.
   it("takes its floor from the bound the executor clamps to", () => {
     const floor = MIN_SCRIPT_TIMEOUT_MS;
     expect(step(`{ path: seed.mjs, timeout: ${floor} }`)).toEqual([
@@ -174,6 +178,8 @@ describe("script path rules, shared with a run: target", () => {
       "{ path: seed }",
       "{ path: seed.js }",
       "{ path: seed.cjs }",
+      // One spelling per language: `.bash` would be a second name for `.sh`,
+      // as `.js` would be for `.mjs`.
       "{ path: seed.bash }",
       "{ path: seed.zsh }",
     ]) {
@@ -217,6 +223,11 @@ describe("the second language reads exactly like the first", () => {
     expect(summarizeStep(steps[0]!, 1)).toBe("1. script: scripts/seed.sh (timeout 5000ms)");
   });
 
+  // The pattern is what every route enforces and the function is what picks the
+  // interpreter, so the pattern accepting another of the extensions listed
+  // below, or the function answering differently for a name the pattern
+  // accepts, has to fail here rather than reach a flow as a script run under
+  // the wrong interpreter.
   it("maps every basename the pattern accepts to an interpreter", () => {
     const cases: Array<[string, "node" | "bash"]> = [
       ["seed.mjs", "node"],
@@ -228,6 +239,9 @@ describe("the second language reads exactly like the first", () => {
       expect(SCRIPT_FILE_NAME_PATTERN.test(name), name).toBe(true);
       expect(scriptInterpreter(`scripts/${name}`), name).toBe(interpreter);
     }
+    // Nothing else the pattern would accept, asked of the extensions rather
+    // than of the source: an alternation added OUTSIDE the group would leave
+    // the source reading `(mjs|sh)` while handing a `.bash` file to node.
     for (const extension of [
       "mjs",
       "sh",
