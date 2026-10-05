@@ -3,7 +3,7 @@ import { ArtifactStore, type Registry } from "@argent/registry";
 
 // `tvTargetLongSide` shells `sips -g pixelWidth -g pixelHeight` to read the
 // capture's real dimensions, then returns the `sips -Z` target as
-// longest-actual-side * scale. Mock child_process.execFile so we can feed it a
+// longest-actual-side * scale, or the 576 px default without a scale. Mock child_process.execFile so we can feed it a
 // 4K vs a non-4K (1920x1080) Apple TV capture and assert the target.
 const execFileMock = vi.fn();
 vi.mock("node:child_process", async () => {
