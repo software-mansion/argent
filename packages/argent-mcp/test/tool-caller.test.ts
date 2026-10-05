@@ -46,7 +46,15 @@ const LISTING = {
     {
       name: "reinstall-app",
       description: "",
-      inputSchema: {},
+      inputSchema: {
+        type: "object",
+        properties: {
+          udid: { type: "string" },
+          bundleId: { type: "string" },
+          appPath: { type: "string" },
+        },
+        required: ["udid", "bundleId", "appPath"],
+      },
       fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
     },
     {
@@ -215,6 +223,33 @@ describe("createToolCaller", () => {
     expect(sent.appPath.path).toBe(appPath);
     expect(sent.appPath).not.toHaveProperty("uploadId");
     expect(sent.appPath).not.toHaveProperty("content");
+  });
+
+  it("refuses a routed call that lacks a required argument before it uploads", async () => {
+    const { callTool } = caller({ remote: true });
+
+    await expect(callTool("reinstall-app", { bundleId: "x", appPath })).rejects.toThrow(
+      "`udid` is required (string) and was not provided. You sent: `bundleId`, `appPath`."
+    );
+    expect(postsTo("/upload")).toHaveLength(0);
+    expect(postsTo("/tools/reinstall-app")).toHaveLength(0);
+  });
+
+  it("names a missing file input beside the other missing arguments", async () => {
+    const { callTool } = caller({ remote: true });
+
+    await expect(callTool("reinstall-app", { bundleId: "x" })).rejects.toThrow(
+      "`udid` is required (string) and was not provided; `appPath` is required (string) and was not provided. You sent: `bundleId`."
+    );
+    expect(postsTo("/tools/reinstall-app")).toHaveLength(0);
+  });
+
+  it("leaves a missing argument of a co-located call to the tool-server", async () => {
+    const { callTool } = caller({ remote: false });
+
+    await callTool("reinstall-app", { bundleId: "x", appPath });
+
+    expect(postsTo("/tools/reinstall-app")).toHaveLength(1);
   });
 
   it("inlines a file input's content only when routed to a remote server", async () => {

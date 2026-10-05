@@ -1,3 +1,4 @@
+import { describeParamIssues } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
@@ -170,6 +171,45 @@ export function errorBodyMessage(body: {
   return body.error ?? body.message;
 }
 
+/**
+ * Refuses a call that lacks a required argument, with the words the
+ * tool-server uses for a missing argument. Over a link, file inputs travel
+ * with the call, so a call the tool-server would refuse must not send them
+ * first. Presence only: a present but invalid
+ * value is the tool-server's call. A target that the client derives from other
+ * arguments (`flow_file` from `name`) is left to the tool-server.
+ */
+function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
+  const record = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+  const schema = meta.inputSchema as {
+    required?: unknown;
+    properties?: Record<string, { type?: unknown; enum?: unknown }>;
+  };
+  const derived = new Set(
+    (meta.fileInputs ?? [])
+      .filter((spec) => spec.path !== `\${${spec.target}}`)
+      .map((spec) => spec.target)
+  );
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  const missing = required.filter(
+    (name): name is string =>
+      typeof name === "string" && !derived.has(name) && record[name] === undefined
+  );
+  if (missing.length === 0) return;
+  // Issues in the shape the tool-server's zod check produces for an absent
+  // field, so the message reads as it would from the tool-server. zod names an
+  // integer field's type `number`.
+  const issues = missing.map((name) => {
+    const property = schema.properties?.[name];
+    const type = property?.enum === undefined ? property?.type : undefined;
+    const expected = type === "integer" ? "number" : typeof type === "string" ? type : undefined;
+    return { code: "invalid_type", path: [name], message: "", expected };
+  });
+  throw new ToolInvocationError(
+    describeParamIssues({ issues } as unknown as Parameters<typeof describeParamIssues>[0], record)
+  );
+}
+
 /** True when a prepared argument names an upload that the tool-server will consume. */
 function carriesUpload(args: unknown): boolean {
   if (typeof args !== "object" || args === null) return false;
@@ -239,6 +279,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     let finalArgs = args;
     const meta = await fetchTool(name);
     if (meta?.fileInputs?.length) {
+      if (remote) assertRequiredPresent(meta, args);
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
         includeContent: remote,
         uploadEndpoint: remote ? { url, token } : undefined,
