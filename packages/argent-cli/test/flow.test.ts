@@ -92,6 +92,20 @@ const caseInsensitiveFs = ((): boolean => {
   }
 })();
 
+/** What fetch rejects with when nothing listens at the tool-server's address. */
+function connectRefused(): TypeError {
+  return new TypeError("fetch failed", {
+    cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:47899"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
+  });
+}
+
+const UNREACHABLE_ENV_MESSAGE =
+  "Could not reach the tool-server at http://127.0.0.1:47899 (set by ARGENT_TOOLS_URL): " +
+  "connection refused.\nStart that tool-server, or unset ARGENT_TOOLS_URL to use the local one.";
+
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const steps: StepFixture[] = [{ index: 0, kind: "tap", status: "pass" }];
   return {
@@ -1584,6 +1598,128 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain("tool-server unreachable");
   });
 
+  // A routed tool-server that refuses the connection ran nothing, so the run
+  // is a setup error (exit 2) that names the address and where it came from,
+  // not undici's bare "fetch failed".
+  it("reports a routed tool-server that refuses the connection as unreachable", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual(['Flow "checkout"', "  ✗ not run (tool-server unreachable)"]);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+  });
+
+  it.each([
+    [
+      "a link",
+      { url: "http://10.0.0.5:4141", source: "link" },
+      "ENOTFOUND",
+      "Could not reach the tool-server at http://10.0.0.5:4141 (set by argent link): host not found.\n" +
+        "Start the tool-server on the linked machine, or run `argent unlink`.",
+    ],
+    [
+      "ARGENT_TOOLS_URL over a link",
+      {
+        url: "http://127.0.0.1:47899",
+        source: "env",
+        shadowedLink: {
+          url: "http://10.0.0.5:4141",
+          host: "10.0.0.5",
+          port: 4141,
+          createdAt: "2026-10-01T00:00:00.000Z",
+        },
+      },
+      "UND_ERR_CONNECT_TIMEOUT",
+      "Could not reach the tool-server at http://127.0.0.1:47899 (set by ARGENT_TOOLS_URL): timed out.\n" +
+        "Start that tool-server, or unset ARGENT_TOOLS_URL and run `argent unlink` to use the local one. " +
+        "A link to http://10.0.0.5:4141 is also configured and takes over once the env var is unset.",
+    ],
+  ] as const)(
+    "names where the unreachable address came from for %s",
+    async (_case, routing, code, message) => {
+      getResolvedToolsUrlMock.mockResolvedValue(routing);
+      toolsClientMock.callTool.mockRejectedValue(
+        new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) })
+      );
+
+      await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+      expect(errs).toEqual([message]);
+    }
+  );
+
+  it("writes an unreachable tool-server as a record a script can branch on under --json", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UNREACHABLE_ENV_MESSAGE,
+        error_code: "TOOL_SERVER_UNREACHABLE",
+        error_kind: "network",
+      },
+    ]);
+  });
+
+  it("ends the stream on an unreachable tool-server with the same record under --json-stream", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UNREACHABLE_ENV_MESSAGE,
+        error_code: "TOOL_SERVER_UNREACHABLE",
+        error_kind: "network",
+      },
+    ]);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+  });
+
+  // Not every refused connect is a missing tool-server: with no routing it is
+  // the auto-started local one, and an open socket can end with the same
+  // codes after the run started. Both stay run errors, and a failure that is
+  // not a connect never reads the routing.
+  it.each([
+    [
+      "a refused connect to the local tool-server",
+      { url: null, source: "none" },
+      "ECONNREFUSED",
+      "connect",
+      true,
+    ],
+    [
+      "a timeout on an open socket",
+      { url: "http://127.0.0.1:47899", source: "env" },
+      "ETIMEDOUT",
+      "read",
+      false,
+    ],
+  ] as const)("keeps %s a run error", async (_case, routing, code, syscall, readsRouting) => {
+    getResolvedToolsUrlMock.mockResolvedValue(routing);
+    toolsClientMock.callTool.mockRejectedValue(
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error(`${syscall} ${code}`), { code, syscall }),
+      })
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual(['Flow "checkout"', "  ✗ did not finish (run error)"]);
+    expect(errs).toEqual(["fetch failed"]);
+    expect(getResolvedToolsUrlMock).toHaveBeenCalledTimes(readsRouting ? 1 : 0);
+  });
+
   it("exits 2 when the result is not a run report (e.g. a prerequisite notice)", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: { flow: "checkout", notice: "prerequisite", executionPrerequisite: "logged in" },
@@ -2291,6 +2427,46 @@ describe("argent flow run <dir>", () => {
     const lines = logs.join("\n").split("\n");
     expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ did not finish (run error)");
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("stops at the first flow when the routed tool-server is unreachable, exiting 2", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe(
+      "  ✗ not run (tool-server unreachable)"
+    );
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toBe("  · not run (batch stopped)");
+    const recap = lines.slice(lines.indexOf("Failed flows (1)"));
+    expect(recap).toContain("  ✗ a-login.yaml › not run (tool-server unreachable)");
+    for (const line of UNREACHABLE_ENV_MESSAGE.split("\n")) expect(recap).toContain(`    ${line}`);
+    expect(lines.at(-1)).toMatch(/^FAIL — 2 flows: 0 passed, 1 failed, 1 skipped /);
+  });
+
+  it("carries an unreachable tool-server into the --json aggregate and stderr record", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const signal = { error_code: "TOOL_SERVER_UNREACHABLE", error_kind: "network" };
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({
+      ok: false,
+      failed: 1,
+      skipped: 1,
+      flows: [
+        { path: "a-login.yaml", status: "fail", error: UNREACHABLE_ENV_MESSAGE, ...signal },
+        { path: "b-checkout.yaml", status: "skip" },
+      ],
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: UNREACHABLE_ENV_MESSAGE, ...signal },
+    ]);
   });
 
   it("treats a non-report result as a failure that stops the batch", async () => {
