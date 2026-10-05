@@ -55,6 +55,19 @@ A validation failure sets `issues`. When the client cannot reach the tool-server
 
 The client includes types for the tools of the installed version. TypeScript rejects a tool name that does not exist and arguments that do not match the schema of the tool. You can omit `args` only when the tool has no required arguments. `ArgentToolName` and `ArgentToolArgs` are exported. A tool name of type `string`, for example from `listTools()`, needs a cast to `ArgentToolName`. The type of `data` is `unknown`. To set a different type, give it as the second type argument, for example `callTool<"list-devices", MyDevices>("list-devices")`.
 
+### Upgrade from 0.27.0 and earlier
+
+In 0.27.0 and earlier, `callTool` accepts any `string` as the tool name, and its only type argument is the type of `data`. The typed `callTool` changes the code that follows:
+
+| Code in 0.27.0                               | Change                                                      |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| `callTool<MyDevices>("list-devices")`        | Write `callTool<"list-devices", MyDevices>("list-devices")` |
+| `callTool(name)`, with `name: string`        | Cast the name: `callTool(name as ArgentToolName)`           |
+| An argument that is not in the schema        | Remove the argument                                         |
+| No `args` for a tool with required arguments | Give the required arguments                                 |
+
+Code that gives no type argument, a literal tool name and valid arguments does not change.
+
 The arguments and results of each tool are in the [Tools reference](./tools.mdx). Run `argent tools describe <name>` to see the argument schema of one tool.
 
 In `data`, the client replaces each artifact, for example a screenshot or a recording, with the path of a local file. When the tool-server is remote, the client downloads the file first.
