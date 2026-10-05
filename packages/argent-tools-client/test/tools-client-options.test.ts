@@ -26,20 +26,21 @@ afterAll(() => {
 
 let server: Server;
 let url: string;
-let requests: Array<{ method: string; url: string }>;
+let requests: Array<{ method: string; url: string; body: string }>;
 
-function readBody(req: IncomingMessage): Promise<void> {
+function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
-    req.on("data", () => {});
-    req.on("end", () => resolve());
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
   });
 }
 
 beforeEach(async () => {
   requests = [];
   server = createServer(async (req, res) => {
-    await readBody(req);
-    requests.push({ method: req.method ?? "", url: req.url ?? "" });
+    const body = await readBody(req);
+    requests.push({ method: req.method ?? "", url: req.url ?? "", body });
     const json = (payload: unknown, contentType = "application/json") => {
       res.writeHead(200, { "Content-Type": contentType });
       res.end(JSON.stringify(payload));
@@ -60,6 +61,12 @@ beforeEach(async () => {
             inputSchema: {},
             fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
           },
+          {
+            name: "run-flow",
+            description: "",
+            inputSchema: {},
+            fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
+          },
         ],
       });
     }
@@ -75,6 +82,7 @@ beforeEach(async () => {
     if (req.method === "POST" && req.url === "/tools/reinstall-app") {
       return json({ data: { reinstalled: true } });
     }
+    if (req.method === "POST" && req.url === "/tools/run-flow") return json({ data: { ok: true } });
     if (req.method === "POST" && req.url === "/tools/proxy-page") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html>Sign in</html>");
@@ -111,7 +119,7 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: false }),
     });
     const tools = await withOverride.fetchTools();
-    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app"]);
+    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "run-flow"]);
 
     const withoutOverride = createToolsClient();
     await expect(withoutOverride.fetchTools()).rejects.toThrow(
@@ -181,6 +189,25 @@ describe("createToolsClient options", () => {
     const routed = createToolsClient({ baseUrl: async () => ({ url, token: "t", remote: true }) });
     await routed.callTool("reinstall-app", { appPath });
     expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+  });
+
+  it("inlines a file input's content only when the override says remote", async () => {
+    const flowPath = join(TEST_HOME, "login.yaml");
+    writeFileSync(flowPath, "steps: []\n");
+
+    for (const remote of [true, false]) {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote }),
+      });
+      await callTool("run-flow", { flow_path: flowPath });
+    }
+
+    const [routed, local] = requests
+      .filter((r) => r.url === "/tools/run-flow")
+      .map((r) => (JSON.parse(r.body) as { flow_path: Record<string, unknown> }).flow_path);
+    expect(Buffer.from(routed!.content as string, "base64").toString("utf8")).toBe("steps: []\n");
+    expect(local).toMatchObject({ __argentFileInput: true, path: flowPath });
+    expect(local).not.toHaveProperty("content");
   });
 
   it("rejects a 2xx answer whose body cannot be read", async () => {

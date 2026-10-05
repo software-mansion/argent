@@ -49,6 +49,12 @@ const LISTING = {
       inputSchema: {},
       fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
     },
+    {
+      name: "run-flow",
+      description: "",
+      inputSchema: {},
+      fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
+    },
     { name: "slow", description: "", inputSchema: {}, longRunning: true },
     { name: "slow-plain", description: "", inputSchema: {} },
     { name: "fast", description: "", inputSchema: {} },
@@ -116,6 +122,8 @@ async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}
       setTimeout(() => json(200, { data: { ok: true } }), 80);
       return;
     }
+    if (req.method === "POST" && url === "/tools/run-flow")
+      return json(200, { data: { ok: true } });
     if (req.method === "POST" && url === "/tools/fast") return json(200, { data: { n: nth } });
     if (req.method === "POST" && url === "/tools/slow-plain") {
       // Slow only once, so a per-attempt timeout shows as one abort and one retry.
@@ -207,6 +215,22 @@ describe("createToolCaller", () => {
     expect(sent.appPath.path).toBe(appPath);
     expect(sent.appPath).not.toHaveProperty("uploadId");
     expect(sent.appPath).not.toHaveProperty("content");
+  });
+
+  it("inlines a file input's content only when routed to a remote server", async () => {
+    const flowPath = join(TEST_HOME, "login.yaml");
+    writeFileSync(flowPath, "steps: []\n");
+
+    await caller({ remote: true }).callTool("run-flow", { flow_path: flowPath });
+    await caller({ remote: false }).callTool("run-flow", { flow_path: flowPath });
+
+    const [routed, local] = postsTo("/tools/run-flow").map(
+      (r) => (JSON.parse(r.body) as { flow_path: Record<string, unknown> }).flow_path
+    );
+    expect(routed).toMatchObject({ __argentFileInput: true, path: flowPath });
+    expect(Buffer.from(routed!.content as string, "base64").toString("utf8")).toBe("steps: []\n");
+    expect(local).toMatchObject({ __argentFileInput: true, path: flowPath });
+    expect(local).not.toHaveProperty("content");
   });
 
   it("takes the file rules from the startup routing, not from the link config of the moment", async () => {
