@@ -1014,25 +1014,20 @@ describe("argent flow run", () => {
     }
   );
 
-  it.each(["env", "link"] as const)(
-    "sends flow_path to flow-execute over %s routing",
-    async (source) => {
-      // The server decides what a routed run can do: an uploaded flow that is
-      // self-contained runs, one that reads beside its file is refused there.
-      // The CLI no longer consults the routing at all.
-      getResolvedToolsUrlMock.mockResolvedValue({ url: "http://example.test:4141", source });
+  it("sends flow_path and project_root to flow-execute", async () => {
+    // The tool-server decides what a run can do, local or over a link: an
+    // uploaded flow that is self-contained runs, one that reads beside its
+    // file is refused there.
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
 
-      await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
-
-      expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
-      expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("flow-execute");
-      expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
-        flow_path: checkoutPath,
-        project_root: process.cwd(),
-        prerequisiteAcknowledged: true,
-      });
-    }
-  );
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("flow-execute");
+    expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
+      flow_path: checkoutPath,
+      project_root: process.cwd(),
+      prerequisiteAcknowledged: true,
+    });
+  });
 
   it("lists runnable YAML paths without consulting remote routing", async () => {
     const listRoot = path.join(tempRoot, "list-project");
@@ -1718,6 +1713,41 @@ describe("argent flow run", () => {
     expect(logs).toEqual(['Flow "checkout"', "  ✗ did not finish (run error)"]);
     expect(errs).toEqual(["fetch failed"]);
     expect(getResolvedToolsUrlMock).toHaveBeenCalledTimes(readsRouting ? 1 : 0);
+  });
+
+  // fail()'s message-only call sites hand it no error object, and under
+  // --json each must still reach stderr as a record, never as prose.
+  it("writes a missing flow file as an error record under --json", async () => {
+    const missing = path.join(tempRoot, "missing.yaml");
+
+    await expect(flow(["run", missing, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: `Flow file not found: ${missing}` },
+    ]);
+  });
+
+  it("writes a wrong flow extension as an error record under --json", async () => {
+    const yml = path.join(tempRoot, "checkout.yml");
+
+    await expect(flow(["run", yml, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: `Flow path must end in .yaml: ${yml}` },
+    ]);
+  });
+
+  it("writes a reply that is not a run report as an error record under --json", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: { flow: "checkout", notice: "x" } });
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: '"checkout" did not produce a run report.' },
+    ]);
   });
 
   it("exits 2 when the result is not a run report (e.g. a prerequisite notice)", async () => {
@@ -2752,9 +2782,36 @@ describe("argent flow run <dir>", () => {
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
-  it("runs every flow in the directory over remote routing", async () => {
-    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://example.test:4141", source: "env" });
+  // Skipped as root / on Windows, where a mode-000 directory is still
+  // listable. See canDenyRead.
+  it.skipIf(!canDenyRead).each([
+    ["human", [], (dir: string) => `Could not read flow directory: ${dir}`],
+    [
+      "--json",
+      ["--json"],
+      (dir: string) =>
+        JSON.stringify({ event: "error", error: `Could not read flow directory: ${dir}` }),
+    ],
+  ] as const)(
+    "exits 2 on a directory it cannot list, in %s mode",
+    async (_mode, flags, expected) => {
+      const lockedDir = path.join(tempRoot, `unlistable-${flags.length}`);
+      await fsp.mkdir(lockedDir, { recursive: true });
+      await fsp.writeFile(path.join(lockedDir, "a.yaml"), "steps: []\n");
+      await fsp.chmod(lockedDir, 0o000);
+      try {
+        await expect(flow(["run", lockedDir, ...flags], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        await fsp.chmod(lockedDir, 0o755);
+      }
 
+      expect(logs).toEqual([]);
+      expect(errs).toEqual([expected(lockedDir)]);
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sends every flow in the directory to flow-execute", async () => {
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
