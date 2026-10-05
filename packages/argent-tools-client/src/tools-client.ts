@@ -260,7 +260,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       const streamed = await consumeToolStream(res.body, opts.onProgress);
       return { ...streamed, outputHint: meta?.outputHint };
     }
-    const json = (await res.json().catch(() => ({}))) as {
+    let json: {
       data?: unknown;
       error?: string;
       message?: string;
@@ -269,6 +269,22 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       error_kind?: string;
       issues?: unknown;
     };
+    try {
+      json = (await res.json()) as typeof json;
+    } catch (err) {
+      // A 2xx whose body cannot be read (a proxy's own page, a connection cut
+      // mid-answer) is not a result: the tool may have run, but its outcome is
+      // lost. An error status keeps its `<status> <statusText>` fallback below.
+      if (res.ok) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `The tool-server answered ${res.status} ${res.statusText} to ${name}, but the answer could not be read (${reason}). ` +
+            `The tool may have run; check its effect before you run it again.`,
+          { cause: err }
+        );
+      }
+      json = {};
+    }
     if (!res.ok) {
       throw new ToolInvocationError(errorBodyMessage(json) ?? `${res.status} ${res.statusText}`, {
         errorCode: json.error_code,

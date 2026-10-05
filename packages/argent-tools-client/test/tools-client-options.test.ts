@@ -75,6 +75,23 @@ beforeEach(async () => {
     if (req.method === "POST" && req.url === "/tools/reinstall-app") {
       return json({ data: { reinstalled: true } });
     }
+    if (req.method === "POST" && req.url === "/tools/proxy-page") {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<html>Sign in</html>");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/tools/cut-answer") {
+      // The headers promise more than arrives before the connection drops.
+      res.writeHead(200, { "Content-Type": "application/json", "Content-Length": "5000" });
+      res.write('{"data":{"reinst');
+      setTimeout(() => res.socket?.destroy(), 20);
+      return;
+    }
+    if (req.method === "POST" && req.url === "/tools/gateway-page") {
+      res.writeHead(502, { "Content-Type": "text/html" });
+      res.end("<html>Bad gateway</html>");
+      return;
+    }
     res.writeHead(404);
     res.end();
   });
@@ -147,6 +164,23 @@ describe("createToolsClient options", () => {
       expect.objectContaining({ method: "POST" }),
       { longRunning: false, carriesUpload: true }
     );
+  });
+
+  it("rejects a 2xx answer whose body cannot be read", async () => {
+    const { callTool } = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+
+    await expect(callTool("proxy-page", {})).rejects.toThrow(
+      /^The tool-server answered 200 OK to proxy-page, but the answer could not be read \(.+\)\. The tool may have run;/
+    );
+    await expect(callTool("cut-answer", {})).rejects.toThrow(
+      /^The tool-server answered 200 OK to cut-answer, but the answer could not be read/
+    );
+  });
+
+  it("names the status of an error answer whose body is not JSON", async () => {
+    const { callTool } = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+
+    await expect(callTool("gateway-page", {})).rejects.toThrow(/^502 Bad Gateway$/);
   });
 
   it("returns outputHint from the listing on the buffered and the streamed path", async () => {
