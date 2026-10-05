@@ -50,6 +50,12 @@ export async function fetchWithReconnect(
 interface ToolCallerDeps {
   /** The current tool-server handle; the adapter updates it after a respawn. */
   getHandle: () => ToolsServerHandle;
+  /**
+   * Whether the startup routing named the tool-server (a link or
+   * ARGENT_TOOLS_URL). It decides whether file inputs travel with a call, and
+   * like the routing it holds until the editor restarts the adapter.
+   */
+  remote: boolean;
   reconnect: () => Promise<void>;
   /** Headers added to every attempt, beside the auth header. */
   extraHeaders: () => Record<string, string>;
@@ -93,7 +99,7 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
   }
 
   const client = createToolsClient({
-    baseUrl: async () => deps.getHandle(),
+    baseUrl: async () => ({ ...deps.getHandle(), remote: deps.remote }),
     fetchImpl: (url, init, meta) =>
       fetchWithReconnect(() => rebase(url), deps.reconnect, {
         init: () => withHeaders(init),

@@ -161,6 +161,7 @@ function caller(overrides: Partial<Parameters<typeof createToolCaller>[0]> = {})
   const reconnect = vi.fn(async () => {});
   const made = createToolCaller({
     getHandle: () => ({ url: stub.url, token: "tok" }),
+    remote: false,
     reconnect,
     extraHeaders: () => ({ "X-Argent-AI-Client": "test" }),
     fetchTimeoutMs: 2_000,
@@ -174,8 +175,7 @@ const postsTo = (path: string) =>
 
 describe("createToolCaller", () => {
   it("uploads a tar-upload input to POST /upload when routed to a remote server", async () => {
-    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
-    const { callTool } = caller();
+    const { callTool } = caller({ remote: true });
 
     const out = await callTool("reinstall-app", { udid: "u", bundleId: "x", appPath });
 
@@ -195,8 +195,7 @@ describe("createToolCaller", () => {
   });
 
   it("sends a path-only wrapper and no upload for a co-located session", async () => {
-    vi.stubEnv("ARGENT_TOOLS_URL", "");
-    const { callTool } = caller();
+    const { callTool } = caller({ remote: false });
 
     await callTool("reinstall-app", { udid: "u", bundleId: "x", appPath });
 
@@ -208,6 +207,27 @@ describe("createToolCaller", () => {
     expect(sent.appPath.path).toBe(appPath);
     expect(sent.appPath).not.toHaveProperty("uploadId");
     expect(sent.appPath).not.toHaveProperty("content");
+  });
+
+  it("takes the file rules from the startup routing, not from the link config of the moment", async () => {
+    // `argent unlink` after startup: still routed, so the call still uploads.
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    await caller({ remote: true }).callTool("reinstall-app", { udid: "u", bundleId: "x", appPath });
+    expect(postsTo("/upload")).toHaveLength(1);
+
+    // `argent link` after startup: still local, so the call still reads in place.
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    await caller({ remote: false }).callTool("reinstall-app", {
+      udid: "u",
+      bundleId: "x",
+      appPath,
+    });
+    expect(postsTo("/upload")).toHaveLength(1);
+    const wrappers = postsTo("/tools/reinstall-app").map(
+      (r) => (JSON.parse(r.body) as { appPath: Record<string, unknown> }).appPath
+    );
+    expect(wrappers[0]).toHaveProperty("uploadId");
+    expect(wrappers[1]).not.toHaveProperty("uploadId");
   });
 
   it("adds the auth header and the extra headers to the listing and the tool call", async () => {
@@ -330,11 +350,11 @@ describe("createToolCaller", () => {
   it("waits for a call that carried an upload instead of aborting and sending it again", async () => {
     const slow = await startStub({ installMs: 80 });
     try {
-      vi.stubEnv("ARGENT_TOOLS_URL", slow.url);
       // The install outlasts this per-attempt timeout. A retry would name an
       // upload that the stub already consumed.
       const { callTool, reconnect } = caller({
         getHandle: () => ({ url: slow.url, token: "tok" }),
+        remote: true,
         fetchTimeoutMs: 40,
       });
 
@@ -353,9 +373,9 @@ describe("createToolCaller", () => {
   it("sends a call that carried an upload once, even when its connection drops", async () => {
     const dropping = await startStub({ dropFirst: ["/tools/reinstall-app"] });
     try {
-      vi.stubEnv("ARGENT_TOOLS_URL", dropping.url);
       const { callTool, reconnect } = caller({
         getHandle: () => ({ url: dropping.url, token: "tok" }),
+        remote: true,
       });
 
       // The stub consumed the upload before the connection dropped, so a

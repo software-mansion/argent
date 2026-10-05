@@ -144,7 +144,13 @@ describe("startMcpServer tool calls", () => {
     vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
     vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
     appPath = makeApp();
-    client = await connect({} as never);
+    // A bundle that does not exist: a local spawn fails at once instead of
+    // starting a real tool-server.
+    client = await connect({
+      bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+      simulatorServerDir: "",
+      nativeDevtoolsDir: "",
+    });
   });
 
   afterEach(async () => {
@@ -173,6 +179,29 @@ describe("startMcpServer tool calls", () => {
     expect(sent.appPath.__argentFileInput).toBe(true);
     expect(sent.appPath.uploadId).toBe("u-1");
     expect(posts[0]!.headers["x-argent-ai-client"]).toBe("other");
+  });
+
+  it("keeps uploading after the link is removed mid-session", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+
+    const result = await client.callTool({
+      name: "reinstall-app",
+      arguments: { udid: "u", bundleId: "x", appPath },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+  });
+
+  it("does not start a local tool-server when the link is removed and its tool-server stops", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    await stub.close();
+
+    const result = await client.callTool({ name: "noted", arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("fetch failed");
+    expect(textOf(result)).not.toContain("gone from disk");
   });
 
   it("returns the tool-server's error text as an error result", async () => {
@@ -248,6 +277,26 @@ describe("startMcpServer with a local tool-server", () => {
     const calls = postsTo(first, "/tools/noted");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.headers.authorization).toBe("Bearer tok-1");
+  });
+
+  it("keeps reading file inputs in place after a link is added mid-session", async () => {
+    const first = await startRecordedStub("tok-1");
+    client = await connect(paths);
+    vi.stubEnv("ARGENT_TOOLS_URL", first.url);
+    const appPath = makeApp();
+
+    const result = await client.callTool({
+      name: "reinstall-app",
+      arguments: { udid: "u", bundleId: "x", appPath },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(postsTo(first, "/upload")).toHaveLength(0);
+    const sent = JSON.parse(postsTo(first, "/tools/reinstall-app")[0]!.body) as {
+      appPath: Record<string, unknown>;
+    };
+    expect(sent.appPath.path).toBe(appPath);
+    expect(sent.appPath).not.toHaveProperty("uploadId");
   });
 
   it("sends a call to the tool-server that replaced a dead one, with its new token", async () => {

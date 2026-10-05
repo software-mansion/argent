@@ -47,13 +47,13 @@ export interface CreateToolsClientOptions {
   /** Locations of bundled artifacts. Required unless a tool-server URL is configured. */
   paths?: ToolsServerPaths;
   /**
-   * Override the resolution of the tool-server URL and token. The MCP adapter
-   * freezes routing at startup and updates the handle after a local respawn.
-   * When set, the client never reads the link config for routing and never
-   * spawns. The remote/co-located decision for file inputs still comes from
-   * `getResolvedToolsUrl()`.
+   * Override the resolution of the tool-server: its URL and token, and
+   * `remote`, which says whether file inputs travel with a call (inlined
+   * content and uploads). The MCP adapter freezes routing at startup and
+   * updates the handle after a local respawn. When set, the client never reads
+   * the link config and never spawns.
    */
-  baseUrl?: () => Promise<ToolsServerHandle>;
+  baseUrl?: () => Promise<ToolsServerHandle & { remote: boolean }>;
   /**
    * Override the fetch used for GET /tools and POST /tools/:name, so a caller
    * can wrap retries and a per-attempt timeout around each request.
@@ -183,23 +183,31 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
 
-  async function baseUrl(): Promise<ToolsServerHandle> {
+  // The handle and the file-input mode come from one resolution, so a call
+  // never sends to one tool-server with the file rules of another.
+  async function route(): Promise<ToolsServerHandle & { remote: boolean }> {
     if (options.baseUrl) return options.baseUrl();
     // Precedence lives in getResolvedToolsUrl. An override without a token means
     // the caller owns an unauthenticated server; with no override, auto-spawn a
     // local, token-authenticated one.
     const resolved = await getResolvedToolsUrl();
     if (resolved.url) {
-      return { url: resolved.url, token: resolved.token ?? "" };
+      return { url: resolved.url, token: resolved.token ?? "", remote: true };
     }
-    if (cached) return cached;
-    if (!options.paths) {
-      throw new Error(
-        "tools-client: cannot spawn tool-server without `paths`; set ARGENT_TOOLS_URL or pass paths to createToolsClient()"
-      );
+    if (!cached) {
+      if (!options.paths) {
+        throw new Error(
+          "tools-client: cannot spawn tool-server without `paths`; set ARGENT_TOOLS_URL or pass paths to createToolsClient()"
+        );
+      }
+      cached = await ensureToolsServer(options.paths);
     }
-    cached = await ensureToolsServer(options.paths);
-    return cached;
+    return { ...cached, remote: false };
+  }
+
+  async function baseUrl(): Promise<ToolsServerHandle> {
+    const { url, token } = await route();
+    return { url, token };
   }
 
   async function fetchTools(): Promise<ToolMeta[]> {
@@ -224,18 +232,16 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     args: unknown,
     opts?: CallToolOptions
   ): Promise<ToolInvocationResult> {
-    const { url, token } = await baseUrl();
+    const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
     let finalArgs = args;
     const meta = await fetchTool(name);
     if (meta?.fileInputs?.length) {
-      const { url: routedUrl } = await getResolvedToolsUrl();
-      const isRemote = routedUrl !== null;
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
-        includeContent: isRemote,
-        uploadEndpoint: isRemote ? { url, token } : undefined,
+        includeContent: remote,
+        uploadEndpoint: remote ? { url, token } : undefined,
       });
     }
 

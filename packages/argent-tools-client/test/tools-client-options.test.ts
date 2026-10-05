@@ -107,7 +107,9 @@ afterEach(async () => {
 
 describe("createToolsClient options", () => {
   it("uses the baseUrl override and never spawns", async () => {
-    const withOverride = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+    const withOverride = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
     const tools = await withOverride.fetchTools();
     expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app"]);
 
@@ -120,7 +122,7 @@ describe("createToolsClient options", () => {
   it("routes GET /tools and POST /tools/:name through fetchImpl with the tool's longRunning flag", async () => {
     const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
     const { callTool } = createToolsClient({
-      baseUrl: async () => ({ url, token: "t" }),
+      baseUrl: async () => ({ url, token: "t", remote: false }),
       fetchImpl,
     });
 
@@ -140,13 +142,12 @@ describe("createToolsClient options", () => {
   });
 
   it("does not route POST /upload through fetchImpl", async () => {
-    vi.stubEnv("ARGENT_TOOLS_URL", url);
     const appPath = join(TEST_HOME, "MyApp.app");
     mkdirSync(appPath, { recursive: true });
     writeFileSync(join(appPath, "Info.plist"), "<plist/>");
     const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
     const { callTool } = createToolsClient({
-      baseUrl: async () => ({ url, token: "t" }),
+      baseUrl: async () => ({ url, token: "t", remote: true }),
       fetchImpl,
     });
 
@@ -166,8 +167,26 @@ describe("createToolsClient options", () => {
     );
   });
 
+  it("takes the file-input mode from the baseUrl override, not from the link config", async () => {
+    const appPath = join(TEST_HOME, "MyApp.app");
+    mkdirSync(appPath, { recursive: true });
+    writeFileSync(join(appPath, "Info.plist"), "<plist/>");
+
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const local = createToolsClient({ baseUrl: async () => ({ url, token: "t", remote: false }) });
+    await local.callTool("reinstall-app", { appPath });
+    expect(requests.filter((r) => r.url === "/upload")).toHaveLength(0);
+
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    const routed = createToolsClient({ baseUrl: async () => ({ url, token: "t", remote: true }) });
+    await routed.callTool("reinstall-app", { appPath });
+    expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+  });
+
   it("rejects a 2xx answer whose body cannot be read", async () => {
-    const { callTool } = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
 
     await expect(callTool("proxy-page", {})).rejects.toThrow(
       /^The tool-server answered 200 OK to proxy-page, but the answer could not be read \(.+\)\. The tool may have run;/
@@ -178,13 +197,17 @@ describe("createToolsClient options", () => {
   });
 
   it("names the status of an error answer whose body is not JSON", async () => {
-    const { callTool } = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
 
     await expect(callTool("gateway-page", {})).rejects.toThrow(/^502 Bad Gateway$/);
   });
 
   it("returns outputHint from the listing on the buffered and the streamed path", async () => {
-    const { callTool } = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
 
     const buffered = await callTool("slow", {});
     const streamed = await callTool("slow", {}, { onProgress: () => {} });
