@@ -23,7 +23,7 @@ function toType(schema: Schema, indent = ""): string {
   if (schema.enum) return schema.enum.map((v: unknown) => JSON.stringify(v)).join(" | ");
   if (schema.anyOf ?? schema.oneOf)
     return (schema.anyOf ?? schema.oneOf).map((s: Schema) => toType(s, indent)).join(" | ");
-  if (schema.allOf) return schema.allOf.map((s: Schema) => toType(s, indent)).join(" & ");
+  if (schema.allOf) return schema.allOf.map((s: Schema) => `(${toType(s, indent)})`).join(" & ");
   if (Array.isArray(schema.type)) {
     return schema.type.map((type: string) => toType({ ...schema, type }, indent)).join(" | ");
   }
