@@ -201,13 +201,11 @@ async function androidTvDefaultScale(serial: string): Promise<number | undefined
   ) {
     return undefined;
   }
-  try {
-    if (!(await isAndroidTv(serial))) return undefined;
-    const { width, height } = await getAndroidScreenSize(serial);
-    return tvDefaultScale(width, height);
-  } catch {
-    return undefined;
-  }
+  const [isTv, size] = await Promise.all([
+    isAndroidTv(serial).catch(() => false),
+    getAndroidScreenSize(serial).catch(() => undefined),
+  ]);
+  return isTv && size ? tvDefaultScale(size.width, size.height) : undefined;
 }
 
 /**

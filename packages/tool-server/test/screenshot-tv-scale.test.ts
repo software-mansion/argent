@@ -209,13 +209,18 @@ describe("screenshot tool on an Android TV", () => {
   it("keeps the 0.25 default on an Android phone", async () => {
     isAndroidTvMock.mockResolvedValue(false);
     expect(await requestedScale({})).toBe(0.25);
-    expect(screenSizeMock).not.toHaveBeenCalled();
   });
 
-  it("skips the TV probe on a phone the runtime-kind cache already knows", async () => {
+  it("skips the TV probes on a phone the runtime-kind cache already knows", async () => {
     cachedKindMock.mockReturnValue("mobile");
     expect(await requestedScale({})).toBe(0.25);
     expect(isAndroidTvMock).not.toHaveBeenCalled();
+    expect(screenSizeMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the 0.25 default when the TV probe fails", async () => {
+    isAndroidTvMock.mockRejectedValue(new Error("adb: device offline"));
+    expect(await requestedScale({})).toBe(0.25);
   });
 
   it("probes a serial the cache last saw as a TV", async () => {
