@@ -43,7 +43,11 @@ import {
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
-import { isClientRequestAbort, isClientRequestRefusal } from "../../client-requests";
+import {
+  isClientRequestAbort,
+  isClientRequestRefusal,
+  isClientRequestTimeout,
+} from "../../client-requests";
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
@@ -1798,7 +1802,10 @@ async function scanLeadingLaunch(
       const text = await hop.read();
       if (text === null) return null;
       nested = parseFlow(text);
-    } catch {
+    } catch (err) {
+      // A client that stops answering is not an unreadable hop: guessing past
+      // it would fail the run later for a reason that hides the real one.
+      if (isClientRequestTimeout(err)) throw err;
       return null;
     }
     const inner = await scanLeadingLaunch(

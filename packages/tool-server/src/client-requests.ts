@@ -180,6 +180,11 @@ export function isClientRequestAbort(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
+/** True for a request the client did not answer in time (the channel itself is broken). */
+export function isClientRequestTimeout(err: unknown): boolean {
+  return getFailureSignal(err)?.failure_stage === "client_request_timeout";
+}
+
 /** True for a request the client answered with a refusal (the channel itself is fine). */
 export function isClientRequestRefusal(err: unknown): boolean {
   return getFailureSignal(err)?.failure_stage === "client_request_refused";

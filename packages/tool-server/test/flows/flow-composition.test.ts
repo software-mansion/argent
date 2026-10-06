@@ -1754,6 +1754,44 @@ describe("flow composition (run:)", () => {
       );
     });
 
+    it("fails the call as not answering when the client goes quiet during the pre-run scan", async () => {
+      // The leading run: chain is scanned before step 1. A client that does
+      // not answer must surface as itself, not as a scan that found nothing
+      // (which ended a run on "no device resolved" instead).
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({
+          executionPrerequisite: "logged in",
+          steps: [{ kind: "run", flow: "e2e.yaml" }],
+        }),
+        "utf8"
+      );
+      const timeout = new FailureError(
+        'the client did not answer the resolve-file request for "e2e.yaml" within 30 s',
+        {
+          error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
+          failure_stage: "client_request_timeout",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }
+      );
+      const { services } = fakeClientServices({});
+      const serve = (services.request as ReturnType<typeof vi.fn>).getMockImplementation() as (
+        op: ClientServiceOp,
+        args: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>;
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp, args: Record<string, unknown>) => {
+          if (args.target === "e2e.yaml") throw timeout;
+          return serve(op, args);
+        }
+      );
+
+      const err = await runUploaded(services).catch((e: unknown) => e);
+
+      expect(err).toBe(timeout);
+    });
+
     it("runs an uploaded flow_path with no run: step without asking the client anything", async () => {
       // A self-contained upload must not depend on the channel: a proxy that
       // holds the stream would otherwise fail every run before step 1.
