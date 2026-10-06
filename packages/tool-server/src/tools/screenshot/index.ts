@@ -21,7 +21,7 @@ import {
   TV_DEFAULT_LONG_SIDE,
   tvDefaultScale,
 } from "../../utils/simulator-client";
-import { getCachedAndroidRuntimeKind, isAndroidTv } from "../../utils/adb";
+import { isAndroidTv } from "../../utils/adb";
 import { getAndroidScreenSize } from "../../utils/android-screen";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
@@ -195,28 +195,27 @@ export const ANDROID_TV_PROBE_BUDGET_MS = 2_000;
 /**
  * The default scale of an Android TV capture, or undefined for any other Android
  * target or when `ARGENT_SCREENSHOT_SCALE` is set. Undefined too when a probe
- * fails or outlasts {@link ANDROID_TV_PROBE_BUDGET_MS}, which leaves the capture
- * at the general default rather than failing it.
+ * fails, or is still running once both {@link ANDROID_TV_PROBE_BUDGET_MS} and
+ * `notBefore` (the capture's own setup, which it cannot start sooner than) have
+ * passed. That leaves the capture at the general default rather than failing it.
  */
-async function androidTvDefaultScale(serial: string): Promise<number | undefined> {
-  // A known phone skips the ~20 ms TV probe that every auto-screenshot would pay.
-  if (
-    getScreenshotScaleOverride() !== undefined ||
-    getCachedAndroidRuntimeKind(serial) === "mobile"
-  ) {
-    return undefined;
-  }
+async function androidTvDefaultScale(
+  serial: string,
+  notBefore: Promise<unknown>
+): Promise<number | undefined> {
+  if (getScreenshotScaleOverride() !== undefined) return undefined;
   const probe = Promise.all([
     isAndroidTv(serial).catch(() => false),
     getAndroidScreenSize(serial).catch(() => undefined),
   ]).then(([isTv, size]) => (isTv && size ? tvDefaultScale(size.width, size.height) : undefined));
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ANDROID_TV_PROBE_BUDGET_MS);
+  });
   try {
     return await Promise.race([
       probe,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(resolve, ANDROID_TV_PROBE_BUDGET_MS, undefined);
-      }),
+      Promise.all([budget, notBefore.catch(() => {})]).then(() => undefined),
     ]);
   } finally {
     clearTimeout(timer);
@@ -344,10 +343,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       }
 
       const ref = simulatorServerRef(device);
+      const apiReady = registry.resolveService(ref.urn, ref.options) as Promise<SimulatorServerApi>;
       const [api, androidTvScale] = await Promise.all([
-        registry.resolveService(ref.urn, ref.options) as Promise<SimulatorServerApi>,
+        apiReady,
         params.scale === undefined && device.platform === "android"
-          ? androidTvDefaultScale(device.id)
+          ? androidTvDefaultScale(device.id, apiReady)
           : undefined,
       ]);
       // On a foldable the panel is resolved now, whoever moved the hinge, and

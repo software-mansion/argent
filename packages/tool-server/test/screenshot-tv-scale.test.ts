@@ -14,9 +14,10 @@ vi.mock("node:child_process", async () => {
   return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
 });
 
+const { isTvOsMock } = vi.hoisted(() => ({ isTvOsMock: vi.fn(() => true) }));
 vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
-  isTvOsSimulator: async () => true,
+  isTvOsSimulator: async () => isTvOsMock(),
 }));
 vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-device-sets")>()),
@@ -24,12 +25,10 @@ vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
 }));
 
 const isAndroidTvMock = vi.fn<(serial: string) => Promise<boolean>>();
-const cachedKindMock = vi.fn<(serial: string) => "mobile" | "tv" | undefined>();
 const runAdbMock = vi.fn<(argv: string[]) => Promise<string>>();
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   isAndroidTv: (serial: string) => isAndroidTvMock(serial),
-  getCachedAndroidRuntimeKind: (serial: string) => cachedKindMock(serial),
   runAdb: (argv: string[]) => runAdbMock(argv),
 }));
 const screenSizeMock = vi.fn<(serial: string) => Promise<{ width: number; height: number }>>();
@@ -169,7 +168,6 @@ describe("screenshot tool on an Android TV", () => {
 
   beforeEach(() => {
     isAndroidTvMock.mockReset().mockResolvedValue(true);
-    cachedKindMock.mockReset().mockReturnValue(undefined);
     screenSizeMock.mockReset().mockResolvedValue({ width: 1920, height: 1080 });
   });
   afterEach(() => {
@@ -178,20 +176,25 @@ describe("screenshot tool on an Android TV", () => {
   });
 
   // The `scale` simulator-server is asked for; absent means a 1.0 capture.
-  async function requestedScale(params: { scale?: number }): Promise<number | undefined> {
+  async function requestedScale(
+    params: { scale?: number },
+    { udid = "emulator-5556", resolveMs = 0 } = {}
+  ): Promise<number | undefined> {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({ url: "http://localhost/s.png", path: "/tmp/s.png" }),
     });
     vi.stubGlobal("fetch", fetchMock);
+    const api = { apiUrl: "http://localhost:4949" };
     const registry = {
-      resolveService: vi.fn().mockResolvedValue({ apiUrl: "http://localhost:4949" }),
+      resolveService: vi.fn(
+        () =>
+          new Promise((resolve) => (resolveMs ? setTimeout(resolve, resolveMs, api) : resolve(api)))
+      ),
     } as unknown as Registry;
     const tool = createScreenshotTool(registry);
-    const parsed = tool.zodSchema!.parse({ udid: "emulator-5556", ...params }) as Parameters<
-      typeof tool.execute
-    >[1];
+    const parsed = tool.zodSchema!.parse({ udid, ...params }) as Parameters<typeof tool.execute>[1];
     await tool.execute({}, parsed, { artifacts: new ArtifactStore() });
     return JSON.parse(fetchMock.mock.calls[0]![1].body).scale;
   }
@@ -215,22 +218,23 @@ describe("screenshot tool on an Android TV", () => {
     expect(await requestedScale({})).toBe(0.25);
   });
 
-  it("skips the TV probes on a phone the runtime-kind cache already knows", async () => {
-    cachedKindMock.mockReturnValue("mobile");
+  // An emulator-NNNN slot is reused, so an earlier phone verdict must not stick.
+  it("re-probes a serial on every capture", async () => {
+    isAndroidTvMock.mockResolvedValueOnce(false);
     expect(await requestedScale({})).toBe(0.25);
+    expect(await requestedScale({})).toBeCloseTo(0.3, 10);
+  });
+
+  it("probes neither an iOS simulator nor a capture with an explicit scale", async () => {
+    isTvOsMock.mockReturnValueOnce(false);
+    expect(await requestedScale({}, { udid: "8BDBFD47-E557-41BA-926B-2DD39A17A53E" })).toBe(0.25);
+    expect(await requestedScale({ scale: 0.2 })).toBe(0.2);
     expect(isAndroidTvMock).not.toHaveBeenCalled();
-    expect(screenSizeMock).not.toHaveBeenCalled();
   });
 
   it("falls back to the 0.25 default when the TV probe fails", async () => {
     isAndroidTvMock.mockRejectedValue(new Error("adb: device offline"));
     expect(await requestedScale({})).toBe(0.25);
-  });
-
-  it("probes a serial the cache last saw as a TV", async () => {
-    cachedKindMock.mockReturnValue("tv");
-    expect(await requestedScale({})).toBeCloseTo(0.3, 10);
-    expect(isAndroidTvMock).toHaveBeenCalledWith("emulator-5556");
   });
 
   it("falls back to the 0.25 default when the TV probe outlasts its budget", async () => {
@@ -240,6 +244,34 @@ describe("screenshot tool on an Android TV", () => {
       const scale = requestedScale({});
       await vi.advanceTimersByTimeAsync(ANDROID_TV_PROBE_BUDGET_MS);
       expect(await scale).toBe(0.25);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a probe that finishes just inside its budget", async () => {
+    vi.useFakeTimers();
+    try {
+      isAndroidTvMock.mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, ANDROID_TV_PROBE_BUDGET_MS - 1, true))
+      );
+      const scale = requestedScale({});
+      await vi.advanceTimersByTimeAsync(ANDROID_TV_PROBE_BUDGET_MS);
+      expect(await scale).toBeCloseTo(0.3, 10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits past its budget for a probe that beats the simulator-server start", async () => {
+    vi.useFakeTimers();
+    try {
+      isAndroidTvMock.mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, ANDROID_TV_PROBE_BUDGET_MS + 500, true))
+      );
+      const scale = requestedScale({}, { resolveMs: ANDROID_TV_PROBE_BUDGET_MS + 2_000 });
+      await vi.advanceTimersByTimeAsync(ANDROID_TV_PROBE_BUDGET_MS + 2_000);
+      expect(await scale).toBeCloseTo(0.3, 10);
     } finally {
       vi.useRealTimers();
     }
