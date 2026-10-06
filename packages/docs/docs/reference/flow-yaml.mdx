@@ -146,11 +146,14 @@ Use the map form for a flow that runs on more than one platform:
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
 - launch: { ios: com.acme.app, android: com.acme.app.android, chromium: ../../app }
+- launch: { ios: { app: com.acme.app, args: [-FeatureFlag, YES] }, android: com.acme.app }
 ```
 
-`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
+`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. `ios` accepts a bundle id, or `{ app, args }`. On an iOS simulator, Argent passes `args` to the app process at launch. A physical iPhone ignores `args`. A launch that has no id for the platform of the run is an error.
 
 A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry, the run uses the `native` entry.
+
+When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry.
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
 
