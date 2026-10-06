@@ -240,10 +240,10 @@ The reason of a timeout names the op, and the target or the path of the request.
 The client enforces these rules. The tool-server checks only the shape of each answer and the 32 MiB cap. The tool-server already holds the bearer token, so the rules protect the files of the project, not the token.
 
 1. The client reads and writes nothing outside the roots it sent. Before it reads a file, writes a file or lists a directory, it checks the real location against the roots. It refuses a symlink that points outside a root. It refuses a target that ends outside a root, for example through `..`.
-2. The client refuses a path when it cannot find the real location of the path. For example, the real location can be longer than the path limit of the system.
+2. The client refuses a path when it cannot find the real location of the path. For example, the real location can be longer than the path limit of the system, or a link on the path can be unreadable.
 3. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
 4. `resolve-file` serves `.yaml` names only. The client refuses a `.yaml` name that links to a file that is not a YAML file (`.yaml` or `.yml`).
-5. `read-file` and `write-file` take only an absolute path of the form `<dir>/__baselines__/<flow>/<key>.png`, with no `..` segment. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path.
+5. `read-file` and `write-file` take only an absolute path of the form `<dir>/__baselines__/<flow>/<key>.png`, in normal form: no `..`, no `.` and no double `/`. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path.
 6. The client refuses a `.png` name that links to a file that is not a PNG file (`.png`).
 7. The client offers `write-file` only for a call that sets `updateBaselines: true`. A run that compares baselines cannot change them.
 8. Before `write-file` creates `__baselines__/<flow>/`, the client checks the real location of that directory against the roots. Before it writes the file, the client checks the real location of the file again. The client follows a link to a file that does not exist to check where it leads, and then refuses it.

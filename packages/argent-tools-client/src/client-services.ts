@@ -65,31 +65,34 @@ const MAX_LINK_HOPS = 40;
  * The kernel's view of a candidate path for the root fence: the realpath of
  * its deepest existing ancestor with the missing rest re-appended. A missing
  * component cannot be a symlink, so this is where the path really points,
- * whether or not it exists. A dangling link is not missing: the kernel
- * follows it, so the fence follows its target too, and a link out of the
- * roots is refused alike whether or not its target exists. A link loop or a
- * directory that cannot be searched stops the kernel as it stops realpath,
- * so it is passed on for the read to name. Null for any other failure: past
- * PATH_MAX (ENAMETOOLONG) the kernel still follows a chain of short relative
- * links that realpath cannot name, so where the path leads is unknown.
+ * whether or not it exists. A link that realpath cannot pass but the kernel
+ * can (dangling, or through a regular file) is not missing: the fence
+ * follows its target from the link's real directory, so a link out of the
+ * roots is refused alike whatever lies at its far end. A link loop stops the
+ * kernel as it stops realpath, so it is passed on for the read to name. Null
+ * for any other failure: past PATH_MAX (ENAMETOOLONG) the kernel still
+ * follows a chain of short relative links, and on macOS it follows a link
+ * whose own mode keeps realpath out (EACCES), so where the path leads is
+ * unknown.
  */
 async function resolveForFence(candidate: string, hops = 0): Promise<string | null> {
   const missing: string[] = [];
-  let dir = candidate;
+  // The kernel reads `a//b` as `a/b` and `a/` as `a`; the climb must too, or a
+  // doubled slash hides a link from it.
+  let dir = candidate.replace(/\/{2,}/g, "/").replace(/(.)\/$/, "$1");
   for (;;) {
     try {
       return path.join(await fs.realpath(dir), ...missing);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "ELOOP" && code !== "EACCES") {
-        return null;
-      }
-      if (code === "ENOENT") {
+      if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "ELOOP") return null;
+      if (code !== "ELOOP") {
         const target = await fs.readlink(dir).catch(() => null);
         if (target !== null) {
           if (hops >= MAX_LINK_HOPS) return null;
-          const followed = path.resolve(path.dirname(dir), target);
-          return resolveForFence(path.join(followed, ...missing), hops + 1);
+          const realParent = await fs.realpath(path.dirname(dir)).catch(() => null);
+          if (realParent === null) return null;
+          return resolveForFence(path.join(path.resolve(realParent, target), ...missing), hops + 1);
         }
       }
       const parent = path.dirname(dir);
@@ -151,7 +154,7 @@ async function readAdmitted(
 }
 
 /**
- * `<dir>/__baselines__/<flow>/<name>.png`, absolute and with no `..` segment:
+ * `<dir>/__baselines__/<flow>/<name>.png`, absolute, in normal form, with no `..`:
  * the only file the tool-server reads or writes through this client, beside
  * the root flow's real file.
  */
@@ -159,6 +162,7 @@ function isBaselinePath(file: string): boolean {
   const keyDir = path.dirname(file);
   return (
     path.isAbsolute(file) &&
+    path.normalize(file) === file &&
     !file.split(/[\\/]/).includes("..") &&
     file.endsWith(".png") &&
     path.basename(path.dirname(keyDir)) === "__baselines__" &&

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -268,25 +269,6 @@ describe("resolve-file", () => {
     });
   });
 
-  it("names a directory that cannot be searched as a host read would", async () => {
-    // Root searches any directory, so this needs another user.
-    if (process.getuid?.() === 0) return;
-    const locked = path.join(flowsDir, "locked");
-    await fs.mkdir(locked);
-    await fs.writeFile(path.join(locked, "frag.yaml"), "steps: []\n");
-    await fs.chmod(locked, 0o000);
-    const handler = await handlerFor([projectDir]);
-
-    try {
-      expect(await handler.handle(resolveLine(flowsDir, "locked/frag.yaml"))).toMatchObject({
-        ok: false,
-        error: expect.stringMatching(/^EACCES: /),
-      });
-    } finally {
-      await fs.chmod(locked, 0o755);
-    }
-  });
-
   it("names a directory and an unreadable file as a host read would", async () => {
     await fs.mkdir(path.join(flowsDir, "dir.yaml"));
     const handler = await handlerFor([projectDir]);
@@ -511,6 +493,121 @@ describe("read-file and write-file", () => {
     } finally {
       await cleanup();
     }
+  });
+
+  it("refuses a baseline path that is not in normal form", async () => {
+    // A doubled slash after a dangling link would hide the link from the
+    // fence, and on macOS mkdir -p would build the rest under its target.
+    const baselines = path.join(flowsDir, "__baselines__");
+    const made = path.join(tmpDir, "outside", "made");
+    await fs.mkdir(path.dirname(made));
+    await fs.mkdir(baselines, { recursive: true });
+    await fs.symlink(made, path.join(baselines, "login"));
+    await fs.symlink(made, path.join(projectDir, "dl"));
+    const handler = await handlerFor([projectDir]);
+
+    for (const file of [
+      `${baselines}/login//x.png`,
+      `${projectDir}/dl//any/tree/__baselines__/login/x.png`,
+      `${baselines}/./login/x.png`,
+    ]) {
+      expect(await handler.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: notBaselineError(file),
+      });
+      expect(await handler.handle(readLine(file))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: notBaselineError(file, "serves"),
+      });
+    }
+    expect(await exists(made)).toBe(false);
+  });
+
+  it("fences a dangling link where the kernel goes, behind a directory link", async () => {
+    // The key directory links to the project itself, so the baseline's real
+    // parent is the project: its `..` leads out, not into __baselines__.
+    await fs.mkdir(path.dirname(keyDir), { recursive: true });
+    await fs.symlink(projectDir, keyDir);
+    await fs.symlink("../outside/gone.png", path.join(projectDir, "x.png"));
+    await fs.mkdir(path.join(tmpDir, "outside"));
+    const file = path.join(keyDir, "x.png");
+    const handler = await handlerFor([projectDir]);
+
+    const whenMissing = await handler.handle(readLine(file));
+    await fs.writeFile(path.join(tmpDir, "outside", "gone.png"), PNG);
+    const whenThere = await handler.handle(readLine(file));
+
+    expect(whenMissing).toEqual({ id: "req-1", ok: false, error: outsideError(file) });
+    expect(whenThere).toEqual(whenMissing);
+  });
+
+  it("refuses a link through an outside file or an unsearchable outside directory alike", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(path.join(outside, "locked"), { recursive: true });
+    await fs.writeFile(path.join(outside, "id_rsa"), "PRIVATE");
+    await fs.mkdir(keyDir, { recursive: true });
+    const links = {
+      throughFile: path.join(outside, "id_rsa", "x.png"),
+      throughMissing: path.join(outside, "nope", "x.png"),
+      throughLocked: path.join(outside, "locked", "x.png"),
+    };
+    for (const [name, target] of Object.entries(links)) {
+      await fs.symlink(target, path.join(keyDir, `${name}.png`));
+    }
+    if (process.getuid?.() !== 0) await fs.chmod(path.join(outside, "locked"), 0o000);
+    const handler = await handlerFor([projectDir]);
+
+    try {
+      for (const name of Object.keys(links)) {
+        const file = path.join(keyDir, `${name}.png`);
+        expect(await handler.handle(readLine(file))).toEqual({
+          id: "req-1",
+          ok: false,
+          error: outsideError(file),
+        });
+      }
+    } finally {
+      await fs.chmod(path.join(outside, "locked"), 0o755);
+    }
+  });
+
+  it("refuses links the user cannot read, which the macOS kernel still follows", async () => {
+    // macOS enforces a symlink's own mode for readlink and realpath, not when
+    // the kernel follows the link; a tar or zip restores such a mode.
+    if (process.platform !== "darwin") return;
+    const unreadable = (link: string) => execFileSync("chmod", ["-h", "000", link]);
+    const outside = path.join(tmpDir, "outside");
+    const elsewhere = path.join(outside, "elsewhere");
+    await fs.mkdir(elsewhere, { recursive: true });
+    await fs.writeFile(path.join(outside, "id_rsa"), "PRIVATE KEY");
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(outside, "id_rsa"), baseline);
+    unreadable(baseline);
+    const linkedKey = path.join(flowsDir, "__baselines__", "other");
+    await fs.symlink(elsewhere, linkedKey);
+    unreadable(linkedKey);
+    await fs.symlink(path.join(outside, "id_rsa"), path.join(flowsDir, "leak.yaml"));
+    unreadable(path.join(flowsDir, "leak.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: outsideError(baseline),
+    });
+    const written = path.join(linkedKey, "home.png");
+    expect(await handler.handle(writeLine(written, PNG))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: outsideError(written),
+    });
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+    expect(await handler.handle(resolveLine(flowsDir, "leak.yaml"))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("outside every root"),
+    });
   });
 
   it("answers exists:false for a missing baseline", async () => {
