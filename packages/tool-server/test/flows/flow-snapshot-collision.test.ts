@@ -96,8 +96,7 @@ async function runFlow(
 ): Promise<FlowRunResult> {
   // A co-located explicit flow_path (the flow file lives outside project_root),
   // plus the artifact store runSnapshot requires from ctx. Not the upload
-  // route: assertUploadSelfContained refuses a snapshot step there, since an
-  // uploaded flow's baselines land in a temp dir no later run can read.
+  // route, whose baselines live on the client.
   const flowPath = String(params.flow_file);
   const { name: _name, flow_file: _flowFile, ...rest } = params;
   const ctx = {

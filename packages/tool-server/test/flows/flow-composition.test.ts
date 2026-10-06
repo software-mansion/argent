@@ -170,8 +170,8 @@ const BASELINE_OPS: ClientServiceOp[] = ["resolve-file", "read-file", "write-fil
 
 /** The end of an upload refusal whose snapshot steps a newer client would get served. */
 const SNAPSHOT_UPDATE_HINT =
-  " This tool-server serves snapshot: steps for a client that offers the read-file and " +
-  "write-file client services. Update the argent CLI or MCP adapter on the client.";
+  " This tool-server serves snapshot: steps for a client that offers the resolve-file, " +
+  "read-file and write-file client services. Update the argent CLI or MCP adapter on the client.";
 
 const fragmentYaml = (message: string): string =>
   serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message }] });
@@ -1834,7 +1834,7 @@ describe("flow composition (run:)", () => {
       expect(err).toBe(timeout);
     });
 
-    it("runs an uploaded flow_path with no run: step without asking the client anything", async () => {
+    it("runs an uploaded flow_path with no run: or snapshot: step without asking the client anything", async () => {
       // A self-contained upload must not depend on the channel: a proxy that
       // holds the stream would otherwise fail every run before step 1.
       const { services, calls } = fakeClientServices({});
@@ -2055,7 +2055,7 @@ describe("flow composition (run:)", () => {
       expect(calls.filter((c) => c.args.target === "login.yaml")).toEqual([]);
     });
 
-    it("asks the client nothing when the uploaded flow has no run: step", async () => {
+    it("asks the client nothing when the uploaded flow has no run: or snapshot: step", async () => {
       await fs.writeFile(uploadedPath, fragmentYaml("no composition"), "utf8");
       const { services, calls } = fakeClientServices({});
 
@@ -2177,6 +2177,62 @@ describe("flow composition (run:)", () => {
       const quiet = fakeClientServices({}, { ops: BASELINE_OPS });
       expect(asRun(await runUploaded(quiet.services)).ok).toBe(true);
       expect(quiet.calls).toEqual([]);
+    });
+
+    it("asks the client for the root of a flow whose only snapshot sits in a when: block", async () => {
+      // A block's snapshot keys by the root like any other, so it needs the
+      // root's real location too.
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [
+            {
+              kind: "when",
+              condition: { kind: "platform", platform: "android" },
+              steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+            },
+          ],
+        }),
+        "utf8"
+      );
+      const { services, calls } = fakeClientServices({}, { ops: BASELINE_OPS });
+
+      await runUploaded(services);
+
+      expect(calls.map((c) => c.args.target)).toEqual(["main.yaml"]);
+    });
+
+    it("lets a snapshot through for the op its run needs: read-file to compare, write-file to update", async () => {
+      // The client offers write-file only for a call that updates baselines.
+      await fs.writeFile(uploadedPath, snapshotThenEcho, "utf8");
+      vi.mocked(runSnapshot).mockResolvedValue({ status: "pass", reason: "snapshot stubbed" });
+      const run = (ops: ClientServiceOp[], updateBaselines: boolean) =>
+        createRunFlowTool(mockRegistry())
+          .execute(
+            {},
+            {
+              name: "main",
+              project_root: tmpDir,
+              flow_file: uploadedPath,
+              device: DEVICE,
+              updateBaselines,
+            },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: uploadedFlowFile(),
+              clientServices: fakeClientServices({}, { ops }).services,
+            }
+          )
+          .then(asRun, (e: unknown) => e);
+
+      expect(await run(["resolve-file", "read-file"], false)).toMatchObject({ ok: true });
+      expect(await run(["resolve-file", "write-file"], true)).toMatchObject({ ok: true });
+      const refused = await run(["resolve-file", "read-file"], true);
+      expect(refused).toBeInstanceOf(FailureError);
+      expect(getFailureSignal(refused)?.failure_stage).toBe("flow_upload_snapshot_baseline");
+      expect((refused as Error).message.endsWith(SNAPSHOT_UPDATE_HINT)).toBe(true);
+      expect(await run(["resolve-file", "write-file"], false)).toBeInstanceOf(FailureError);
     });
 
     it("fails a snapshot flow before step 1 when the client refuses its root", async () => {
@@ -2703,7 +2759,8 @@ describe("flow composition (run:)", () => {
     // snapshot step served after the update, and one sentence says so.
     const combinedHint =
       " This tool-server serves run: steps for a client that sends client services, and " +
-      "snapshot: steps for a client that offers the read-file and write-file client services. " +
+      "snapshot: steps for a client that offers the resolve-file, read-file and write-file " +
+      "client services. " +
       "Update the argent CLI or MCP adapter on the client.";
     expect(message.slice(-combinedHint.length)).toBe(combinedHint);
     // validation is what lets a directory run move on to the next flow.

@@ -64,12 +64,12 @@ const FLOW_TEXT = serializeFlow({
 });
 const ALL_OPS = ["resolve-file", "read-file", "write-file"];
 
-let workDir: string;
+let workDir = "";
 let capture: string;
 let captureBytes: Buffer;
 let restoreTmpdir: () => void = () => {};
-let handle: HttpAppHandle | undefined;
-let server: http.Server | undefined;
+let handle: HttpAppHandle | undefined = undefined;
+let server: http.Server | undefined = undefined;
 
 beforeEach(async () => {
   workDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-snapshot-over-link-"));
@@ -187,8 +187,9 @@ function fakeClient(opts: { links?: Record<string, string>; refuse?: Record<stri
           };
     }
     if (req.op === "write-file") {
+      const replaced = disk.has(req.args.path as string);
       disk.set(req.args.path as string, Buffer.from(req.args.content as string, "base64"));
-      return { ok: true, written: req.args.path };
+      return { ok: true, written: req.args.path, replaced };
     }
     return { ok: false, error: `no such op ${req.op}` };
   };
@@ -268,7 +269,7 @@ describe("snapshot: steps over a link", () => {
         op: "resolve-file",
         args: { anchorDir: "/client/flows", target: "withsnap.yaml", kind: "flow" },
       },
-      { op: "read-file", args: { path: BASELINE } },
+      // The write itself says whether a baseline was there: nothing is read.
       { op: "write-file", args: { path: BASELINE, content: expect.any(String) } },
     ]);
     // The capture itself landed on the client, a PNG of the device's size.
@@ -310,7 +311,10 @@ describe("snapshot: steps over a link", () => {
 
     await runOverLink(base, client, { updateBaselines: true });
     expect(client.disk.has(BASELINE)).toBe(true);
-    const { requests, terminal } = await runOverLink(base, client);
+    // A client offers write-file only for a call that updates baselines.
+    const { requests, terminal } = await runOverLink(base, client, {
+      ops: ["resolve-file", "read-file"],
+    });
 
     // No write: a plain run only reads the baseline.
     expect(requests.map((r) => r.op)).toEqual(["resolve-file", "read-file"]);
@@ -341,7 +345,6 @@ describe("snapshot: steps over a link", () => {
     const realBaseline = "/client/real/__baselines__/withsnap/title__ios-30x60.png";
     expect(requests.map((r) => [r.op, r.args.path ?? r.args.target])).toEqual([
       ["resolve-file", "alias.yaml"],
-      ["read-file", realBaseline],
       ["write-file", realBaseline],
     ]);
     // The report keeps the name the caller used.
@@ -349,7 +352,7 @@ describe("snapshot: steps over a link", () => {
   });
 
   it.each([[["resolve-file"]], [["resolve-file", "read-file"]]])(
-    "refuses the flow before step 1 for a client that offers only %j",
+    "refuses an update before step 1 for a client that offers only %j",
     async (ops) => {
       const steps = stepRegistry();
       handle = createHttpApp(httpRegistry(steps));
@@ -369,8 +372,9 @@ describe("snapshot: steps over a link", () => {
       });
       expect(terminal.error).toContain("step 1: snapshot: title");
       expect(terminal.error).toContain(
-        "This tool-server serves snapshot: steps for a client that offers the read-file and " +
-          "write-file client services. Update the argent CLI or MCP adapter on the client."
+        "This tool-server serves snapshot: steps for a client that offers the resolve-file, " +
+          "read-file and write-file client services. Update the argent CLI or MCP adapter on " +
+          "the client."
       );
       expect(vi.mocked(steps.invokeTool)).not.toHaveBeenCalled();
     }
@@ -382,11 +386,9 @@ describe("snapshot: steps over a link", () => {
     const client = fakeClient({ refuse: { "read-file": "the path is outside the served roots" } });
     client.disk.set(ROOT_FLOW, Buffer.from(FLOW_TEXT));
 
-    const { requests, terminal } = await runOverLink(base, client, { updateBaselines: true });
+    const { requests, terminal } = await runOverLink(base, client);
 
-    // Nothing is written once the read was refused.
     expect(requests.map((r) => r.op)).toEqual(["resolve-file", "read-file"]);
-    expect(client.disk.has(BASELINE)).toBe(false);
     const data = terminal.data as { ok: boolean; steps: { status: string; reason: string }[] };
     expect(data.ok).toBe(false);
     expect(data.steps).toHaveLength(1);

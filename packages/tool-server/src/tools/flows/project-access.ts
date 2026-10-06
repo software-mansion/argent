@@ -47,8 +47,11 @@ export interface ProjectAccess {
   resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile>;
   /** The bytes of a project file, or null when nothing is there. */
   readFile(filePath: string): Promise<Buffer | null>;
-  /** Write a snapshot baseline, creating its `__baselines__/<key>/` directory. */
-  writeBaseline(filePath: string, bytes: Buffer): Promise<void>;
+  /**
+   * Write a snapshot baseline, creating its `__baselines__/<key>/` directory.
+   * `replaced` says whether a file was there before.
+   */
+  writeBaseline(filePath: string, bytes: Buffer): Promise<{ replaced: boolean }>;
 }
 
 /**
@@ -62,6 +65,11 @@ export function clientBaselinePath(clientFlowPath: string, key: string, file: st
 
 function isEnoent(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === "ENOENT";
+}
+
+/** A path where no file can be: missing, or a file stands where a directory should. */
+function isNothingThere(err: unknown): boolean {
+  return isEnoent(err) || (err as { code?: unknown } | null)?.code === "ENOTDIR";
 }
 
 export class HostProjectAccess implements ProjectAccess {
@@ -94,14 +102,19 @@ export class HostProjectAccess implements ProjectAccess {
     try {
       return await fs.readFile(filePath);
     } catch (err) {
-      if (!isEnoent(err)) throw err;
+      if (!isNothingThere(err)) throw err;
       return null;
     }
   }
 
-  async writeBaseline(filePath: string, bytes: Buffer): Promise<void> {
+  async writeBaseline(filePath: string, bytes: Buffer): Promise<{ replaced: boolean }> {
+    const replaced = await fs.access(filePath).then(
+      () => true,
+      () => false
+    );
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, bytes);
+    return { replaced };
   }
 }
 
@@ -168,12 +181,16 @@ export class ClientProjectAccess implements ProjectAccess {
     return Buffer.from(content, "base64");
   }
 
-  async writeBaseline(filePath: string, bytes: Buffer): Promise<void> {
+  async writeBaseline(filePath: string, bytes: Buffer): Promise<{ replaced: boolean }> {
     const answer = await this.services.request(
       "write-file",
       { path: filePath, content: bytes.toString("base64") } satisfies WriteFileArgs,
       CLIENT_FILE_OP_TIMEOUT_MS
     );
-    if (typeof answer.written !== "string") throw invalidAnswer("write-file", filePath);
+    const { written, replaced } = answer;
+    if (typeof written !== "string" || typeof replaced !== "boolean") {
+      throw invalidAnswer("write-file", filePath);
+    }
+    return { replaced };
   }
 }

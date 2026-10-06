@@ -263,6 +263,36 @@ describe("runSnapshot baselines", () => {
     expect(r.reason).toContain("baseline updated");
   });
 
+  it("refreshes a baseline this process can write but not read", async () => {
+    // Only whether a baseline is there decides "updated": its bytes are not read.
+    if (process.getuid?.() === 0) return;
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    await fs.chmod(baselinePath(), 0o200);
+
+    const r = await runSnapshot(env, opts({ updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("baseline updated");
+  });
+
+  it("fails as a missing baseline when a file stands where its directory should be", async () => {
+    await fs.mkdir(path.dirname(path.dirname(baselinePath())), { recursive: true });
+    await fs.writeFile(path.dirname(baselinePath()), "not a directory");
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain('no baseline for "home"');
+  });
+
+  it("reports a baseline path it cannot read as an error, not as a missing baseline", async () => {
+    // "No baseline" would steer the author to adopt the current screen.
+    await fs.mkdir(baselinePath(), { recursive: true });
+
+    await expect(runSnapshot(env, opts())).rejects.toThrow(/EISDIR/);
+  });
+
   it("diffs against an existing baseline", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
@@ -837,14 +867,19 @@ describe("runSnapshot with a client project", () => {
   const clientFlowPath = "/client/proj/.argent/flows/withsnap.yaml";
   const clientBaseline = "/client/proj/.argent/flows/__baselines__/withsnap/home__ios-390x844.png";
 
-  /** The client's side of the channel: answers every read with `stored`, records reads and writes. */
+  /**
+   * The client's side of the channel: answers every read with `stored`, and
+   * every write with whether `stored` was there; records reads and writes.
+   */
   const clientProject = (stored: Buffer | null) => ({
     mode: "client" as const,
     resolveFlowFile: vi.fn(async (): Promise<ResolvedFlowFile> => {
       throw new Error("unused");
     }),
     readFile: vi.fn(async (_filePath: string): Promise<Buffer | null> => stored),
-    writeBaseline: vi.fn(async (_filePath: string, _bytes: Buffer): Promise<void> => {}),
+    writeBaseline: vi.fn(async (_filePath: string, _bytes: Buffer) => ({
+      replaced: stored !== null,
+    })),
   });
 
   const clientOpts = (
@@ -896,17 +931,20 @@ describe("runSnapshot with a client project", () => {
     expect(r.status).toBe("pass");
     expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
     expect(project.writeBaseline.mock.calls).toEqual([[clientBaseline, capture]]);
-    // The handle points at a server copy a client can download, named like the
-    // host-mode baseline file.
+    // The write itself says whether a baseline was there: nothing is read.
+    expect(project.readFile).not.toHaveBeenCalled();
+    // The handle points at the capture on this host, which a client can
+    // download, named like the host-mode baseline file; no second copy is made.
     const baseline = r.artifacts?.baseline as { hostPath: string };
     expect(baseline).toMatchObject({
       __argentArtifact: true,
       kind: "screenshot",
       mimeType: "image/png",
       filename: "home__ios-390x844.png",
+      hostPath: h.shotPath,
     });
-    expect(baseline.hostPath).not.toBe(clientBaseline);
     await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(capture);
+    await expect(baselineCopyDirs()).resolves.toEqual([]);
   });
 
   it("says updated when the client already had a baseline", async () => {
@@ -967,8 +1005,25 @@ describe("runSnapshot with a client project", () => {
     expect([...png.data.subarray(0, 3)]).toEqual([25, 50, 75]);
     const last = (49 * 50 + 49) * 4;
     expect([...png.data.subarray(last, last + 3)]).toEqual([74, 99, 173]);
-    const baseline = r.artifacts?.baseline as { hostPath: string };
+    // The registered crop outlives the call; nothing else is left behind.
+    const baseline = r.artifacts?.baseline as { hostPath: string; filename: string };
+    expect(baseline.filename).toBe(`${r.snapshotKey}.png`);
     await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(bytes);
+    await expect(baselineCopyDirs()).resolves.toEqual([]);
+  });
+
+  it("keeps the baseline copy it returns on a client dimension mismatch", async () => {
+    const stored = Buffer.from("old pixels");
+    h.dimensionMismatch = {
+      expected: { width: 390, height: 844 },
+      actual: { width: 400, height: 844 },
+    };
+
+    const r = await runSnapshot(env, clientOpts(clientProject(stored)));
+
+    expect(r.status).toBe("fail");
+    const baseline = r.artifacts?.baseline as { hostPath: string };
+    await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(stored);
   });
 
   it("removes the baseline copy on a pass", async () => {

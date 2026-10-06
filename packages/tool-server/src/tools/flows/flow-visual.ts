@@ -312,10 +312,10 @@ export async function runSnapshot(
   };
 
   // The differ and the artifact store read files on THIS host, so a client
-  // baseline gets a copy here, under its own key filename. Not in the diff
-  // scratch dir: that one keeps only the context diff, and a registered
-  // baseline must outlive this call for a client to download it. On the host
-  // the baseline file itself serves both.
+  // baseline being compared gets a copy here, under its own key filename. Not
+  // in the diff scratch dir: that one keeps only the context diff, and a
+  // registered baseline must outlive this call for a client to download it.
+  // On the host the baseline file itself serves both.
   let baselineCopyDir: string | undefined;
   let keepBaselineCopy = false;
   const hostBaseline = async (bytes: Buffer): Promise<string> => {
@@ -350,12 +350,20 @@ export async function runSnapshot(
       currentPath = croppedPath;
     }
 
-    const stored = await opts.project.readFile(baselinePath);
-
     if (opts.updateBaselines) {
-      const bytes = await fs.readFile(currentPath);
-      await opts.project.writeBaseline(baselinePath, bytes);
-      const baseline = await baselineArtifact(await hostBaseline(bytes));
+      const { replaced } = await opts.project.writeBaseline(
+        baselinePath,
+        await fs.readFile(currentPath)
+      );
+      // A client's new baseline is the capture this host already holds, so
+      // that file is its artifact, under the baseline's name.
+      if (opts.clientFlowPath !== undefined && cropDir !== undefined) keepCropped = true;
+      const baseline = await store.register({
+        hostPath: opts.clientFlowPath === undefined ? baselinePath : currentPath,
+        kind: "screenshot",
+        mimeType: "image/png",
+        filename: key,
+      });
       // The folded key makes this the file a local run compares against, so a
       // remote capture replacing it says so. Otherwise a cloud refresh of a
       // committed baseline reads exactly like a local one.
@@ -363,15 +371,15 @@ export async function runSnapshot(
       return {
         ...captureWarned,
         status: "pass",
-        reason:
-          stored !== null
-            ? `baseline updated${source} (${key})`
-            : `baseline written${source} (${key})`,
+        reason: replaced
+          ? `baseline updated${source} (${key})`
+          : `baseline written${source} (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };
     }
 
+    const stored = await opts.project.readFile(baselinePath);
     if (stored === null) {
       // Fail WITHOUT seeding: writing here would make this unreviewed capture
       // the truth a re-run silently passes against, and a workspace that never

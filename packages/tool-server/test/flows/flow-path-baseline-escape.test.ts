@@ -211,7 +211,7 @@ describe("the stem a valid flow_path derives", () => {
           };
         }
         if (op === "read-file") return { exists: false };
-        if (op === "write-file") return { written: args.path };
+        if (op === "write-file") return { written: args.path, replaced: false };
         throw new Error(`unexpected op ${op}`);
       }),
     };
@@ -252,7 +252,6 @@ describe("the stem a valid flow_path derives", () => {
         op: "resolve-file",
         args: { anchorDir: "/work/proj/.argent/flows", target: "withsnap.yaml", kind: "flow" },
       },
-      { op: "read-file", args: { path: baseline } },
       {
         op: "write-file",
         args: { path: baseline, content: (await fs.readFile(capture)).toString("base64") },
@@ -260,13 +259,12 @@ describe("the stem a valid flow_path derives", () => {
     ]);
     expect(await fs.readdir(flowDir, { recursive: true })).toEqual(["materialized-upload.yaml"]);
 
-    // What the caller downloads is a copy on this host, outside the flow's
-    // directory. The registered copy outlives the run by design, so the test
-    // removes it.
-    const copy = result.steps[0]?.artifacts?.baseline?.hostPath;
-    expect(copy).toBeDefined();
-    expect(await fs.readFile(copy!)).toEqual(await fs.readFile(capture));
-    await fs.rm(path.dirname(copy!), { recursive: true, force: true });
+    // What the caller downloads is the capture on this host, under the
+    // baseline's name: no copy is made, and nothing lands beside the upload.
+    expect(result.steps[0]?.artifacts?.baseline).toMatchObject({
+      hostPath: capture,
+      filename: "shot__ios-390x844.png",
+    });
   });
 
   it("seeds run: cycle detection, so a sibling cycling back to the top flow is caught", async () => {

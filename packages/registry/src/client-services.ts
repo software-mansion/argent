@@ -18,8 +18,7 @@ import type { OnDiskSpelling } from "./flow-file-refs";
 
 /**
  * Every op name the protocol reserves. `resolve-file`, `read-file` and
- * `write-file` are served today; `run-script` is defined so the schema
- * accepts it once a handler exists.
+ * `write-file` are served; `run-script` is reserved and served by no client.
  */
 export const CLIENT_SERVICE_OPS = [
   "resolve-file",
@@ -102,11 +101,13 @@ export interface WriteFileArgs {
 export interface WriteFileAnswer {
   /** The path the client wrote. */
   written: string;
+  /** Whether a file was at the path before the write. */
+  replaced: boolean;
 }
 
 /** How long the server waits for the answer to a file op. */
 export const CLIENT_FILE_OP_TIMEOUT_MS = 30_000;
-/** The decoded size cap of a file carried in an answer; mirrors the file-input cap. */
+/** The decoded size cap of a file carried in an answer or a write; mirrors the file-input cap. */
 export const CLIENT_CONTENT_CAP_BYTES = 32 * 1024 * 1024;
 
 const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;

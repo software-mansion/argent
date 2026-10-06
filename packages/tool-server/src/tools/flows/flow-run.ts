@@ -1272,7 +1272,9 @@ function toolStepFilePaths(registry: Registry, tool: string, args: Record<string
  * `offeredOps` is what the client's `client_services` listed. A `run:` step
  * passes when it holds `resolve-file` — the runner then resolves every
  * fragment on the client ({@link ClientProjectAccess}) — and a `snapshot` step
- * when it also holds `read-file` and `write-file`, which carry the baselines.
+ * when it also holds the op that carries the baseline: `write-file` for a run
+ * that updates baselines, `read-file` for one that compares. The client
+ * offers `write-file` only for a call that updates baselines.
  * The other kinds have no op yet and are refused for every client. A caller
  * whose client could not serve a refused `run:` or `snapshot` step is told
  * that this tool-server would serve it for a client that can, so the way out
@@ -1294,6 +1296,7 @@ function assertUploadSelfContained(
   registry: Registry,
   flow: FlowFile,
   offeredOps: readonly ClientServiceOp[] | undefined,
+  updateBaselines: boolean,
   origin: { subject: string; arrival: string } = {
     subject: "This flow",
     arrival: "it arrived as an upload",
@@ -1302,9 +1305,8 @@ function assertUploadSelfContained(
   const serves = new Set<ClientServiceOp>(offeredOps ?? []);
   // A snapshot also needs `resolve-file`: its baselines anchor beside the root
   // flow's real file, which the client resolves (clientRootCanonical).
-  const servesBaselines = (["resolve-file", "read-file", "write-file"] as const).every((op) =>
-    serves.has(op)
-  );
+  const servesBaselines =
+    serves.has("resolve-file") && serves.has(updateBaselines ? "write-file" : "read-file");
   const offending: { kind: keyof typeof UPLOAD_STAGE_BY_KIND; line: string }[] = [];
   for (const { step, where } of walkSteps(flow.steps)) {
     if (step.kind === "run") {
@@ -1341,7 +1343,9 @@ function assertUploadSelfContained(
       ? ["run: steps for a client that sends client services"]
       : []),
     ...(offending.some((o) => o.kind === "snapshot")
-      ? ["snapshot: steps for a client that offers the read-file and write-file client services"]
+      ? [
+          "snapshot: steps for a client that offers the resolve-file, read-file and write-file client services",
+        ]
       : []),
   ];
   const updateHint =
@@ -1409,7 +1413,14 @@ Returns a per-step report: the first failure stops the run and the rest report a
       const canonicalPath = await canonicalFlowPath(filePath);
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
-      if (viaUpload) assertUploadSelfContained(registry, flow, ctx?.clientServices?.ops);
+      if (viaUpload) {
+        assertUploadSelfContained(
+          registry,
+          flow,
+          ctx?.clientServices?.ops,
+          Boolean(params.updateBaselines)
+        );
+      }
       // Refused before the prerequisite handshake and before any step touches
       // the device: a mid-run refusal would land after earlier steps had already
       // driven it (see findRetiredToolArg).
@@ -1770,8 +1781,8 @@ async function clientRootCanonical(
     throw new FailureError(
       `The client did not resolve the flow file "${clientRootPath}" (${errMsg(err)}). ` +
         `Its run: targets and snapshot baselines resolve beside the file's real location, ` +
-        `so the run cannot anchor them. Keep the flow file, or a symlink to it, under the ` +
-        `project root.`,
+        `so the run cannot anchor them. Keep the flow file under the project root; a link ` +
+        `to it must point at a .yaml or .yml file.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "client_root_refused",
@@ -2507,10 +2518,16 @@ async function execRunStep(
   if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
   if (state.project.mode === "client") {
     try {
-      assertUploadSelfContained(state.registry, fragment, state.ctx?.clientServices?.ops, {
-        subject: `The fragment "${target}"`,
-        arrival: "the client served it from a project",
-      });
+      assertUploadSelfContained(
+        state.registry,
+        fragment,
+        state.ctx?.clientServices?.ops,
+        state.updateBaselines,
+        {
+          subject: `The fragment "${target}"`,
+          arrival: "the client served it from a project",
+        }
+      );
     } catch (err) {
       return fail(errMsg(err));
     }
@@ -3082,8 +3099,9 @@ export async function resolveFlowSource(
     // The client's spelling still names the flow (report, __baselines__/,
     // --output), so it is held to the same shape rules as a host path. What
     // the upload cannot supply is the directory beside the file: execute()
-    // refuses a flow whose steps read it (assertUploadSelfContained), and the
-    // temp dir is the flowsDir the run gets.
+    // reads it through the client when the client serves it, and otherwise
+    // refuses a flow whose steps read it (assertUploadSelfContained). The temp
+    // dir is the flowsDir the run gets.
     if (flowPathInput?.viaUpload) {
       const clientPath = flowPathInput.clientPath;
       assertFlowPathShape(clientPath);

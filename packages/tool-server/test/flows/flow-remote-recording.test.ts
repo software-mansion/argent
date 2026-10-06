@@ -797,7 +797,8 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     // The materialized temp file is this process's own copy of the client's
     // file, so no boundary stat and no host listing has anything to judge; the
     // flow name comes from the client's spelling, and viaUpload is what makes
-    // execute() refuse a run:, script: or snapshot: step before step 1.
+    // execute() read the files beside it through the client, or refuse the
+    // steps that need them before step 1.
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
     await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
