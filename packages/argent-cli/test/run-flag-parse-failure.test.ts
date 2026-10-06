@@ -6,8 +6,8 @@ import { run } from "../src/run.js";
 // A flag the parser refuses is a rejected invocation like any other, so it owes `--json` callers
 // the same contract the missing-required and server-rejected paths keep: one object on stderr,
 // nothing on stdout. It used to answer with the human help block on stdout regardless, which puts
-// prose in the result channel and makes `--json | jq` a parse error. The defect is general, so a
-// plain bad-number typo is pinned beside the retired-key refusal.
+// prose in the result channel and makes `--json | jq` a parse error. A plain bad-number typo stands
+// in for every refusal.
 
 const toolsClientMock = vi.hoisted(() => ({
   fetchTool: vi.fn(),
@@ -32,17 +32,8 @@ vi.mock("@argent/tools-client", async (importOriginal) => {
 
 vi.mock("@argent/telemetry", () => telemetryMock);
 
-const RETIREMENT_NOTE =
-  "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
-
-// The refusal text, assembled by the parser from the note above with its "Retired: " label
-// dropped. Pinned whole so the message a `--json` caller reads is the message a human reads.
-const REFUSAL =
-  "--settle is retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key.";
-
-// Run the real registry serializer over a real zod object rather than hand-writing the
-// `{description, not: {}}` shape a retired key produces, so this fixture cannot drift from what
-// the tool-server actually publishes. `flag-parser.test.ts` pins the shape itself.
+// Run the real registry serializer over a real zod object rather than hand-writing the schema, so
+// this fixture cannot drift from the shape the tool-server actually publishes.
 const gestureSwipeMeta = {
   name: "gesture-swipe",
   description: "Execute a smooth swipe / drag touch gesture between two points",
@@ -51,10 +42,6 @@ const gestureSwipeMeta = {
       udid: z.string().describe("Target device"),
       durationMs: z.number().optional().describe("Total gesture duration in milliseconds"),
       momentum: z.boolean().optional().describe("Whether the swipe releases with momentum"),
-      settle: z
-        .never({ error: "`settle` was renamed to `momentum`, with the opposite sense" })
-        .optional()
-        .describe(RETIREMENT_NOTE),
     })
   ),
 };
@@ -91,23 +78,12 @@ describe("argent run - a flag the parser refuses", () => {
   });
 
   describe("with --json", () => {
-    it("answers a retired key with one object on stderr and nothing on stdout", async () => {
-      await expect(
-        invoke(["gesture-swipe", "--json", "--udid", "X", "--settle", "true"])
-      ).rejects.toThrow("process.exit:2");
-
-      // The whole point: `--json | jq` must read an empty stream, not the help block.
-      expect(logSpy).not.toHaveBeenCalled();
-      const envelope = JSON.parse(stderr());
-      expect(envelope).toEqual({ error: REFUSAL, missing: [], issues: [] });
-      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-    });
-
-    it("answers an ordinary bad value the same way", async () => {
+    it("answers a bad value with one object on stderr and nothing on stdout", async () => {
       await expect(
         invoke(["gesture-swipe", "--json", "--udid", "X", "--durationMs", "abc"])
       ).rejects.toThrow("process.exit:2");
 
+      // The whole point: `--json | jq` must read an empty stream, not the help block.
       expect(logSpy).not.toHaveBeenCalled();
       const envelope = JSON.parse(stderr());
       expect(envelope.error).toContain("--durationMs");
@@ -117,7 +93,7 @@ describe("argent run - a flag the parser refuses", () => {
     it("carries the same keys as a missing-required failure", async () => {
       // A scripted caller reads `.error` without first working out which failure it hit, so the
       // two envelopes must not differ in shape - only in what fills them.
-      await expect(invoke(["gesture-swipe", "--json", "--settle", "true"])).rejects.toThrow(
+      await expect(invoke(["gesture-swipe", "--json", "--durationMs", "abc"])).rejects.toThrow(
         "process.exit:2"
       );
       const parseKeys = Object.keys(JSON.parse(stderr()));
@@ -131,7 +107,7 @@ describe("argent run - a flag the parser refuses", () => {
     });
 
     it("still reports the parse-flags telemetry signal, not the validation one", async () => {
-      await expect(invoke(["gesture-swipe", "--json", "--settle", "true"])).rejects.toThrow(
+      await expect(invoke(["gesture-swipe", "--json", "--durationMs", "abc"])).rejects.toThrow(
         "process.exit:2"
       );
 
@@ -152,17 +128,6 @@ describe("argent run - a flag the parser refuses", () => {
   describe("without --json", () => {
     // Pinned so routing the parse failure through the shared reporter cannot quietly swallow the
     // human path: the message still goes to stderr and the help block still goes to stdout.
-    it("keeps the retired-key refusal on stderr and the help block on stdout", async () => {
-      await expect(invoke(["gesture-swipe", "--udid", "X", "--settle", "true"])).rejects.toThrow(
-        "process.exit:2"
-      );
-
-      expect(stderr()).toContain(`Error: ${REFUSAL}`);
-      expect(stdout()).toContain("argent run gesture-swipe [flags]");
-      expect(stdout()).toContain("--momentum");
-      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-    });
-
     it("keeps an ordinary bad value on stderr with the help block on stdout", async () => {
       await expect(invoke(["gesture-swipe", "--udid", "X", "--durationMs", "abc"])).rejects.toThrow(
         "process.exit:2"

@@ -3342,16 +3342,6 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
       "the swipe options form takes a nested point — e.g. swipe: { from: { x: 0.5, y: 0.5 }, direction: left }"
     );
   }
-  // `settle` was this flag's old spelling, with the opposite polarity. Rejected
-  // by name rather than by rejectUnknownKeys' generic message, and never aliased:
-  // `settle: true` maps to `momentum: false`, so a silent rewrite would invert
-  // what the author wrote.
-  if (obj.settle !== undefined) {
-    badEntry(
-      entry,
-      "swipe.settle was renamed to swipe.momentum, with the opposite sense — write `momentum: false` for the momentum-free swipe that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)"
-    );
-  }
   rejectUnknownKeys(entry, obj, SWIPE_OPTION_KEYS, "swipe");
 
   // The travel spec: three mutually exclusive spellings.
