@@ -245,7 +245,9 @@ describe("callTool client services", () => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ data: { ok: true } }));
     };
-    const { callTool } = createToolsClient({ baseUrl: async () => ({ url, token: "" }) });
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote: false }),
+    });
 
     await callTool("flow-execute", { project_root: projectDir });
 

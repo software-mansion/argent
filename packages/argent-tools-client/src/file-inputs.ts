@@ -3,9 +3,9 @@
  *
  * {@link prepareFileInputs} interpolates each `fileInputs` spec advertised by
  * `GET /tools`, stats the file on THIS machine, and replaces the target arg
- * with a `__argentFileInput` wrapper. The tool-server resolves it against ITS
- * filesystem — in place when co-located, else from the inlined base64, which
- * is sent only for remote tool-servers so local sessions skip the encoding.
+ * with a `__argentFileInput` wrapper. The tool-server materializes the inlined
+ * base64, which is sent only to a routed tool-server so local sessions skip the
+ * encoding; without it, the tool-server reads the path in place.
  *
  * {@link applyClientFileDirectives} is the reverse: a `__argentClientFile`
  * directive (e.g. a recorded flow YAML) is written here, constrained to
@@ -13,9 +13,9 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, rmSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { createTarGzFile } from "@argent/archive";
@@ -101,10 +101,51 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
   return missing ? null : out;
 }
 
-async function tarball(sourcePath: string): Promise<string> {
-  const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
-  await createTarGzFile(sourcePath, tarPath);
-  return tarPath;
+// Archives of the uploads in progress. A signal or `process.exit()` ends the
+// process without the `finally` that removes an archive, so listeners remove
+// them while any exists. A signal is then raised again for its default action.
+const pendingArchives = new Set<string>();
+const ARCHIVE_SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+function removePendingArchives(): void {
+  for (const archive of pendingArchives) {
+    try {
+      rmSync(archive, { force: true });
+    } catch {
+      // Best effort: the process is ending.
+    }
+  }
+  pendingArchives.clear();
+  for (const s of ARCHIVE_SIGNALS) process.removeListener(s, removeArchivesOnSignal);
+  process.removeListener("exit", removePendingArchives);
+}
+
+function removeArchivesOnSignal(signal: NodeJS.Signals): void {
+  removePendingArchives();
+  // A listener replaces the signal's default action. When no other code
+  // handles the signal, raise it again so the process ends as it would have.
+  if (process.listenerCount(signal) > 0) return;
+  try {
+    process.kill(process.pid, signal);
+  } catch {
+    // Windows cannot raise every signal (SIGHUP among them): exit with the
+    // code that the signal gives.
+    process.exit(128 + constants.signals[signal]);
+  }
+}
+
+function trackArchive(archive: string): void {
+  if (pendingArchives.size === 0) {
+    for (const s of ARCHIVE_SIGNALS) process.on(s, removeArchivesOnSignal);
+    process.on("exit", removePendingArchives);
+  }
+  pendingArchives.add(archive);
+}
+
+function untrackArchive(archive: string): void {
+  if (!pendingArchives.delete(archive) || pendingArchives.size > 0) return;
+  for (const s of ARCHIVE_SIGNALS) process.removeListener(s, removeArchivesOnSignal);
+  process.removeListener("exit", removePendingArchives);
 }
 
 function sha256File(filePath: string): Promise<string> {
@@ -225,17 +266,19 @@ export async function prepareFileInputs(
       }
 
       if (opts.uploadEndpoint && st) {
-        let tarPath: string | null = null;
+        const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
+        trackArchive(tarPath);
         try {
           // stderr, not stdout (MCP owns it), so a slow upload isn't silent.
           process.stderr.write(
             `Uploading ${path.basename(filePath)} to the remote tool-server...\n`
           );
-          tarPath = await tarball(filePath);
+          await createTarGzFile(filePath, tarPath);
           wire.contentHash = await sha256File(tarPath);
           wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint);
         } finally {
-          if (tarPath) await rm(tarPath, { force: true }).catch(() => {});
+          untrackArchive(tarPath);
+          await rm(tarPath, { force: true }).catch(() => {});
         }
       }
     }

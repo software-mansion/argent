@@ -27,7 +27,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a co-located flow .yaml on the client and tool server's shared filesystem. This must be supplied through the file-input boundary. Pass the same flow source here as to flow-execute, so the prerequisite you read belongs to the flow that will run; for remote reads, pass name + project_root instead."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file and the tool-server reads the uploaded copy; without a link, the tool-server reads the file in place. Pass the path through the argent client; a raw path that the file-input boundary did not verify is rejected. Pass the same flow source here as to flow-execute, so the prerequisite you read belongs to the flow that will run."
       ),
   })
   .superRefine((params, ctx) => {

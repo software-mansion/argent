@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 import {
   createToolsClient,
+  getResolvedToolsUrl,
   isArtifactHandle,
   materializeArtifacts,
   ToolInvocationError,
@@ -131,11 +132,12 @@ does not mark as validation, or a reply that is not a report stops the batch and
 counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
-automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
-a link, a run: step runs when both the CLI and the tool-server are 0.27 or
-later: the tool-server reads each fragment from the client during the run.
-script:, snapshot: and nested tool: flow-execute steps still do not run over
-a link: the tool-server rejects them before the first step.
+automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
+either, the CLI uploads the flow file. A run: step runs when both the CLI and
+the tool-server are 0.27 or later: the tool-server reads each fragment from the
+client during the run. The tool-server rejects a flow with script: or snapshot:
+steps, or with tool: steps that take a file or record a flow, before the first
+step. With neither, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
@@ -1044,9 +1046,74 @@ function writeJsonStreamRecord(record: Record<string, unknown>): void {
   console.log(JSON.stringify(record));
 }
 
+/**
+ * A run whose routed tool-server never answered. Nothing ran, so it is a setup
+ * error like the other can't-run exits, not a run error.
+ */
+class ToolServerUnreachableError extends Error {
+  readonly errorCode = "TOOL_SERVER_UNREACHABLE";
+  readonly errorKind = "network";
+}
+
+/** The stdout verdict for a ToolServerUnreachableError, in either runner. */
+const UNREACHABLE_VERDICT = "not run (tool-server unreachable)";
+
+/**
+ * The fetch failures that end a request before a connection opens, by the
+ * code on the error's `cause`, with the words the message gives each one.
+ */
+const CONNECT_FAILURES = new Map([
+  ["ECONNREFUSED", "connection refused"],
+  ["ENOTFOUND", "host not found"],
+  ["EAI_AGAIN", "host not found"],
+  ["ETIMEDOUT", "timed out"],
+  ["UND_ERR_CONNECT_TIMEOUT", "timed out"],
+  ["EHOSTUNREACH", "host unreachable"],
+  ["ENETUNREACH", "host unreachable"],
+]);
+
+/**
+ * `err` restated for the operator when it is a failed connect to the
+ * tool-server that ARGENT_TOOLS_URL or `argent link` names; undefined
+ * otherwise. ETIMEDOUT and the unreachable codes can also end an open
+ * socket, where the run may have started, so a cause with a syscall other
+ * than connect or DNS stays a run error. undici's connect timeout and a
+ * dual-stack AggregateError carry no syscall. Routing is read only here,
+ * after the failure, so no validation path waits on it.
+ */
+async function toolServerUnreachable(
+  err: unknown
+): Promise<ToolServerUnreachableError | undefined> {
+  if (!(err instanceof TypeError)) return undefined;
+  const cause = err.cause as { code?: unknown; syscall?: unknown } | undefined;
+  const reason = typeof cause?.code === "string" ? CONNECT_FAILURES.get(cause.code) : undefined;
+  const syscall = cause?.syscall;
+  if (!reason || (syscall !== undefined && syscall !== "connect" && syscall !== "getaddrinfo")) {
+    return undefined;
+  }
+  const routing = await getResolvedToolsUrl();
+  if (routing.source === "none") return undefined;
+  // With ARGENT_TOOLS_URL set over a link file, unsetting only the env var
+  // routes through the link instead, so the recovery names both steps.
+  const recovery =
+    routing.source === "link"
+      ? "Start the tool-server on the linked machine, or run `argent unlink`."
+      : routing.shadowedLink
+        ? "Start that tool-server, or unset ARGENT_TOOLS_URL and run `argent unlink` to use " +
+          `the local one. A link to ${routing.shadowedLink.url} is also configured and ` +
+          "takes over once the env var is unset."
+        : "Start that tool-server, or unset ARGENT_TOOLS_URL to use the local one.";
+  const setBy = routing.source === "env" ? "ARGENT_TOOLS_URL" : "argent link";
+  return new ToolServerUnreachableError(
+    `Could not reach the tool-server at ${routing.url} (set by ${setBy}): ${reason}.\n${recovery}`
+  );
+}
+
 /** A failure's machine-readable half, under the names JSON output carries it by. */
 function failureSignal(err: unknown): { error_code?: string; error_kind?: string } {
-  if (!(err instanceof ToolInvocationError)) return {};
+  if (!(err instanceof ToolInvocationError) && !(err instanceof ToolServerUnreachableError)) {
+    return {};
+  }
   return {
     ...(err.errorCode ? { error_code: err.errorCode } : {}),
     ...(err.errorKind ? { error_kind: err.errorKind } : {}),
@@ -1157,11 +1224,15 @@ async function runFlowDirectory(
   projectRoot: string,
   options: FlowCommandOptions
 ): Promise<void> {
-  // Discovery fails before any call, so there is no aggregate to print: under
-  // --json the reason goes to stderr as the record --json-stream would carry,
-  // and stdout stays empty rather than holding prose where a document is due.
+  // Under --json stdout holds the aggregate alone, so each failure goes to
+  // stderr as the record --json-stream would carry, never as prose.
+  const printError = (message: string, err: unknown = message): void => {
+    console.error(args.json ? JSON.stringify(errorRecord(err, message)) : message);
+  };
+  // Discovery fails before any call, so there is no aggregate to print, and
+  // stdout stays empty rather than holding prose where a document is due.
   const reject = (message: string): Promise<never> => {
-    console.error(args.json ? JSON.stringify(errorRecord(message)) : message);
+    printError(message);
     return exitAfterFlush(2);
   };
   let flows: string[];
@@ -1188,6 +1259,9 @@ async function runFlowDirectory(
   // at all — stops it, as does a transport throw: each remaining flow would
   // burn a run against the same wall.
   let stopped = false;
+  // An unreachable tool-server stops the batch as a setup error (exit 2): the
+  // flows after it would fail to connect the same way.
+  let unreachable = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
     if (stopped) {
@@ -1202,13 +1276,17 @@ async function runFlowDirectory(
       // No onProgress: batch output is failures-only, never live step lines.
       const resp = await callTool("flow-execute", buildRunPayload(flowPath, projectRoot, args));
       if (isFlowReport(resp.data)) report = resp.data;
-    } catch (err) {
+    } catch (thrown) {
+      const unreachableErr = await toolServerUnreachable(thrown);
+      const err = unreachableErr ?? thrown;
       const message = err instanceof Error ? err.message : String(err);
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
       const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
-      const verdict = rejectedThisFlowOnly
-        ? rejectionVerdict(toolErr?.errorCode)
-        : "did not finish (run error)";
+      const verdict = unreachableErr
+        ? UNREACHABLE_VERDICT
+        : rejectedThisFlowOnly
+          ? rejectionVerdict(toolErr?.errorCode)
+          : "did not finish (run error)";
       // A verdict on stdout for every entry, next to the `[i/n]` header stdout
       // already carries. The detail goes to stderr, so without this line a
       // redirected stdout log shows this flow's header followed by the next
@@ -1216,17 +1294,18 @@ async function runFlowDirectory(
       // still counts it failed and names nothing. Verdict before detail, as the
       // single-flow runner prints them, so a merged log reads the same way.
       if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
-      console.error(message);
+      printError(message, err);
       results.push({ path: rel, status: "fail", error: message, ...failureSignal(err) });
       failures.push({ path: rel, headline: verdict, detail: message, rerun });
       if (!rejectedThisFlowOnly) stopped = true;
+      if (unreachableErr) unreachable = true;
       continue;
     }
     if (!report) {
       const message = `"${rel}" did not produce a run report.`;
       const verdict = "did not finish (no run report)";
       if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
-      console.error(message);
+      printError(message);
       results.push({ path: rel, status: "fail", error: message });
       failures.push({ path: rel, headline: verdict, detail: message, rerun });
       stopped = true;
@@ -1263,7 +1342,7 @@ async function runFlowDirectory(
     for (const line of renderFailedFlows(failures)) console.log(line);
     console.log(`\n${renderBatchSummary(counts, durationMs)}`);
   }
-  return exitAfterFlush(counts.failed === 0 ? 0 : 1);
+  return exitAfterFlush(unreachable ? 2 : counts.failed === 0 ? 0 : 1);
 }
 
 export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
@@ -1296,11 +1375,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  // Once streaming is requested stdout belongs exclusively to NDJSON, so help
-  // goes to stderr as the diagnostic it is.
-  const jsonStream = rest.some(
-    (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
-  );
+  // The output mode is read off raw argv, since parsing can fail on a later
+  // token. Once streaming is requested stdout belongs exclusively to NDJSON,
+  // so help goes to stderr as the diagnostic it is. --json reads stderr as
+  // records, so a usage error there is the record alone, with no help.
+  const flagGiven = (flag: string): boolean =>
+    rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
+  const jsonStream = flagGiven("--json-stream");
+  const json = !jsonStream && flagGiven("--json");
   // Checked before parseRunArgs so --help wins even when it trails a
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
@@ -1308,25 +1390,29 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     printHelp(jsonStream);
     return;
   }
+  const usageError = (message: string, prose: string): Promise<never> => {
+    if (json) {
+      console.error(JSON.stringify(errorRecord(message)));
+      return exitAfterFlush(2);
+    }
+    if (jsonStream) writeJsonStreamError(message);
+    console.error(prose);
+    printHelp(jsonStream);
+    return exitAfterFlush(2);
+  };
   let args: ReturnType<typeof parseRunArgs>;
   try {
     args = parseRunArgs(rest);
   } catch (err) {
     if (err instanceof FlagParseException) {
-      if (jsonStream) writeJsonStreamError(err);
-      console.error(`Error: ${err.message}\n`);
-      printHelp(jsonStream);
-      return exitAfterFlush(2);
+      return usageError(err.message, `Error: ${err.message}\n`);
     }
     throw err;
   }
   if (!args.flowRef) {
     const message =
       "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.";
-    if (jsonStream) writeJsonStreamError(message);
-    console.error(message);
-    printHelp(jsonStream);
-    return exitAfterFlush(2);
+    return usageError(message, message);
   }
 
   // A failure with no report. --json-stream mirrors it on stdout as a record
@@ -1586,6 +1672,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // show a path. Only what --output copies is fetched, below.
     report = resp.data as FlowReport;
   } catch (err) {
+    const unreachableErr = await toolServerUnreachable(err);
     // The same stdout verdict a directory run gives every entry. Live step
     // lines make the gap worse here: the last thing a redirected log holds is
     // a passing step, so a run that died reads as one that passed and got cut
@@ -1596,11 +1683,14 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       if (liveSteps === 0) console.log(`Flow "${flowName}"`);
       console.log(
         `  ${STATUS_GLYPH.error} ` +
-          (err instanceof ToolInvocationError && err.errorKind === "validation"
-            ? rejectionVerdict(err.errorCode)
-            : "did not finish (run error)")
+          (unreachableErr
+            ? UNREACHABLE_VERDICT
+            : err instanceof ToolInvocationError && err.errorKind === "validation"
+              ? rejectionVerdict(err.errorCode)
+              : "did not finish (run error)")
       );
     }
+    if (unreachableErr) return fail(unreachableErr.message, 2, unreachableErr);
     return fail(err instanceof Error ? err.message : String(err), 1, err);
   }
 

@@ -8,7 +8,6 @@ import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   ensureToolsServer,
   getResolvedToolsUrl,
-  isRemoteRouted,
   getDeviceIdFromArgs,
   type ToolsServerPaths,
 } from "@argent/tools-client";
@@ -73,6 +72,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // before auto-spawning; it carries its own token, while the local auto-spawn
   // path mints one.
   const resolved = await getResolvedToolsUrl();
+  // Frozen with the URL: a remote-routed session never falls back to a local
+  // spawn, and a call never uses one tool-server with the file rules of
+  // another. `argent link` and `argent unlink` ask for an editor restart.
+  const remote = resolved.url !== null;
   if (resolved.url) {
     TOOLS_URL = resolved.url;
     AUTH_TOKEN = resolved.token ?? "";
@@ -105,7 +108,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   let reconnectPromise: Promise<void> | null = null;
 
   async function reconnect(): Promise<void> {
-    if (await isRemoteRouted()) return;
+    if (remote) return;
     if (!reconnectPromise) {
       reconnectPromise = ensureToolsServer(options.paths)
         .then((handle) => {
@@ -136,6 +139,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   const { fetchTools, callTool } = createToolCaller({
     getHandle: () => ({ url: TOOLS_URL, token: AUTH_TOKEN }),
+    remote,
     reconnect,
     extraHeaders: aiClientHeaders,
   });
@@ -340,7 +344,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // Restart the tool server if it dies between requests. Auto-spawned servers
   // only: a remote-routed target is the user's responsibility, and a silent
   // local respawn would mask its outage.
-  if (!(await isRemoteRouted())) {
+  if (!remote) {
     const HEALTH_INTERVAL_MS = 30_000;
     const healthInterval = setInterval(async () => {
       try {

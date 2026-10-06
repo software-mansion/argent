@@ -4,10 +4,11 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
-// The tools client captures ~/.argent/link.json from homedir() at module load.
-// HOME is redirected before the import, so a developer's real link cannot turn
-// the co-located cases into remote ones.
+// The tools client builds its ~/.argent paths from homedir() at module load.
+// HOME is redirected before the import, so no case can reach the developer's
+// real link or tool-server state.
 let createToolCaller: typeof import("../src/tool-caller.js").createToolCaller;
 let TEST_HOME: string;
 const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -46,8 +47,22 @@ const LISTING = {
     {
       name: "reinstall-app",
       description: "",
-      inputSchema: {},
+      inputSchema: {
+        type: "object",
+        properties: {
+          udid: { type: "string" },
+          bundleId: { type: "string" },
+          appPath: { type: "string" },
+        },
+        required: ["udid", "bundleId", "appPath"],
+      },
       fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
+    },
+    {
+      name: "run-flow",
+      description: "",
+      inputSchema: {},
+      fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
     },
     { name: "slow", description: "", inputSchema: {}, longRunning: true },
     { name: "slow-plain", description: "", inputSchema: {} },
@@ -65,11 +80,17 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-/** A stub tool-server. The routes in `dropFirst` destroy the socket of their first request. */
-async function startStub(opts: { dropFirst?: string[] } = {}): Promise<Stub> {
+/**
+ * A stub tool-server. The routes in `dropFirst` destroy the socket of their
+ * first request after they read it. As on the real tool-server, a call that
+ * names an upload consumes it when its body is read, and `reinstall-app` waits
+ * `installMs` before it answers.
+ */
+async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}): Promise<Stub> {
   const dropFirst = new Set(opts.dropFirst ?? ["/tools/fast"]);
   const requests: Recorded[] = [];
   const calls = new Map<string, number>();
+  const uploads = new Set<string>();
   let slowPlainCalls = 0;
   const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
@@ -77,6 +98,11 @@ async function startStub(opts: { dropFirst?: string[] } = {}): Promise<Stub> {
     requests.push({ method: req.method ?? "", url, headers: req.headers, body });
     const nth = (calls.get(url) ?? 0) + 1;
     calls.set(url, nth);
+    const named =
+      url === "/tools/reinstall-app"
+        ? (JSON.parse(body) as { appPath?: { uploadId?: string } }).appPath?.uploadId
+        : undefined;
+    const consumed = named !== undefined && uploads.delete(named);
     if (dropFirst.has(url) && nth === 1) {
       req.socket.destroy();
       return;
@@ -86,14 +112,27 @@ async function startStub(opts: { dropFirst?: string[] } = {}): Promise<Stub> {
       res.end(JSON.stringify(payload));
     };
     if (req.method === "GET" && url === "/tools") return json(200, LISTING);
-    if (req.method === "POST" && url === "/upload") return json(200, { uploadId: "u-1" });
+    if (req.method === "POST" && url === "/upload") {
+      const uploadId = `u-${uploads.size + 1}`;
+      uploads.add(uploadId);
+      return json(200, { uploadId });
+    }
     if (req.method === "POST" && url === "/tools/reinstall-app") {
-      return json(200, { data: { reinstalled: true, bundleId: "x" } });
+      if (named !== undefined && !consumed) {
+        return json(422, { error: `Upload "${named}" was not found on the tool-server` });
+      }
+      setTimeout(
+        () => json(200, { data: { reinstalled: true, bundleId: "x" } }),
+        opts.installMs ?? 0
+      );
+      return;
     }
     if (req.method === "POST" && url === "/tools/slow") {
       setTimeout(() => json(200, { data: { ok: true } }), 80);
       return;
     }
+    if (req.method === "POST" && url === "/tools/run-flow")
+      return json(200, { data: { ok: true } });
     if (req.method === "POST" && url === "/tools/fast") return json(200, { data: { n: nth } });
     if (req.method === "POST" && url === "/tools/slow-plain") {
       // Slow only once, so a per-attempt timeout shows as one abort and one retry.
@@ -125,7 +164,7 @@ let appPath: string;
 
 beforeEach(async () => {
   stub = await startStub();
-  appPath = join(TEST_HOME, `MyApp-${Date.now()}.app`);
+  appPath = join(TEST_HOME, `MyApp-${randomUUID()}.app`);
   mkdirSync(appPath);
   writeFileSync(join(appPath, "Info.plist"), "<plist/>");
 });
@@ -139,6 +178,7 @@ function caller(overrides: Partial<Parameters<typeof createToolCaller>[0]> = {})
   const reconnect = vi.fn(async () => {});
   const made = createToolCaller({
     getHandle: () => ({ url: stub.url, token: "tok" }),
+    remote: false,
     reconnect,
     extraHeaders: () => ({ "X-Argent-AI-Client": "test" }),
     fetchTimeoutMs: 2_000,
@@ -152,8 +192,7 @@ const postsTo = (path: string) =>
 
 describe("createToolCaller", () => {
   it("uploads a tar-upload input to POST /upload when routed to a remote server", async () => {
-    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
-    const { callTool } = caller();
+    const { callTool } = caller({ remote: true });
 
     const out = await callTool("reinstall-app", { udid: "u", bundleId: "x", appPath });
 
@@ -173,8 +212,7 @@ describe("createToolCaller", () => {
   });
 
   it("sends a path-only wrapper and no upload for a co-located session", async () => {
-    vi.stubEnv("ARGENT_TOOLS_URL", "");
-    const { callTool } = caller();
+    const { callTool } = caller({ remote: false });
 
     await callTool("reinstall-app", { udid: "u", bundleId: "x", appPath });
 
@@ -186,6 +224,70 @@ describe("createToolCaller", () => {
     expect(sent.appPath.path).toBe(appPath);
     expect(sent.appPath).not.toHaveProperty("uploadId");
     expect(sent.appPath).not.toHaveProperty("content");
+  });
+
+  it("refuses a routed call that lacks a required argument before it uploads", async () => {
+    const { callTool } = caller({ remote: true });
+
+    await expect(callTool("reinstall-app", { bundleId: "x", appPath })).rejects.toThrow(
+      "`udid` is required (string) and was not provided. You sent: `bundleId`, `appPath`."
+    );
+    expect(postsTo("/upload")).toHaveLength(0);
+    expect(postsTo("/tools/reinstall-app")).toHaveLength(0);
+  });
+
+  it("names a missing file input beside the other missing arguments", async () => {
+    const { callTool } = caller({ remote: true });
+
+    await expect(callTool("reinstall-app", { bundleId: "x" })).rejects.toThrow(
+      "`udid` is required (string) and was not provided; `appPath` is required (string) and was not provided. You sent: `bundleId`."
+    );
+    expect(postsTo("/tools/reinstall-app")).toHaveLength(0);
+  });
+
+  it("leaves a missing argument of a co-located call to the tool-server", async () => {
+    const { callTool } = caller({ remote: false });
+
+    await callTool("reinstall-app", { bundleId: "x", appPath });
+
+    expect(postsTo("/tools/reinstall-app")).toHaveLength(1);
+  });
+
+  it("inlines a file input's content only when routed to a remote server", async () => {
+    const flowPath = join(TEST_HOME, "login.yaml");
+    writeFileSync(flowPath, "steps: []\n");
+
+    await caller({ remote: true }).callTool("run-flow", { flow_path: flowPath });
+    await caller({ remote: false }).callTool("run-flow", { flow_path: flowPath });
+
+    const [routed, local] = postsTo("/tools/run-flow").map(
+      (r) => (JSON.parse(r.body) as { flow_path: Record<string, unknown> }).flow_path
+    );
+    expect(routed).toMatchObject({ __argentFileInput: true, path: flowPath });
+    expect(Buffer.from(routed!.content as string, "base64").toString("utf8")).toBe("steps: []\n");
+    expect(local).toMatchObject({ __argentFileInput: true, path: flowPath });
+    expect(local).not.toHaveProperty("content");
+  });
+
+  it("takes the file rules from the startup routing, not from the link config of the moment", async () => {
+    // `argent unlink` after startup: still routed, so the call still uploads.
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    await caller({ remote: true }).callTool("reinstall-app", { udid: "u", bundleId: "x", appPath });
+    expect(postsTo("/upload")).toHaveLength(1);
+
+    // `argent link` after startup: still local, so the call still reads in place.
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    await caller({ remote: false }).callTool("reinstall-app", {
+      udid: "u",
+      bundleId: "x",
+      appPath,
+    });
+    expect(postsTo("/upload")).toHaveLength(1);
+    const wrappers = postsTo("/tools/reinstall-app").map(
+      (r) => (JSON.parse(r.body) as { appPath: Record<string, unknown> }).appPath
+    );
+    expect(wrappers[0]).toHaveProperty("uploadId");
+    expect(wrappers[1]).not.toHaveProperty("uploadId");
   });
 
   it("adds the auth header and the extra headers to the listing and the tool call", async () => {
@@ -305,29 +407,59 @@ describe("createToolCaller", () => {
     }
   });
 
-  it("retries a call that carried an upload without uploading again", async () => {
-    const dropping = await startStub({ dropFirst: ["/tools/reinstall-app"] });
+  it("waits for a call that carried an upload instead of aborting and sending it again", async () => {
+    const slow = await startStub({ installMs: 80 });
     try {
-      vi.stubEnv("ARGENT_TOOLS_URL", dropping.url);
+      // The install outlasts this per-attempt timeout. A retry would name an
+      // upload that the stub already consumed.
       const { callTool, reconnect } = caller({
-        getHandle: () => ({ url: dropping.url, token: "tok" }),
+        getHandle: () => ({ url: slow.url, token: "tok" }),
+        remote: true,
+        fetchTimeoutMs: 40,
       });
 
       await expect(
         callTool("reinstall-app", { udid: "u", bundleId: "x", appPath })
       ).resolves.toEqual({ result: { reinstalled: true, bundleId: "x" } });
 
-      const uploads = dropping.requests.filter((r) => r.url === "/upload");
-      const posts = dropping.requests.filter((r) => r.url === "/tools/reinstall-app");
-      expect(uploads).toHaveLength(1);
-      expect(posts).toHaveLength(2);
-      expect(reconnect).toHaveBeenCalledTimes(1);
-      const ids = posts.map(
-        (r) => (JSON.parse(r.body) as { appPath: { uploadId?: string } }).appPath.uploadId
-      );
-      expect(ids).toEqual(["u-1", "u-1"]);
+      expect(slow.requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+      expect(slow.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it("sends a call that carried an upload once, even when its connection drops", async () => {
+    const dropping = await startStub({ dropFirst: ["/tools/reinstall-app"] });
+    try {
+      const { callTool, reconnect } = caller({
+        getHandle: () => ({ url: dropping.url, token: "tok" }),
+        remote: true,
+      });
+
+      // The stub consumed the upload before the connection dropped, so a
+      // second attempt would only get "not found".
+      await expect(
+        callTool("reinstall-app", { udid: "u", bundleId: "x", appPath })
+      ).rejects.toThrow("fetch failed");
+
+      expect(dropping.requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+      expect(dropping.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1);
+      expect(reconnect).not.toHaveBeenCalled();
     } finally {
       await dropping.close();
+    }
+  });
+
+  it("names a tool-server URL without http:// at once, without a retry", async () => {
+    for (const url of ["127.0.0.1:3001", "localhost:3001"]) {
+      const { fetchTools, reconnect } = caller({ getHandle: () => ({ url, token: "" }) });
+
+      await expect(fetchTools()).rejects.toThrow(
+        `Failed to parse URL from ${url}/tools: expected an http:// or https:// URL`
+      );
+      expect(reconnect).not.toHaveBeenCalled();
     }
   });
 

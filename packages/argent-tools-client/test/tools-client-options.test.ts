@@ -26,20 +26,21 @@ afterAll(() => {
 
 let server: Server;
 let url: string;
-let requests: Array<{ method: string; url: string }>;
+let requests: Array<{ method: string; url: string; body: string }>;
 
-function readBody(req: IncomingMessage): Promise<void> {
+function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
-    req.on("data", () => {});
-    req.on("end", () => resolve());
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
   });
 }
 
 beforeEach(async () => {
   requests = [];
   server = createServer(async (req, res) => {
-    await readBody(req);
-    requests.push({ method: req.method ?? "", url: req.url ?? "" });
+    const body = await readBody(req);
+    requests.push({ method: req.method ?? "", url: req.url ?? "", body });
     const json = (payload: unknown, contentType = "application/json") => {
       res.writeHead(200, { "Content-Type": contentType });
       res.end(JSON.stringify(payload));
@@ -60,6 +61,12 @@ beforeEach(async () => {
             inputSchema: {},
             fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
           },
+          {
+            name: "run-flow",
+            description: "",
+            inputSchema: {},
+            fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
+          },
         ],
       });
     }
@@ -74,6 +81,24 @@ beforeEach(async () => {
     }
     if (req.method === "POST" && req.url === "/tools/reinstall-app") {
       return json({ data: { reinstalled: true } });
+    }
+    if (req.method === "POST" && req.url === "/tools/run-flow") return json({ data: { ok: true } });
+    if (req.method === "POST" && req.url === "/tools/proxy-page") {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<html>Sign in</html>");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/tools/cut-answer") {
+      // The headers promise more than arrives before the connection drops.
+      res.writeHead(200, { "Content-Type": "application/json", "Content-Length": "5000" });
+      res.write('{"data":{"reinst');
+      setTimeout(() => res.socket?.destroy(), 20);
+      return;
+    }
+    if (req.method === "POST" && req.url === "/tools/gateway-page") {
+      res.writeHead(502, { "Content-Type": "text/html" });
+      res.end("<html>Bad gateway</html>");
+      return;
     }
     res.writeHead(404);
     res.end();
@@ -90,9 +115,11 @@ afterEach(async () => {
 
 describe("createToolsClient options", () => {
   it("uses the baseUrl override and never spawns", async () => {
-    const withOverride = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+    const withOverride = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
     const tools = await withOverride.fetchTools();
-    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app"]);
+    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "run-flow"]);
 
     const withoutOverride = createToolsClient();
     await expect(withoutOverride.fetchTools()).rejects.toThrow(
@@ -103,7 +130,7 @@ describe("createToolsClient options", () => {
   it("routes GET /tools and POST /tools/:name through fetchImpl with the tool's longRunning flag", async () => {
     const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
     const { callTool } = createToolsClient({
-      baseUrl: async () => ({ url, token: "t" }),
+      baseUrl: async () => ({ url, token: "t", remote: false }),
       fetchImpl,
     });
 
@@ -112,23 +139,23 @@ describe("createToolsClient options", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenNthCalledWith(1, `${url}/tools`, expect.any(Object), {
       longRunning: false,
+      carriesUpload: false,
     });
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
       `${url}/tools/slow`,
       expect.objectContaining({ method: "POST" }),
-      { longRunning: true }
+      { longRunning: true, carriesUpload: false }
     );
   });
 
   it("does not route POST /upload through fetchImpl", async () => {
-    vi.stubEnv("ARGENT_TOOLS_URL", url);
     const appPath = join(TEST_HOME, "MyApp.app");
     mkdirSync(appPath, { recursive: true });
     writeFileSync(join(appPath, "Info.plist"), "<plist/>");
     const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
     const { callTool } = createToolsClient({
-      baseUrl: async () => ({ url, token: "t" }),
+      baseUrl: async () => ({ url, token: "t", remote: true }),
       fetchImpl,
     });
 
@@ -139,10 +166,75 @@ describe("createToolsClient options", () => {
       `${url}/tools/reinstall-app`,
     ]);
     expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+    // The tool call names the upload, which the tool-server consumes once.
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      `${url}/tools/reinstall-app`,
+      expect.objectContaining({ method: "POST" }),
+      { longRunning: false, carriesUpload: true }
+    );
+  });
+
+  it("takes the file-input mode from the baseUrl override, not from the link config", async () => {
+    const appPath = join(TEST_HOME, "MyApp.app");
+    mkdirSync(appPath, { recursive: true });
+    writeFileSync(join(appPath, "Info.plist"), "<plist/>");
+
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const local = createToolsClient({ baseUrl: async () => ({ url, token: "t", remote: false }) });
+    await local.callTool("reinstall-app", { appPath });
+    expect(requests.filter((r) => r.url === "/upload")).toHaveLength(0);
+
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    const routed = createToolsClient({ baseUrl: async () => ({ url, token: "t", remote: true }) });
+    await routed.callTool("reinstall-app", { appPath });
+    expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
+  });
+
+  it("inlines a file input's content only when the override says remote", async () => {
+    const flowPath = join(TEST_HOME, "login.yaml");
+    writeFileSync(flowPath, "steps: []\n");
+
+    for (const remote of [true, false]) {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote }),
+      });
+      await callTool("run-flow", { flow_path: flowPath });
+    }
+
+    const [routed, local] = requests
+      .filter((r) => r.url === "/tools/run-flow")
+      .map((r) => (JSON.parse(r.body) as { flow_path: Record<string, unknown> }).flow_path);
+    expect(Buffer.from(routed!.content as string, "base64").toString("utf8")).toBe("steps: []\n");
+    expect(local).toMatchObject({ __argentFileInput: true, path: flowPath });
+    expect(local).not.toHaveProperty("content");
+  });
+
+  it("rejects a 2xx answer whose body cannot be read", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    await expect(callTool("proxy-page", {})).rejects.toThrow(
+      /^The tool-server answered 200 OK to proxy-page, but the answer could not be read \(.+\)\. The tool may have run;/
+    );
+    await expect(callTool("cut-answer", {})).rejects.toThrow(
+      /^The tool-server answered 200 OK to cut-answer, but the answer could not be read/
+    );
+  });
+
+  it("names the status of an error answer whose body is not JSON", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    await expect(callTool("gateway-page", {})).rejects.toThrow(/^502 Bad Gateway$/);
   });
 
   it("returns outputHint from the listing on the buffered and the streamed path", async () => {
-    const { callTool } = createToolsClient({ baseUrl: async () => ({ url, token: "t" }) });
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
 
     const buffered = await callTool("slow", {});
     const streamed = await callTool("slow", {}, { onProgress: () => {} });

@@ -21,9 +21,11 @@ import {
   NATIVE_READY_TIMEOUT_MS,
   type FlowRunResult,
 } from "../../src/tools/flows/flow-run";
-import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import { reinstallAppTool } from "../../src/tools/reinstall-app";
+import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
 
 // Stub the snapshot differ: the baseline-anchoring test asserts only WHERE the
 // runner points it (root flowsDir + root flow name), not the diffing itself.
@@ -1477,7 +1479,7 @@ describe("flow composition (run:)", () => {
   });
 
   it("rejects run: composition for an uploaded flow when the client offers no client services", async () => {
-    // A remote client's flow arrives as content and is materialized to a temp
+    // A linked client's flow arrives as content and is materialized to a temp
     // file — the files its run: paths reference stayed on the client, and a
     // same-named file on the server must never be read in their place. The
     // rejection is a preflight contract error, so no step (e.g. a leading
@@ -2219,13 +2221,12 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("allows run: composition for a co-located flow_file resolved in place", async () => {
-    // The everyday co-located client: the flow_file boundary resolves the
-    // exact ${project_root}/.argent/flows/${name}.yaml path on a shared
-    // filesystem (presentOnHost, NOT an upload). This return is what carries
-    // the whole feature — misclassifying it as an upload would reject every
-    // local run: composition with the co-located contract error, so the
-    // upload-rejection tests above need this inverse pin.
+  it("allows run: composition for a flow_file resolved in place", async () => {
+    // The everyday unlinked client: the flow_file boundary resolves the exact
+    // ${project_root}/.argent/flows/${name}.yaml path in place (presentOnHost,
+    // NOT an upload). This return is what carries the whole feature —
+    // misclassifying it as an upload would reject every local run:
+    // composition, so the upload-rejection tests above need this inverse pin.
     await writeFlow("login", {
       executionPrerequisite: "",
       steps: [{ kind: "echo", message: "composed fragment ran" }],
@@ -2356,6 +2357,7 @@ describe("flow composition (run:)", () => {
           { kind: "echo", message: "before" },
           { kind: "run", flow: "frag.yaml" },
           { kind: "echo", message: "between" },
+          { kind: "script", path: "seed.mjs" },
           { kind: "snapshot", name: "title", maxMismatch: 0.5 },
         ],
       }),
@@ -2385,8 +2387,14 @@ describe("flow composition (run:)", () => {
     expect(err).toBeInstanceOf(Error);
     const message = (err as Error).message;
     expect(message).toContain("not self-contained");
-    expect(message).toContain("  - step 2: run: frag.yaml\n  - step 4: snapshot: title");
-    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
+    expect(message).toContain(
+      "  - step 2: run: frag.yaml\n  - step 4: script: { path: seed.mjs }\n  - step 5: snapshot: title"
+    );
+    // validation is what lets a directory run move on to the next flow.
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_run_composition",
+      error_kind: "validation",
+    });
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
   });
@@ -2438,14 +2446,163 @@ describe("flow composition (run:)", () => {
     const message = (err as Error).message;
     expect(message).toContain("not self-contained");
     expect(message).toContain("  - step 2: tool: flow-execute (name: login)");
-    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_nested_flow",
+      error_kind: "validation",
+    });
     // Preflight, not mid-run: neither the tap nor the nested run was dispatched.
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("allows a snapshot step for a co-located flow_file resolved in place", async () => {
+  /** Run an uploaded flow with these steps and return what it threw. */
+  async function rejectUpload(steps: FlowStep[], registry = mockRegistry()): Promise<unknown> {
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(uploadedPath, serializeFlow({ executionPrerequisite: "", steps }), "utf8");
+    return createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+  }
+
+  it("rejects an uploaded flow whose nested tool: flow-execute names a flow_path", async () => {
+    const registry = mockRegistry();
+    const err = await rejectUpload(
+      [
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { flow_path: "/client/.argent/flows/login.yaml", project_root: "/client" },
+        },
+      ],
+      registry
+    );
+    expect((err as Error).message).toContain(
+      "  - step 2: tool: flow-execute (flow_path: /client/.argent/flows/login.yaml)"
+    );
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("files an upload whose first offending step records a flow under the recording stage", async () => {
+    const err = await rejectUpload([
+      {
+        kind: "tool",
+        name: "flow-start-recording",
+        args: { name: "rec", project_root: "/client" },
+      },
+      { kind: "run", flow: "frag.yaml" },
+    ]);
+    expect((err as Error).message).toContain(
+      "  - step 1: tool: flow-start-recording (records a flow)\n  - step 2: run: frag.yaml"
+    );
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_recording_tool",
+      error_kind: "validation",
+    });
+  });
+
+  it("files an upload whose first offending step is a script under the script stage", async () => {
+    const err = await rejectUpload([
+      { kind: "echo", message: "before" },
+      { kind: "script", path: "seed.mjs" },
+      { kind: "run", flow: "frag.yaml" },
+    ]);
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_script_step",
+      error_kind: "validation",
+    });
+  });
+
+  it("rejects an uploaded flow whose tool: steps take files or record a flow", async () => {
+    // A tool: step gets its arguments as plain strings, so a file argument
+    // names a client path that this host opens on its own disk: ENOENT after
+    // the earlier steps drove the device, or the server's own file reported
+    // as a pass. reinstall-app uninstalls the app before it fails.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { baselinePath: "/client/base.png", currentPath: "/client/now.png" },
+          },
+          // Fills none of the declared file inputs, so the check does not list it
+          // (screenshot-diff itself refuses this call when it runs).
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { captureBaseline: true, captureCurrent: true },
+          },
+          { kind: "tool", name: "reinstall-app", args: { appPath: "/client/app.apk" } },
+          { kind: "tool", name: "flow-add-step", args: { name: "rec", command: "tap" } },
+        ],
+      }),
+      "utf8"
+    );
+
+    const tools: Record<string, { fileInputs?: unknown }> = {
+      "screenshot-diff": screenshotDiffTool,
+      "reinstall-app": reinstallAppTool,
+    };
+    const registry = mockRegistry();
+    vi.mocked(registry.getTool).mockImplementation((id: string) => tools[id] as never);
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "  - step 2: tool: screenshot-diff (/client/base.png, /client/now.png)\n" +
+        "  - step 4: tool: reinstall-app (/client/app.apk)\n" +
+        "  - step 5: tool: flow-add-step (records a flow)\n"
+    );
+    expect(message).not.toContain("step 3");
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_tool_file_input",
+      error_kind: "validation",
+    });
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("allows a snapshot step for a flow_file resolved in place", async () => {
     // The inverse pin for the snapshot upload rejection above: the everyday
-    // co-located client (presentOnHost, NOT an upload) keeps its durable
+    // unlinked client (presentOnHost, NOT an upload) keeps its durable
     // baseline directory beside the flow file, so the snapshot path still runs.
     await writeFlow("main", {
       executionPrerequisite: "",
