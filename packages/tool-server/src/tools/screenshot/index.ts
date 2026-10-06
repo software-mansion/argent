@@ -56,7 +56,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android. " +
-        "On a TV (Apple TV, Android TV, Vega), with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
+        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture); an Android TV whose form factor or display size cannot be read in time keeps 0.25. " +
         "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
