@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as dns from "node:dns";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -428,10 +428,16 @@ export function getInstalledVersion(): string | null {
 const PROBE_TIMEOUT_MS = 3_000;
 
 export function getLatestVersion(): string {
-  const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
-    encoding: "utf8",
-    timeout: PROBE_TIMEOUT_MS,
-  });
+  // Windows needs the shell to resolve the npm.cmd shim (see execShellCommandSync).
+  const result = execFileSync(
+    "npm",
+    ["view", PACKAGE_NAME, "version", "--registry", NPM_REGISTRY],
+    {
+      encoding: "utf8",
+      timeout: PROBE_TIMEOUT_MS,
+      shell: process.platform === "win32",
+    }
+  );
   return result.trim();
 }
 
