@@ -72,5 +72,6 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 - One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
 - A component that unmounts before the session stops can lose its name in the report. The report shows the duration of this work under "unattributed".
 - The memory leak data is available on iOS only. On Android, Argent reports memory growth as a weak signal.
+- On Android, native network capture can slow the app and change the timings in a profile. When native network capture is on for an app on the device, the start of a profiler gives a warning. To profile without it, ask the agent to stop native network capture for the app. Then restart the app. See [Network inspection](/docs/features/network).
 
 Argent does this with the `react-profiler-*`, `native-profiler-*` and `profiler-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

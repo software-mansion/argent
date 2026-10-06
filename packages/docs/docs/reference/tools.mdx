@@ -12,22 +12,22 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                   |
-| ---------------------------- | --------------------------------------------------------------------------------------------- |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, and Vega (Fire TV) devices |
-| `boot-device`                | Boot a simulator, emulator, or Vega Virtual Device, or spawn an Electron app                  |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                      |
-| `restart-app`                | Terminate then relaunch an app                                                                |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                        |
-| `open-url`                   | Open a URL or URL scheme on the device                                                        |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                 |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                    |
-| `shake`                      | Shake the device                                                                              |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                 |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                            |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                              |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons              |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                              |
+| Tool                         | Description                                                                                              |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, and Vega (Fire TV) devices            |
+| `boot-device`                | Boot a simulator, emulator, or Vega Virtual Device, or spawn an Electron app                             |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                 |
+| `restart-app`                | Terminate then relaunch an app                                                                           |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                   |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                   |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                            |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                               |
+| `shake`                      | Shake the device                                                                                         |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                            |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                       |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                         |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, native network capture |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                         |
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
@@ -74,15 +74,66 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 ## Native devtools
 
-| Tool                                     | Description                                                           |
-| ---------------------------------------- | --------------------------------------------------------------------- |
-| `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared |
-| `native-describe-screen`                 | Read the app's native accessibility screen description                |
-| `native-full-hierarchy`                  | Get the complete UIKit view tree                                      |
-| `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`    |
-| `native-view-at-point`                   | Inspect the deepest visible view at a native window point             |
-| `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input    |
-| `native-network-logs`                    | Read native HTTP requests on iOS and Android                          |
+| Tool                                     | Description                                                                             |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared (iOS)             |
+| `native-describe-screen`                 | Read the app's native accessibility screen description                                  |
+| `native-full-hierarchy`                  | Get the complete UIKit view tree                                                        |
+| `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                      |
+| `native-view-at-point`                   | Inspect the deepest visible view at a native window point                               |
+| `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input                      |
+| `native-network-logs`                    | Read native HTTP requests on iOS and Android, or stop native network capture on Android |
+
+### Native network capture on Android
+
+On Android, `native-network-logs` reads the OkHttp traffic of a debuggable app. The device must run Android 8.0 or later. The app must run as `arm64-v8a` or `x86_64`. Argent attaches an in-app agent to the running app.
+
+To capture a request:
+
+1. Call `native-network-logs` with the serial of the device and the package name of the app. The first call usually returns `armed: false`.
+2. Call `native-network-logs` again until `armed` is `true`.
+3. Do the action that sends the request again.
+4. Call `native-network-logs` again to read the list of requests.
+
+| Parameter  | Effect on Android                                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `udid`     | The serial of the device                                                                                                  |
+| `bundleId` | The package name of the app                                                                                               |
+| `port`     | The Metro port. Argent removes the Metro traffic on this port from the list. The default is the Metro port of the device. |
+| `limit`    | The maximum number of requests in the list. Argent returns the most recent requests, oldest first. The default is 50.     |
+| `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                   |
+| `stop`     | Stop native network capture for this app. The capture of a different app continues.                                       |
+
+The result contains `header`, `armed`, `capture`, `count`, `total` and `requests`. The `capture` field and the `header` line show the state of the capture. The `capture` field is absent when `armed` is `false`. These are the states:
+
+| State       | Meaning                                                                              |
+| ----------- | ------------------------------------------------------------------------------------ |
+| active      | Argent captures the OkHttp requests of the app.                                      |
+| waiting     | The app did not load OkHttp yet. The capture starts when the app loads it.           |
+| unavailable | The in-app agent cannot capture in this process. The `header` line gives the reason. |
+
+Each request has an ID with the format `android-<4 hex digits>-<number>`, for example `android-3f9a-12`. An ID is valid only in the tool-server that listed it. An ID is not valid after `native-network-logs` with `stop: true` or `stop-all-simulator-servers` stops the capture, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
+
+- The request headers that went on the wire, for example `Cookie` and `User-Agent`. When Argent knows only the headers that the app set, the details say so.
+- Each redirect with the request headers that went on the wire for it and the headers of its response, for example `Location`.
+- The final URL of the response.
+- The request body and the response body.
+
+The details do not contain an initiator.
+
+Only the in-app agent that Argent attached can report requests to Argent.
+
+While native network capture is on for an app, these tools tell you:
+
+| Tool                                            | What it reports                                                                                                                                                                                 |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `launch-app`, `restart-app`                     | Argent attaches the in-app agent to the new process. The `networkCapture` field tells if Argent attached it. If Argent did not attach it, the field gives the reason.                           |
+| `flow-execute`                                  | A `launch` step uses `restart-app`. The report shows the `networkCapture` note as a `warning` on the first launch of the app, and again when the note changes. A new pid alone is not a change. |
+| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the device with native network capture on.                                                                                               |
+
+A process of the app can also start in a different way, for example from a launcher tap, from a link or after a crash. The next call of `native-network-logs` attaches the in-app agent to this process.
+
+Native network capture stays on until `native-network-logs` with `stop: true` stops it for the app, or `stop-all-simulator-servers` stops the services of the device. After that, call `restart-app` to start the app without the in-app agent. See [Network inspection](/docs/features/network) for the limits.
 
 ## Chromium and Electron
 
