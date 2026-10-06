@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import * as path from "node:path";
 
 import {
+  CLIENT_FILE_OP_TIMEOUT_MS,
   CLIENT_REQUEST_EVENT,
   describeParamIssues,
   type ClientRequestLine,
@@ -122,19 +123,27 @@ interface ClientServicesLink {
 
 /**
  * Answer one request line and post the answer. Never rejects: a failed post is
- * one stderr line, and the server times the request out on its side.
+ * one stderr line, and the server times the request out on its side. A line
+ * without a string id or invocation names no answer to post, so it is
+ * dropped. The post gives up when the server would have stopped waiting.
  */
 async function answerClientRequest(
   link: ClientServicesLink,
   msg: ClientRequestLine
 ): Promise<void> {
-  const body = await link.handler.handle(msg);
-  const describe = `answer to ${String(msg.op)} request ${String(msg.id)} failed`;
+  const { id, op, invocation } = msg as { id?: unknown; op?: unknown; invocation?: unknown };
+  if (typeof id !== "string" || typeof invocation !== "string") {
+    process.stderr.write(`[client-services] ignored a request line without a string id\n`);
+    return;
+  }
+  const describe = `answer to ${typeof op === "string" ? op : "an unknown op"} request ${id} failed`;
   try {
-    const res = await fetch(link.answerUrl(String(msg.invocation)), {
+    const body = await link.handler.handle(msg);
+    const res = await fetch(link.answerUrl(invocation), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...link.headers },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
     });
     // Drain so the connection is released; the body itself is not needed.
     await res.text().catch(() => undefined);
@@ -147,13 +156,32 @@ async function answerClientRequest(
   }
 }
 
+/**
+ * The stream of a call ended before its result line: the tool may have acted
+ * already, which a caller must know before it runs the tool again.
+ */
+function brokenStream(name: string, reason: string, progress: number, cause?: unknown): Error {
+  const ran =
+    progress > 0
+      ? `${progress} progress update${progress === 1 ? "" : "s"} had arrived, so the tool ran at ` +
+        `least in part`
+      : `The tool may have run`;
+  return new Error(
+    `The connection to the tool-server closed before ${name} finished (${reason}). ${ran}; ` +
+      `check its effect before you run it again.`,
+    cause === undefined ? undefined : { cause }
+  );
+}
+
 /** Read an NDJSON tool-invocation stream, mirroring the buffered path's contract. */
 async function consumeToolStream(
+  name: string,
   body: ReadableStream<Uint8Array>,
   onProgress: (event: unknown) => void,
   services?: ClientServicesLink
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
+  let progress = 0;
   // Answers are posted while the stream keeps flowing; they are awaited once
   // the read loop ends so none is left dangling, on success or on error.
   const answers: Promise<void>[] = [];
@@ -167,8 +195,10 @@ async function consumeToolStream(
       error_code?: string;
       error_kind?: string;
     };
-    if (msg.event === "progress") onProgress(msg.data);
-    else if (msg.event === CLIENT_REQUEST_EVENT) {
+    if (msg.event === "progress") {
+      progress++;
+      onProgress(msg.data);
+    } else if (msg.event === CLIENT_REQUEST_EVENT) {
       // Without a handler the line is ignored, as any unknown event is.
       if (services) answers.push(answerClientRequest(services, msg as ClientRequestLine));
     } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
@@ -185,7 +215,13 @@ async function consumeToolStream(
   let buffered = "";
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        throw brokenStream(name, err instanceof Error ? err.message : String(err), progress, err);
+      }
+      const { done, value } = chunk;
       if (done) break;
       buffered += decoder.decode(value, { stream: true });
       let newline: number;
@@ -205,9 +241,7 @@ async function consumeToolStream(
   }
   await Promise.all(answers);
 
-  if (!final) {
-    throw new Error("tool stream ended without a result — connection lost mid-run?");
-  }
+  if (!final) throw brokenStream(name, "the stream ended without a result", progress);
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
   return { data, note: final.note };
@@ -417,7 +451,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
     if (stream && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      const streamed = await consumeToolStream(res.body, opts?.onProgress ?? (() => {}), services);
+      const streamed = await consumeToolStream(
+        name,
+        res.body,
+        opts?.onProgress ?? (() => {}),
+        services
+      );
       return { ...streamed, outputHint: meta?.outputHint };
     }
     let json: {

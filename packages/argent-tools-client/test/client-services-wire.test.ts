@@ -43,6 +43,8 @@ let flowsDir: string;
 let onInvoke: (body: unknown, res: ServerResponse) => void | Promise<void>;
 /** Per test: the status POST /invocations/:id/client-responses answers with. */
 let answerStatus: number;
+/** Per test: the answer route reads the POST and never answers it. */
+let answerHangs: boolean;
 /** Resolves once per posted answer, so the invoke stub can wait for it. */
 let answerPosted: () => void;
 let nextAnswer: Promise<void>;
@@ -68,6 +70,7 @@ function armAnswer(): void {
 beforeEach(async () => {
   requests = [];
   answerStatus = 200;
+  answerHangs = false;
   listing = [
     { name: "flow-execute", description: "", inputSchema: {}, clientServices: ADVERT },
     { name: "plain", description: "", inputSchema: {} },
@@ -102,6 +105,7 @@ beforeEach(async () => {
       return;
     }
     if (req.method === "POST" && /^\/invocations\/[^/]+\/client-responses$/.test(req.url ?? "")) {
+      if (answerHangs) return;
       res.writeHead(answerStatus, { "Content-Type": "application/json" });
       res.end(JSON.stringify(answerStatus === 200 ? { accepted: true } : { error: "nope" }));
       answerPosted();
@@ -408,5 +412,87 @@ describe("callTool client services", () => {
 
     expect(result.data).toEqual({ ran: true });
     expect(answerRequests()).toHaveLength(0);
+  });
+
+  it("drops a request line whose id is not a string and answers the next one", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    onInvoke = (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      for (const line of [
+        { id: { toString: 1 }, op: "resolve-file", args: {} },
+        { id: "req-7", op: { toString: 1 }, args: {} },
+      ]) {
+        res.write(`${JSON.stringify({ event: "client-request", invocation: "inv-1", ...line })}\n`);
+      }
+      res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
+    };
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { callTool } = createToolsClient();
+
+    const result = await callTool("flow-execute", { project_root: projectDir });
+
+    expect(result.data).toEqual({ ran: true });
+    expect(write.mock.calls.map((c) => String(c[0]))).toContain(
+      "[client-services] ignored a request line without a string id\n"
+    );
+    expect(answerRequests().map((r) => r.body)).toEqual([
+      { id: "req-7", ok: false, error: "op (not a string) is not served by this client" },
+    ]);
+  });
+
+  it("gives up on an answer POST once the tool-server would have stopped waiting for it", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerHangs = true;
+    const giveUp = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(giveUp.signal);
+    onInvoke = (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(
+        `${JSON.stringify({
+          event: "client-request",
+          invocation: "inv-1",
+          id: "req-8",
+          op: "resolve-file",
+          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+        })}\n`
+      );
+      res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
+    };
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { callTool } = createToolsClient();
+
+    const pending = callTool("flow-execute", { project_root: projectDir });
+    await vi.waitFor(() => expect(answerRequests()).toHaveLength(1));
+    expect(timeout).toHaveBeenCalledWith(30_000);
+    giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+
+    expect((await pending).data).toEqual({ ran: true });
+    expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+      "[client-services] answer to resolve-file request req-8 failed: The operation was aborted due to timeout\n",
+    ]);
+  });
+
+  it("says the tool may already have acted when the stream breaks before the result", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    onInvoke = (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(`${JSON.stringify({ event: "progress", data: { index: 0 } })}\n`);
+      setTimeout(() => res.socket?.destroy(), 20);
+    };
+    const { callTool } = createToolsClient();
+
+    await expect(
+      callTool("flow-execute", { project_root: projectDir }, { onProgress: () => {} })
+    ).rejects.toThrow(
+      /^The connection to the tool-server closed before flow-execute finished \(.+\)\. 1 progress update had arrived, so the tool ran at least in part; check its effect before you run it again\.$/
+    );
+
+    onInvoke = (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.end();
+    };
+    await expect(callTool("flow-execute", { project_root: projectDir })).rejects.toThrow(
+      "The connection to the tool-server closed before flow-execute finished (the stream ended without a result). The tool may have run; check its effect before you run it again."
+    );
   });
 });

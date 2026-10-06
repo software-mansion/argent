@@ -173,8 +173,9 @@ export async function createClientServicesHandler(opts: {
   }
 
   async function handle(line: ClientRequestLine): Promise<ClientResponseBody> {
-    const id = typeof line.id === "string" ? line.id : String(line.id);
-    const op = String(line.op);
+    // A broken server may send any JSON here; none of it may make this throw.
+    const id = typeof line.id === "string" ? line.id : "";
+    const op = typeof line.op === "string" ? line.op : "(not a string)";
     try {
       if (!ops.includes(line.op)) return refuse(id, `op ${op} is not served by this client`);
       if (!isRecord(line.args)) return refuse(id, `${op} request carries no args object`);
