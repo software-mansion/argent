@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -11,6 +12,10 @@ import {
   type ClientServiceOp,
 } from "@argent/registry";
 import { createClientServicesHandler } from "../src/client-services.js";
+
+// The registry's resolution code reads through this module object, so a spy on
+// it sees every directory the handler lists.
+const fsCjs = createRequire(import.meta.url)("node:fs/promises") as typeof fs;
 
 let tmpDir: string;
 let projectDir: string;
@@ -185,6 +190,38 @@ describe("resolve-file", () => {
     expect((answer as { error: string }).error).toContain("outside every root");
   });
 
+  it("lists no directory outside the roots before it refuses", async () => {
+    const outside = path.join(tmpDir, "there");
+    await fs.mkdir(outside);
+    const handler = await handlerFor([projectDir]);
+    const readdir = vi.spyOn(fsCjs, "readdir");
+
+    const answer = await handler.handle(resolveLine(flowsDir, "../../../there/x.yaml"));
+
+    expect(answer).toMatchObject({ ok: false });
+    const listed = readdir.mock.calls.map((call) => path.resolve(String(call[0])));
+    expect(listed.filter((dir) => dir.startsWith(outside))).toEqual([]);
+  });
+
+  it("refuses a target spelled through a directory outside the roots, even when the file leads back in", async () => {
+    // The casing check lists the directory the target is SPELLED in, so that
+    // directory is fenced too, not only the file the target resolves to.
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    await fs.symlink(path.join(flowsDir, "frag.yaml"), path.join(outside, "x.yaml"));
+    await fs.symlink(outside, path.join(flowsDir, "escape"));
+    const handler = await handlerFor([projectDir]);
+    const readdir = vi.spyOn(fsCjs, "readdir");
+
+    const answer = await handler.handle(resolveLine(flowsDir, "escape/x.yaml"));
+
+    expect(answer).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("outside every root"),
+    });
+    expect(readdir.mock.calls.map((call) => path.resolve(String(call[0])))).not.toContain(outside);
+  });
+
   it("answers a target whose directory does not exist as a missing file", async () => {
     const handler = await handlerFor([projectDir]);
 
@@ -203,7 +240,29 @@ describe("resolve-file", () => {
     expect(answer).toEqual({
       id: "req-1",
       ok: false,
-      error: "x.yaml links to a file that is not a .yaml file",
+      error: "x.yaml links to a file that is not a YAML file",
+    });
+  });
+
+  it("serves a .yaml name that links to a .yml flow", async () => {
+    await fs.writeFile(path.join(flowsDir, "real.yml"), "steps: []\n");
+    await fs.symlink(path.join(flowsDir, "real.yml"), path.join(flowsDir, "alias.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "alias.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(flowsDir, "real.yml"),
+    });
+  });
+
+  it("names a link loop as a host read would, not as a missing file", async () => {
+    await fs.symlink("loop.yaml", path.join(flowsDir, "loop.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "loop.yaml"))).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^ELOOP: /),
     });
   });
 

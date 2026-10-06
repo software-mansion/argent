@@ -7,7 +7,7 @@
  *
  * The handler decides what leaves this machine: it reads nothing outside the
  * roots the client itself sent (checked on real paths before any listing or
- * read), serves `.yaml` files only, a link included, refuses a file above the
+ * read), serves `.yaml` names of YAML files only, refuses a file above the
  * 32 MiB cap, and refuses an op it did not offer. A refusal does not say where
  * an outside path leads or whether it exists. The resolution itself is the
  * registry's `canonicalFlowPath` + `classifyOnDiskSpelling`, so a `run:` target
@@ -145,9 +145,10 @@ export async function createClientServicesHandler(opts: {
     if (!isInsideRoots(resolved, roots) || !isInsideRoots(listedDir, roots)) {
       return refuse(id, `${target} is ${outsideRoots}`);
     }
-    // A `.yaml` name that links to another kind of file would send that file.
-    if (!path.basename(resolved!).endsWith(".yaml")) {
-      return refuse(id, `${target} links to a file that is not a .yaml file`);
+    // A `.yaml` name that links to a file that is not YAML (a `.env`) would
+    // send that file; a link to a `.yml` flow is an ordinary layout.
+    if (!/\.ya?ml$/i.test(path.basename(resolved!))) {
+      return refuse(id, `${target} links to a file that is not a YAML file`);
     }
     const spelling = await classifyOnDiskSpelling(
       path.dirname(spelled),
@@ -158,16 +159,14 @@ export async function createClientServicesHandler(opts: {
 
     const read = await readFileInputWire(canonical, { includeContent: true });
     if (read === null) {
-      // The wire read answers null for a directory too; name it as a host
-      // read would, so the step does not report a missing file.
-      if (
-        await fs.stat(canonical).then(
-          (st) => st.isDirectory(),
-          () => false
-        )
-      ) {
-        return refuse(id, "EISDIR: illegal operation on a directory, read");
-      }
+      // The wire read answers null for a directory and for any stat error;
+      // only a missing file is the "no such fragment" answer. Anything else is
+      // named as a host read would name it.
+      const reason = await fs.stat(canonical).then(
+        (st) => (st.isDirectory() ? "EISDIR: illegal operation on a directory, read" : null),
+        (err: NodeJS.ErrnoException) => (err.code === "ENOENT" ? null : err.message)
+      );
+      if (reason !== null) return refuse(id, reason);
       const answer: ResolveFileAnswer = { canonical, spelling, exists: false };
       return { id, ok: true, ...answer };
     }
