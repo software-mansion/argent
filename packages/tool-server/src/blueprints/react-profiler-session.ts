@@ -7,7 +7,7 @@ import {
 } from "@argent/registry";
 import { assertExternalCapability } from "../utils/external-devices";
 import type { CDPClient } from "../utils/debugger/cdp-client";
-import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
+import type { JsRuntimeDebuggerApi, RuntimeAppMetadata } from "./js-runtime-debugger";
 import {
   FIBER_ROOT_TRACKER_SCRIPT,
   STOP_FOR_TAKEOVER_SCRIPT,
@@ -39,6 +39,7 @@ export interface ReactProfilerSessionApi {
   projectRoot: string;
   appName: string;
   deviceName: string;
+  runtimeApp?: RuntimeAppMetadata;
   hermesVersion: string;
   detectedArchitecture: "bridge" | "bridgeless" | null;
   sessionPaths: ProfilerSessionPaths | null;
@@ -114,6 +115,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       projectRoot: debuggerApi.projectRoot,
       appName: debuggerApi.appName,
       deviceName: debuggerApi.deviceName,
+      runtimeApp: debuggerApi.runtimeApp,
       hermesVersion: "unknown",
       detectedArchitecture: null,
       sessionPaths: null,

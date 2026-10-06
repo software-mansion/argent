@@ -95,6 +95,30 @@ export async function resolveLauncherActivity(
   );
 }
 
+/**
+ * Once `native-network-logs` has started native network capture for an app,
+ * the capture follows the app into each process that launch-app and
+ * restart-app start. The note in the launch result tells the caller whether
+ * the new process is instrumented, or why capture did not follow it. Best
+ * effort: a launch never fails because capture could not follow it.
+ */
+export async function followNativeNetworkCapture(
+  udid: string,
+  bundleId: string
+): Promise<{ networkCapture?: string }> {
+  try {
+    const note = await attachAndroidNetworkInspectorToLaunch(udid, bundleId);
+    return note ? { networkCapture: note } : {};
+  } catch (err) {
+    process.stderr.write(
+      `[${udid}:${bundleId}] native network capture did not follow the launch: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
+    );
+    return {};
+  }
+}
+
 export const androidImpl: PlatformImpl<
   Record<string, unknown>,
   LaunchAppParams,
@@ -117,7 +141,7 @@ export const androidImpl: PlatformImpl<
       timeoutMs: 30_000,
     });
     assertAmStartOk(out);
-    await attachAndroidNetworkInspectorToLaunch(params.udid, params.bundleId);
-    return { launched: true, bundleId: params.bundleId };
+    const capture = await followNativeNetworkCapture(params.udid, params.bundleId);
+    return { launched: true, bundleId: params.bundleId, ...capture };
   },
 };

@@ -15,6 +15,8 @@ export type LaunchAppResult =
       launched: boolean;
       bundleId: string;
       note?: string;
+      /** Android, while native network capture is on for the app: whether it followed the app into this process. */
+      networkCapture?: string;
     }
   | NativeDevtoolsInitFailedResult;
 

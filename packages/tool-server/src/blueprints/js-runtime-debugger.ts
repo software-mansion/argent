@@ -122,12 +122,27 @@ function createConsoleLogServer(
   });
 }
 
+/**
+ * What a React Native runtime says about itself in
+ * `ReactNativeApplication.metadataUpdated`, its answer to the enable sent at
+ * connect. Metro's target list names the app but not its platform, so this is
+ * where a runtime says it runs on Android or iOS. Fields stay unset when the
+ * runtime does not send it.
+ */
+export interface RuntimeAppMetadata {
+  /** Android package name or iOS bundle id. */
+  appId?: string;
+  /** "android" or "ios". */
+  platform?: string;
+}
+
 export interface JsRuntimeDebuggerApi {
   port: number;
   projectRoot: string;
   deviceName: string;
   appName: string;
   logicalDeviceId: string | undefined;
+  runtimeApp?: RuntimeAppMetadata;
   isNewDebugger: boolean;
   cdp: CDPClient;
   sourceResolver: SourceResolver;
@@ -279,6 +294,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
     }
 
+    const runtimeApp: RuntimeAppMetadata = {};
+    cdp.events.on("event", (method, params) => {
+      if (method !== "ReactNativeApplication.metadataUpdated") return;
+      if (typeof params.appIdentifier === "string") runtimeApp.appId = params.appIdentifier;
+      if (typeof params.platform === "string") runtimeApp.platform = params.platform;
+    });
     await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
     await cdp.send("Runtime.enable");
     await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
@@ -332,6 +353,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       deviceName: selected.deviceName,
       appName: selected.target.title,
       logicalDeviceId: selected.target.reactNative?.logicalDeviceId,
+      runtimeApp,
       isNewDebugger: selected.isNewDebugger,
       cdp,
       sourceResolver,
