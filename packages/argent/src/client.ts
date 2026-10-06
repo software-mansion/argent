@@ -34,6 +34,51 @@ export interface ArgentToolResult<T = unknown> {
   note?: string;
 }
 
+/**
+ * A node of the `ui-tree` result. A flag is set only when true; a field named in
+ * `UiTree.unsupportedFields` is unknown when absent.
+ */
+export interface UiTreeNode {
+  role: string;
+  label?: string;
+  value?: string;
+  identifier?: string;
+  checked?: boolean;
+  disabled?: boolean;
+  password?: boolean;
+  focused?: boolean;
+  selected?: boolean;
+  /** Normalized to `screen` like gesture-tap, but not clamped: it can fall outside 0..1. */
+  frame?: { x: number; y: number; width: number; height: number };
+  /** Android: the view class. */
+  type?: string;
+  /** iOS: the accessibility trait names. */
+  traits?: string[];
+  roleDescription?: string;
+  /** Android: the raw content-desc. */
+  contentDescription?: string;
+  /** Android window roots: the package. */
+  bundleId?: string;
+  editable?: boolean;
+  heading?: boolean;
+  /** iOS: on screen, but behind an in-app presentation. */
+  covered?: boolean;
+  children: UiTreeNode[];
+}
+
+export interface UiTree {
+  schemaVersion: 1;
+  source: "ax-service" | "android-devtools";
+  /** Native units: iOS points, Android pixels. */
+  screen?: { width: number; height: number };
+  roots: UiTreeNode[];
+  truncated: boolean;
+  alertVisible?: boolean;
+  keyboardVisible?: boolean;
+  /** Fields this source cannot report. */
+  unsupportedFields: string[];
+}
+
 export interface CallToolOptions {
   /** Receive progress events while a long-running tool works. */
   onProgress?: (event: unknown) => void;
