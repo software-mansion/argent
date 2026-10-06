@@ -249,14 +249,16 @@ describe("screenshot tool on an Android TV", () => {
     }
   });
 
-  it("waits for a probe that finishes just inside its budget", async () => {
+  // A literal, not the budget: a cap shorter than a slow but healthy adb (~500 ms)
+  // would send every Android TV capture to 0.25.
+  it("waits for a probe that takes 500 ms", async () => {
     vi.useFakeTimers();
     try {
       isAndroidTvMock.mockImplementation(
-        () => new Promise((resolve) => setTimeout(resolve, ANDROID_TV_PROBE_BUDGET_MS - 1, true))
+        () => new Promise((resolve) => setTimeout(resolve, 500, true))
       );
       const scale = requestedScale({});
-      await vi.advanceTimersByTimeAsync(ANDROID_TV_PROBE_BUDGET_MS);
+      await vi.advanceTimersByTimeAsync(500);
       expect(await scale).toBeCloseTo(0.3, 10);
     } finally {
       vi.useRealTimers();
