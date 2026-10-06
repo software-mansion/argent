@@ -42,6 +42,28 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ensureDeps: vi.fn(() => depsHook()),
 }));
 
+// File-input resolution waits on this hook first, so a test can hold a call
+// inside it; `filesCleanup` records each call's cleanup.
+let filesHook: () => Promise<void> = async () => {};
+const filesCleanup = vi.fn();
+vi.mock("../src/file-inputs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/file-inputs")>();
+  return {
+    ...actual,
+    resolveFileInputs: vi.fn(async (...args: Parameters<typeof actual.resolveFileInputs>) => {
+      await filesHook();
+      const resolved = await actual.resolveFileInputs(...args);
+      return {
+        ...resolved,
+        cleanup: async () => {
+          filesCleanup();
+          await resolved.cleanup();
+        },
+      };
+    }),
+  };
+});
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ADVERT = { ops: ["resolve-file"] as const };
 const CLIENT_SERVICES = { ops: ["resolve-file"], roots: ["/proj"] };
@@ -395,8 +417,8 @@ describe("HTTP client services", () => {
     handle = createHttpApp(
       stubRegistry(async (_params, options) => {
         const request = options!.clientServices!.request;
-        const first = await request("resolve-file", { path: "/proj" }, 30_000);
-        const second = await request("resolve-file", { path: "/proj/flows" }, 30_000);
+        const first = await request("resolve-file", { target: "/proj" }, 30_000);
+        const second = await request("resolve-file", { target: "/proj/flows" }, 30_000);
         return { first, second };
       })
     );
@@ -442,7 +464,7 @@ describe("HTTP client services", () => {
     expect(next).toMatchObject({
       event: "client-request",
       invocation,
-      args: { path: "/proj/flows" },
+      args: { target: "/proj/flows" },
     });
     expect(next.id).not.toBe(id);
     const second = await postAnswer(base, invocation, { id: next.id, ok: true, entries: [] });
@@ -549,6 +571,44 @@ describe("HTTP client services", () => {
       expect(impl).not.toHaveBeenCalled();
     } finally {
       depsHook = async () => {};
+    }
+  });
+
+  it("removes the uploads of a call whose client hung up while they were resolved", async () => {
+    const reached = deferred<void>();
+    const release = deferred<void>();
+    filesHook = async () => {
+      reached.resolve();
+      await release.promise;
+    };
+    filesCleanup.mockClear();
+    const impl = vi.fn(async () => ({ ok: true }));
+    handle = createHttpApp(stubRegistry(impl));
+    let base: string;
+    ({ server, base } = await listen(handle));
+
+    try {
+      const controller = new AbortController();
+      const call = startCall(
+        base,
+        "served-tool",
+        { client_services: CLIENT_SERVICES },
+        controller.signal
+      ).catch((err: unknown) => err);
+      await reached.promise;
+      controller.abort();
+      await call;
+      for (let i = 0; i < 100; i++) {
+        const open = await new Promise<number>((r) => server!.getConnections((_e, n) => r(n)));
+        if (open === 0) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      release.resolve();
+      await vi.waitFor(() => expect(filesCleanup).toHaveBeenCalledTimes(1));
+
+      expect(impl).not.toHaveBeenCalled();
+    } finally {
+      filesHook = async () => {};
     }
   });
 

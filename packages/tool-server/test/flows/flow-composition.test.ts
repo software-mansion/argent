@@ -1754,6 +1754,33 @@ describe("flow composition (run:)", () => {
       );
     });
 
+    it("fails the call as not answering when the client does not answer the request for the root flow", async () => {
+      // The first request of a composing upload comes before step 1. A proxy
+      // that holds the stream times it out, and the call must fail as a
+      // timeout (a directory run stops on it), not as an invalid flow.
+      const timeout = new FailureError(
+        'the client did not answer the resolve-file request for "main.yaml" within 30 s',
+        {
+          error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
+          failure_stage: "client_request_timeout",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }
+      );
+      const { services, calls } = fakeClientServices({});
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp, args: Record<string, unknown>) => {
+          calls.push({ op, args });
+          throw timeout;
+        }
+      );
+
+      const err = await runUploaded(services).catch((e: unknown) => e);
+
+      expect(err).toBe(timeout);
+      expect(calls.map((c) => c.args.target)).toEqual(["main.yaml"]);
+    });
+
     it("fails the call as not answering when the client goes quiet during the pre-run scan", async () => {
       // The leading run: chain is scanned before step 1. A client that does
       // not answer must surface as itself, not as a scan that found nothing

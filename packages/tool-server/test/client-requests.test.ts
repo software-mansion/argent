@@ -59,7 +59,7 @@ describe("ClientRequestBroker", () => {
     });
 
     // A second request gets its own id.
-    broker.request("inv-1", "resolve-file", { path: "/proj/flows" }, 30_000).catch(() => {});
+    broker.request("inv-1", "resolve-file", { target: "/proj/flows" }, 30_000).catch(() => {});
     expect(lines).toHaveLength(2);
     expect(lines[1]!.id).not.toBe(lines[0]!.id);
     broker.close("inv-1");
@@ -68,7 +68,7 @@ describe("ClientRequestBroker", () => {
   it("rejects with client_request_timeout when no answer arrives within timeoutMs", async () => {
     vi.useFakeTimers();
     const { broker, lines } = openBroker();
-    const pending = broker.request("inv-1", "resolve-file", { path: "/proj/flows" }, 30_000);
+    const pending = broker.request("inv-1", "resolve-file", { target: "/proj/flows" }, 30_000);
     let settled = false;
     const outcome = rejectionOf(pending).finally(() => {
       settled = true;
@@ -168,7 +168,7 @@ describe("ClientRequestBroker", () => {
 
   it("returns duplicate for a second answer to the same id", async () => {
     const { broker, lines } = openBroker();
-    const pending = broker.request("inv-1", "resolve-file", { path: "/proj" }, 30_000);
+    const pending = broker.request("inv-1", "resolve-file", { target: "/proj" }, 30_000);
     const id = lines[0]!.id;
 
     expect(broker.answer("inv-1", { id, ok: true, entries: ["a.yaml"] })).toBe("accepted");
@@ -182,7 +182,7 @@ describe("ClientRequestBroker", () => {
 
   it("returns unknown_request for an unknown id and unknown_invocation for an unknown invocation", () => {
     const { broker } = openBroker();
-    broker.request("inv-1", "resolve-file", { path: "/proj" }, 30_000).catch(() => {});
+    broker.request("inv-1", "resolve-file", { target: "/proj" }, 30_000).catch(() => {});
 
     expect(broker.answer("inv-1", { id: "never-minted", ok: true })).toBe("unknown_request");
     expect(broker.answer("inv-2", { id: "never-minted", ok: true })).toBe("unknown_invocation");
@@ -193,9 +193,9 @@ describe("ClientRequestBroker", () => {
     vi.useFakeTimers();
     const { broker, lines } = openBroker();
     const first = broker.request("inv-1", "resolve-file", { target: "a.yaml" }, 30_000);
-    const second = broker.request("inv-1", "resolve-file", { path: "/proj" }, 30_000);
+    const second = broker.request("inv-1", "resolve-file", { target: "/proj" }, 30_000);
     // Nobody ever awaits this one: close must not raise an unhandled rejection.
-    void broker.request("inv-1", "resolve-file", { path: "/proj/ignored" }, 30_000);
+    void broker.request("inv-1", "resolve-file", { target: "/proj/ignored" }, 30_000);
     expect(lines).toHaveLength(3);
     expect(vi.getTimerCount()).toBe(3);
 
@@ -233,7 +233,7 @@ describe("ClientRequestBroker", () => {
 
     // The same for an invocation that was never opened.
     const neverOpened = await rejectionOf(
-      broker.request("inv-9", "resolve-file", { path: "/proj" }, 30_000)
+      broker.request("inv-9", "resolve-file", { target: "/proj" }, 30_000)
     );
     expect((neverOpened as Error).name).toBe("AbortError");
     expect((neverOpened as Error).message).toBe(
