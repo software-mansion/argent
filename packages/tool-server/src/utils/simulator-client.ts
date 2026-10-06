@@ -310,27 +310,15 @@ export async function sendCommand(
     if (conn.ws.readyState === WebSocket.OPEN) write();
     else conn.ws.once("open", write);
   });
-  const screen = typeof targeted.screen === "number" ? targeted.screen : undefined;
-  return {
-    ...(screen !== undefined ? { screen } : {}),
-    ...(warning !== undefined ? { warning } : {}),
-  };
+  return warning !== undefined ? { warning } : {};
 }
 
 /**
- * What `sendCommand` reports back besides delivery, over the local
- * simulator-server (the MoQ transport reports nothing): the screen a command
- * went to, when it went to one, so a caller can name it on the touches that
- * follow; and on a foldable, a warning when the panel a touch should name
- * could not be resolved and it went to the main screen. Empty for a command
- * that went to no screen.
- *
- * A touch that names its screen neither reads nor records the sequence's
- * screen (see {@link withActiveScreen}), so a caller names one only after the
- * Up of the sequence that resolved it.
+ * What `sendCommand` reports back besides delivery: on a foldable, a warning
+ * when the panel a touch should name could not be resolved and it went to
+ * the main screen. Empty for every other device and command.
  */
 export interface SendCommandOutcome {
-  screen?: number;
   warning?: string;
 }
 
@@ -344,27 +332,21 @@ const gestureScreens = new WeakMap<SimulatorServerApi, number>();
  * The screen a touch is for, on a foldable. The simulator-server captures
  * every panel and follows none: a command that names no screen goes to
  * screen 1, the cover panel, which is black once the device is open. So on a
- * foldable every touch names the panel the guest renders to, unless the caller
- * named one, resolved at that moment (`utils/foldable.ts`): the accessibility
- * service's answer, where a main screen is checked against CoreDevice, whose
- * lit panel wins, and stands when it cannot be checked; else CoreDevice's; else
- * the main screen with a warning the tool carries. Touches are the only
- * screen-taking command the tool-server sends; the preview page names the
- * screen on its own touches and wheels.
+ * foldable every touch names the panel the guest renders to, resolved at that
+ * moment (`utils/foldable.ts`): the accessibility service's answer, else
+ * CoreDevice's, else the main screen with a warning the tool carries. Touches
+ * are the only screen-taking command the tool-server sends; the preview page
+ * names the screen on its own touches and wheels.
  *
  * A gesture completes on the panel it started on: a fold made outside argent
  * in the middle of a swipe would otherwise send the swipe's tail to the other
  * panel, leaving a finger down on the first and the next tap on the second
  * consumed by its lift. So the screen a `Down` resolved is kept for every
- * `Move` and the `Up` of that touch sequence, which resolve only when no
- * `Down` left a screen to keep.
+ * `Move` and the `Up` of that touch sequence, and only the `Down` resolves.
  *
  * `api.display` is set only when the device profile is foldable AND the server
  * reported its panels, so the payload of every other device is byte-identical
- * to what it was. A caller that already named a screen keeps it, and that
- * touch neither reads nor records the sequence's screen: gesture-tap names the
- * screen its first tap resolved on the taps after it, so a multi-tap asks for
- * the panel once.
+ * to what it was. A caller that already named a screen keeps it.
  */
 async function withActiveScreen(
   api: SimulatorServerApi,
@@ -546,18 +528,11 @@ export async function resolveCapturePanel(
     );
     return { screen: panel.screen, note, warning: note };
   }
-  // CoreDevice overruled the accessibility service, whose panel `describe`
-  // still reads its tree on: its frames are then not in this capture's space.
-  const space =
-    panel.treeScreen === undefined
-      ? "describe frames and touch coordinates are in the same space."
-      : "touch coordinates are in the same space, but describe reads its tree on " +
-        `${screenLabel(panel.treeScreen, api.display.panels)}, so its frames may not match this capture.`;
   return {
     screen: panel.screen,
     note:
       `This foldable simulator renders to ${screenLabel(panel.screen, api.display.panels)}, which ` +
-      `this capture shows; ${space}`,
+      "this capture shows; describe frames and touch coordinates are in the same space.",
   };
 }
 

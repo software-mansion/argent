@@ -45,7 +45,6 @@ import {
   DEVICECTL_TIMEOUT_MS,
   foldablePostureHint,
   holdLivePanel,
-  MAIN_SCREEN_CONFIRM_TIMEOUT_MS,
   panelForHingeAngle,
   parseDisplaysPayload,
   readCoreDeviceDisplays,
@@ -271,9 +270,6 @@ describe("readCoreDeviceDisplays", () => {
     expect((await readCoreDeviceDisplays(DUO)).reason).toBe(
       `CoreDevice did not answer within ${DEVICECTL_TIMEOUT_MS / 1000} s`
     );
-    expect((await readCoreDeviceDisplays(DUO, MAIN_SCREEN_CONFIRM_TIMEOUT_MS)).reason).toBe(
-      `CoreDevice did not answer within ${MAIN_SCREEN_CONFIRM_TIMEOUT_MS / 1000} s`
-    );
     execFileMock.mockImplementation((cmd: string) =>
       cmd === "xcode-select" ? { stdout: "/x\n" } : { stdout: "not json" }
     );
@@ -288,55 +284,12 @@ describe("readCoreDeviceDisplays", () => {
 });
 
 describe("resolveLivePanel", () => {
-  it("takes the ax-service's inner panel and asks CoreDevice nothing", async () => {
+  it("takes the ax-service's answer and asks CoreDevice nothing", async () => {
     livePanelMock.mockResolvedValue(3);
     mockDevicectl([duoPayload(1)]);
     expect(await resolveLivePanel(DUO)).toEqual({ screen: 3, source: "ax-service" });
     expect(providerMock).toHaveBeenCalledWith(DUO);
     expect(devicectlCalls()).toBe(0);
-  });
-
-  it("has CoreDevice confirm the ax-service's main screen, and takes the lit panel", async () => {
-    // Expo Go in front of the open Duo: the ax-service names the cover panel,
-    // which is dark, while the inner panel is lit.
-    livePanelMock.mockResolvedValue(1);
-    mockDevicectl([duoPayload(3)]);
-    expect(await resolveLivePanel(DUO)).toEqual({
-      screen: 3,
-      source: "coredevice",
-      treeScreen: 1,
-    });
-
-    // Closed: both name the cover panel.
-    mockDevicectl([duoPayload(1)]);
-    expect(await resolveLivePanel(DUO)).toEqual({ screen: 1, source: "coredevice" });
-    expect(devicectlCalls()).toBe(2);
-  });
-
-  it("keeps the ax-service's main screen when CoreDevice cannot confirm it", async () => {
-    livePanelMock.mockResolvedValue(1);
-    mockDevicectl([timeoutError()]);
-    expect(await resolveLivePanel(DUO)).toEqual({ screen: 1, source: "ax-service" });
-
-    // CoreDevice answers, but with no panel lit.
-    const unlit = duoPayload(1) as { result: { displays: Array<Record<string, unknown>> } };
-    for (const d of unlit.result.displays) d.backlightState = "off";
-    mockDevicectl([unlit]);
-    expect(await resolveLivePanel(DUO)).toEqual({ screen: 1, source: "ax-service" });
-    expect(devicectlCalls()).toBe(2);
-  });
-
-  it("gives the confirmation a shorter budget than a query in its own right", async () => {
-    const budgets = (): unknown[] =>
-      execFileMock.mock.calls
-        .filter(([c, a]) => isDevicectl(c, a))
-        .map(([, , opts]) => (opts as { timeout?: number }).timeout);
-    mockDevicectl([duoPayload(3)]);
-    livePanelMock.mockResolvedValue(1);
-    await resolveLivePanel(DUO);
-    livePanelMock.mockResolvedValue(null);
-    await resolveLivePanel(DUO);
-    expect(budgets()).toEqual([MAIN_SCREEN_CONFIRM_TIMEOUT_MS, DEVICECTL_TIMEOUT_MS]);
   });
 
   it("asks CoreDevice when the ax-service names no panel, fails, or is not wired in", async () => {
@@ -385,7 +338,6 @@ describe("resolveLivePanel", () => {
 
   it("remembers nothing: every call asks again", async () => {
     livePanelMock.mockResolvedValueOnce(1).mockResolvedValueOnce(3);
-    mockDevicectl([duoPayload(1)]);
     expect((await resolveLivePanel(DUO)).screen).toBe(1);
     expect((await resolveLivePanel(DUO)).screen).toBe(3);
     expect(livePanelMock).toHaveBeenCalledTimes(2);
@@ -406,7 +358,6 @@ describe("resolveLivePanel", () => {
     expect((await other).screen).toBe(3);
     // Landed: the next call reads anew.
     livePanelMock.mockResolvedValue(1);
-    mockDevicectl([duoPayload(1)]);
     expect((await resolveLivePanel(DUO)).screen).toBe(1);
   });
 });
@@ -414,7 +365,6 @@ describe("resolveLivePanel", () => {
 describe("awaitLivePanel", () => {
   it("polls until a read satisfies the predicate", async () => {
     livePanelMock.mockResolvedValueOnce(1).mockResolvedValueOnce(1).mockResolvedValue(3);
-    mockDevicectl([duoPayload(1)]);
     const panel = await awaitLivePanel(DUO, (screen) => screen === 3, {
       timeoutMs: 2_000,
       pollMs: 5,
@@ -425,9 +375,8 @@ describe("awaitLivePanel", () => {
 
   it("answers with the last panel read when the predicate never holds", async () => {
     livePanelMock.mockResolvedValue(1);
-    mockDevicectl([duoPayload(1)]);
     const panel = await awaitLivePanel(DUO, () => false, { timeoutMs: 40, pollMs: 5 });
-    expect(panel).toEqual({ screen: 1, source: "coredevice" });
+    expect(panel).toEqual({ screen: 1, source: "ax-service" });
   });
 
   it("is null only when nothing resolved the panel", async () => {
@@ -438,7 +387,6 @@ describe("awaitLivePanel", () => {
 
   it("stops at an abort with what it read so far", async () => {
     livePanelMock.mockResolvedValue(1);
-    mockDevicectl([duoPayload(1)]);
     const controller = new AbortController();
     const wait = awaitLivePanel(DUO, () => false, {
       timeoutMs: 5_000,
@@ -447,7 +395,7 @@ describe("awaitLivePanel", () => {
     });
     await new Promise((r) => setTimeout(r, 15));
     controller.abort();
-    expect(await wait).toEqual({ screen: 1, source: "coredevice" });
+    expect(await wait).toEqual({ screen: 1, source: "ax-service" });
   });
 
   it("keeps its budget as wall clock when both sources hang", async () => {
@@ -479,7 +427,6 @@ describe("holdLivePanel", () => {
       .mockResolvedValueOnce(3)
       .mockResolvedValueOnce(1)
       .mockResolvedValue(1);
-    mockDevicectl([duoPayload(1)]);
     const started = Date.now();
     const panel = await holdLivePanel(DUO, { screen: 3, source: "ax-service" }, 40, {
       pollMs: 5,
@@ -491,7 +438,6 @@ describe("holdLivePanel", () => {
   it("bounds the restarts", async () => {
     let flip = 1;
     livePanelMock.mockImplementation(async () => (flip = flip === 1 ? 3 : 1));
-    mockDevicectl([duoPayload(1)]);
     const started = Date.now();
     await holdLivePanel(DUO, initial, 30, { pollMs: 5, maxMs: 80 });
     expect(Date.now() - started).toBeLessThan(400);

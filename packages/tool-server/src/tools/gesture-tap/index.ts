@@ -151,10 +151,6 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     }
     const api = services.simulatorServer as SimulatorServerApi;
     let warning: string | undefined;
-    // On a foldable the first Down resolves the panel and the later taps name
-    // it, so no tap after the first waits on a panel query inside the
-    // double-tap window. Unset on every other device, whose payload is unchanged.
-    let screen: number | undefined;
     for (let i = 1; i <= clickCount; i++) {
       if (i > 1) await sleep(MULTI_TAP_GAP_MS);
       const down = await sendCommand(api, {
@@ -164,7 +160,6 @@ Before tapping, determine the correct coordinates by using discovery tools — p
         y: params.y,
         second_x: null,
         second_y: null,
-        ...(screen !== undefined ? { screen } : {}),
       });
       warning ??= down.warning;
       await sleep(TAP_HOLD_MS);
@@ -175,10 +170,7 @@ Before tapping, determine the correct coordinates by using discovery tools — p
         y: params.y,
         second_x: null,
         second_y: null,
-        ...(screen !== undefined ? { screen } : {}),
       });
-      // Taken after the first Up, which ends the sequence its Down resolved.
-      screen ??= down.screen;
     }
     return { tapped: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
   },

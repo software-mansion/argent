@@ -20,25 +20,17 @@ const execFileAsync = promisify(execFile);
  * {@link resolveLivePanel} asks two sources in turn:
  *
  * 1. The ax-service, the daemon the `describe` tool reads the accessibility
- *    tree through. Its `live_panel` command names the display of the front
- *    app's window, the panel it reads a tree on, in a few milliseconds. A
- *    device whose daemon is not running yet gets it started, as a describe
- *    would; a daemon build that predates the command answers an error, and the
- *    next source is asked.
+ *    tree through. Its `live_panel` command names the panel it reads a tree
+ *    on, in a few milliseconds. A device whose daemon is not running yet gets
+ *    it started, as a describe would; a daemon build that predates the command
+ *    answers an error, and the next source is asked.
  * 2. One CoreDevice query, `devicectl device info displays`, which reports
  *    the panel that is lit, in about 100 ms.
  *
- * Both agree in every posture measured on the Duo with the home screen, a
- * system app, or a UIKit, SwiftUI or bare React Native app in front; the
- * ax-service sees a hand-over about 180 ms earlier. With Expo Go or an Expo
- * development build in front of the open Duo they do not: the window the
- * ax-service goes by is on the main screen, so it names that panel while the
- * main screen is dark and the inner panel is lit. The main screen is
- * therefore the one answer the ax-service does not give alone: CoreDevice
- * confirms it within {@link MAIN_SCREEN_CONFIRM_TIMEOUT_MS}, and the panel it
- * reports lit wins; when it cannot, the main screen stands, without a warning.
- * Any other panel is taken as the ax-service names it. When neither answers,
- * the answer is the main screen with the reason, and the caller says so.
+ * Both agree in every posture and foreground state measured on the Duo (an
+ * app in front, the home screen, a system app); the ax-service sees a
+ * hand-over about 180 ms earlier. When neither answers, the answer is the
+ * main screen with the reason, and the caller says so.
  *
  * Each source has a hard timeout, and a read in flight is shared by everyone
  * who asks for the same device meanwhile, so a gesture and the capture right
@@ -60,12 +52,10 @@ export interface FoldablePanel {
 /**
  * The panel the device renders to, and which source said so. `unknown` is the
  * fall-back to the main screen when neither source answered; `reason` says why,
- * for the warning the caller carries. `treeScreen` is set when CoreDevice
- * overruled the ax-service: the panel the ax-service named, which `describe`
- * reads its tree on although it is not the one captured and touched.
+ * for the warning the caller carries.
  */
 export type LivePanel =
-  | { screen: number; source: "ax-service" | "coredevice"; treeScreen?: number }
+  | { screen: number; source: "ax-service" | "coredevice" }
   | { screen: typeof MAIN_SCREEN_ID; source: "unknown"; reason: string };
 
 /**
@@ -85,21 +75,10 @@ interface LivePanelSource {
 export const AX_LIVE_PANEL_TIMEOUT_MS = 2_000;
 
 /**
- * How long a CoreDevice query asked in its own right may take, when the
- * ax-service named no panel; a confirmation gets
- * {@link MAIN_SCREEN_CONFIRM_TIMEOUT_MS}. Measured at ~100 ms on the Duo; the
+ * How long one CoreDevice query may take. Measured at ~100 ms on the Duo; the
  * budget is for a CoreDevice that is not answering, not for normal latency.
  */
 export const DEVICECTL_TIMEOUT_MS = 5_000;
-
-/**
- * How long CoreDevice gets to confirm the ax-service's main screen. Shorter
- * than {@link DEVICECTL_TIMEOUT_MS}: the ax-service has already answered, and
- * this read runs on every action on a closed device, so a CoreDevice that is
- * not answering costs each of those this much before the ax-service's answer
- * stands, not the whole query budget.
- */
-export const MAIN_SCREEN_CONFIRM_TIMEOUT_MS = 1_000;
 
 /**
  * The hand-over lands 1.5-2 s after a hinge sweep, longer when the guest is
@@ -120,11 +99,10 @@ const SETTLE_POLL_MS = 200;
  * ~250 ms of that read, with or without a hand-over, while one that ends at
  * any other angle (half-open included, and 30° on the cover panel) drops
  * every tap for 0.4-0.8 s more, up to ~1.2 s after the sweep, again whether
- * or not the panel changed. The ax-service, the usual source for the inner
- * panel, reports a hand-over to it about 180 ms before CoreDevice does, so the
- * holds carry that much more; a hand-over to the cover panel is CoreDevice's
- * to confirm. The fold tool holds the matching time before it answers, so the
- * next command lands.
+ * or not the panel changed. The ax-service, the usual source now, reports a
+ * hand-over about 180 ms before CoreDevice does, so the holds carry that much
+ * more. The fold tool holds the matching time before it answers, so the next
+ * command lands.
  */
 export const INPUT_READY_HOLD_MS = 700;
 export const INPUT_READY_HOLD_MID_ANGLE_MS = 1_700;
@@ -289,14 +267,11 @@ function firstLine(err: unknown): string {
 }
 
 /**
- * One CoreDevice query, killed after `timeoutMs`. Null, with the reason, on
- * any failure: a missing binary, a timeout, a device CoreDevice does not know,
- * or a payload with no lit integrated panel.
+ * One CoreDevice query. Null, with the reason, on any failure: a missing
+ * binary, a timeout, a device CoreDevice does not know, or a payload with no
+ * lit integrated panel.
  */
-export async function readCoreDeviceDisplays(
-  udid: string,
-  timeoutMs: number = DEVICECTL_TIMEOUT_MS
-): Promise<{
+export async function readCoreDeviceDisplays(udid: string): Promise<{
   displays: { activeScreen: number; panels: FoldablePanel[] } | null;
   reason?: string;
 }> {
@@ -315,7 +290,7 @@ export async function readCoreDeviceDisplays(
   try {
     ({ stdout } = await execFileAsync(bin, argv, {
       env,
-      timeout: timeoutMs,
+      timeout: DEVICECTL_TIMEOUT_MS,
       killSignal: "SIGKILL",
       maxBuffer: 4 * 1024 * 1024,
     }));
@@ -324,7 +299,7 @@ export async function readCoreDeviceDisplays(
     return {
       displays: null,
       reason: timedOut
-        ? `CoreDevice did not answer within ${timeoutMs / 1000} s`
+        ? `CoreDevice did not answer within ${DEVICECTL_TIMEOUT_MS / 1000} s`
         : `CoreDevice failed (${firstLine(err)})`,
     };
   }
@@ -361,34 +336,18 @@ async function askAxService(udid: string): Promise<number | string> {
 
 async function resolveLivePanelUncached(udid: string): Promise<LivePanel> {
   const ax = await askAxService(udid);
-  // The main screen is the ax-service's one answer CoreDevice has to confirm
-  // (see the module comment); any other panel is taken as named.
-  if (typeof ax === "number" && ax !== MAIN_SCREEN_ID) return { screen: ax, source: "ax-service" };
-  const { displays, reason } = await readCoreDeviceDisplays(
-    udid,
-    typeof ax === "number" ? MAIN_SCREEN_CONFIRM_TIMEOUT_MS : DEVICECTL_TIMEOUT_MS
-  );
-  if (displays) {
-    const overruled = typeof ax === "number" && ax !== displays.activeScreen;
-    return {
-      screen: displays.activeScreen,
-      source: "coredevice",
-      ...(overruled ? { treeScreen: ax } : {}),
-    };
-  }
-  // Unconfirmed, the ax-service's main screen stands without a warning: it is
-  // still a panel a source named, only one CoreDevice could not check.
   if (typeof ax === "number") return { screen: ax, source: "ax-service" };
+  const { displays, reason } = await readCoreDeviceDisplays(udid);
+  if (displays) return { screen: displays.activeScreen, source: "coredevice" };
   return { screen: MAIN_SCREEN_ID, source: "unknown", reason: `${ax}; ${reason}` };
 }
 
 /**
  * The panel the device renders to, right now: the ax-service's answer, else
- * CoreDevice's, else the main screen with the reason — a main screen the
- * ax-service names is CoreDevice's to confirm (see the module comment). One
- * read per device at a time: a caller that asks while one is in flight shares
- * its answer, so a source that is not answering has at most one query hanging
- * on it per device, whatever polls.
+ * CoreDevice's, else the main screen with the reason (see the module
+ * comment). One read per device at a time: a caller that asks while one is
+ * in flight shares its answer, so a source that is not answering has at most
+ * one query hanging on it per device, whatever polls.
  */
 export function resolveLivePanel(udid: string): Promise<LivePanel> {
   const pending = inFlight.get(udid);

@@ -8,7 +8,6 @@ import {
   sendCommand,
 } from "../src/utils/simulator-client";
 import { __resetFoldableStateForTests, setLivePanelSourceProvider } from "../src/utils/foldable";
-import { gestureTapTool } from "../src/tools/gesture-tap";
 
 const execFileMock = vi.fn();
 vi.mock("node:child_process", async () => {
@@ -36,7 +35,7 @@ const PANELS = [
   { screenId: 3, width: 2007, height: 2853 },
 ];
 
-/** CoreDevice reporting the given panel lit and `active`, the other dark. */
+/** CoreDevice reporting `active` for the given panel. */
 function mockActivePanel(active: 1 | 3 | null): void {
   execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
     if (cmd === "xcode-select") return { stdout: "/Applications/Xcode.app/Contents/Developer\n" };
@@ -47,7 +46,6 @@ function mockActivePanel(active: 1 | 3 | null): void {
           result: {
             displays: PANELS.map((p) => ({
               active: p.screenId === active,
-              backlightState: p.screenId === active ? "activeOn" : "off",
               displayId: p.screenId,
               nativeSize: [p.width, p.height],
               type: { integrated: {} },
@@ -146,7 +144,7 @@ describe("sendCommand on a foldable", () => {
     try {
       livePanelMock.mockResolvedValue(3);
       const api = foldableApi(server.port);
-      expect(await sendCommand(api, TOUCH)).toEqual({ screen: 3 });
+      expect(await sendCommand(api, TOUCH)).toEqual({});
       await sendCommand(api, { cmd: "key", direction: "Down", code: 4 });
       await sendCommand(api, { cmd: "rotate", direction: "Portrait" });
       expect(server.received.map((m) => [m.cmd, m.screen])).toEqual([
@@ -167,7 +165,7 @@ describe("sendCommand on a foldable", () => {
       const api = foldableApi(server.port);
       livePanelMock.mockResolvedValue(null);
       mockActivePanel(3);
-      expect(await sendCommand(api, TOUCH)).toEqual({ screen: 3 });
+      expect(await sendCommand(api, TOUCH)).toEqual({});
       expect(server.received[0]!.screen).toBe(3);
 
       // A device left open, and nothing to say so: the cover panel, and the
@@ -177,7 +175,7 @@ describe("sendCommand on a foldable", () => {
       expect(server.received[1]!.screen).toBe(3); // the sequence's Down chose it
       const fresh = await sendCommand(api, TOUCH);
       expect(server.received[2]!.screen).toBe(1);
-      expect(outcome).toEqual({ screen: 3 });
+      expect(outcome).toEqual({});
       expect(fresh.warning).toContain("could not be resolved");
       expect(fresh.warning).toContain("the accessibility service could not name the panel");
       expect(fresh.warning).toContain("this touch went to screen 1 (cover panel, 1398x2034)");
@@ -195,7 +193,6 @@ describe("sendCommand on a foldable", () => {
       await sendCommand(api, TOUCH);
       // A fold made outside argent mid-swipe.
       livePanelMock.mockResolvedValue(1);
-      mockActivePanel(1);
       await sendCommand(api, { ...TOUCH, type: "Move", y: 0.4 });
       await sendCommand(api, { ...TOUCH, type: "Up", y: 0.3 });
       // The next touch sequence starts on the panel the device renders to now.
@@ -208,42 +205,6 @@ describe("sendCommand on a foldable", () => {
       ]);
       // Only the two Downs resolved.
       expect(livePanelMock).toHaveBeenCalledTimes(2);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("sends the touch to the lit inner panel when the ax-service names the dark cover panel", async () => {
-    // Expo Go in front of the open Duo.
-    const server = await startWs();
-    try {
-      livePanelMock.mockResolvedValue(1);
-      mockActivePanel(3);
-      expect(await sendCommand(foldableApi(server.port), TOUCH)).toEqual({ screen: 3 });
-      expect(server.received[0]!.screen).toBe(3);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("resolves the panel once for a multi-tap and names it on the later taps", async () => {
-    // Expo Go in front of the open Duo: every resolution costs a CoreDevice query.
-    const server = await startWs();
-    try {
-      livePanelMock.mockResolvedValue(1);
-      mockActivePanel(3);
-      const services = { simulatorServer: foldableApi(server.port) } as never;
-      await gestureTapTool.execute(services, { udid: DUO, x: 0.5, y: 0.5, clickCount: 3 });
-      expect(livePanelMock).toHaveBeenCalledTimes(1);
-      expect(execFileMock.mock.calls.filter(([cmd]) => cmd !== "xcode-select")).toHaveLength(1);
-      expect(server.received.map((m) => [m.type, m.screen])).toEqual([
-        ["Down", 3],
-        ["Up", 3],
-        ["Down", 3],
-        ["Up", 3],
-        ["Down", 3],
-        ["Up", 3],
-      ]);
     } finally {
       await server.close();
     }
@@ -324,19 +285,6 @@ describe("resolveCapturePanel", () => {
     expect(panel).not.toHaveProperty("warning");
     expect(await resolveCapturePanel(apiFor(4949, { deviceId: DUO }))).toBeUndefined();
     expect(livePanelMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("captures the lit inner panel when the ax-service names the dark cover panel", async () => {
-    livePanelMock.mockResolvedValue(1);
-    mockActivePanel(3);
-    const panel = await resolveCapturePanel(foldableApi(4949));
-    expect(panel?.screen).toBe(3);
-    expect(panel?.note).toContain("renders to screen 3 (inner panel, 2007x2853)");
-    // `describe` still reads the panel the ax-service named, and the note says so.
-    expect(panel?.note).toContain(
-      "describe reads its tree on screen 1 (cover panel, 1398x2034), so its frames may not match"
-    );
-    expect(panel).not.toHaveProperty("warning");
   });
 
   it("says why the capture is of the main screen when nothing resolved the panel", async () => {
