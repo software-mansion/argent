@@ -64,6 +64,10 @@ export type {
   ClientResponseBody,
   ResolveFileArgs,
   ResolveFileAnswer,
+  ReadFileArgs,
+  ReadFileAnswer,
+  WriteFileArgs,
+  WriteFileAnswer,
 } from "./client-services";
 export { parseURN } from "./urn";
 export {

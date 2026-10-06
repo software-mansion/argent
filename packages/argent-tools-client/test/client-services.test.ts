@@ -38,7 +38,7 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-const ALL: ClientServiceOp[] = ["resolve-file"];
+const ALL: ClientServiceOp[] = ["resolve-file", "read-file", "write-file"];
 
 async function handlerFor(roots: string[], advertised: ClientServiceOp[] = ALL) {
   const handler = await createClientServicesHandler({ roots, advertised });
@@ -65,12 +65,14 @@ describe("createClientServicesHandler", () => {
   it("realpaths the roots, drops a missing one and offers the implemented ops in order", async () => {
     const linkToProject = path.join(tmpDir, "proj-link");
     await fs.symlink(projectDir, linkToProject);
+    // Advertised out of order, with an op this client does not implement
+    // (run-script) and without one it does (read-file).
     const handler = await handlerFor(
       [linkToProject, path.join(tmpDir, "nope")],
-      ["read-file", "resolve-file"]
+      ["write-file", "run-script", "resolve-file"]
     );
     expect(handler.param).toEqual({
-      ops: ["resolve-file"],
+      ops: ["resolve-file", "write-file"],
       roots: [projectDir],
     });
   });
@@ -80,7 +82,7 @@ describe("createClientServicesHandler", () => {
       await createClientServicesHandler({ roots: [path.join(tmpDir, "nope")], advertised: ALL })
     ).toBeNull();
     expect(
-      await createClientServicesHandler({ roots: [projectDir], advertised: ["read-file"] })
+      await createClientServicesHandler({ roots: [projectDir], advertised: ["run-script"] })
     ).toBeNull();
     expect(await createClientServicesHandler({ roots: [projectDir], advertised: [] })).toBeNull();
   });
@@ -380,6 +382,419 @@ describe("resolve-file", () => {
     expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
       `[client-services] resolve-file ${path.join(flowsDir, "frag.yaml")}\n`,
     ]);
+  });
+});
+
+describe("read-file and write-file", () => {
+  // Where the tool-server puts a baseline: beside the root flow's real file.
+  let keyDir: string;
+  let baseline: string;
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+  beforeEach(() => {
+    keyDir = path.join(flowsDir, "__baselines__", "login");
+    baseline = path.join(keyDir, "home__ios-390x844.png");
+  });
+
+  function fileLine(
+    op: "read-file" | "write-file",
+    args: Record<string, unknown>
+  ): ClientRequestLine {
+    return { event: "client-request", invocation: "inv-1", id: "req-1", op, args };
+  }
+  const readLine = (file: unknown) => fileLine("read-file", { path: file });
+  const writeLine = (file: unknown, bytes: Buffer) =>
+    fileLine("write-file", { path: file, content: bytes.toString("base64") });
+
+  const outsideError = (file: string, roots = [projectDir]) =>
+    `${file} is outside every root this client serves (${roots.join(", ")})`;
+  const notBaselineError = (file: string) =>
+    `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
+    `this client writes baselines only`;
+
+  async function exists(file: string): Promise<boolean> {
+    return fs.lstat(file).then(
+      () => true,
+      () => false
+    );
+  }
+
+  it("answers exists:false for a missing baseline", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: true,
+      exists: false,
+    });
+  });
+
+  it("reads a baseline as base64 with its size", async () => {
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.writeFile(baseline, PNG);
+    const st = await fs.stat(baseline);
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: true,
+      exists: true,
+      size: PNG.length,
+      mtimeMs: st.mtimeMs,
+      content: PNG.toString("base64"),
+    });
+  });
+
+  it("refuses a read outside the roots", async () => {
+    const outside = path.join(tmpDir, "outside.png");
+    await fs.writeFile(outside, PNG);
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(readLine(outside))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: outsideError(outside),
+    });
+  });
+
+  it("refuses a read through a symlink that leaves the roots", async () => {
+    const elsewhere = path.join(tmpDir, "elsewhere");
+    await fs.mkdir(elsewhere);
+    await fs.writeFile(path.join(elsewhere, "real.png"), PNG);
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(elsewhere, "real.png"), baseline);
+    // A whole `__baselines__` directory that leads out, too.
+    const otherFlows = path.join(projectDir, "other-flows");
+    await fs.mkdir(otherFlows);
+    await fs.symlink(elsewhere, path.join(otherFlows, "__baselines__"));
+    const throughDir = path.join(otherFlows, "__baselines__", "real.png");
+    const handler = await handlerFor([projectDir]);
+
+    for (const file of [baseline, throughDir]) {
+      const answer = await handler.handle(readLine(file));
+      expect(answer).toEqual({ id: "req-1", ok: false, error: outsideError(file) });
+      // Where it points is the client's business: the server only learns "outside".
+      expect((answer as { error: string }).error).not.toContain(elsewhere);
+    }
+  });
+
+  it("refuses a read of a .png name that links to another kind of file", async () => {
+    await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(projectDir, ".env"), baseline);
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `${baseline} links to a file that is not a PNG file`,
+    });
+  });
+
+  it("refuses a .mjs read and a .yaml read", async () => {
+    await fs.writeFile(path.join(flowsDir, "helper.mjs"), "export default 1;\n");
+    const handler = await handlerFor([projectDir]);
+
+    // Both exist inside the root: read-file serves baselines, not flows.
+    for (const file of [path.join(flowsDir, "helper.mjs"), path.join(flowsDir, "frag.yaml")]) {
+      expect(await handler.handle(readLine(file))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: `${file} is not a .png file; this client serves snapshot baselines only`,
+      });
+    }
+  });
+
+  it("refuses a read with a .. segment, a relative path and a non-string path", async () => {
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.writeFile(baseline, PNG);
+    const handler = await handlerFor([projectDir]);
+
+    // The `..` path names the existing baseline inside the root: it is the
+    // form that is refused. (path.join would fold the `..` away.)
+    const dotted = [keyDir, "..", "login", path.basename(baseline)].join(path.sep);
+    const relative = path.join(".argent", "flows", "__baselines__", "login", "x.png");
+    for (const file of [dotted, relative, 1]) {
+      expect(await handler.handle(readLine(file))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: "read-file needs an absolute path with no .. segment",
+      });
+    }
+  });
+
+  it("names a directory as a host read would", async () => {
+    await fs.mkdir(path.join(keyDir, "dir.png"), { recursive: true });
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(readLine(path.join(keyDir, "dir.png")))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: "EISDIR: illegal operation on a directory, read",
+    });
+  });
+
+  it("refuses a read above 32 MiB", async () => {
+    // A sparse file: only the size matters, and APFS writes no data for a hole.
+    await fs.mkdir(keyDir, { recursive: true });
+    const fh = await fs.open(baseline, "w");
+    await fh.truncate(CLIENT_CONTENT_CAP_BYTES + 1);
+    await fh.close();
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `${baseline} is larger than the 32 MiB cap on a file sent to the tool-server`,
+    });
+  });
+
+  it("refuses a write outside __baselines__", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    for (const file of [
+      path.join(projectDir, ".argent", "flows", "x.yaml"),
+      path.join(projectDir, ".argent", "flows", "x.png"),
+      // No `<flow>` directory between `__baselines__` and the file.
+      path.join(flowsDir, "__baselines__", "x.png"),
+      // The right directory, the wrong kind of file.
+      path.join(keyDir, "x.yaml"),
+    ]) {
+      expect(await handler.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: notBaselineError(file),
+      });
+      expect(await exists(file)).toBe(false);
+    }
+    expect(await exists(path.join(flowsDir, "__baselines__"))).toBe(false);
+  });
+
+  it("refuses a write whose key is not a flow name", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    for (const key of ["a b", "a.b"]) {
+      const file = path.join(flowsDir, "__baselines__", key, "x.png");
+      expect(await handler.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: notBaselineError(file),
+      });
+    }
+    expect(await exists(path.join(flowsDir, "__baselines__"))).toBe(false);
+  });
+
+  it("refuses a write with a .. segment, a relative path and non-string args", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    // The `..` path lands on a valid baseline inside the root: it is the form
+    // that is refused.
+    const dotted = [flowsDir, "other", "..", "__baselines__", "login", "x.png"].join(path.sep);
+    const relative = path.join(".argent", "flows", "__baselines__", "login", "x.png");
+    for (const file of [dotted, relative]) {
+      expect(await handler.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: notBaselineError(file),
+      });
+    }
+    expect(await exists(path.join(flowsDir, "__baselines__"))).toBe(false);
+
+    for (const args of [{ path: baseline }, { path: 1, content: "" }, { content: "" }]) {
+      expect(await handler.handle(fileLine("write-file", args))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: "write-file needs string path and content",
+      });
+    }
+  });
+
+  it("refuses a write through a __baselines__ symlink that leaves the roots", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    await fs.symlink(outside, path.join(flowsDir, "__baselines__"));
+    const handler = await handlerFor([projectDir]);
+
+    const answer = await handler.handle(writeLine(baseline, PNG));
+
+    expect(answer).toEqual({ id: "req-1", ok: false, error: outsideError(baseline) });
+    expect((answer as { error: string }).error).not.toContain(outside);
+    // Fenced before the key directory is made: nothing was created out there.
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+
+  it("refuses a write through a baseline file that is a symlink out of the roots", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "real.png"), "old");
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(outside, "real.png"), baseline);
+    const handler = await handlerFor([projectDir]);
+
+    const answer = await handler.handle(writeLine(baseline, PNG));
+
+    expect(answer).toEqual({ id: "req-1", ok: false, error: outsideError(baseline) });
+    expect((answer as { error: string }).error).not.toContain(outside);
+    expect(await fs.readFile(path.join(outside, "real.png"), "utf8")).toBe("old");
+  });
+
+  it("refuses a write through a dangling baseline symlink out of the roots", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(outside, "planted.sh"), baseline);
+    const handler = await handlerFor([projectDir]);
+
+    const answer = await handler.handle(writeLine(baseline, PNG));
+
+    expect({ answer, outside: await fs.readdir(outside) }).toEqual({
+      answer: { id: "req-1", ok: false, error: `${baseline} is a symbolic link to a missing file` },
+      outside: [],
+    });
+  });
+
+  it("refuses a write through a dangling baseline symlink inside the roots", async () => {
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(projectDir, "missing.png"), baseline);
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `${baseline} is a symbolic link to a missing file`,
+    });
+    expect(await exists(path.join(projectDir, "missing.png"))).toBe(false);
+  });
+
+  it("refuses a write through a baseline that links to another kind of file", async () => {
+    await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(projectDir, ".env"), baseline);
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `${baseline} links to a file that is not a PNG file`,
+    });
+    expect(await fs.readFile(path.join(projectDir, ".env"), "utf8")).toBe("SECRET=1\n");
+  });
+
+  it("writes a baseline under a root that is the real location of a symlinked .argent/flows", async () => {
+    // The project keeps its flows in a tree outside it; the tools client sends
+    // the project and its `.argent/flows`, and the server names the baseline
+    // beside the root flow's REAL file.
+    const sharedFlows = path.join(tmpDir, "shared-flows");
+    await fs.mkdir(sharedFlows);
+    await fs.writeFile(path.join(sharedFlows, "login.yaml"), "steps: []\n");
+    const linkedProject = path.join(tmpDir, "linked-proj");
+    await fs.mkdir(path.join(linkedProject, ".argent"), { recursive: true });
+    await fs.symlink(sharedFlows, path.join(linkedProject, ".argent", "flows"));
+    const file = path.join(sharedFlows, "__baselines__", "login", "home.png");
+
+    const handler = await handlerFor([linkedProject, path.join(linkedProject, ".argent", "flows")]);
+    expect(handler.param.roots).toEqual([linkedProject, sharedFlows]);
+
+    expect(await handler.handle(writeLine(file, PNG))).toEqual({
+      id: "req-1",
+      ok: true,
+      written: file,
+    });
+    expect(await fs.readFile(file)).toEqual(PNG);
+
+    // The flows root is what admits it: the project alone does not reach there.
+    await fs.rm(path.join(sharedFlows, "__baselines__"), { recursive: true });
+    const projectOnly = await handlerFor([linkedProject]);
+    expect(await projectOnly.handle(writeLine(file, PNG))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: outsideError(file, [linkedProject]),
+    });
+    expect(await exists(path.join(sharedFlows, "__baselines__"))).toBe(false);
+  });
+
+  it("writes a baseline and creates the key directory", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
+      id: "req-1",
+      ok: true,
+      written: baseline,
+    });
+    expect(await fs.readFile(baseline)).toEqual(PNG);
+    // What was written reads back through read-file byte for byte.
+    expect(await handler.handle(readLine(baseline))).toMatchObject({
+      ok: true,
+      exists: true,
+      content: PNG.toString("base64"),
+    });
+  });
+
+  it("overwrites an existing baseline", async () => {
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.writeFile(baseline, Buffer.alloc(64, 7));
+    const handler = await handlerFor([projectDir]);
+
+    // Shorter than the old file, so a write that did not truncate would show.
+    expect(await handler.handle(writeLine(baseline, PNG))).toMatchObject({ ok: true });
+    expect(await fs.readFile(baseline)).toEqual(PNG);
+  });
+
+  it("refuses content over 32 MiB and writes content of exactly 32 MiB", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    expect(
+      await handler.handle(writeLine(baseline, Buffer.alloc(CLIENT_CONTENT_CAP_BYTES + 1)))
+    ).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `${baseline} is larger than the 32 MiB cap on a file sent to the tool-server`,
+    });
+    // Refused before the key directory is made.
+    expect(await exists(path.join(flowsDir, "__baselines__"))).toBe(false);
+
+    expect(
+      await handler.handle(writeLine(baseline, Buffer.alloc(CLIENT_CONTENT_CAP_BYTES)))
+    ).toMatchObject({ ok: true, written: baseline });
+    expect((await fs.stat(baseline)).size).toBe(CLIENT_CONTENT_CAP_BYTES);
+  });
+
+  it("logs the op and the path, never the content, under ARGENT_CLIENT_SERVICES_LOG=1", async () => {
+    const handler = await handlerFor([projectDir]);
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await handler.handle(writeLine(baseline, PNG));
+    await handler.handle(readLine(baseline));
+    expect(write).not.toHaveBeenCalled();
+
+    vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "1");
+    await handler.handle(writeLine(baseline, PNG));
+    await handler.handle(readLine(baseline));
+
+    expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+      `[client-services] write-file ${baseline}\n`,
+      `[client-services] read-file ${baseline}\n`,
+    ]);
+  });
+
+  it("refuses read-file and write-file when the server did not advertise them", async () => {
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.writeFile(baseline, PNG);
+    const handler = await handlerFor([projectDir], ["resolve-file"]);
+    expect(handler.param.ops).toEqual(["resolve-file"]);
+
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: "op read-file is not served by this client",
+    });
+    const other = path.join(keyDir, "other.png");
+    expect(await handler.handle(writeLine(other, PNG))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: "op write-file is not served by this client",
+    });
+    expect(await exists(other)).toBe(false);
   });
 });
 

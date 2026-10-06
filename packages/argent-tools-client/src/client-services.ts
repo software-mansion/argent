@@ -5,27 +5,33 @@
  * NDJSON stream is answered through {@link ClientServicesHandler.handle}, and
  * the tools client posts the answer to `/invocations/:invocation/client-responses`.
  *
- * The handler decides what leaves this machine: it reads nothing outside the
- * roots the client itself sent (checked on real paths before any listing or
- * read), serves `.yaml` names of YAML files only, refuses a file above the
- * 32 MiB cap, and refuses an op it did not offer. A refusal does not say where
- * an outside path leads or whether it exists. The resolution itself is the
- * registry's `canonicalFlowPath` + `classifyOnDiskSpelling`, so a `run:` target
- * keeps its kernel meaning on the machine that has the files.
+ * The handler decides what leaves and enters this machine: it reads and writes
+ * nothing outside the roots the client itself sent (checked on real paths
+ * before any listing, read or write), serves `.yaml` names of YAML files and
+ * `.png` names of PNG files only, writes a snapshot baseline only into a
+ * `__baselines__/<flow>/` directory, refuses a file above the 32 MiB cap, and
+ * refuses an op it did not offer. A refusal does not say where an outside path
+ * leads or whether it exists. The resolution itself is the registry's
+ * `canonicalFlowPath` + `classifyOnDiskSpelling`, so a `run:` target keeps its
+ * kernel meaning on the machine that has the files.
  */
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import {
+  CLIENT_CONTENT_CAP_BYTES,
   FLOW_FILE_NAME_PATTERN,
+  FLOW_NAME_PATTERN,
   canonicalFlowPath,
   classifyOnDiskSpelling,
   type ClientRequestLine,
   type ClientResponseBody,
   type ClientServiceOp,
   type ClientServicesParam,
+  type ReadFileAnswer,
   type ResolveFileAnswer,
+  type WriteFileAnswer,
 } from "@argent/registry";
 
 import { readFileInputWire } from "./file-inputs.js";
@@ -38,7 +44,7 @@ export interface ClientServicesHandler {
 }
 
 /** The ops this client serves, in the order they are offered. */
-const IMPLEMENTED_OPS: readonly ClientServiceOp[] = ["resolve-file"];
+const IMPLEMENTED_OPS: readonly ClientServiceOp[] = ["resolve-file", "read-file", "write-file"];
 
 const LOG_ENV = "ARGENT_CLIENT_SERVICES_LOG";
 
@@ -84,6 +90,49 @@ function isInsideRoots(resolved: string | null, roots: readonly string[]): boole
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function tooLarge(file: string): string {
+  return `${file} is larger than the 32 MiB cap on a file sent to the tool-server`;
+}
+
+/**
+ * Read a file the fence already admitted, as the wire answer: the file when
+ * it is there, `exists: false` when nothing is, or a refusal that names what
+ * a host read would name (EISDIR, EACCES, the size cap).
+ */
+async function readAdmitted(
+  file: string
+): Promise<{ refusal: string } | { answer: ReadFileAnswer }> {
+  const read = await readFileInputWire(file, { includeContent: true });
+  if (read === null) {
+    // The wire read answers null for a directory and for any stat error;
+    // only a missing file is the "no such file" answer. Anything else is
+    // named as a host read would name it.
+    const reason = await fs.stat(file).then(
+      (st) => (st.isDirectory() ? "EISDIR: illegal operation on a directory, read" : null),
+      (err: NodeJS.ErrnoException) => (err.code === "ENOENT" ? null : err.message)
+    );
+    return reason === null ? { answer: { exists: false } } : { refusal: reason };
+  }
+  if (read.contentOmitted) return { refusal: tooLarge(file) };
+  if (read.content === undefined) {
+    // The wire read keeps no error; read once more for the one a host read
+    // would report (EACCES and the like).
+    const reason = await fs.readFile(file).then(
+      () => `${file} could not be read on this client`,
+      (err: unknown) => (err instanceof Error ? err.message : String(err))
+    );
+    return { refusal: reason };
+  }
+  return {
+    answer: { exists: true, size: read.size, mtimeMs: read.mtimeMs, content: read.content },
+  };
+}
+
+/** An absolute path with no `..` segment: the only form a server builds for a file op. */
+function isPlainAbsolute(file: string): boolean {
+  return path.isAbsolute(file) && !file.split(/[\\/]/).includes("..");
 }
 
 /**
@@ -157,42 +206,81 @@ export async function createClientServicesHandler(opts: {
     );
     logRequest("resolve-file", canonical);
 
-    const read = await readFileInputWire(canonical, { includeContent: true });
-    if (read === null) {
-      // The wire read answers null for a directory and for any stat error;
-      // only a missing file is the "no such fragment" answer. Anything else is
-      // named as a host read would name it.
-      const reason = await fs.stat(canonical).then(
-        (st) => (st.isDirectory() ? "EISDIR: illegal operation on a directory, read" : null),
-        (err: NodeJS.ErrnoException) => (err.code === "ENOENT" ? null : err.message)
-      );
-      if (reason !== null) return refuse(id, reason);
-      const answer: ResolveFileAnswer = { canonical, spelling, exists: false };
-      return { id, ok: true, ...answer };
+    const read = await readAdmitted(canonical);
+    if ("refusal" in read) return refuse(id, read.refusal);
+    const answer: ResolveFileAnswer = { canonical, spelling, ...read.answer };
+    return { id, ok: true, ...answer };
+  }
+
+  // A snapshot baseline, read as the server names it: the server built the
+  // path beside the root flow's real file, so there is nothing to resolve.
+  async function readFile(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
+    const file = args.path;
+    if (typeof file !== "string" || !isPlainAbsolute(file)) {
+      return refuse(id, "read-file needs an absolute path with no .. segment");
     }
-    if (read.contentOmitted) {
+    if (!file.endsWith(".png")) {
+      return refuse(id, `${file} is not a .png file; this client serves snapshot baselines only`);
+    }
+    const resolved = await resolveForFence(file);
+    if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
+    // A `.png` name that links to another kind of file (a `.env`) would send it.
+    if (!resolved!.endsWith(".png")) {
+      return refuse(id, `${file} links to a file that is not a PNG file`);
+    }
+    logRequest("read-file", file);
+    const read = await readAdmitted(file);
+    if ("refusal" in read) return refuse(id, read.refusal);
+    return { id, ok: true, ...read.answer };
+  }
+
+  // A new snapshot baseline. The only file the tool-server may write here, and
+  // only into a `__baselines__/<flow>/` directory under a root: the place a
+  // run with no link writes it, beside the root flow's real file.
+  async function writeFile(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
+    const { path: file, content } = args;
+    if (typeof file !== "string" || typeof content !== "string") {
+      return refuse(id, "write-file needs string path and content");
+    }
+    const keyDir = path.dirname(file);
+    if (
+      !isPlainAbsolute(file) ||
+      !file.endsWith(".png") ||
+      path.basename(path.dirname(keyDir)) !== "__baselines__" ||
+      !FLOW_NAME_PATTERN.test(path.basename(keyDir))
+    ) {
       return refuse(
         id,
-        `${canonical} is larger than the 32 MiB cap on a file sent to the tool-server`
+        `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
+          `this client writes baselines only`
       );
     }
-    if (read.content === undefined) {
-      // The wire read keeps no error; read once more for the one a host read
-      // would report (EACCES and the like).
-      const reason = await fs.readFile(canonical).then(
-        () => `${canonical} could not be read on this client`,
-        (err: unknown) => (err instanceof Error ? err.message : String(err))
-      );
-      return refuse(id, reason);
+    // Fenced before the directory is created, so a symlinked `__baselines__`
+    // that leads out of the roots gets no directory made there either.
+    if (!isInsideRoots(await resolveForFence(keyDir), roots)) {
+      return refuse(id, `${file} is ${outsideRoots}`);
     }
-    const answer: ResolveFileAnswer = {
-      canonical,
-      spelling,
-      exists: true,
-      size: read.size,
-      mtimeMs: read.mtimeMs,
-      content: read.content,
-    };
+    const bytes = Buffer.from(content, "base64");
+    if (bytes.length > CLIENT_CONTENT_CAP_BYTES) return refuse(id, tooLarge(file));
+    await fs.mkdir(keyDir, { recursive: true });
+    // Again on the file itself: a baseline that is a symlink writes through.
+    // A dangling one would create its target, wherever it points, and the
+    // fence cannot see where that is, so it is refused outright.
+    const isLink = await fs.lstat(file).then(
+      (st) => st.isSymbolicLink(),
+      () => false
+    );
+    if (isLink && (await fs.realpath(file).catch(() => null)) === null) {
+      return refuse(id, `${file} is a symbolic link to a missing file`);
+    }
+    const resolved = await resolveForFence(file);
+    if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
+    if (!resolved!.endsWith(".png")) {
+      return refuse(id, `${file} links to a file that is not a PNG file`);
+    }
+    logRequest("write-file", file);
+    await fs.writeFile(file, bytes);
+    const answer: WriteFileAnswer = { written: file };
     return { id, ok: true, ...answer };
   }
 
@@ -203,6 +291,8 @@ export async function createClientServicesHandler(opts: {
     try {
       if (!ops.includes(line.op)) return refuse(id, `op ${op} is not served by this client`);
       if (!isRecord(line.args)) return refuse(id, `${op} request carries no args object`);
+      if (line.op === "read-file") return await readFile(id, line.args);
+      if (line.op === "write-file") return await writeFile(id, line.args);
       return await resolveFile(id, line.args);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
