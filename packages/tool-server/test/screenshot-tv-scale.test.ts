@@ -24,10 +24,12 @@ vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
 }));
 
 const isAndroidTvMock = vi.fn<(serial: string) => Promise<boolean>>();
+const cachedKindMock = vi.fn<(serial: string) => "mobile" | "tv" | undefined>();
 const runAdbMock = vi.fn<(argv: string[]) => Promise<string>>();
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   isAndroidTv: (serial: string) => isAndroidTvMock(serial),
+  getCachedAndroidRuntimeKind: (serial: string) => cachedKindMock(serial),
   runAdb: (argv: string[]) => runAdbMock(argv),
 }));
 const screenSizeMock = vi.fn<(serial: string) => Promise<{ width: number; height: number }>>();
@@ -163,6 +165,7 @@ describe("screenshot tool on an Android TV", () => {
 
   beforeEach(() => {
     isAndroidTvMock.mockReset().mockResolvedValue(true);
+    cachedKindMock.mockReset().mockReturnValue(undefined);
     screenSizeMock.mockReset().mockResolvedValue({ width: 1920, height: 1080 });
   });
   afterEach(() => {
@@ -207,6 +210,18 @@ describe("screenshot tool on an Android TV", () => {
     isAndroidTvMock.mockResolvedValue(false);
     expect(await requestedScale({})).toBe(0.25);
     expect(screenSizeMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the TV probe on a phone the runtime-kind cache already knows", async () => {
+    cachedKindMock.mockReturnValue("mobile");
+    expect(await requestedScale({})).toBe(0.25);
+    expect(isAndroidTvMock).not.toHaveBeenCalled();
+  });
+
+  it("probes a serial the cache last saw as a TV", async () => {
+    cachedKindMock.mockReturnValue("tv");
+    expect(await requestedScale({})).toBeCloseTo(0.3, 10);
+    expect(isAndroidTvMock).toHaveBeenCalledWith("emulator-5556");
   });
 
   it("falls back to the 0.25 default when the display size probe fails", async () => {

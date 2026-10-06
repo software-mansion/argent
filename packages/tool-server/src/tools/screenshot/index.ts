@@ -21,7 +21,7 @@ import {
   TV_DEFAULT_LONG_SIDE,
   tvDefaultScale,
 } from "../../utils/simulator-client";
-import { isAndroidTv } from "../../utils/adb";
+import { getCachedAndroidRuntimeKind, isAndroidTv } from "../../utils/adb";
 import { getAndroidScreenSize } from "../../utils/android-screen";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
@@ -194,7 +194,13 @@ export async function tvTargetLongSide(file: string, scale: number | undefined):
  * fails, which leaves the capture at the general default rather than failing it.
  */
 async function androidTvDefaultScale(serial: string): Promise<number | undefined> {
-  if (getScreenshotScaleOverride() !== undefined) return undefined;
+  // A known phone skips the ~20 ms TV probe that every auto-screenshot would pay.
+  if (
+    getScreenshotScaleOverride() !== undefined ||
+    getCachedAndroidRuntimeKind(serial) === "mobile"
+  ) {
+    return undefined;
+  }
   try {
     if (!(await isAndroidTv(serial))) return undefined;
     const { width, height } = await getAndroidScreenSize(serial);
