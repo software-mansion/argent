@@ -130,6 +130,59 @@ describe("createNdjsonCdpRequester", () => {
     await expect(body).resolves.toEqual({ body: "b" });
   });
 
+  it("writes each request through the send hook when one is given, and rejects as closed when it returns false", async () => {
+    const stream = new PassThrough();
+    const frames = captureFrames(stream);
+    const sent: unknown[] = [];
+    let open = true;
+    const cdp = createNdjsonCdpRequester(stream as unknown as net.Socket, {
+      label: "test",
+      send: (frame) => {
+        if (open) sent.push(frame);
+        return open;
+      },
+    });
+
+    const enable = cdp.request("Network.enable");
+    expect(sent).toEqual([
+      { type: "CDP", payload: { id: 1, method: "Network.enable", params: {} } },
+    ]);
+    expect(cdp.handleResponse({ id: 1, result: {} })).toBe(true);
+    await expect(enable).resolves.toEqual({});
+
+    open = false;
+    const err = await cdp.request("Network.disable").catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NDJSON_CDP_CONNECTION_CLOSED);
+    await settle();
+    // Nothing went to the socket itself.
+    expect(frames()).toEqual([]);
+  });
+
+  it("runs onResult inside handleResponse, before the next frame, and rejects when it throws", async () => {
+    const cdp = createNdjsonCdpRequester(new PassThrough() as unknown as net.Socket, {
+      label: "test",
+    });
+    const seen: unknown[] = [];
+    const enable = cdp.request("Network.enable", {}, { onResult: (r) => seen.push(r) });
+    const failing = cdp.request(
+      "Network.enable",
+      {},
+      {
+        onResult: () => {
+          throw new Error("bad reply");
+        },
+      }
+    );
+
+    expect(cdp.handleResponse({ id: 1, result: { inFlight: [] } })).toBe(true);
+    // Applied synchronously, not after a microtask.
+    expect(seen).toEqual([{ inFlight: [] }]);
+    expect(cdp.handleResponse({ id: 2, result: {} })).toBe(true);
+
+    await expect(enable).resolves.toEqual({ inFlight: [] });
+    await expect(failing).rejects.toThrow("bad reply");
+  });
+
   it("leaves events to the caller: a payload with a method is no reply", () => {
     const cdp = createNdjsonCdpRequester(new PassThrough() as unknown as net.Socket, {
       label: "test",

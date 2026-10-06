@@ -55,12 +55,13 @@ export function reportDroppedFrameToStderr(tag: string): NdjsonReaderHandlers["o
  * `maxFrameChars` bounds a frame that has not ended yet. Past it, the frame is
  * reported through `onDropped` and the socket is destroyed: a peer that never
  * sends a `\n` otherwise grows the buffer until the string is too long for V8,
- * and the append throws out of the `data` handler.
+ * and the append throws out of the `data` handler. A function is read on every
+ * chunk, so a protocol can allow larger frames once a peer has authenticated.
  */
 export function attachNdjsonReader(
   socket: net.Socket,
   handlers: NdjsonReaderHandlers,
-  { maxFrameChars = Infinity }: { maxFrameChars?: number } = {}
+  { maxFrameChars = Infinity }: { maxFrameChars?: number | (() => number) } = {}
 ): void {
   socket.setEncoding("utf8");
   let buf = "";
@@ -85,7 +86,8 @@ export function attachNdjsonReader(
       buf = buf.slice(nl + 1);
       deliver(raw);
     }
-    if (buf.length > maxFrameChars) {
+    const limit = typeof maxFrameChars === "function" ? maxFrameChars() : maxFrameChars;
+    if (buf.length > limit) {
       handlers.onDropped({ bytes: Buffer.byteLength(buf, "utf8"), preview: preview(buf) });
       buf = "";
       socket.destroy();
@@ -101,7 +103,8 @@ export function attachNdjsonReader(
   });
 }
 
-function writeNdjsonFrame(socket: net.Socket, frame: unknown): boolean {
+/** Writes one frame; false when the socket can no longer take it. */
+export function writeNdjsonFrame(socket: net.Socket, frame: unknown): boolean {
   if (socket.destroyed || !socket.writable) return false;
   socket.write(`${JSON.stringify(frame)}\n`);
   return true;
@@ -112,23 +115,35 @@ const CDP_FRAME_TYPE = "CDP";
 const DEFAULT_CDP_TIMEOUT_MS = 10_000;
 
 export interface NdjsonCdpRequester {
+  /**
+   * `onResult` runs inside `handleResponse`, before the reader delivers the
+   * next frame: a reply whose effects must land in frame order applies them
+   * there, since code after an `await` of the promise runs only once the rest
+   * of the chunk was delivered. When it throws, the promise rejects with that.
+   */
   request(
     method: string,
     params?: Record<string, unknown>,
-    options?: { timeoutMs?: number }
+    options?: { timeoutMs?: number; onResult?: (result: unknown) => void }
   ): Promise<unknown>;
   handleResponse(payload: unknown): boolean;
   close(): void;
 }
 
+/**
+ * `send` writes each request frame in place of `writeNdjsonFrame`, as when a
+ * protocol wraps its frames; false means the frame was not sent.
+ */
 export function createNdjsonCdpRequester(
   socket: net.Socket,
-  options: { label: string; timeoutMs?: number }
+  options: { label: string; timeoutMs?: number; send?: (frame: unknown) => boolean }
 ): NdjsonCdpRequester {
+  const send = options.send ?? ((frame: unknown) => writeNdjsonFrame(socket, frame));
   const pending = new Map<
     number,
     {
       method: string;
+      onResult?: (result: unknown) => void;
       resolve: (result: unknown) => void;
       reject: (error: Error) => void;
       timer: NodeJS.Timeout;
@@ -146,7 +161,11 @@ export function createNdjsonCdpRequester(
     });
 
   return {
-    request(method, params = {}, { timeoutMs = options.timeoutMs ?? DEFAULT_CDP_TIMEOUT_MS } = {}) {
+    request(
+      method,
+      params = {},
+      { timeoutMs = options.timeoutMs ?? DEFAULT_CDP_TIMEOUT_MS, onResult } = {}
+    ) {
       if (closed) return Promise.reject(closedError(method));
       const id = nextId++;
       return new Promise((resolve, reject) => {
@@ -162,8 +181,8 @@ export function createNdjsonCdpRequester(
           );
         }, timeoutMs);
         timer.unref();
-        pending.set(id, { method, resolve, reject, timer });
-        if (!writeNdjsonFrame(socket, { type: CDP_FRAME_TYPE, payload: { id, method, params } })) {
+        pending.set(id, { method, onResult, resolve, reject, timer });
+        if (!send({ type: CDP_FRAME_TYPE, payload: { id, method, params } })) {
           clearTimeout(timer);
           pending.delete(id);
           reject(closedError(method));
@@ -197,7 +216,12 @@ export function createNdjsonCdpRequester(
           })
         );
       } else {
-        entry.resolve(reply.result);
+        try {
+          entry.onResult?.(reply.result);
+          entry.resolve(reply.result);
+        } catch (err) {
+          entry.reject(err instanceof Error ? err : new Error(String(err)));
+        }
       }
       return true;
     },

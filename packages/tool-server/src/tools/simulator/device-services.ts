@@ -14,6 +14,7 @@ import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector"
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
+import { externalNativeId } from "../../utils/external-devices";
 
 /**
  * The one URN matcher both `stop-simulator-server` and
@@ -60,7 +61,9 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
  * Namespaces whose URN appends the app after the device id:
  * `<Namespace>:<deviceId>:<package>`. The LAST colon separates them: an
  * Android package name cannot contain one, while a wireless adb serial
- * (`AndroidNetworkInspector:192.168.1.5:5555:com.example`) can.
+ * (`AndroidNetworkInspector:192.168.1.5:5555:com.example`) can. Their device
+ * id is the adb serial even when the service was asked for with an `ext:` id,
+ * so either spelling of the device matches.
  */
 const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
 
@@ -162,8 +165,13 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const lower = id.toLowerCase();
-      return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
+      const spellings = APP_KEYED_NAMESPACES.includes(namespace)
+        ? [id, externalNativeId(id)]
+        : [id];
+      return spellings.some((spelling) => {
+        const lower = spelling.toLowerCase();
+        return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
+      });
     });
     // Namespaces contain no ":", so at most one can prefix a given URN — a
     // miss here is a miss outright, not a reason to keep scanning.
