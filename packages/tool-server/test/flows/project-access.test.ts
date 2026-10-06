@@ -73,7 +73,7 @@ describe("ClientProjectAccess baselines", () => {
     }
   );
 
-  it("puts a client baseline beside the root flow's file, with POSIX separators", () => {
+  it("puts a client baseline beside the root flow's file", () => {
     expect(clientBaselinePath("/client/vault/b.yaml", "b", "home.png")).toBe(
       "/client/vault/__baselines__/b/home.png"
     );

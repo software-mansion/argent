@@ -250,7 +250,7 @@ The client enforces these rules. The tool-server checks only the shape of each a
 9. The client refuses a file above 32 MiB, for a read and for a write. The error names the cap.
 10. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
 11. The client answers a directory with the `EISDIR` error and an unreadable file with the error of the read, for example `EACCES`. It answers a target or a path in a directory that does not exist as a missing file.
-12. By default, the client prints nothing for a request it serves. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line per served request to stderr. The line holds the op and the path, for example `[client-services] write-file <path>`. The client never prints the content. The client prints no line for a request that it refuses.
+12. By default, the client prints nothing for a request it serves. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line per served request to stderr. The line holds the op and the path, for example `[client-services] write-file <path>`. The client never prints the content. For `read-file` and `write-file`, the client prints the line only after the read or the write succeeds.
 
 ## A client or tool-server without client services
 

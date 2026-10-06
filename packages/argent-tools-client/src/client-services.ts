@@ -262,9 +262,9 @@ export async function createClientServicesHandler(opts: {
     if (!resolved!.endsWith(".png")) {
       return refuse(id, `${file} links to a file that is not a PNG file`);
     }
-    logRequest("read-file", file);
     const read = await readAdmitted(file);
     if ("refusal" in read) return refuse(id, read.refusal);
+    logRequest("read-file", file);
     return { id, ok: true, ...read.answer };
   }
 
@@ -307,8 +307,8 @@ export async function createClientServicesHandler(opts: {
       () => true,
       () => false
     );
-    logRequest("write-file", file);
     await fs.writeFile(file, bytes);
+    logRequest("write-file", file);
     const answer: WriteFileAnswer = { written: file, replaced };
     return { id, ok: true, ...answer };
   }

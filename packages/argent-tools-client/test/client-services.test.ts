@@ -917,10 +917,15 @@ describe("read-file and write-file", () => {
       `[client-services] read-file ${baseline}\n`,
     ]);
 
-    // A refused request names no file: nothing was read or written.
+    // A refused request names no file: nothing was read or written, also
+    // when the refusal comes from the read or the write itself (EISDIR).
     write.mockClear();
+    const dirBaseline = path.join(keyDir, "dir.png");
+    await fs.mkdir(dirBaseline);
     await handler.handle(writeLine(path.join(projectDir, "notes.png"), PNG));
     await handler.handle(readLine(path.join(tmpDir, "x", "__baselines__", "k", "home.png")));
+    expect(await handler.handle(readLine(dirBaseline))).toMatchObject({ ok: false });
+    expect(await handler.handle(writeLine(dirBaseline, PNG))).toMatchObject({ ok: false });
     expect(write).not.toHaveBeenCalled();
   });
 

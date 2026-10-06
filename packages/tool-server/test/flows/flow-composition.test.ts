@@ -2235,6 +2235,51 @@ describe("flow composition (run:)", () => {
       expect(await run(["resolve-file", "write-file"], false)).toBeInstanceOf(FailureError);
     });
 
+    it("gates a client-served fragment's snapshot by the op its run needs", async () => {
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({ executionPrerequisite: "", steps: [{ kind: "run", flow: "frag.yaml" }] }),
+        "utf8"
+      );
+      const fragFiles = {
+        "/client/.argent/flows/frag.yaml": serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+        }),
+      };
+      vi.mocked(runSnapshot).mockResolvedValue({ status: "pass", reason: "snapshot stubbed" });
+      const run = async (ops: ClientServiceOp[], updateBaselines: boolean) =>
+        asRun(
+          await createRunFlowTool(mockRegistry()).execute(
+            {},
+            {
+              name: "main",
+              project_root: tmpDir,
+              flow_file: uploadedPath,
+              device: DEVICE,
+              updateBaselines,
+            },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: uploadedFlowFile(),
+              clientServices: fakeClientServices(fragFiles, { ops }).services,
+            }
+          )
+        ).steps.map((s) => `${s.kind}:${s.status}`);
+
+      // What the shipped client offers: read-file to compare, write-file too to update.
+      expect(await run(["resolve-file", "read-file"], false)).toEqual([
+        "run:pass",
+        "snapshot:pass",
+      ]);
+      expect(await run(["resolve-file", "write-file"], true)).toEqual([
+        "run:pass",
+        "snapshot:pass",
+      ]);
+      expect(await run(["resolve-file", "read-file"], true)).toEqual(["run:error"]);
+      expect(await run(["resolve-file", "write-file"], false)).toEqual(["run:error"]);
+    });
+
     it("fails a snapshot flow before step 1 when the client refuses its root", async () => {
       // Keying the store beside the spelling instead would compare against,
       // or overwrite, another flow's baselines, so the refusal is the run's
