@@ -5,12 +5,13 @@
  * NDJSON stream is answered through {@link ClientServicesHandler.handle}, and
  * the tools client posts the answer to `/invocations/:invocation/client-responses`.
  *
- * The handler enforces every rule of the channel; the server enforces none:
- * it serves a path only when its realpath lies inside one of the roots the
- * client itself sent, serves `.yaml` files only, refuses a
- * file above the 32 MiB cap, and refuses an op it did not offer. The resolution
- * itself is the registry's `canonicalFlowPath` + `classifyOnDiskSpelling`, so a
- * `run:` target keeps its kernel meaning on the machine that has the files.
+ * The handler decides what leaves this machine: it reads nothing outside the
+ * roots the client itself sent (checked on real paths before any listing or
+ * read), serves `.yaml` files only, a link included, refuses a file above the
+ * 32 MiB cap, and refuses an op it did not offer. A refusal does not say where
+ * an outside path leads or whether it exists. The resolution itself is the
+ * registry's `canonicalFlowPath` + `classifyOnDiskSpelling`, so a `run:` target
+ * keeps its kernel meaning on the machine that has the files.
  */
 
 import * as fs from "node:fs/promises";
@@ -52,19 +53,23 @@ function logRequest(op: string, servedPath: string): void {
 }
 
 /**
- * The kernel's view of a candidate path for the root fence: its realpath, or
- * for one that does not exist yet, its parent's realpath with the basename
- * re-appended. Null when the parent does not resolve either; such a candidate
- * is not inside any root.
+ * The kernel's view of a candidate path for the root fence: the realpath of
+ * its deepest existing ancestor with the missing rest re-appended. A missing
+ * component cannot be a symlink, so this is where the path really points,
+ * whether or not it exists. Null only when not even the filesystem root
+ * resolves.
  */
 async function resolveForFence(candidate: string): Promise<string | null> {
-  try {
-    return await fs.realpath(candidate);
-  } catch {
+  const missing: string[] = [];
+  let dir = candidate;
+  for (;;) {
     try {
-      return path.join(await fs.realpath(path.dirname(candidate)), path.basename(candidate));
+      return path.join(await fs.realpath(dir), ...missing);
     } catch {
-      return null;
+      const parent = path.dirname(dir);
+      if (parent === dir) return null;
+      missing.unshift(path.basename(dir));
+      dir = parent;
     }
   }
 }
@@ -127,28 +132,42 @@ export async function createClientServicesHandler(opts: {
     }
 
     // Same join and same classifier as the tool-server's own resolution, so
-    // `..` and casing mean here what they mean in a co-located run.
+    // `..` and casing mean here what they mean in a co-located run. Both
+    // places the resolution reads are fenced before anything there is read:
+    // the file the target really points to, and the directory the casing
+    // check lists. The refusal is the same whether or not the path exists.
     const spelled = anchorDir + path.sep + target;
     const canonical = await canonicalFlowPath(spelled);
+    const [resolved, listedDir] = await Promise.all([
+      resolveForFence(canonical),
+      resolveForFence(path.dirname(spelled)),
+    ]);
+    if (!isInsideRoots(resolved, roots) || !isInsideRoots(listedDir, roots)) {
+      return refuse(id, `${target} is ${outsideRoots}`);
+    }
+    // A `.yaml` name that links to another kind of file would send that file.
+    if (!path.basename(resolved!).endsWith(".yaml")) {
+      return refuse(id, `${target} links to a file that is not a .yaml file`);
+    }
     const spelling = await classifyOnDiskSpelling(
       path.dirname(spelled),
       base,
       FLOW_FILE_NAME_PATTERN
     );
-    const resolved = await resolveForFence(canonical);
-    if (resolved === null) {
-      return refuse(
-        id,
-        `${target} cannot be resolved under ${anchorDir} on this client: its directory does not exist`
-      );
-    }
-    if (!isInsideRoots(resolved, roots)) {
-      return refuse(id, `${target} resolves to ${resolved}, ${outsideRoots}`);
-    }
     logRequest("resolve-file", canonical);
 
     const read = await readFileInputWire(canonical, { includeContent: true });
     if (read === null) {
+      // The wire read answers null for a directory too; name it as a host
+      // read would, so the step does not report a missing file.
+      if (
+        await fs.stat(canonical).then(
+          (st) => st.isDirectory(),
+          () => false
+        )
+      ) {
+        return refuse(id, "EISDIR: illegal operation on a directory, read");
+      }
       const answer: ResolveFileAnswer = { canonical, spelling, exists: false };
       return { id, ok: true, ...answer };
     }
@@ -159,7 +178,13 @@ export async function createClientServicesHandler(opts: {
       );
     }
     if (read.content === undefined) {
-      return refuse(id, `${canonical} exists but could not be read on this client`);
+      // The wire read keeps no error; read once more for the one a host read
+      // would report (EACCES and the like).
+      const reason = await fs.readFile(canonical).then(
+        () => `${canonical} could not be read on this client`,
+        (err: unknown) => (err instanceof Error ? err.message : String(err))
+      );
+      return refuse(id, reason);
     }
     const answer: ResolveFileAnswer = {
       canonical,

@@ -143,7 +143,21 @@ describe("resolve-file", () => {
 
     expect(answer).toMatchObject({ id: "req-1", ok: false });
     expect((answer as { error: string }).error).toContain("outside every root");
-    expect((answer as { error: string }).error).toContain(path.join(tmpDir, "outside.yaml"));
+    // Where it points is the client's business: the server only learns "outside".
+    expect((answer as { error: string }).error).not.toContain(path.join(tmpDir, "outside.yaml"));
+  });
+
+  it("refuses an outside target with the same words whether or not it exists", async () => {
+    await fs.mkdir(path.join(tmpDir, "there"));
+    const handler = await handlerFor([projectDir]);
+
+    const exists = await handler.handle(resolveLine(flowsDir, "../../../there/x.yaml"));
+    const absent = await handler.handle(resolveLine(flowsDir, "../../../nowhere/x.yaml"));
+
+    const shape = (answer: unknown, word: string) =>
+      (answer as { error: string }).error.replace(word, "<dir>");
+    expect(exists).toMatchObject({ ok: false });
+    expect(shape(exists, "there")).toBe(shape(absent, "nowhere"));
   });
 
   it("refuses an anchor directory outside every root", async () => {
@@ -167,16 +181,54 @@ describe("resolve-file", () => {
     const answer = await handler.handle(resolveLine(flowsDir, "link.yaml"));
 
     expect(answer).toMatchObject({ ok: false });
-    expect((answer as { error: string }).error).toContain(path.join(elsewhere, "real.yaml"));
+    expect((answer as { error: string }).error).not.toContain(elsewhere);
     expect((answer as { error: string }).error).toContain("outside every root");
   });
 
-  it("refuses a target whose directory does not exist on this client", async () => {
+  it("answers a target whose directory does not exist as a missing file", async () => {
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "gone/frag.yaml"));
 
-    expect(answer).toMatchObject({ ok: false, error: expect.stringContaining("does not exist") });
+    expect(answer).toMatchObject({ ok: true, exists: false });
+  });
+
+  it("refuses a .yaml name that links to a file of another kind", async () => {
+    await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
+    await fs.symlink(path.join(projectDir, ".env"), path.join(flowsDir, "x.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    const answer = await handler.handle(resolveLine(flowsDir, "x.yaml"));
+
+    expect(answer).toEqual({
+      id: "req-1",
+      ok: false,
+      error: "x.yaml links to a file that is not a .yaml file",
+    });
+  });
+
+  it("names a directory and an unreadable file as a host read would", async () => {
+    await fs.mkdir(path.join(flowsDir, "dir.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "dir.yaml"))).toMatchObject({
+      ok: false,
+      error: "EISDIR: illegal operation on a directory, read",
+    });
+
+    // Root reads a mode-000 file anyway, so the EACCES half needs another user.
+    if (process.getuid?.() === 0) return;
+    const locked = path.join(flowsDir, "locked.yaml");
+    await fs.writeFile(locked, "steps: []\n");
+    await fs.chmod(locked, 0o000);
+    try {
+      expect(await handler.handle(resolveLine(flowsDir, "locked.yaml"))).toMatchObject({
+        ok: false,
+        error: expect.stringMatching(/^EACCES: permission denied, open /),
+      });
+    } finally {
+      await fs.chmod(locked, 0o644);
+    }
   });
 
   it("refuses a basename that is not .yaml", async () => {

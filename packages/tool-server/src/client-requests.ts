@@ -43,8 +43,6 @@ interface OpenInvocation {
   silent?: FailureError;
 }
 
-const REQUEST_FAILURE_STAGES = new Set(["client_request_timeout", "client_request_refused"]);
-
 function requestSubject(op: ClientServiceOp, args: Record<string, unknown>): string {
   if (typeof args.target === "string") return args.target;
   if (typeof args.path === "string") return args.path;
@@ -180,12 +178,6 @@ export class ClientRequestBroker {
 /** True for the rejection the broker raises when the call's response closed. */
 export function isClientRequestAbort(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
-}
-
-/** True for a request that timed out or that the client refused. */
-export function isClientRequestFailure(err: unknown): boolean {
-  const stage = getFailureSignal(err)?.failure_stage;
-  return stage !== undefined && REQUEST_FAILURE_STAGES.has(stage);
 }
 
 /** True for a request the client answered with a refusal (the channel itself is fine). */

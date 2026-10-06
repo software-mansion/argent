@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { FAILURE_CODES, getFailureSignal, type ClientRequestLine } from "@argent/registry";
-import {
-  ClientRequestBroker,
-  isClientRequestAbort,
-  isClientRequestFailure,
-} from "../src/client-requests";
+import { ClientRequestBroker, isClientRequestAbort } from "../src/client-requests";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -98,7 +94,6 @@ describe("ClientRequestBroker", () => {
       failure_area: "tool_server",
       error_kind: "timeout",
     });
-    expect(isClientRequestFailure(err)).toBe(true);
     expect(isClientRequestAbort(err)).toBe(false);
 
     // The id is forgotten on timeout: a late answer is unknown, not a duplicate.
@@ -167,7 +162,6 @@ describe("ClientRequestBroker", () => {
       failure_area: "tool_server",
       error_kind: "validation",
     });
-    expect(isClientRequestFailure(err)).toBe(true);
     expect(isClientRequestAbort(err)).toBe(false);
     broker.close("inv-1");
   });
@@ -216,7 +210,6 @@ describe("ClientRequestBroker", () => {
       "the client disconnected before answering the resolve-file request"
     );
     expect(errors.every((err) => isClientRequestAbort(err))).toBe(true);
-    expect(errors.some((err) => isClientRequestFailure(err))).toBe(false);
     expect(errors.some((err) => getFailureSignal(err) !== null)).toBe(false);
 
     // Every timer is cleared and the invocation is forgotten.

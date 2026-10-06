@@ -1659,7 +1659,9 @@ describe("flow composition (run:)", () => {
         "run:error",
         "echo:skip",
       ]);
-      expect(result.steps[1]?.reason).toBe(timeout.message);
+      expect(result.steps[1]?.reason).toBe(
+        `could not load fragment "login.yaml": ${timeout.message}`
+      );
     });
 
     it("fails the run: step when the client refuses the fragment", async () => {
@@ -1691,7 +1693,7 @@ describe("flow composition (run:)", () => {
       expect(result.steps[1]).toMatchObject({
         kind: "run",
         status: "error",
-        reason: refusal.message,
+        reason: `could not load fragment "login.yaml": ${refusal.message}`,
       });
       expect(result.steps[2]?.status).toBe("skip");
     });

@@ -44,11 +44,7 @@ import {
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
-import {
-  isClientRequestAbort,
-  isClientRequestFailure,
-  isClientRequestRefusal,
-} from "../../client-requests";
+import { isClientRequestAbort, isClientRequestRefusal } from "../../client-requests";
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
@@ -2391,11 +2387,7 @@ async function execRunStep(
       state.stopped = true;
       return;
     }
-    return fail(
-      isClientRequestFailure(err)
-        ? errMsg(err)
-        : `could not load fragment "${target}": ${errMsg(err)}`
-    );
+    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
   const { canonical, spelling } = hop;
 
