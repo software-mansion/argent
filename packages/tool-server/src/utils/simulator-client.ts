@@ -27,6 +27,14 @@ import { pathToFileURL } from "node:url";
 // selected-tab underline (#878).
 const DEFAULT_SCREENSHOT_SCALE = 0.25;
 
+/**
+ * Long side of a TV capture (Apple TV, Android TV, Vega) with no scale
+ * requested. A pixel size, not a fraction: 4K and 1080p TVs render the same
+ * layout, so one fraction leaves the 1080p capture half as legible. Below this,
+ * Haiku 4.5 starts misreading tvOS Settings values (71% correct at 480).
+ */
+export const TV_DEFAULT_LONG_SIDE = 576;
+
 // A simulator-server captures from its live frame stream, so it answers HTTP 200
 // `{ error: "no image to export" }` until the first frame lands — reliably so for
 // a backgrounded simulator when more than one is booted
@@ -734,6 +742,11 @@ export function getScreenshotScaleOverride(): number | undefined {
 
 export function getScreenshotScale(): number {
   return getScreenshotScaleOverride() ?? DEFAULT_SCREENSHOT_SCALE;
+}
+
+/** The scale that takes a TV capture to {@link TV_DEFAULT_LONG_SIDE}, never above 1. */
+export function tvDefaultScale(width: number, height: number): number {
+  return Math.min(1, TV_DEFAULT_LONG_SIDE / Math.max(width, height));
 }
 
 /**

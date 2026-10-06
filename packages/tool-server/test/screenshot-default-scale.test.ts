@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getScreenshotScale } from "../src/utils/simulator-client";
 
-// Every iOS/Android/Vega capture with no explicit `scale` lands on this value,
-// and the agent pays for it in context on every screenshot.
+// Every iOS/Android phone or tablet capture with no explicit `scale` lands on
+// this value, and the agent pays for it in context on every screenshot.
 
 const ENV = "ARGENT_SCREENSHOT_SCALE";
 

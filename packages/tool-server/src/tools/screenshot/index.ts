@@ -18,7 +18,11 @@ import {
   getScreenshotScaleOverride,
   httpScreenshot,
   resolveCapturePanel,
+  TV_DEFAULT_LONG_SIDE,
+  tvDefaultScale,
 } from "../../utils/simulator-client";
+import { isAndroidTv } from "../../utils/adb";
+import { getAndroidScreenSize } from "../../utils/android-screen";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
@@ -52,7 +56,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android. " +
-        "On Apple TV, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
+        "On a TV (Apple TV, Android TV, Vega), with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
         "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
@@ -126,14 +130,6 @@ async function iosPhysicalScreenshot(
 }
 
 /**
- * Long side of an Apple TV capture with no scale requested. A pixel size, not a
- * fraction: 4K and 1080p simulators render the same layout, so one fraction
- * leaves the 1080p capture half as legible. Below this, Haiku 4.5 starts
- * misreading Settings values (71% correct at 480).
- */
-const TV_DEFAULT_LONG_SIDE = 576;
-
-/**
  * tvOS screenshot path: simulator-server has no tvOS backend, so capture with
  * `xcrun simctl io <udid> screenshot` and downscale via `sips`. An undefined
  * `scale` downscales to {@link TV_DEFAULT_LONG_SIDE}.
@@ -190,6 +186,22 @@ export async function tvTargetLongSide(file: string, scale: number | undefined):
   return scale === undefined
     ? Math.min(TV_DEFAULT_LONG_SIDE, longSide)
     : Math.round(longSide * scale);
+}
+
+/**
+ * The default scale of an Android TV capture, or undefined for any other Android
+ * target or when `ARGENT_SCREENSHOT_SCALE` is set. Undefined too when a probe
+ * fails, which leaves the capture at the general default rather than failing it.
+ */
+async function androidTvDefaultScale(serial: string): Promise<number | undefined> {
+  if (getScreenshotScaleOverride() !== undefined) return undefined;
+  try {
+    if (!(await isAndroidTv(serial))) return undefined;
+    const { width, height } = await getAndroidScreenSize(serial);
+    return tvDefaultScale(width, height);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -299,7 +311,9 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // Vega captures host-side via the Android emulator console (`adb emu`);
       // resolving the iOS/Android-only simulator-server blueprint would throw.
       if (device.platform === "vega") {
-        const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
+        const pngPath = await captureVegaScreenshotPng({
+          scale: params.scale ?? getScreenshotScaleOverride(),
+        });
         const image = await requireArtifacts(ctx).register({
           hostPath: pngPath,
           kind: "screenshot",
@@ -313,7 +327,12 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       }
 
       const ref = simulatorServerRef(device);
-      const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
+      const [api, androidTvScale] = await Promise.all([
+        registry.resolveService(ref.urn, ref.options) as Promise<SimulatorServerApi>,
+        params.scale === undefined && device.platform === "android"
+          ? androidTvDefaultScale(device.id)
+          : undefined,
+      ]);
       // On a foldable the panel is resolved now, whoever moved the hinge, and
       // handed to the capture. The server cannot say which panel a frame is
       // from, so the result names it.
@@ -323,7 +342,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         device,
         params.rotation,
         signal,
-        params.scale,
+        params.scale ?? androidTvScale,
         panel ? (a, r, s, sc) => httpScreenshot(a, r, s, sc, panel.screen) : undefined,
         androidDevtoolsRotationPeek(registry, device)
       );

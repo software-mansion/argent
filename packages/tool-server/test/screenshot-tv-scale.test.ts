@@ -1,4 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { PNG } from "pngjs";
 import { ArtifactStore, type Registry } from "@argent/registry";
 
 // `tvTargetLongSide` shells `sips -g pixelWidth -g pixelHeight` to read the
@@ -18,6 +21,27 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
 vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-device-sets")>()),
   simctlArgsForUdid: async (_udid: string, args: readonly string[]) => ["simctl", ...args],
+}));
+
+const isAndroidTvMock = vi.fn<(serial: string) => Promise<boolean>>();
+const runAdbMock = vi.fn<(argv: string[]) => Promise<string>>();
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  isAndroidTv: (serial: string) => isAndroidTvMock(serial),
+  runAdb: (argv: string[]) => runAdbMock(argv),
+}));
+const screenSizeMock = vi.fn<(serial: string) => Promise<{ width: number; height: number }>>();
+vi.mock("../src/utils/android-screen", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/android-screen")>()),
+  getAndroidScreenSize: (serial: string) => screenSizeMock(serial),
+}));
+vi.mock("../src/utils/device-orientation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/device-orientation")>()),
+  readAndroidSurfaceRotation: async () => null,
+}));
+vi.mock("../src/utils/vega-vvd", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/vega-vvd")>()),
+  discoverVegaConsolePort: async () => 5554,
 }));
 
 import { createScreenshotTool, tvTargetLongSide } from "../src/tools/screenshot";
@@ -131,5 +155,124 @@ describe("screenshot tool on an Apple TV simulator", () => {
 
   it("skips the downscale at scale 1", async () => {
     expect(await zTargetsFor({ scale: 1 })).toEqual([]);
+  });
+});
+
+describe("screenshot tool on an Android TV", () => {
+  const ENV = "ARGENT_SCREENSHOT_SCALE";
+
+  beforeEach(() => {
+    isAndroidTvMock.mockReset().mockResolvedValue(true);
+    screenSizeMock.mockReset().mockResolvedValue({ width: 1920, height: 1080 });
+  });
+  afterEach(() => {
+    delete process.env[ENV];
+    vi.unstubAllGlobals();
+  });
+
+  // The `scale` simulator-server is asked for; absent means a 1.0 capture.
+  async function requestedScale(params: { scale?: number }): Promise<number | undefined> {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ url: "http://localhost/s.png", path: "/tmp/s.png" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const registry = {
+      resolveService: vi.fn().mockResolvedValue({ apiUrl: "http://localhost:4949" }),
+    } as unknown as Registry;
+    const tool = createScreenshotTool(registry);
+    const parsed = tool.zodSchema!.parse({ udid: "emulator-5556", ...params }) as Parameters<
+      typeof tool.execute
+    >[1];
+    await tool.execute({}, parsed, { artifacts: new ArtifactStore() });
+    return JSON.parse(fetchMock.mock.calls[0]![1].body).scale;
+  }
+
+  it.each([
+    [3840, 2160, 0.15],
+    [1920, 1080, 0.3],
+    [1280, 720, 0.45],
+  ])("scales a %ix%i display to a 576 px long side", async (width, height, expected) => {
+    screenSizeMock.mockResolvedValue({ width, height });
+    expect(await requestedScale({})).toBeCloseTo(expected, 10);
+  });
+
+  it("never upscales a display smaller than the default", async () => {
+    screenSizeMock.mockResolvedValue({ width: 400, height: 225 });
+    expect(await requestedScale({})).toBeUndefined();
+  });
+
+  it("keeps the 0.25 default on an Android phone", async () => {
+    isAndroidTvMock.mockResolvedValue(false);
+    expect(await requestedScale({})).toBe(0.25);
+    expect(screenSizeMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the 0.25 default when the display size probe fails", async () => {
+    screenSizeMock.mockRejectedValue(new Error("adb: device offline"));
+    expect(await requestedScale({})).toBe(0.25);
+  });
+
+  it("honours ARGENT_SCREENSHOT_SCALE and an explicit scale", async () => {
+    process.env[ENV] = "0.5";
+    expect(await requestedScale({})).toBe(0.5);
+    expect(await requestedScale({ scale: 0.2 })).toBe(0.2);
+    expect(isAndroidTvMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("screenshot tool on Vega", () => {
+  const ENV = "ARGENT_SCREENSHOT_SCALE";
+
+  afterEach(() => {
+    delete process.env[ENV];
+  });
+
+  // Size of the screenshot artifact for a VVD display of the given size.
+  async function capturedSize(
+    params: { scale?: number },
+    dims: { width: number; height: number }
+  ): Promise<{ width: number; height: number }> {
+    // `adb emu screenrecord screenshot <dir>` writes the capture into <dir>.
+    runAdbMock.mockReset().mockImplementation(async (argv) => {
+      const png = new PNG({ width: dims.width, height: dims.height });
+      await writeFile(join(argv[argv.length - 1]!, "shot.png"), PNG.sync.write(png));
+      return "";
+    });
+    const tool = createScreenshotTool({ resolveService: vi.fn() } as unknown as Registry);
+    const parsed = tool.zodSchema!.parse({
+      udid: "amazon-4a27df03c9777152",
+      ...params,
+    }) as Parameters<typeof tool.execute>[1];
+    const { image } = await tool.execute({}, parsed, { artifacts: new ArtifactStore() });
+    const out = PNG.sync.read(await readFile(image.hostPath));
+    return { width: out.width, height: out.height };
+  }
+
+  it.each([
+    [1920, 1080],
+    [1280, 720],
+  ])("downscales a %ix%i capture to a 576 px long side", async (width, height) => {
+    expect(await capturedSize({}, { width, height })).toEqual({ width: 576, height: 324 });
+  });
+
+  it("never upscales a capture smaller than the default", async () => {
+    expect(await capturedSize({}, { width: 400, height: 225 })).toEqual({
+      width: 400,
+      height: 225,
+    });
+  });
+
+  it("honours ARGENT_SCREENSHOT_SCALE and an explicit scale", async () => {
+    process.env[ENV] = "0.5";
+    expect(await capturedSize({}, { width: 1920, height: 1080 })).toEqual({
+      width: 960,
+      height: 540,
+    });
+    expect(await capturedSize({ scale: 0.25 }, { width: 1920, height: 1080 })).toEqual({
+      width: 480,
+      height: 270,
+    });
   });
 });
