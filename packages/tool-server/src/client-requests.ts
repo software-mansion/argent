@@ -7,7 +7,9 @@
  * (`POST /invocations/:invocation/client-responses`), which the route hands to
  * {@link ClientRequestBroker.answer}. The broker keeps no queue: it holds one
  * promise per request id, settles it on the answer or the timeout, and rejects
- * every pending promise when the call's response closes.
+ * every pending promise when the call's response closes. A client that let one
+ * request time out is not answering: every later request of the call fails at
+ * once instead of waiting out a timeout of its own.
  */
 
 import { randomUUID } from "node:crypto";
@@ -37,6 +39,8 @@ interface OpenInvocation {
   pending: Map<string, PendingRequest>;
   /** Ids that already got an answer, kept until close so a repeat is a duplicate. */
   answered: Set<string>;
+  /** The timeout of the first unanswered request; later requests fail with it at once. */
+  silent?: FailureError;
 }
 
 const REQUEST_FAILURE_STAGES = new Set(["client_request_timeout", "client_request_refused"]);
@@ -53,13 +57,39 @@ function abortError(op: ClientServiceOp): Error {
   return err;
 }
 
-function requestFailure(message: string, stage: string): FailureError {
+function refusalFailure(message: string): FailureError {
   return new FailureError(message, {
     error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-    failure_stage: stage,
+    failure_stage: "client_request_refused",
     failure_area: "tool_server",
     error_kind: "validation",
   });
+}
+
+/**
+ * The client went quiet: a transport failure, not a fault of the flow, so it is
+ * a timeout and not a validation error (a directory run stops on it rather than
+ * waiting out the same timeout for every flow). The message names what keeps
+ * answers from arriving.
+ */
+function notAnsweringFailure(
+  op: ClientServiceOp,
+  subject: string,
+  timeoutMs: number
+): FailureError {
+  return new FailureError(
+    `the client did not answer the ${op} request for "${subject}" within ` +
+      `${Math.round(timeoutMs / 1000)} s. The client has to keep running, and its answers have ` +
+      `to reach this tool-server, until the run ends: a paused or sleeping client, a reverse ` +
+      `proxy that buffers the call's response stream, or a proxy that does not forward ` +
+      `POST /invocations/<invocation>/client-responses stops them.`,
+    {
+      error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
+      failure_stage: "client_request_timeout",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
 }
 
 export class ClientRequestBroker {
@@ -84,16 +114,15 @@ export class ClientRequestBroker {
         reject(abortError(op));
         return;
       }
+      if (entry.silent) {
+        reject(entry.silent);
+        return;
+      }
       const id = randomUUID();
       const timer = setTimeout(() => {
         entry.pending.delete(id);
-        reject(
-          requestFailure(
-            `the client did not answer the ${op} request for "${subject}" within ` +
-              `${Math.round(timeoutMs / 1000)} s`,
-            "client_request_timeout"
-          )
-        );
+        entry.silent = notAnsweringFailure(op, subject, timeoutMs);
+        reject(entry.silent);
       }, timeoutMs);
       timer.unref?.();
       entry.pending.set(id, { op, subject, resolve, reject, timer });
@@ -124,9 +153,8 @@ export class ClientRequestBroker {
     entry.answered.add(body.id);
     if (body.ok === false) {
       pending.reject(
-        requestFailure(
-          `the client refused the ${pending.op} request for "${pending.subject}": ${body.error}`,
-          "client_request_refused"
+        refusalFailure(
+          `the client refused the ${pending.op} request for "${pending.subject}": ${body.error}`
         )
       );
     } else {

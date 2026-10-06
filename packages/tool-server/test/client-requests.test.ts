@@ -85,14 +85,18 @@ describe("ClientRequestBroker", () => {
     const err = await outcome;
     expect(settled).toBe(true);
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe(
-      'the client did not answer the resolve-file request for "/proj/flows" within 30 s'
+    expect((err as Error).message).toMatch(
+      /^the client did not answer the resolve-file request for "\/proj\/flows" within 30 s\. The client has to keep running/
     );
+    expect((err as Error).message).toContain(
+      "a reverse proxy that buffers the call's response stream"
+    );
+    // A transport failure, not a fault of the flow: a directory run stops on it.
     expect(getFailureSignal(err)).toEqual({
-      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
       failure_stage: "client_request_timeout",
       failure_area: "tool_server",
-      error_kind: "validation",
+      error_kind: "timeout",
     });
     expect(isClientRequestFailure(err)).toBe(true);
     expect(isClientRequestAbort(err)).toBe(false);
@@ -100,12 +104,39 @@ describe("ClientRequestBroker", () => {
     // The id is forgotten on timeout: a late answer is unknown, not a duplicate.
     expect(broker.answer("inv-1", { id: lines[0]!.id, ok: true })).toBe("unknown_request");
 
+    broker.close("inv-1");
+
     // The message falls back to the op when the args name neither target nor path.
-    const bare = rejectionOf(broker.request("inv-1", "run-script", { step: 3 }, 2_500));
+    broker.open("inv-2", () => {});
+    const bare = rejectionOf(broker.request("inv-2", "run-script", { step: 3 }, 2_500));
     await vi.advanceTimersByTimeAsync(2_500);
-    expect(((await bare) as Error).message).toBe(
-      'the client did not answer the run-script request for "run-script" within 3 s'
+    expect(((await bare) as Error).message).toMatch(
+      /^the client did not answer the run-script request for "run-script" within 3 s\. /
     );
+    broker.close("inv-2");
+  });
+
+  it("fails every later request of the call at once after one timed out, without writing it", async () => {
+    vi.useFakeTimers();
+    const { broker, lines } = openBroker();
+    const first = rejectionOf(
+      broker.request("inv-1", "resolve-file", { target: "a.yaml" }, 30_000)
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    const timedOut = await first;
+
+    const later = await rejectionOf(
+      broker.request("inv-1", "resolve-file", { target: "b.yaml" }, 30_000)
+    );
+
+    expect(later).toBe(timedOut);
+    expect(lines.map((line) => line.args.target)).toEqual(["a.yaml"]);
+    // Another call's channel is not affected.
+    broker.open("inv-2", () => {});
+    const other = broker.request("inv-2", "resolve-file", { target: "c.yaml" }, 30_000);
+    expect(broker.answer("inv-2", { id: "nope", ok: true })).toBe("unknown_request");
+    broker.close("inv-2");
+    await rejectionOf(other);
     broker.close("inv-1");
   });
 

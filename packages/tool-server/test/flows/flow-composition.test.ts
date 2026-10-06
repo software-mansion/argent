@@ -1633,10 +1633,10 @@ describe("flow composition (run:)", () => {
       const timeout = new FailureError(
         'the client did not answer the resolve-file request for "login.yaml" within 30 s',
         {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
           failure_stage: "client_request_timeout",
           failure_area: "tool_server",
-          error_kind: "validation",
+          error_kind: "timeout",
         }
       );
       const { services } = fakeClientServices({});
