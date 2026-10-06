@@ -188,8 +188,8 @@ export async function tvTargetLongSide(file: string, scale: number | undefined):
     : Math.round(longSide * scale);
 }
 
-// The probes' own adb timeouts sum past the capture's 16 s budget (`adb devices`
-// alone may wait 30 s), so a wedged adb would fail a capture that needs no probe.
+// The probes' own adb timeouts sum to ~45 s (`adb devices` alone may wait 30 s),
+// so uncapped, a wedged adb would stall a capture that needs no probe.
 export const ANDROID_TV_PROBE_BUDGET_MS = 2_000;
 
 /**
