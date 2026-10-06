@@ -8,6 +8,8 @@ export interface LaunchAppParams {
   bundleId: string;
   /** Android-only. */
   activity?: string;
+  /** Apple simulator-only: appended to the simctl launch argv after the bundle id. */
+  launchArgs?: string[];
 }
 
 export type LaunchAppResult =

@@ -28,6 +28,7 @@ import {
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
   getFlowPath,
+  iosLaunchArgs,
   isBlockStep,
   parseFlow,
   precedesLeadingLaunch,
@@ -631,9 +632,14 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
+  // An ios `{ app, args }` entry's args reach only an iOS device.
+  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
   let restart: unknown;
   try {
-    restart = await invokeOnDevice(env, "restart-app", { bundleId });
+    restart = await invokeOnDevice(env, "restart-app", {
+      bundleId,
+      ...(launchArgs ? { launchArgs } : {}),
+    });
   } catch (err) {
     // A cancellation makes the sub-tool reject; that rejection is the abort,
     // not an app failure, so it must not be attributed to restart-app.

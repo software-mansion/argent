@@ -185,7 +185,7 @@ Where the value is read from, and the rules for using a placeholder — includin
 { "udid": "<UDID>", "text": "482913" }
 ```
 
-Puts `text` on the **device** clipboard (the host clipboard is untouched) and triggers the platform's paste shortcut. iOS simulator and Android emulator only; a TV target, a physical device, Chromium and Vega are rejected.
+Puts `text` on the **device** clipboard and triggers the platform's paste shortcut. iOS simulator and Android emulator only; a TV target, a physical device, Chromium and Vega are rejected.
 
 `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry — a search query, a login, a form field. Reach for `paste` only where a real user would paste: a 2FA / OTP code copied from another app, a long link or token, or to test how the app handles pasted input. It also carries what `keyboard` can't type on a given platform (multi-line text, non-ASCII on Android), but that alone is not a reason to paste — ask whether the user would.
 
