@@ -30,8 +30,8 @@ vi.mock("../src/utils/update-checker", () => ({
 }));
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const ADVERT = { version: 1 as const, ops: ["resolve-file", "list-dir"] as const };
-const CLIENT_SERVICES = { version: 1, ops: ["resolve-file", "list-dir"], roots: ["/proj"] };
+const ADVERT = { ops: ["resolve-file", "list-dir"] as const };
+const CLIENT_SERVICES = { ops: ["resolve-file", "list-dir"], roots: ["/proj"] };
 const RESOLVE_ARGS = { anchorDir: "/proj/flows", target: "login.yaml", kind: "flow" };
 
 type ToolImpl = (params: unknown, options: InvokeToolOptions | undefined) => Promise<unknown>;
@@ -50,7 +50,7 @@ function stubRegistry(impl: ToolImpl = async () => ({ ok: true })): Registry {
           id: "served-tool",
           description: "A stub tool that can use client services",
           inputSchema: { type: "object", properties: {} },
-          clientServices: { version: 1, ops: [...ADVERT.ops] },
+          clientServices: { ops: [...ADVERT.ops] },
           services: () => ({}),
           execute: async () => ({ ok: true }),
         };
@@ -176,7 +176,6 @@ describe("HTTP client services", () => {
       (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
     );
     expect(byName.get("served-tool")!.clientServices).toEqual({
-      version: 1,
       ops: ["resolve-file", "list-dir"],
     });
     expect(byName.get("plain-tool")).not.toHaveProperty("clientServices");
@@ -257,7 +256,7 @@ describe("HTTP client services", () => {
     const res = await supertest(handle.app)
       .post("/tools/served-tool")
       .set("Accept", "application/x-ndjson")
-      .send({ client_services: { version: 1, ops: ["resolve-file"], roots: ["relative/dir"] } })
+      .send({ client_services: { ops: ["resolve-file"], roots: ["relative/dir"] } })
       .expect(400);
 
     expect(res.headers["content-type"]).toContain("application/json");

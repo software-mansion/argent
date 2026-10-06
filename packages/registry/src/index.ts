@@ -51,7 +51,6 @@ export {
 } from "./flow-file-refs";
 export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
 export {
-  CLIENT_SERVICES_VERSION,
   CLIENT_SERVICE_OPS,
   CLIENT_REQUEST_EVENT,
   CLIENT_FILE_OP_TIMEOUT_MS,

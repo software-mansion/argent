@@ -16,12 +16,10 @@
 import { z } from "zod";
 import type { OnDiskSpelling } from "./flow-file-refs";
 
-export const CLIENT_SERVICES_VERSION = 1 as const;
-
 /**
  * Every op name the protocol reserves. Only `resolve-file` and `list-dir` are
- * served today; the others are defined so the schema accepts them once a later
- * version adds their handlers.
+ * served today; the others are defined so the schema accepts them once their
+ * handlers exist.
  */
 export const CLIENT_SERVICE_OPS = [
   "resolve-file",
@@ -34,13 +32,11 @@ export type ClientServiceOp = (typeof CLIENT_SERVICE_OPS)[number];
 
 /** What a tool's `GET /tools` entry carries when the tool can use the channel. */
 export interface ClientServicesAdvert {
-  version: typeof CLIENT_SERVICES_VERSION;
   ops: ClientServiceOp[];
 }
 
 /** The `client_services` parameter the client adds to a call it serves. */
 export interface ClientServicesParam {
-  version: typeof CLIENT_SERVICES_VERSION;
   ops: ClientServiceOp[];
   /** Absolute client directories the handler serves files under. */
   roots: string[];
@@ -102,7 +98,6 @@ const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
 
 /** Validates the `client_services` parameter on the wire. */
 export const clientServicesParamSchema = z.object({
-  version: z.literal(CLIENT_SERVICES_VERSION),
   ops: z.array(z.enum(CLIENT_SERVICE_OPS)),
   roots: z.array(
     z.string().refine((root) => ABSOLUTE_PATH.test(root), {

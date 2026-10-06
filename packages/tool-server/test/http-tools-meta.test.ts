@@ -103,7 +103,7 @@ function stubRegistry(): Registry {
           id: "served-tool",
           description: "Uses client services",
           inputSchema: { type: "object", properties: {} },
-          clientServices: { version: 1, ops: ["resolve-file", "list-dir"] },
+          clientServices: { ops: ["resolve-file", "list-dir"] },
           services: () => ({}),
           execute: async () => ({}),
         };
@@ -154,7 +154,6 @@ describe("GET /tools progressive-loading metadata", () => {
     );
 
     expect(byName.get("served-tool")!.clientServices).toEqual({
-      version: 1,
       ops: ["resolve-file", "list-dir"],
     });
     expect(byName.get("plain-tool")).not.toHaveProperty("clientServices");

@@ -17,7 +17,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import {
-  CLIENT_SERVICES_VERSION,
   FLOW_FILE_NAME_PATTERN,
   canonicalFlowPath,
   classifyOnDiskSpelling,
@@ -106,7 +105,7 @@ export async function createClientServicesHandler(opts: {
   const ops = IMPLEMENTED_OPS.filter((op) => opts.advertised.includes(op));
   if (ops.length === 0) return null;
 
-  const param: ClientServicesParam = { version: CLIENT_SERVICES_VERSION, ops, roots };
+  const param: ClientServicesParam = { ops, roots };
   const outsideRoots = `outside every root this client serves (${roots.join(", ")})`;
 
   async function resolveFile(

@@ -32,7 +32,7 @@ interface Recorded {
   body: unknown;
 }
 
-const ADVERT = { version: 1, ops: ["resolve-file", "list-dir"] };
+const ADVERT = { ops: ["resolve-file", "list-dir"] };
 
 let server: Server;
 let url: string;
@@ -156,7 +156,7 @@ describe("callTool client services", () => {
     expect(invoke.body).toEqual({
       project_root: projectDir,
       name: "root",
-      client_services: { version: 1, ops: ["resolve-file", "list-dir"], roots: [projectDir] },
+      client_services: { ops: ["resolve-file", "list-dir"], roots: [projectDir] },
     });
   });
 

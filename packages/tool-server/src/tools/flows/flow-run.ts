@@ -6,7 +6,6 @@ import {
   classifyListedSpelling,
   classifyOnDiskSpelling,
   clientServicesParamSchema,
-  CLIENT_SERVICES_VERSION,
   FAILURE_CODES,
   FailureError,
   FLOW_NAME_PATTERN,
@@ -1364,7 +1363,7 @@ one-off interaction use the gesture tools instead, and to author a flow use flow
 exactly one flow source: name (under project_root) or flow_path.
 Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
     longRunning: true,
-    clientServices: { version: CLIENT_SERVICES_VERSION, ops: ["resolve-file", "list-dir"] },
+    clientServices: { ops: ["resolve-file", "list-dir"] },
     zodSchema,
     fileInputs,
     services: () => ({}),

@@ -3,7 +3,6 @@ import * as path from "node:path";
 
 import {
   CLIENT_REQUEST_EVENT,
-  CLIENT_SERVICES_VERSION,
   describeParamIssues,
   type ClientRequestLine,
   type ClientServicesAdvert,
@@ -381,7 +380,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           uploadEndpoint: remote ? { url, token } : undefined,
         });
       }
-      if (remote && meta.clientServices?.version === CLIENT_SERVICES_VERSION) {
+      if (remote && meta.clientServices) {
         const handler = await clientServicesHandlerFor(meta.clientServices, args);
         if (handler) {
           finalArgs = { ...(finalArgs as Record<string, unknown>), client_services: handler.param };

@@ -75,7 +75,6 @@ describe("createClientServicesHandler", () => {
       ["list-dir", "read-file", "resolve-file"]
     );
     expect(handler.param).toEqual({
-      version: 1,
       ops: ["resolve-file", "list-dir"],
       roots: [projectDir],
     });
