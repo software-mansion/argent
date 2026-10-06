@@ -5,13 +5,18 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import {
+  ArtifactStore,
   CLIENT_CONTENT_CAP_BYTES,
   FAILURE_CODES,
   getFailureSignal,
   type Registry,
   type InvokeToolOptions,
+  type ToolContext,
+  zodObjectToJsonSchema,
 } from "@argent/registry";
 import { isClientRequestAbort } from "../src/client-requests";
+import { createRunFlowTool } from "../src/tools/flows/flow-run";
+import { serializeFlow } from "../src/tools/flows/flow-utils";
 
 // Streaming rides the same response path as the update note — pin the checker
 // to "no update" so result lines stay minimal and deterministic.
@@ -252,19 +257,19 @@ describe("HTTP client services", () => {
     expect(seen).not.toHaveProperty("clientServices");
   });
 
-  it("answers 400 when client_services arrives without Accept: application/x-ndjson", async () => {
+  it("runs a plain JSON call that carries client_services as if it had not offered them", async () => {
     const registry = stubRegistry();
     handle = createHttpApp(registry);
 
-    const res = await supertest(handle.app)
+    await supertest(handle.app)
       .post("/tools/served-tool")
-      .send({ client_services: CLIENT_SERVICES })
-      .expect(400);
+      .send({ client_services: CLIENT_SERVICES, other: 1 })
+      .expect(200);
 
-    expect(res.body).toEqual({
-      error: "client_services requires an NDJSON request (Accept: application/x-ndjson)",
-    });
-    expect(registry.invokeTool).not.toHaveBeenCalled();
+    const [, params, options] = (registry.invokeTool as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    // The key comes off the arguments, so the tool never sees it.
+    expect(params).toEqual({ other: 1 });
+    expect(options).not.toHaveProperty("clientServices");
   });
 
   it("answers 400 with HTTP_ZOD_VALIDATION_FAILED for a malformed client_services", async () => {
@@ -589,5 +594,120 @@ describe("HTTP client services", () => {
     // The tool returns normally after the abort; the route tolerates the
     // closed socket.
     await finished.promise;
+  });
+});
+
+/**
+ * The REAL flow-execute behind the HTTP layer, its steps dispatched to a stub,
+ * so a call exercises the whole client-services chain: the advert in the
+ * listing, the parameter taken off the body, the stream, the answer route and
+ * the runner's client-mode resolution.
+ */
+function flowRegistry(): Registry {
+  const flowExecute = createRunFlowTool({
+    invokeTool: vi.fn(async () => ({ ok: true })),
+    getTool: vi.fn(() => undefined),
+  } as unknown as Registry);
+  // What registration derives for the listing.
+  flowExecute.inputSchema = zodObjectToJsonSchema(flowExecute.zodSchema!);
+  return {
+    getSnapshot: vi.fn(() => ({ services: new Map(), namespaces: [], tools: ["flow-execute"] })),
+    getTool: vi.fn((id: string) => (id === "flow-execute" ? flowExecute : undefined)),
+    invokeTool: vi.fn(async (_id: string, args: unknown, opts?: Partial<ToolContext>) =>
+      flowExecute.execute({}, args as never, { artifacts: new ArtifactStore(), ...opts })
+    ),
+  } as unknown as Registry;
+}
+
+describe("flow-execute over client services", () => {
+  let handle: HttpAppHandle | undefined;
+  let server: http.Server | undefined;
+
+  afterEach(async () => {
+    handle?.dispose();
+    handle = undefined;
+    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
+  });
+
+  it("advertises resolve-file and keeps client_services out of its input schema", async () => {
+    handle = createHttpApp(flowRegistry());
+
+    const res = await supertest(handle.app).get("/tools").expect(200);
+
+    const entry = (res.body.tools as Record<string, unknown>[]).find(
+      (t) => t.name === "flow-execute"
+    )!;
+    expect(entry.clientServices).toEqual({ ops: ["resolve-file"] });
+    const properties = (entry.inputSchema as { properties: Record<string, unknown> }).properties;
+    expect(Object.keys(properties)).toContain("flow_path");
+    expect(Object.keys(properties)).not.toContain("client_services");
+  });
+
+  it("runs an uploaded flow's run: fragment that the client serves", async () => {
+    handle = createHttpApp(flowRegistry());
+    let base: string;
+    ({ server, base } = await listen(handle));
+    const clientFiles: Record<string, string> = {
+      "/client/flows/root.yaml": serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "run", flow: "frag.yaml" }],
+      }),
+      "/client/flows/frag.yaml": serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "echo", message: "served by the client" }],
+      }),
+    };
+    const root = clientFiles["/client/flows/root.yaml"]!;
+
+    const res = await startCall(base, "flow-execute", {
+      project_root: "/client",
+      device: "00000000-0000-0000-0000-0000000000ab",
+      flow_path: {
+        __argentFileInput: true,
+        path: "/client/flows/root.yaml",
+        size: Buffer.byteLength(root),
+        mtimeMs: 1,
+        content: Buffer.from(root).toString("base64"),
+      },
+      client_services: { ops: ["resolve-file"], roots: ["/client"] },
+    });
+    expect(res.headers.get("content-type")).toContain("application/x-ndjson");
+
+    const asked: string[] = [];
+    let result: Record<string, unknown> | undefined;
+    for await (const line of ndjsonLines(res.body!)) {
+      if (line.event === "client-request") {
+        const args = line.args as { anchorDir: string; target: string };
+        const canonical = `${args.anchorDir}/${args.target}`;
+        asked.push(canonical);
+        const text = clientFiles[canonical];
+        await fetch(`${base}/invocations/${line.invocation as string}/client-responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(
+            text === undefined
+              ? { id: line.id, ok: true, canonical, spelling: { state: "absent" }, exists: false }
+              : {
+                  id: line.id,
+                  ok: true,
+                  canonical,
+                  spelling: { state: "listed" },
+                  exists: true,
+                  content: Buffer.from(text).toString("base64"),
+                }
+          ),
+        });
+      } else if (line.event === "result") {
+        result = line.data as Record<string, unknown>;
+      }
+    }
+
+    expect(asked).toEqual(["/client/flows/root.yaml", "/client/flows/frag.yaml"]);
+    expect(result).toMatchObject({ ok: true });
+    const reported = (result!.steps as { kind: string; message?: string }[]).map(
+      (step) => `${step.kind}:${step.message ?? ""}`
+    );
+    expect(reported).toEqual(["run:", "echo:served by the client"]);
   });
 });

@@ -847,6 +847,20 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         throw err;
       }
 
+      // Client services ride beside the tool's own arguments: the client adds
+      // `client_services` only for a tool whose listing advertises the
+      // capability, and it comes off here, so the tool's schema neither sees
+      // nor declares it (an agent reading that schema never meets it).
+      let rawClientServices: unknown;
+      if (
+        def.clientServices &&
+        typeof bodyArgs === "object" &&
+        bodyArgs !== null &&
+        "client_services" in bodyArgs
+      ) {
+        ({ client_services: rawClientServices, ...bodyArgs } = bodyArgs);
+      }
+
       let parsedData = bodyArgs;
       if (def.zodSchema) {
         const parseResult = def.zodSchema.safeParse(bodyArgs);
@@ -883,12 +897,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
       // Client services: the caller offers to serve its own project files during
       // the call (see client-requests.ts). Validated after the tool's own schema
-      // and usable only on an NDJSON request, since the request line rides the
-      // progress stream.
-      const rawClientServices =
-        typeof parsedData === "object" && parsedData !== null
-          ? (parsedData as Record<string, unknown>).client_services
-          : undefined;
+      // and used only on an NDJSON request, since the request line rides the
+      // progress stream; a plain JSON call runs as if it had not offered.
       let clientServicesParam: ClientServicesParam | undefined;
       if (rawClientServices !== undefined) {
         const parsed = clientServicesParamSchema.safeParse(rawClientServices);
@@ -908,13 +918,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           });
           return;
         }
-        if (!wantsStream) {
-          res.status(400).json({
-            error: "client_services requires an NDJSON request (Accept: application/x-ndjson)",
-          });
-          return;
-        }
-        clientServicesParam = parsed.data;
+        if (wantsStream) clientServicesParam = parsed.data;
       }
 
       // Capability gate fires BEFORE the global requires preflight: an android

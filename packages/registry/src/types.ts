@@ -108,8 +108,9 @@ export interface InvokeToolOptions {
    * request: the ops the client serves, the client roots it serves them under,
    * and `request`, which writes one client-request line on the stream and
    * resolves with the client's answer (the body without `id` and `ok`), or
-   * rejects on timeout, refusal or disconnect. Absent for a co-located caller
-   * and for every transport that cannot carry the request line.
+   * rejects on timeout, refusal or disconnect. Absent for a call without a
+   * link (the client sends no `client_services` then) and for every transport
+   * that cannot carry the request line.
    */
   clientServices?: {
     ops: readonly ClientServiceOp[];
@@ -247,6 +248,8 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * Client services this tool can use during a call: ops the tool-server asks
    * the client to perform on the client's own files. Advertised through
    * `GET /tools`; the client sends `client_services` only when this is present.
+   * The HTTP layer takes that parameter off the arguments, so the tool's own
+   * schema does not declare it.
    */
   clientServices?: ClientServicesAdvert;
   /**

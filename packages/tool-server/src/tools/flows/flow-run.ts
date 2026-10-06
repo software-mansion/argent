@@ -4,7 +4,6 @@ import * as path from "node:path";
 import {
   canonicalFlowPath,
   classifyOnDiskSpelling,
-  clientServicesParamSchema,
   FAILURE_CODES,
   FailureError,
   FLOW_NAME_PATTERN,
@@ -141,11 +140,6 @@ const zodSchema = z
       .optional()
       .describe(
         "Set to true to confirm the execution prerequisite has been met. Required (LLM path) when a fragment defines an executionPrerequisite."
-      ),
-    client_services: clientServicesParamSchema
-      .optional()
-      .describe(
-        "Internal — the argent client sets it when it serves project files over a link; leave unset."
       ),
   })
   .superRefine((params, ctx) => {
