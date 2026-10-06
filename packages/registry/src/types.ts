@@ -226,6 +226,12 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    */
   longRunning?: boolean;
   /**
+   * Leaves the tool out of the MCP adapter's tool list, so it costs agents no
+   * context. It stays in `GET /tools` and callable over HTTP, for programmatic
+   * callers such as the Node client and `argent run`.
+   */
+  hideFromMcp?: boolean;
+  /**
    * Gates this tool behind a flag name in @argent/configuration-core's
    * FLAG_REGISTRY. Enforced in TWO places, both re-checked per request so
    * `argent enable/disable <flag>` takes effect without restarting the long-lived

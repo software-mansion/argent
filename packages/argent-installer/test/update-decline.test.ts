@@ -16,7 +16,7 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const childProcessMock = vi.hoisted(() => ({
-  execSync: vi.fn(() => "/usr/local/bin/argent\n"),
+  which: vi.fn((..._args: unknown[]) => "/usr/local/bin/argent\n"),
   execFileSync: vi.fn(),
   spawn: vi.fn(),
 }));
@@ -41,7 +41,15 @@ const promptsMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@argent/telemetry", () => telemetryMock);
-vi.mock("node:child_process", () => childProcessMock);
+// The PATH probe (`which -a argent` / `where argent`) goes to its own mock so the
+// execFileSync assertions below only see package-manager runs.
+vi.mock("node:child_process", () => ({
+  ...childProcessMock,
+  execFileSync: (bin: string, ...rest: unknown[]) =>
+    bin === "which" || bin === "where"
+      ? childProcessMock.which(bin, ...rest)
+      : childProcessMock.execFileSync(bin, ...rest),
+}));
 vi.mock("@clack/prompts", () => promptsMock);
 vi.mock("@argent/tools-client", () => ({
   killToolServer: vi.fn().mockResolvedValue(undefined),
@@ -719,7 +727,7 @@ describe("update — a second global copy shadowing the one being updated", () =
     fs.rmSync(bin, { force: true });
     fs.symlinkSync(path.join(packageDir, "dist", "cli.js"), bin);
     topologyState.packageRoot = packageDir;
-    childProcessMock.execSync.mockReturnValue(`${bin}\n`);
+    childProcessMock.which.mockReturnValue(`${bin}\n`);
   };
 
   beforeEach(() => {

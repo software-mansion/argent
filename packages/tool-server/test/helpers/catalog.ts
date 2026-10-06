@@ -1,25 +1,8 @@
-import { zodObjectToJsonSchema, type Registry, type ToolDefinition } from "@argent/registry";
-import { createProposeVariantTool } from "../../src/tools/variants/propose-variant";
-import { awaitUserSelectionTool } from "../../src/tools/variants/await-user-selection";
+import { zodObjectToJsonSchema, type ToolDefinition } from "@argent/registry";
+export { listToolDefinitions as definitionsById } from "../../src/utils/setup-registry";
 
 /** Every tool argent can serve. Bump deliberately when a tool is added or removed. */
 export const EXPECTED_TOOL_COUNT = 79;
-
-/**
- * The full catalog, keyed by id. The Lens tools never reach
- * `registry.registerTool` off macOS, so they are added by hand and CI covers
- * one catalog everywhere.
- */
-export function definitionsById(registry: Registry): Map<string, ToolDefinition<any, any>> {
-  const definitions = new Map<string, ToolDefinition<any, any>>();
-  for (const id of registry.getSnapshot().tools) {
-    definitions.set(id, registry.getTool(id)!);
-  }
-
-  definitions.set("propose_variant", createProposeVariantTool(registry));
-  definitions.set("await_user_selection", awaitUserSelectionTool);
-  return definitions;
-}
 
 /**
  * The schema a client actually receives: the explicit one if a definition

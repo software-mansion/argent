@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toMcpTool } from "../src/tool-mapping.js";
+import { toMcpTool, toMcpToolList } from "../src/tool-mapping.js";
 
 describe("toMcpTool — MCP _meta forwarding", () => {
   const base = {
@@ -51,5 +51,18 @@ describe("toMcpTool — MCP _meta forwarding", () => {
       type: "object",
       properties: { foo: { type: "string" } },
     });
+  });
+});
+
+describe("toMcpToolList", () => {
+  it("drops tools marked hideFromMcp and maps the rest", () => {
+    const schema = { properties: {} };
+    const list = toMcpToolList([
+      { name: "shown", description: "", inputSchema: schema },
+      { name: "sdk-only", description: "", inputSchema: schema, hideFromMcp: true },
+      { name: "also-shown", description: "", inputSchema: schema, hideFromMcp: false },
+    ]);
+    expect(list.map((t) => t.name)).toEqual(["shown", "also-shown"]);
+    expect(list[0]).toEqual(toMcpTool({ name: "shown", description: "", inputSchema: schema }));
   });
 });

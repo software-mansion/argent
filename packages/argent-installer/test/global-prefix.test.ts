@@ -3,17 +3,19 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const { mockExecFileSync, mockExecSync, mockAccessSync } = vi.hoisted(() => ({
+const { mockExecFileSync, mockWhich, mockAccessSync } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
   // `which -a argent`, behind topology's getGlobalBinaryPath. Undefined output
   // is what "not on PATH" looks like from there.
-  mockExecSync: vi.fn(),
+  mockWhich: vi.fn(),
   mockAccessSync: vi.fn(),
 }));
 
+// The PATH probe goes to its own mock so the execFileSync assertions below only
+// see package-manager queries.
 vi.mock("node:child_process", () => ({
-  execFileSync: mockExecFileSync,
-  execSync: mockExecSync,
+  execFileSync: (bin: string, ...rest: unknown[]) =>
+    bin === "which" || bin === "where" ? mockWhich(bin, ...rest) : mockExecFileSync(bin, ...rest),
 }));
 
 // The real one, past the mock above: a printed shell command is only proven by a
@@ -810,7 +812,7 @@ describe("globalInstallPresent", () => {
       JSON.stringify({ name: "@swmansion/argent" })
     );
     mockExecFileSync.mockReturnValue(`${globalDir}\n`);
-    mockExecSync.mockImplementation(() => {
+    mockWhich.mockImplementation(() => {
       throw new Error("argent not found");
     });
 
@@ -821,7 +823,7 @@ describe("globalInstallPresent", () => {
     mockExecFileSync.mockImplementation(() => {
       throw new Error("npm not found");
     });
-    mockExecSync.mockReturnValue("/usr/local/bin/argent\n");
+    mockWhich.mockReturnValue("/usr/local/bin/argent\n");
 
     expect(globalInstallPresent()).toBe(true);
   });
@@ -830,7 +832,7 @@ describe("globalInstallPresent", () => {
     mockExecFileSync.mockImplementation(() => {
       throw new Error("npm not found");
     });
-    mockExecSync.mockImplementation(() => {
+    mockWhich.mockImplementation(() => {
       throw new Error("argent not found");
     });
 

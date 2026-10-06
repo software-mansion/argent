@@ -28,7 +28,7 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const childProcessMock = vi.hoisted(() => ({
-  execSync: vi.fn(() => "/usr/local/bin/argent\n"),
+  which: vi.fn((..._args: unknown[]) => "/usr/local/bin/argent\n"),
   execFileSync: vi.fn(),
 }));
 
@@ -38,7 +38,15 @@ const toolsClientMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@argent/telemetry", () => telemetryMock);
-vi.mock("node:child_process", () => childProcessMock);
+// The PATH probe (`which -a argent` / `where argent`) goes to its own mock so the
+// execFileSync assertions below only see package-manager runs.
+vi.mock("node:child_process", () => ({
+  ...childProcessMock,
+  execFileSync: (bin: string, ...rest: unknown[]) =>
+    bin === "which" || bin === "where"
+      ? childProcessMock.which(bin, ...rest)
+      : childProcessMock.execFileSync(bin, ...rest),
+}));
 vi.mock("@argent/tools-client", () => toolsClientMock);
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
@@ -80,7 +88,7 @@ beforeEach(() => {
   // reads that back, so the default mocks have to move together or a passing
   // removal looks like npm's silent no-op.
   let globalOnPath = true;
-  childProcessMock.execSync.mockImplementation(() => {
+  childProcessMock.which.mockImplementation(() => {
     if (!globalOnPath) throw new Error("not found");
     return "/usr/local/bin/argent\n";
   });
@@ -130,7 +138,7 @@ describe("uninstall — telemetry consent preservation", () => {
   });
 
   it("does not reset uninstall telemetry identity when no global package was uninstalled", async () => {
-    childProcessMock.execSync.mockImplementationOnce(() => {
+    childProcessMock.which.mockImplementationOnce(() => {
       throw new Error("not found");
     });
     process.chdir(tmpDir);
@@ -205,9 +213,7 @@ describe("uninstall — telemetry consent preservation", () => {
     const globalPkg = path.join(tmpDir, "global-argent");
     writeFile(path.join(globalPkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
     writeFile(path.join(globalPkg, "bin", "argent"), "#!/usr/bin/env node\n");
-    childProcessMock.execSync.mockImplementation(
-      () => path.join(globalPkg, "bin", "argent") + "\n"
-    );
+    childProcessMock.which.mockImplementation(() => path.join(globalPkg, "bin", "argent") + "\n");
     toolsClientMock.killToolServerForInstallDir.mockRejectedValueOnce(
       new Error("tool server busy")
     );
@@ -275,7 +281,7 @@ describe("uninstall — a global removal npm did not perform", () => {
     binPath = path.join(tmpDir, "npm-global", "bin", "argent");
     fs.mkdirSync(path.dirname(binPath), { recursive: true });
     fs.symlinkSync(path.join(packageDir, "dist", "cli.js"), binPath);
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       if (!fs.existsSync(binPath)) throw new Error("not found");
       return `${binPath}\n`;
     });
@@ -353,7 +359,7 @@ describe("uninstall — a global install linked at its source", () => {
     const binPath = path.join(tmpDir, "npm-global", "bin", "argent");
     fs.mkdirSync(path.dirname(binPath), { recursive: true });
     fs.symlinkSync(path.join(sourceDir, "dist", "cli.js"), binPath);
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       if (!fs.existsSync(binPath)) throw new Error("not found");
       return `${binPath}\n`;
     });
@@ -424,7 +430,7 @@ describe("uninstall — a second argent further down PATH", () => {
     fs.symlinkSync(path.join(localPkg, "dist", "cli.js"), localBin);
 
     // The global install comes first, the project shim second — PATH order.
-    childProcessMock.execSync.mockImplementation(
+    childProcessMock.which.mockImplementation(
       () => [globalBin, localBin].filter((b) => fs.existsSync(b)).join("\n") + "\n"
     );
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
@@ -792,7 +798,7 @@ describe("uninstall — local (committable) mode package removal", () => {
     process.chdir(tmpDir);
     // No global argent anywhere: this devDependency is the machine's last known
     // install, so removing it must reset local telemetry like a global uninstall.
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       throw new Error("not found");
     });
 
@@ -974,7 +980,7 @@ describe("uninstall — a project shim ahead of the global install on PATH", () 
     fs.symlinkSync(path.join(localPkg, "dist", "cli.js"), localBin);
 
     // The project shim first, the global install second.
-    childProcessMock.execSync.mockImplementation(
+    childProcessMock.which.mockImplementation(
       () => [localBin, globalBin].filter((b) => fs.existsSync(b)).join("\n") + "\n"
     );
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
@@ -1036,7 +1042,7 @@ describe("uninstall — an argent npm did not install", () => {
     writeFile(shim, '#!/bin/sh\nexec node /elsewhere/cli.js "$@"\n');
     const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
     fs.mkdirSync(globalRoot, { recursive: true });
-    childProcessMock.execSync.mockImplementation(() => `${shim}\n`);
+    childProcessMock.which.mockImplementation(() => `${shim}\n`);
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
       if (Array.isArray(args) && args.includes("root") && args.includes("-g"))
         return `${globalRoot}\n`;
@@ -1106,7 +1112,7 @@ describe("uninstall — a link whose source was deleted", () => {
     entry = path.join(globalRoot, "@swmansion", "argent");
     fs.mkdirSync(path.dirname(entry), { recursive: true });
     fs.symlinkSync(path.join(tmpDir, "deleted-checkout"), entry);
-    childProcessMock.execSync.mockImplementation(() => `${tmpDir}/npm-global/bin/argent\n`);
+    childProcessMock.which.mockImplementation(() => `${tmpDir}/npm-global/bin/argent\n`);
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
       if (!Array.isArray(args)) return undefined;
       if (args.includes("root") && args.includes("-g")) return `${globalRoot}\n`;
@@ -1209,7 +1215,7 @@ describe("uninstall — npm's directory asked on a run that would remove with pn
       path.join(globalPkg, "package.json"),
       JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
     );
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       throw new Error("not found");
     });
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
@@ -1264,7 +1270,7 @@ describe("uninstall — machine-wide state under a global install only npm can s
       path.join(localPkg, "package.json"),
       JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
     );
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       throw new Error("not found");
     });
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
@@ -1300,7 +1306,7 @@ describe("uninstall — npm answers for a global directory it holds nothing in",
     process.env.HOME = tmpDir;
     const globalRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
     fs.mkdirSync(globalRoot, { recursive: true });
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       throw new Error("not found");
     });
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
@@ -1350,7 +1356,7 @@ describe("uninstall — a global install another package manager owns", () => {
     const bin = path.join(tmpDir, "pnpm-home", "argent");
     writeFile(bin, "#!/bin/sh\n");
     fs.mkdirSync(path.join(tmpDir, "npm-global", "lib", "node_modules"), { recursive: true });
-    childProcessMock.execSync.mockImplementation(() => `${bin}\n`);
+    childProcessMock.which.mockImplementation(() => `${bin}\n`);
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
       if (Array.isArray(args) && args.includes("root") && args.includes("-g"))
         return `${path.join(tmpDir, "npm-global", "lib", "node_modules")}\n`;
@@ -1414,7 +1420,7 @@ describe("uninstall — a global removal bun did not perform", () => {
     fs.symlinkSync(path.join(packageDir, "dist", "cli.js"), binPath);
     // npm's own global directory holds nothing: only bun's store is the answer.
     fs.mkdirSync(path.join(tmpDir, "npm-global", "lib", "node_modules"), { recursive: true });
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       if (!fs.existsSync(binPath)) throw new Error("not found");
       return `${binPath}\n`;
     });
@@ -1504,7 +1510,7 @@ describe("uninstall — the global went and the local removal did not", () => {
     );
     // Nothing on PATH, and npm's directory is emptied by the removal, so the
     // surviving local install is the only thing the gate can be held by.
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       throw new Error("not found");
     });
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
@@ -1559,7 +1565,7 @@ describe("uninstall — a global install the shells cannot see yet", () => {
     );
     realPackageDir = fs.realpathSync(packageDir);
     // Nothing on PATH at all.
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       throw new Error("not found");
     });
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
@@ -1620,7 +1626,7 @@ describe("uninstall — a project shim ahead of a global install another manager
     fs.mkdirSync(path.dirname(localBin), { recursive: true });
     fs.symlinkSync(path.join(localPkg, "dist", "cli.js"), localBin);
 
-    childProcessMock.execSync.mockImplementation(() => `${localBin}\n`);
+    childProcessMock.which.mockImplementation(() => `${localBin}\n`);
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
       if (!Array.isArray(args)) return undefined;
       if (args.includes("root") && args.includes("-g"))
