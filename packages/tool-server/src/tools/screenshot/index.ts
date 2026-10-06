@@ -19,6 +19,7 @@ import {
   resolveCapturePanel,
 } from "../../utils/simulator-client";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
+import { readPngSize } from "../../utils/device-orientation";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
@@ -145,42 +146,34 @@ export async function tvScreenshot(
     signal,
   });
 
-  // `sips -Z` caps the longest *actual* side, and capture size isn't fixed (4K
-  // sim is 3840 wide, non-4K is 1920), so scale against the real dimensions — a
-  // hardcoded 3840 would double the scale on a 1920 capture.
-  if (scale < 1.0) {
-    await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
-      signal,
-    }).catch(() => {
-      // Best-effort: keep the full-resolution capture if sips fails.
-    });
-  }
+  await downscalePngInPlace(file, scale, signal);
 
   return file;
 }
 
-// Longest actual side × scale, falling back to the 4K long side if the
-// dimension probe fails.
-export async function tvTargetLongSide(file: string, scale: number): Promise<number> {
-  let longSide = 3840;
-
-  try {
-    const { stdout } = await execFileAsync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file]);
-    const width = Number(/pixelWidth:\s*(\d+)/.exec(stdout)?.[1]);
-    const height = Number(/pixelHeight:\s*(\d+)/.exec(stdout)?.[1]);
-
-    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
-      longSide = Math.max(width, height);
-    }
-  } catch {
-    /* probe failed — keep the 4K fallback */
-  }
-
-  return Math.round(longSide * scale);
+/**
+ * The pixel size of a `width` x `height` capture at `scale`, rounded per axis.
+ * simulator-server rounds each axis the same way, so a screen has one size at
+ * a given scale whichever route captured it.
+ */
+function scaledPngSize(
+  size: { width: number; height: number },
+  scale: number
+): { width: number; height: number } {
+  return {
+    width: Math.max(1, Math.round(size.width * scale)),
+    height: Math.max(1, Math.round(size.height * scale)),
+  };
 }
 
 /**
  * Best-effort in-place downscale via sips. Keeps the original file if sips fails.
+ *
+ * The target is both sides, from the PNG's own header. `sips -Z` took only the
+ * longest side and derived the other by truncating, so a 1206x2622 capture at
+ * 0.25 came out 301x656 where simulator-server returns 302x656, and a failed
+ * dimension probe fell back to a 3840 long side that made the size depend on
+ * whether `sips -g` happened to answer.
  */
 export async function downscalePngInPlace(
   file: string,
@@ -191,7 +184,11 @@ export async function downscalePngInPlace(
     return;
   }
 
-  await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
+  const size = await readPngSize(file);
+  if (!size) return;
+
+  const target = scaledPngSize(size, scale);
+  await execFileAsync("sips", ["-z", String(target.height), String(target.width), file], {
     signal,
   }).catch(() => {
     // Best-effort: keep the full-resolution capture if sips fails.

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { ArtifactStore, type Registry } from "@argent/registry";
 
 // The physical-iOS route shells out (`sips` for the downscale) via
@@ -36,27 +38,35 @@ function failAllSpawns(message = "unexpected execFile call"): void {
   });
 }
 
-function mockSips(dims: { width: number; height: number }): { zTargets: () => string[] } {
+function mockSips(): { zTargets: () => string[] } {
   const zCalls: string[] = [];
   execFileMock.mockImplementation((...args: unknown[]) => {
     const file = args[0] as string;
     const argv = (args[1] as string[]) ?? [];
     const cb = callbackOf(args);
-    if (file === "sips" && argv[0] === "-g") {
-      cb?.(null, {
-        stdout: `pixelWidth: ${dims.width}\npixelHeight: ${dims.height}\n`,
-        stderr: "",
-      });
-      return;
-    }
-    if (file === "sips" && argv[0] === "-Z") {
-      zCalls.push(argv[1]);
+    if (file === "sips" && argv[0] === "-z") {
+      zCalls.push(`${argv[2]}x${argv[1]}`);
       cb?.(null, { stdout: "", stderr: "" });
       return;
     }
     cb?.(new Error(`unexpected execFile ${file} ${argv.join(" ")}`));
   });
   return { zTargets: () => zCalls };
+}
+
+// A PNG stub the size of its IHDR header: all the downscale reads.
+async function writePngStub(width: number, height: number): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-png-stub-"));
+  const file = path.join(dir, "cap.png");
+  const buf = Buffer.alloc(33);
+  buf.writeUInt32BE(0x89504e47, 0);
+  buf.writeUInt32BE(0x0d0a1a0a, 4);
+  buf.writeUInt32BE(13, 8);
+  buf.write("IHDR", 12, "ascii");
+  buf.writeUInt32BE(width, 16);
+  buf.writeUInt32BE(height, 20);
+  await fs.writeFile(file, buf);
+  return file;
 }
 
 beforeEach(() => {
@@ -234,19 +244,34 @@ describe("physical-iOS route: the runner is the only capture path", () => {
 });
 
 describe("downscalePngInPlace: shared device-route downscale", () => {
-  it("caps the longest actual side at the requested scale", async () => {
-    const sips = mockSips({ width: 1920, height: 1080 });
-    await downscalePngInPlace("/tmp/cap.png", 0.5);
-    expect(sips.zTargets()).toEqual(["960"]);
+  it("resizes both sides, rounding each as simulator-server does", async () => {
+    const sips = mockSips();
+    // 1206x2622 is an iPhone 17 Pro: simulator-server returns 302x656 at 0.25,
+    // where `sips -Z 656` truncated the width to 301.
+    await downscalePngInPlace(await writePngStub(1206, 2622), 0.25);
+    await downscalePngInPlace(await writePngStub(1920, 1080), 0.5);
+    expect(sips.zTargets()).toEqual(["302x656", "960x540"]);
+  });
+
+  it("does not depend on a sips dimension probe", async () => {
+    const sips = mockSips();
+    await downscalePngInPlace(await writePngStub(3840, 2160), 0.3);
+    expect(sips.zTargets()).toEqual(["1152x648"]);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
   it("spawns nothing at scale 1", async () => {
-    await downscalePngInPlace("/tmp/cap.png", 1.0);
+    await downscalePngInPlace(await writePngStub(1920, 1080), 1.0);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the file untouched when it is not a PNG", async () => {
+    await downscalePngInPlace("/tmp/argent-does-not-exist.png", 0.5);
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("keeps the full-resolution file when sips fails (best-effort)", async () => {
     failAllSpawns("sips: command not found");
-    await expect(downscalePngInPlace("/tmp/cap.png", 0.5)).resolves.toBeUndefined();
+    await expect(downscalePngInPlace(await writePngStub(1920, 1080), 0.5)).resolves.toBeUndefined();
   });
 });
