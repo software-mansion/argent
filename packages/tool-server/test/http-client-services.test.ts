@@ -29,6 +29,14 @@ vi.mock("../src/utils/update-checker", () => ({
   suppressUpdateNote: vi.fn(),
 }));
 
+// The dependency preflight of `gated-tool` waits on this hook, so a test can
+// hold a call inside the awaits that come before the tool runs.
+let depsHook: () => Promise<void> = async () => {};
+vi.mock("../src/utils/check-deps", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/check-deps")>()),
+  ensureDeps: vi.fn(() => depsHook()),
+}));
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ADVERT = { ops: ["resolve-file"] as const };
 const CLIENT_SERVICES = { ops: ["resolve-file"], roots: ["/proj"] };
@@ -42,7 +50,7 @@ function stubRegistry(impl: ToolImpl = async () => ({ ok: true })): Registry {
     getSnapshot: vi.fn(() => ({
       services: new Map(),
       namespaces: [],
-      tools: ["served-tool", "plain-tool"],
+      tools: ["served-tool", "plain-tool", "gated-tool"],
     })),
     getTool: vi.fn((name: string) => {
       if (name === "served-tool") {
@@ -51,6 +59,17 @@ function stubRegistry(impl: ToolImpl = async () => ({ ok: true })): Registry {
           description: "A stub tool that can use client services",
           inputSchema: { type: "object", properties: {} },
           clientServices: { ops: [...ADVERT.ops] },
+          services: () => ({}),
+          execute: async () => ({ ok: true }),
+        };
+      }
+      if (name === "gated-tool") {
+        return {
+          id: "gated-tool",
+          description: "A stub tool with client services and a dependency preflight",
+          inputSchema: { type: "object", properties: {} },
+          clientServices: { ops: [...ADVERT.ops] },
+          requires: ["gate"],
           services: () => ({}),
           execute: async () => ({ ok: true }),
         };
@@ -488,6 +507,45 @@ describe("HTTP client services", () => {
       },
     ]);
   }, 20_000);
+
+  it("does not run a call whose client hung up before the call started", async () => {
+    const reached = deferred<void>();
+    const release = deferred<void>();
+    depsHook = async () => {
+      reached.resolve();
+      await release.promise;
+    };
+    const impl = vi.fn(async () => ({ ok: true }));
+    handle = createHttpApp(stubRegistry(impl));
+    let base: string;
+    ({ server, base } = await listen(handle));
+
+    try {
+      const controller = new AbortController();
+      const call = startCall(
+        base,
+        "gated-tool",
+        { client_services: CLIENT_SERVICES },
+        controller.signal
+      ).catch((err: unknown) => err);
+      await reached.promise;
+      controller.abort();
+      await call;
+      // Wait until the server has seen the connection close, then let the
+      // preflight finish: the tool must not run for nobody.
+      for (let i = 0; i < 100; i++) {
+        const open = await new Promise<number>((r) => server!.getConnections((_e, n) => r(n)));
+        if (open === 0) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      release.resolve();
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(impl).not.toHaveBeenCalled();
+    } finally {
+      depsHook = async () => {};
+    }
+  });
 
   it("rejects pending requests when the client disconnects", async () => {
     const rejection = deferred<unknown>();
