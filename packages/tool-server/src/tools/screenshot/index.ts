@@ -188,10 +188,15 @@ export async function tvTargetLongSide(file: string, scale: number | undefined):
     : Math.round(longSide * scale);
 }
 
+// The probes' own adb timeouts sum past the capture's 16 s budget (`adb devices`
+// alone may wait 30 s), so a wedged adb would fail a capture that needs no probe.
+export const ANDROID_TV_PROBE_BUDGET_MS = 2_000;
+
 /**
  * The default scale of an Android TV capture, or undefined for any other Android
  * target or when `ARGENT_SCREENSHOT_SCALE` is set. Undefined too when a probe
- * fails, which leaves the capture at the general default rather than failing it.
+ * fails or outlasts {@link ANDROID_TV_PROBE_BUDGET_MS}, which leaves the capture
+ * at the general default rather than failing it.
  */
 async function androidTvDefaultScale(serial: string): Promise<number | undefined> {
   // A known phone skips the ~20 ms TV probe that every auto-screenshot would pay.
@@ -201,11 +206,21 @@ async function androidTvDefaultScale(serial: string): Promise<number | undefined
   ) {
     return undefined;
   }
-  const [isTv, size] = await Promise.all([
+  const probe = Promise.all([
     isAndroidTv(serial).catch(() => false),
     getAndroidScreenSize(serial).catch(() => undefined),
-  ]);
-  return isTv && size ? tvDefaultScale(size.width, size.height) : undefined;
+  ]).then(([isTv, size]) => (isTv && size ? tvDefaultScale(size.width, size.height) : undefined));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      probe,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(resolve, ANDROID_TV_PROBE_BUDGET_MS, undefined);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

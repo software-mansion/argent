@@ -46,7 +46,11 @@ vi.mock("../src/utils/vega-vvd", async (importOriginal) => ({
   discoverVegaConsolePort: async () => 5554,
 }));
 
-import { createScreenshotTool, tvTargetLongSide } from "../src/tools/screenshot";
+import {
+  ANDROID_TV_PROBE_BUDGET_MS,
+  createScreenshotTool,
+  tvTargetLongSide,
+} from "../src/tools/screenshot";
 
 type ExecFileCallback = (e: Error | null, r?: { stdout: string; stderr: string }) => void;
 
@@ -227,6 +231,18 @@ describe("screenshot tool on an Android TV", () => {
     cachedKindMock.mockReturnValue("tv");
     expect(await requestedScale({})).toBeCloseTo(0.3, 10);
     expect(isAndroidTvMock).toHaveBeenCalledWith("emulator-5556");
+  });
+
+  it("falls back to the 0.25 default when the TV probe outlasts its budget", async () => {
+    vi.useFakeTimers();
+    try {
+      isAndroidTvMock.mockReturnValue(new Promise<boolean>(() => {}));
+      const scale = requestedScale({});
+      await vi.advanceTimersByTimeAsync(ANDROID_TV_PROBE_BUDGET_MS);
+      expect(await scale).toBe(0.25);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to the 0.25 default when the display size probe fails", async () => {
