@@ -58,17 +58,22 @@ function logRequest(op: string, servedPath: string): void {
   process.stderr.write(`[client-services] ${op} ${servedPath}\n`);
 }
 
+/** Links a dangling chain may take before the fence gives up, as the kernel does. */
+const MAX_LINK_HOPS = 40;
+
 /**
  * The kernel's view of a candidate path for the root fence: the realpath of
  * its deepest existing ancestor with the missing rest re-appended. A missing
  * component cannot be a symlink, so this is where the path really points,
- * whether or not it exists. A link loop stops the kernel as it stops
- * realpath, so it is passed on for the read to name. Null for any other
- * failure: past PATH_MAX (ENAMETOOLONG) the kernel still follows a chain of
- * short relative links that realpath cannot name, so where the path leads is
- * unknown.
+ * whether or not it exists. A dangling link is not missing: the kernel
+ * follows it, so the fence follows its target too, and a link out of the
+ * roots is refused alike whether or not its target exists. A link loop or a
+ * directory that cannot be searched stops the kernel as it stops realpath,
+ * so it is passed on for the read to name. Null for any other failure: past
+ * PATH_MAX (ENAMETOOLONG) the kernel still follows a chain of short relative
+ * links that realpath cannot name, so where the path leads is unknown.
  */
-async function resolveForFence(candidate: string): Promise<string | null> {
+async function resolveForFence(candidate: string, hops = 0): Promise<string | null> {
   const missing: string[] = [];
   let dir = candidate;
   for (;;) {
@@ -76,7 +81,17 @@ async function resolveForFence(candidate: string): Promise<string | null> {
       return path.join(await fs.realpath(dir), ...missing);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "ELOOP") return null;
+      if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "ELOOP" && code !== "EACCES") {
+        return null;
+      }
+      if (code === "ENOENT") {
+        const target = await fs.readlink(dir).catch(() => null);
+        if (target !== null) {
+          if (hops >= MAX_LINK_HOPS) return null;
+          const followed = path.resolve(path.dirname(dir), target);
+          return resolveForFence(path.join(followed, ...missing), hops + 1);
+        }
+      }
       const parent = path.dirname(dir);
       if (parent === dir) return null;
       missing.unshift(path.basename(dir));
@@ -274,19 +289,19 @@ export async function createClientServicesHandler(opts: {
     }
     await fs.mkdir(keyDir, { recursive: true });
     // Again on the file itself: a baseline that is a symlink writes through.
-    // A dangling one would create its target, wherever it points, and the
-    // fence cannot see where that is, so it is refused outright.
+    const resolved = await resolveForFence(file);
+    if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
+    if (!resolved!.endsWith(".png")) {
+      return refuse(id, `${file} links to a file that is not a PNG file`);
+    }
+    // A dangling link inside the roots would create a file the user never
+    // made; only now, past the fence, may the refusal say so.
     const isLink = await fs.lstat(file).then(
       (st) => st.isSymbolicLink(),
       () => false
     );
     if (isLink && (await fs.realpath(file).catch(() => null)) === null) {
       return refuse(id, `${file} is a symbolic link to a missing file`);
-    }
-    const resolved = await resolveForFence(file);
-    if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
-    if (!resolved!.endsWith(".png")) {
-      return refuse(id, `${file} links to a file that is not a PNG file`);
     }
     const replaced = await fs.stat(file).then(
       () => true,

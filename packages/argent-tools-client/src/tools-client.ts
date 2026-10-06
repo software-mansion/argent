@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import {
@@ -295,8 +295,18 @@ async function clientServicesHandlerFor(
         : undefined;
   if (rootFlow !== undefined) {
     roots.push(path.dirname(rootFlow));
+    // Only the real directory of a YAML flow file, the rule resolve-file
+    // applies: a committed link to a directory or another kind of file must
+    // not widen what this client serves.
     const real = await realpath(rootFlow).catch(() => null);
-    if (real !== null) roots.push(path.dirname(real));
+    const isFlowFile =
+      real !== null &&
+      /\.ya?ml$/i.test(real) &&
+      (await stat(real).then(
+        (st) => st.isFile(),
+        () => false
+      ));
+    if (isFlowFile) roots.push(path.dirname(real));
   }
   const updatesBaselines = (args as Record<string, unknown>).updateBaselines === true;
   return createClientServicesHandler({

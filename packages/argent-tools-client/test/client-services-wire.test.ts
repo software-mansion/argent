@@ -227,6 +227,28 @@ describe("callTool client services", () => {
     await fs.rm(vault, { recursive: true, force: true });
   });
 
+  it("adds no root for a root flow that links to something other than a YAML file", async () => {
+    // A committed link must not widen what the client serves: only the real
+    // directory of a YAML flow file becomes a root, as resolve-file requires.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const elsewhere = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "argent-elsewhere-")));
+    await fs.writeFile(path.join(elsewhere, "notes.txt"), "not a flow\n");
+    await fs.symlink(path.join(elsewhere, "notes.txt"), path.join(flowsDir, "text.yaml"));
+    await fs.symlink(elsewhere, path.join(flowsDir, "dir.yaml"));
+    const { callTool } = createToolsClient();
+    const roots = () =>
+      (invokeRequest().body as { client_services: { roots: string[] } }).client_services.roots;
+
+    await callTool("flow-execute", { project_root: projectDir, name: "text" });
+    const viaText = roots();
+    requests.length = 0;
+    await callTool("flow-execute", { project_root: projectDir, name: "dir" });
+
+    expect(viaText).toEqual([projectDir]);
+    expect(roots()).toEqual([projectDir]);
+    await fs.rm(elsewhere, { recursive: true, force: true });
+  });
+
   it("offers write-file only for a call that updates baselines", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     listing[0] = {

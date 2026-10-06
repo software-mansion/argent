@@ -268,6 +268,25 @@ describe("resolve-file", () => {
     });
   });
 
+  it("names a directory that cannot be searched as a host read would", async () => {
+    // Root searches any directory, so this needs another user.
+    if (process.getuid?.() === 0) return;
+    const locked = path.join(flowsDir, "locked");
+    await fs.mkdir(locked);
+    await fs.writeFile(path.join(locked, "frag.yaml"), "steps: []\n");
+    await fs.chmod(locked, 0o000);
+    const handler = await handlerFor([projectDir]);
+
+    try {
+      expect(await handler.handle(resolveLine(flowsDir, "locked/frag.yaml"))).toMatchObject({
+        ok: false,
+        error: expect.stringMatching(/^EACCES: /),
+      });
+    } finally {
+      await fs.chmod(locked, 0o755);
+    }
+  });
+
   it("names a directory and an unreadable file as a host read would", async () => {
     await fs.mkdir(path.join(flowsDir, "dir.yaml"));
     const handler = await handlerFor([projectDir]);
@@ -739,7 +758,7 @@ describe("read-file and write-file", () => {
     const answer = await handler.handle(writeLine(baseline, PNG));
 
     expect({ answer, outside: await fs.readdir(outside) }).toEqual({
-      answer: { id: "req-1", ok: false, error: `${baseline} is a symbolic link to a missing file` },
+      answer: { id: "req-1", ok: false, error: outsideError(baseline) },
       outside: [],
     });
   });
@@ -755,6 +774,30 @@ describe("read-file and write-file", () => {
       error: `${baseline} is a symbolic link to a missing file`,
     });
     expect(await exists(path.join(projectDir, "missing.png"))).toBe(false);
+  });
+
+  it("answers a link out of the roots the same whether or not its target exists", async () => {
+    // A refusal must not tell the tool-server whether an outside path exists.
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "there.png"), PNG);
+    await fs.mkdir(keyDir, { recursive: true });
+    const there = path.join(keyDir, "there.png");
+    const gone = path.join(keyDir, "gone.png");
+    await fs.symlink(path.join(outside, "there.png"), there);
+    await fs.symlink(path.join(outside, "gone.png"), gone);
+    const handler = await handlerFor([projectDir]);
+
+    for (const file of [there, gone]) {
+      for (const line of [readLine(file), writeLine(file, PNG)]) {
+        expect(await handler.handle(line)).toEqual({
+          id: "req-1",
+          ok: false,
+          error: outsideError(file),
+        });
+      }
+    }
+    expect(await fs.readdir(outside)).toEqual(["there.png"]);
   });
 
   it("refuses a write through a baseline that links to another kind of file", async () => {
