@@ -315,9 +315,7 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // Vega captures host-side via the Android emulator console (`adb emu`);
       // resolving the iOS/Android-only simulator-server blueprint would throw.
       if (device.platform === "vega") {
-        const pngPath = await captureVegaScreenshotPng({
-          scale: params.scale ?? getScreenshotScaleOverride(),
-        });
+        const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
         const image = await requireArtifacts(ctx).register({
           hostPath: pngPath,
           kind: "screenshot",

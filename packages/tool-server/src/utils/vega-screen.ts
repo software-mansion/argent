@@ -5,7 +5,7 @@ import { PNG } from "pngjs";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { runAdb } from "./adb";
 import { discoverVegaConsolePort } from "./vega-vvd";
-import { tvDefaultScale } from "./simulator-client";
+import { getScreenshotScaleOverride, tvDefaultScale } from "./simulator-client";
 import { resizeDecodedPng } from "../tools/screenshot-diff/resize";
 
 /**
@@ -50,11 +50,11 @@ async function captureViaEmulatorConsole(opts: { scale?: number }): Promise<stri
 }
 
 /**
- * Downscale a decoded RGBA PNG with screenshot-diff's lanczos3 resampler, to the
- * TV default size when `scale` is undefined.
+ * Downscale a decoded RGBA PNG with screenshot-diff's lanczos3 resampler. Without
+ * a `scale`, `ARGENT_SCREENSHOT_SCALE` applies, then the TV default size.
  */
 function scalePng(src: PNG, scale?: number): PNG {
-  const s = scale ?? tvDefaultScale(src.width, src.height);
+  const s = scale ?? getScreenshotScaleOverride() ?? tvDefaultScale(src.width, src.height);
   if (s >= 1) return src;
   const outW = Math.max(1, Math.round(src.width * s));
   const outH = Math.max(1, Math.round(src.height * s));
