@@ -47,6 +47,18 @@ export function makeIosImpl(
         const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
         if (blocked) return blocked;
       }
+      // A plain launch only foregrounds an app that is already running, so the
+      // arguments would be dropped. Terminate first to apply them.
+      if (params.launchArgs?.length) {
+        try {
+          await execFileAsync(
+            "xcrun",
+            await simctlArgsForUdid(params.udid, ["terminate", params.udid, params.bundleId])
+          );
+        } catch {
+          // App may not be running
+        }
+      }
       try {
         await execFileAsync(
           "xcrun",
