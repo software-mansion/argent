@@ -1,6 +1,6 @@
 ---
 name: argent-native-profiler
-description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via xctrace; Android via Perfetto. Use when diagnosing native-level performance issues.
+description: Native profiling for CPU hotspots, UI hangs, memory issues, and iOS app launch time. iOS via xctrace; Android via Perfetto. Use when diagnosing native-level performance issues.
 ---
 
 ## 1. Tools
@@ -10,7 +10,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 - `native-profiler-analyze` — parse exported trace data and return a structured bottleneck payload.
 - `profiler-stack-query` — drill into parsed data: hang stacks, function callers, thread breakdown, leak details.
 - `profiler-load` — list and reload previous trace sessions from disk for re-investigation.
-- Physical iPhone: not supported; use a simulator.
+- The `native-profiler-*` session tools use a simulator for iOS. For app launch time, see §7.
 
 ---
 
@@ -106,3 +106,14 @@ Each bottleneck type indicates a different class of problem:
 - **Profiler overhead**: xctrace instrumentation adds CPU load. If `JSLexer`, `JSONEmitter`, or Hermes runtime internals dominate the JS thread in CPU hotspot results, those reflect profiler overhead — not app work. Discount those entries when evaluating findings.
 - **Run-to-run variance**: Small fluctuations in CPU percentages between runs are normal. Treat only consistent directional changes (across 2+ runs or >15% delta) as actionable signal.
 - **Live data variability**: If the app fetches live API data, different responses between runs change rendering workload independently of code changes. Note when data-dependent screens show variance.
+
+---
+
+## 7. App Launch (iOS)
+
+For any iOS app (Swift, Objective-C, React Native, Flutter) when the user asks about launch or startup time.
+
+- `ios-launch-time-measure` — five XCTest launch samples (`averageMs`, `samplesMs`). Use as the baseline and to verify fixes.
+- `ios-launch-time-profile` — Instruments App Launch trace: phases up to the first frame plus a CPU session. Follow `profilerSession.next` (`profiler-load` `load_native` → `profiler-stack-query` `thread_breakdown` with `thread: "Main Thread"`), then `function_callers` for the dominant function. Typical causes: static initializers, dylib loading, heavy `didFinishLaunching` work.
+- Both build in Release and need a physical iPhone on a USB cable. Use `allow_simulator: true` only when the user accepts Mac-hardware timings. The measured launch is usually warm.
+- The launch ends at the first frame. Framework work before it (e.g. React Native runtime creation) appears in the launch profile; work after it belongs to that framework's profiler.

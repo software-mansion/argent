@@ -73,6 +73,13 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   // devicectl launches the named receiving app with the URL as its payload.
   // Web URLs default to Safari and any other scheme must name the app.
   "open-url",
+  // Build and launch through xcodebuild / xctrace --device, which target hardware directly.
+  "ios-launch-time-measure",
+  "ios-launch-time-profile",
+  // Host-side readers of the xctrace session ios-launch-time-profile writes; the
+  // native-profiler capture tools stay simulator-only.
+  "profiler-load",
+  "profiler-stack-query",
 ];
 
 describe("apple.device capability ratchet", () => {

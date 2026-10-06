@@ -1,0 +1,23 @@
+---
+sidebar_position: 10
+sidebar_label: iOS launch performance
+title: iOS launch performance
+sidebar_custom_props:
+  icon: gauge
+---
+
+Argent can measure an iOS app launch and record an Xcode Instruments App Launch trace. Argent builds the app in Release for both tasks, so the app runs as a production build. Select a connected iPhone for device measurements.
+
+The launch measurement uses an Argent UI test runner. The runner measures five launches with Apple's application launch metric. Argent keeps the app project unchanged.
+
+The Instruments recording shows the launch phases up to the first frame. Argent returns these phases and keeps the CPU samples of the launch as a native profiler session. The agent then uses the profiler query tools to find the functions that delay the first frame.
+
+In a React Native app, the launch ends at the first frame, but React Native startup can continue after it. Some React Native work, such as runtime creation, can run before the first frame. The launch profile shows this work. The launch time is a part of the time to interactive (TTI), not the full TTI. Measure the native launch as one part of TTI, together with the React Native startup.
+
+Before each task, Argent runs the app once and then stops it. The next launch starts a new app process. Usually this is a warm launch, because parts of the app are still in memory. iOS can remove the app from memory at any time, so Argent cannot guarantee a warm launch. Argent does not measure a cold launch after a restart or a resume from the background.
+
+Measure on a physical iPhone when you need device performance. A simulator uses Mac hardware, so its timings can differ from iPhone timings. Argent uses a simulator only when you allow it.
+
+Argent saves each run under `.argent/traces/<datetime>/` in the app project. The measurement keeps its Xcode result and logs. The Instruments run keeps the trace and its lifecycle and dyld exports. Argent keeps the CPU samples of the launch in the native profiler session.
+
+See the [tools reference](/docs/reference/tools#ios-launch-performance) for parameters and signing behavior.

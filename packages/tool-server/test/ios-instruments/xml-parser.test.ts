@@ -43,3 +43,20 @@ describe("decodeXml (via parseCpuXml)", () => {
     expect(result).toBe("'x'");
   });
 });
+
+describe("sample-time refs", () => {
+  it("keeps a row whose sample-time is a ref, and the backtrace it defines", () => {
+    // Two threads sampled at the same instant: the second row references the first
+    // row's sample-time and defines a backtrace that a later row reuses.
+    const xml = `
+<row><sample-time id="1">1000</sample-time><thread id="2" fmt="Main Thread"/><weight id="3">1000000</weight><tagged-backtrace id="4"><frame id="5" name="mainWork"/></tagged-backtrace></row>
+<row><sample-time ref="1"/><thread id="6" fmt="Worker"/><weight ref="3"/><tagged-backtrace id="7"><frame id="8" name="workerWork"/></tagged-backtrace></row>
+<row><sample-time id="9">2000</sample-time><thread ref="6"/><weight ref="3"/><tagged-backtrace ref="7"/></row>`;
+    const samples = parseCpuXml(xml);
+    expect(samples.map((s) => [s.timestampNs, s.threadFmt, s.stack[0]?.name])).toEqual([
+      [1000, "Main Thread", "mainWork"],
+      [1000, "Worker", "workerWork"],
+      [2000, "Worker", "workerWork"],
+    ]);
+  });
+});

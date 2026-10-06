@@ -450,16 +450,43 @@ describe("ensureRunnerArtifact", () => {
 });
 
 describe("resolveRunnerProjectPath", () => {
+  it("prefers the project bundled beside the npm tool server", async () => {
+    const moduleDir = path.join(tmpRoot, "bundle");
+    const bundledProject = path.join(
+      moduleDir,
+      "ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj"
+    );
+    await fsp.mkdir(bundledProject, { recursive: true });
+    const saved = process.env.ARGENT_IOS_RUNNER_PROJECT;
+    delete process.env.ARGENT_IOS_RUNNER_PROJECT;
+    try {
+      expect(resolveRunnerProjectPath(moduleDir)).toBe(bundledProject);
+    } finally {
+      if (saved === undefined) delete process.env.ARGENT_IOS_RUNNER_PROJECT;
+      else process.env.ARGENT_IOS_RUNNER_PROJECT = saved;
+    }
+  });
+
+  it("finds the runner project in a source checkout", () => {
+    const saved = process.env.ARGENT_IOS_RUNNER_PROJECT;
+    delete process.env.ARGENT_IOS_RUNNER_PROJECT;
+    try {
+      expect(resolveRunnerProjectPath()).toBe(
+        path.resolve(__dirname, "../../ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj")
+      );
+    } finally {
+      if (saved === undefined) delete process.env.ARGENT_IOS_RUNNER_PROJECT;
+      else process.env.ARGENT_IOS_RUNNER_PROJECT = saved;
+    }
+  });
+
   it("stamps the project-not-found error with a failure signal", () => {
     const saved = process.env.ARGENT_IOS_RUNNER_PROJECT;
     delete process.env.ARGENT_IOS_RUNNER_PROJECT;
     try {
       let caught: unknown;
       try {
-        // Under vitest __dirname is the source tree, where no copy of the
-        // project sits next to the module, so the not-found arm is the
-        // natural outcome.
-        resolveRunnerProjectPath();
+        resolveRunnerProjectPath(tmpRoot);
       } catch (error) {
         caught = error;
       }

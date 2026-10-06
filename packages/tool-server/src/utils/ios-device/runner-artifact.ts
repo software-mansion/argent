@@ -20,25 +20,28 @@ const PROJECT_SUFFIX = "ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj";
 /**
  * Locate the runner Xcode project.
  */
-export function resolveRunnerProjectPath(): string {
-  // Packaged tool-server copies the project next to the bundle.
-  // Outside the bundle, set ARGENT_IOS_RUNNER_PROJECT.
+export function resolveRunnerProjectPath(moduleDir: string = __dirname): string {
+  // The npm bundle places the project beside tools.js. Source and tsc builds
+  // use the sibling ios-device-runner workspace package instead.
   const override = process.env.ARGENT_IOS_RUNNER_PROJECT;
 
   if (override) {
     return override;
   }
 
-  const candidate = path.resolve(__dirname, PROJECT_SUFFIX);
+  const candidates = [
+    path.resolve(moduleDir, PROJECT_SUFFIX),
+    path.resolve(moduleDir, "../../../..", PROJECT_SUFFIX),
+  ];
 
-  if (fs.existsSync(candidate)) {
-    return candidate;
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
   }
 
   throw withFailureSignal(
     new Error(
       `Could not locate the ios-device-runner Xcode project (looked at ` +
-        `${candidate}). Set ARGENT_IOS_RUNNER_PROJECT to the ` +
+        `${candidates.join(", ")}). Set ARGENT_IOS_RUNNER_PROJECT to the ` +
         `ArgentRunner.xcodeproj path.`
     ),
     {
