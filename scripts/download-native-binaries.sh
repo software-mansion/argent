@@ -24,11 +24,41 @@ else
   exit 1
 fi
 
-if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
-  echo "Error: release '${TAG}' not found in ${REPO}." >&2
-  echo "Build and publish the native binaries for this version first, then retry." >&2
+# Every temporary download lands here, so it is removed on every exit path,
+# including a failed `gh` or `tar` under `set -e`.
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
+
+# The release's asset names, one per line. `gh release download` exits non-zero
+# both for an asset the release lacks and for a network, auth or rate-limit
+# failure, so the optional network inspector asset is checked against this list
+# instead: only an unlisted one is skipped, and a failed download of a listed
+# one is fatal.
+GH_STDERR="${TMP_DIR}/gh-release-view.stderr"
+if ! RELEASE_ASSETS="$(gh release view "${TAG}" --repo "${REPO}" --json assets --jq '.assets[].name' 2>"${GH_STDERR}")"; then
+  if grep -q "release not found" "${GH_STDERR}"; then
+    echo "Error: release '${TAG}' not found in ${REPO}." >&2
+    echo "Build and publish the native binaries for this version first, then retry." >&2
+  else
+    echo "Error: could not read release '${TAG}' from ${REPO}:" >&2
+    sed 's/^/  gh: /' "${GH_STDERR}" >&2
+  fi
   exit 1
 fi
+
+release_has_asset() {
+  grep -qxF -- "$1" <<<"${RELEASE_ASSETS}"
+}
+
+# Usage: download_listed_asset <asset> [gh release download options...]
+download_listed_asset() {
+  local asset="$1"
+  shift
+  if ! gh release download "${TAG}" --repo "${REPO}" --pattern "${asset}" --clobber "$@"; then
+    echo "Error: ${asset} is on '${TAG}' but could not be downloaded (gh error above)." >&2
+    exit 1
+  fi
+}
 
 DYLIBS_DIR="packages/native-devtools-ios/dylibs"
 BIN_DIR="packages/native-devtools-ios/bin"
@@ -151,8 +181,7 @@ else
 fi
 
 echo "  Downloading argent-android-devtools.apk..."
-TMP_APK="$(mktemp -t argent-android-devtools.XXXXXX.apk)"
-trap 'rm -f "$TMP_APK"' EXIT
+TMP_APK="${TMP_DIR}/argent-android-devtools.apk"
 gh release download "${TAG}" \
   --repo "${REPO}" \
   --pattern "argent-android-devtools.apk" \
@@ -163,24 +192,22 @@ gh release download "${TAG}" \
 ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionName")"
 ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
-trap - EXIT
 
 # Tags cut before the agent was released carry no such asset, so a missing one
 # is skipped with a warning: the service then reports the agent binaries as
-# absent and names the JS layer as the fallback.
+# absent and names the JS layer as the fallback. The copy an earlier download
+# left is removed too, or bundle-tools.cjs would ship it with this tag's other
+# binaries.
 NETWORK_INSPECTOR_ASSET="network-inspector.tar.gz"
 NETWORK_INSPECTOR_CHECKSUM="${NETWORK_INSPECTOR_ASSET}.sha256"
 NETWORK_INSPECTOR_DIR="${ANDROID_BIN_DIR}/network-inspector"
-NETWORK_INSPECTOR_TMP="$(mktemp -d)"
+NETWORK_INSPECTOR_TMP="${TMP_DIR}/network-inspector"
 echo "  Downloading ${NETWORK_INSPECTOR_ASSET} (Android network inspector)..."
-GH_STDERR="$(mktemp)"
-if gh release download "${TAG}" \
-  --repo "${REPO}" \
-  --pattern "${NETWORK_INSPECTOR_ASSET}" \
-  --pattern "${NETWORK_INSPECTOR_CHECKSUM}" \
-  --dir "${NETWORK_INSPECTOR_TMP}" \
-  --clobber 2>"${GH_STDERR}"; then
-  rm -f "${GH_STDERR}"
+if release_has_asset "${NETWORK_INSPECTOR_ASSET}"; then
+  mkdir -p "${NETWORK_INSPECTOR_TMP}"
+  download_listed_asset "${NETWORK_INSPECTOR_ASSET}" \
+    --pattern "${NETWORK_INSPECTOR_CHECKSUM}" \
+    --dir "${NETWORK_INSPECTOR_TMP}"
 
   # Like the trace-processor bundle, a missing checksum or a mismatch is fatal:
   # it means a corrupt or tampered download. `gh` succeeds when either pattern
@@ -194,7 +221,6 @@ if gh release download "${TAG}" \
     NETWORK_INSPECTOR_ACTUAL="$(sha256 "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" | awk '{print $1}')"
   fi
   if [[ -z "${NETWORK_INSPECTOR_EXPECTED}" || "${NETWORK_INSPECTOR_EXPECTED}" != "${NETWORK_INSPECTOR_ACTUAL}" ]]; then
-    rm -rf "${NETWORK_INSPECTOR_TMP}"
     echo "Error: sha256 check failed for ${NETWORK_INSPECTOR_ASSET} on '${TAG}'." >&2
     echo "  expected: ${NETWORK_INSPECTOR_EXPECTED:-<missing or empty ${NETWORK_INSPECTOR_CHECKSUM}>}" >&2
     echo "  actual:   ${NETWORK_INSPECTOR_ACTUAL:-<missing ${NETWORK_INSPECTOR_ASSET}>}" >&2
@@ -213,7 +239,6 @@ if gh release download "${TAG}" \
       | tr -d '\r' | sed -n 's/^Implementation-Version: //p') || true
   )"
   if [[ "${NETWORK_INSPECTOR_VERSION}" != "${ANDROID_VERSION_NAME}" ]]; then
-    rm -rf "${NETWORK_INSPECTOR_TMP}"
     echo "Error: network-inspector.jar on '${TAG}' is version '${NETWORK_INSPECTOR_VERSION:-<none>}'," >&2
     echo "       but versionName in ${ANDROID_MANIFEST_FILE} is '${ANDROID_VERSION_NAME}'." >&2
     echo "       Release a network inspector at version ${ANDROID_VERSION_NAME}, or fix versionName, then retry." >&2
@@ -221,16 +246,13 @@ if gh release download "${TAG}" \
   fi
   rm -rf "${NETWORK_INSPECTOR_DIR}"
   mv "${NETWORK_INSPECTOR_EXTRACTED}" "${NETWORK_INSPECTOR_DIR}"
-  rm -rf "${NETWORK_INSPECTOR_TMP}"
   echo "  ✓ network inspector ${NETWORK_INSPECTOR_VERSION} → ${NETWORK_INSPECTOR_DIR}"
 else
-  GH_MSG=$(<"${GH_STDERR}")
-  rm -f "${GH_STDERR}"
-  rm -rf "${NETWORK_INSPECTOR_TMP}"
-  echo "  ⚠ ${NETWORK_INSPECTOR_ASSET} not downloaded — the Android native network layer will be unavailable"
-  if [[ -n "${GH_MSG}" ]]; then
-    printf '    gh: %s\n' "${GH_MSG//$'\n'/$'\n    gh: '}"
+  if [[ -e "${NETWORK_INSPECTOR_DIR}" ]]; then
+    rm -rf "${NETWORK_INSPECTOR_DIR}"
+    echo "  Removed the earlier ${NETWORK_INSPECTOR_DIR}/ so it is not bundled."
   fi
+  echo "  ⚠ ${NETWORK_INSPECTOR_ASSET} is not on '${TAG}': the Android native network layer will be unavailable"
 fi
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
