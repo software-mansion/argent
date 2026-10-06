@@ -227,6 +227,43 @@ describe("callTool client services", () => {
     await fs.rm(vault, { recursive: true, force: true });
   });
 
+  it("offers write-file only for a call that updates baselines", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    listing[0] = {
+      name: "flow-execute",
+      description: "",
+      inputSchema: {},
+      clientServices: { ops: ["resolve-file", "read-file", "write-file"] },
+    };
+    const { callTool } = createToolsClient();
+    const offered = () =>
+      (invokeRequest().body as { client_services: { ops: string[] } }).client_services.ops;
+
+    await callTool("flow-execute", { project_root: projectDir, name: "root" });
+    const comparing = offered();
+    requests.length = 0;
+    await callTool("flow-execute", {
+      project_root: projectDir,
+      name: "root",
+      updateBaselines: true,
+    });
+
+    expect(comparing).toEqual(["resolve-file", "read-file"]);
+    expect(offered()).toEqual(["resolve-file", "read-file", "write-file"]);
+  });
+
+  it("builds no root from a name that is not a flow name", async () => {
+    // The tool-server refuses such a name, but the roots are offered first.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const { callTool } = createToolsClient();
+
+    await callTool("flow-execute", { project_root: projectDir, name: "../../../../../../../x" });
+
+    expect(
+      (invokeRequest().body as { client_services: { roots: string[] } }).client_services.roots
+    ).toEqual([projectDir]);
+  });
+
   it("sends no client_services when the listing has no clientServices", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     listing = [{ name: "flow-execute", description: "", inputSchema: {} }];

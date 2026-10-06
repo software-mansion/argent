@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
   CLIENT_FILE_OP_TIMEOUT_MS,
   CLIENT_REQUEST_EVENT,
+  FLOW_NAME_PATTERN,
   describeParamIssues,
   type ClientRequestLine,
   type ClientServicesAdvert,
@@ -271,7 +272,11 @@ export function errorBodyMessage(body: {
  * the directory the root flow file REALLY lives in: a `run:` target resolves
  * beside the real file, as it does on one computer, so a root flow that is a
  * symlink serves the fragments next to its target. Every root is served by
- * its real location; one that does not exist is dropped.
+ * its real location; one that does not exist is dropped. A `name` that is not
+ * a flow name (`../../x`) names no root: the tool-server refuses it anyway,
+ * and it must not widen what this client serves first. `write-file` is
+ * offered only for a call that updates baselines, so a plain run cannot
+ * change a committed baseline.
  */
 async function clientServicesHandlerFor(
   advert: ClientServicesAdvert,
@@ -285,7 +290,7 @@ async function clientServicesHandlerFor(
   const rootFlow =
     typeof flow_path === "string"
       ? flow_path
-      : typeof name === "string"
+      : typeof name === "string" && FLOW_NAME_PATTERN.test(name)
         ? path.join(flowsDir, `${name}.yaml`)
         : undefined;
   if (rootFlow !== undefined) {
@@ -293,7 +298,11 @@ async function clientServicesHandlerFor(
     const real = await realpath(rootFlow).catch(() => null);
     if (real !== null) roots.push(path.dirname(real));
   }
-  return createClientServicesHandler({ roots, advertised: advert.ops });
+  const updatesBaselines = (args as Record<string, unknown>).updateBaselines === true;
+  return createClientServicesHandler({
+    roots,
+    advertised: advert.ops.filter((op) => op !== "write-file" || updatesBaselines),
+  });
 }
 
 /**

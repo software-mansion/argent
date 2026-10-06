@@ -408,9 +408,9 @@ describe("read-file and write-file", () => {
 
   const outsideError = (file: string, roots = [projectDir]) =>
     `${file} is outside every root this client serves (${roots.join(", ")})`;
-  const notBaselineError = (file: string) =>
+  const notBaselineError = (file: string, verb = "writes") =>
     `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
-    `this client writes baselines only`;
+    `this client ${verb} baselines only`;
 
   async function exists(file: string): Promise<boolean> {
     return fs.lstat(file).then(
@@ -418,6 +418,81 @@ describe("read-file and write-file", () => {
       () => false
     );
   }
+
+  /**
+   * `<proj>/deep/__baselines__/login`, whose real location is longer than
+   * PATH_MAX: realpath gives up with ENAMETOOLONG, while the kernel, which
+   * expands `deep` (a short relative link) on its own, still follows the path.
+   * A git checkout can carry such links. `cleanup` removes the tree bottom-up
+   * through links, since no absolute path reaches its deepest level.
+   */
+  async function overlongKeyDir(): Promise<{ keyDir: string; cleanup: () => Promise<void> }> {
+    const pathMax = process.platform === "linux" ? 4096 : 1024;
+    const rest = "/__baselines__/login/home.png".length;
+    // The link target plus the rest of the spelled path stays under PATH_MAX;
+    // with the project prefix in front, the real path does not.
+    const segments: string[] = [];
+    for (let left = pathMax - rest - 8; left > 1; left -= 201) {
+      segments.push("d".repeat(Math.min(200, left - 1)));
+    }
+    const via = (k: number) => path.join(projectDir, k === segments.length ? "deep" : `t${k}`);
+    await fs.mkdir(path.join(projectDir, "c"), { recursive: true });
+    for (let k = 0; k <= segments.length; k++) {
+      await fs.symlink(path.join("c", ...segments.slice(0, k)), via(k));
+      if (k < segments.length) await fs.mkdir(path.join(via(k), segments[k]!));
+    }
+    const keyDir = path.join(via(segments.length), "__baselines__", "login");
+    await fs.mkdir(keyDir, { recursive: true });
+    const cleanup = async () => {
+      await fs.rm(path.join(via(segments.length), "__baselines__"), { recursive: true });
+      for (let k = segments.length - 1; k >= 0; k--)
+        await fs.rmdir(path.join(via(k), segments[k]!));
+    };
+    return { keyDir, cleanup };
+  }
+
+  it("refuses a read whose real location realpath cannot name", async () => {
+    const secret = path.join(tmpDir, "outside", "id_rsa");
+    await fs.mkdir(path.dirname(secret));
+    await fs.writeFile(secret, "PRIVATE KEY");
+    const { keyDir: deepKey, cleanup } = await overlongKeyDir();
+    try {
+      const file = path.join(deepKey, "home.png");
+      await fs.symlink(secret, file);
+      await expect(fs.realpath(file)).rejects.toMatchObject({ code: "ENAMETOOLONG" });
+      await expect(fs.readFile(file, "utf8")).resolves.toBe("PRIVATE KEY");
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(readLine(file))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: outsideError(file),
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("refuses a write whose real location realpath cannot name", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    const { keyDir: deepKey, cleanup } = await overlongKeyDir();
+    try {
+      const file = path.join(deepKey, "home.png");
+      await fs.symlink(path.join(outside, "victim.png"), file);
+      await fs.writeFile(path.join(outside, "victim.png"), "untouched");
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: outsideError(file),
+      });
+      expect(await fs.readFile(path.join(outside, "victim.png"), "utf8")).toBe("untouched");
+    } finally {
+      await cleanup();
+    }
+  });
 
   it("answers exists:false for a missing baseline", async () => {
     const handler = await handlerFor([projectDir]);
@@ -446,7 +521,8 @@ describe("read-file and write-file", () => {
   });
 
   it("refuses a read outside the roots", async () => {
-    const outside = path.join(tmpDir, "outside.png");
+    const outside = path.join(tmpDir, "outside", "__baselines__", "login", "home.png");
+    await fs.mkdir(path.dirname(outside), { recursive: true });
     await fs.writeFile(outside, PNG);
     const handler = await handlerFor([projectDir]);
 
@@ -460,14 +536,15 @@ describe("read-file and write-file", () => {
   it("refuses a read through a symlink that leaves the roots", async () => {
     const elsewhere = path.join(tmpDir, "elsewhere");
     await fs.mkdir(elsewhere);
-    await fs.writeFile(path.join(elsewhere, "real.png"), PNG);
+    await fs.mkdir(path.join(elsewhere, "login"));
+    await fs.writeFile(path.join(elsewhere, "login", "real.png"), PNG);
     await fs.mkdir(keyDir, { recursive: true });
-    await fs.symlink(path.join(elsewhere, "real.png"), baseline);
+    await fs.symlink(path.join(elsewhere, "login", "real.png"), baseline);
     // A whole `__baselines__` directory that leads out, too.
     const otherFlows = path.join(projectDir, "other-flows");
     await fs.mkdir(otherFlows);
     await fs.symlink(elsewhere, path.join(otherFlows, "__baselines__"));
-    const throughDir = path.join(otherFlows, "__baselines__", "real.png");
+    const throughDir = path.join(otherFlows, "__baselines__", "login", "real.png");
     const handler = await handlerFor([projectDir]);
 
     for (const file of [baseline, throughDir]) {
@@ -491,16 +568,25 @@ describe("read-file and write-file", () => {
     });
   });
 
-  it("refuses a .mjs read and a .yaml read", async () => {
+  it("refuses a .mjs read, a .yaml read and a .png outside __baselines__", async () => {
     await fs.writeFile(path.join(flowsDir, "helper.mjs"), "export default 1;\n");
+    const screenshot = path.join(projectDir, "docs", "Screenshot 2026-10-06.png");
+    await fs.mkdir(path.dirname(screenshot));
+    await fs.writeFile(screenshot, PNG);
     const handler = await handlerFor([projectDir]);
 
-    // Both exist inside the root: read-file serves baselines, not flows.
-    for (const file of [path.join(flowsDir, "helper.mjs"), path.join(flowsDir, "frag.yaml")]) {
+    // All exist inside the root: read-file serves baselines only.
+    for (const file of [
+      path.join(flowsDir, "helper.mjs"),
+      path.join(flowsDir, "frag.yaml"),
+      screenshot,
+      path.join(flowsDir, "__baselines__", "home.png"),
+      path.join(flowsDir, "__baselines__", "a b", "home.png"),
+    ]) {
       expect(await handler.handle(readLine(file))).toEqual({
         id: "req-1",
         ok: false,
-        error: `${file} is not a .png file; this client serves snapshot baselines only`,
+        error: notBaselineError(file, "serves"),
       });
     }
   });
@@ -514,13 +600,18 @@ describe("read-file and write-file", () => {
     // form that is refused. (path.join would fold the `..` away.)
     const dotted = [keyDir, "..", "login", path.basename(baseline)].join(path.sep);
     const relative = path.join(".argent", "flows", "__baselines__", "login", "x.png");
-    for (const file of [dotted, relative, 1]) {
+    for (const file of [dotted, relative]) {
       expect(await handler.handle(readLine(file))).toEqual({
         id: "req-1",
         ok: false,
-        error: "read-file needs an absolute path with no .. segment",
+        error: notBaselineError(file, "serves"),
       });
     }
+    expect(await handler.handle(readLine(1))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: "read-file needs a string path",
+    });
   });
 
   it("names a directory as a host read would", async () => {
@@ -699,6 +790,7 @@ describe("read-file and write-file", () => {
       id: "req-1",
       ok: true,
       written: file,
+      replaced: false,
     });
     expect(await fs.readFile(file)).toEqual(PNG);
 
@@ -720,6 +812,7 @@ describe("read-file and write-file", () => {
       id: "req-1",
       ok: true,
       written: baseline,
+      replaced: false,
     });
     expect(await fs.readFile(baseline)).toEqual(PNG);
     // What was written reads back through read-file byte for byte.
@@ -736,7 +829,12 @@ describe("read-file and write-file", () => {
     const handler = await handlerFor([projectDir]);
 
     // Shorter than the old file, so a write that did not truncate would show.
-    expect(await handler.handle(writeLine(baseline, PNG))).toMatchObject({ ok: true });
+    expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
+      id: "req-1",
+      ok: true,
+      written: baseline,
+      replaced: true,
+    });
     expect(await fs.readFile(baseline)).toEqual(PNG);
   });
 
@@ -748,7 +846,7 @@ describe("read-file and write-file", () => {
     ).toEqual({
       id: "req-1",
       ok: false,
-      error: `${baseline} is larger than the 32 MiB cap on a file sent to the tool-server`,
+      error: `${baseline}: the baseline is larger than the 32 MiB cap on a file it writes`,
     });
     // Refused before the key directory is made.
     expect(await exists(path.join(flowsDir, "__baselines__"))).toBe(false);
@@ -775,6 +873,12 @@ describe("read-file and write-file", () => {
       `[client-services] write-file ${baseline}\n`,
       `[client-services] read-file ${baseline}\n`,
     ]);
+
+    // A refused request names no file: nothing was read or written.
+    write.mockClear();
+    await handler.handle(writeLine(path.join(projectDir, "notes.png"), PNG));
+    await handler.handle(readLine(path.join(tmpDir, "x", "__baselines__", "k", "home.png")));
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("refuses read-file and write-file when the server did not advertise them", async () => {

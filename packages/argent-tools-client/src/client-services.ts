@@ -62,8 +62,11 @@ function logRequest(op: string, servedPath: string): void {
  * The kernel's view of a candidate path for the root fence: the realpath of
  * its deepest existing ancestor with the missing rest re-appended. A missing
  * component cannot be a symlink, so this is where the path really points,
- * whether or not it exists. Null only when not even the filesystem root
- * resolves.
+ * whether or not it exists. A link loop stops the kernel as it stops
+ * realpath, so it is passed on for the read to name. Null for any other
+ * failure: past PATH_MAX (ENAMETOOLONG) the kernel still follows a chain of
+ * short relative links that realpath cannot name, so where the path leads is
+ * unknown.
  */
 async function resolveForFence(candidate: string): Promise<string | null> {
   const missing: string[] = [];
@@ -71,7 +74,9 @@ async function resolveForFence(candidate: string): Promise<string | null> {
   for (;;) {
     try {
       return path.join(await fs.realpath(dir), ...missing);
-    } catch {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "ELOOP") return null;
       const parent = path.dirname(dir);
       if (parent === dir) return null;
       missing.unshift(path.basename(dir));
@@ -130,9 +135,27 @@ async function readAdmitted(
   };
 }
 
-/** An absolute path with no `..` segment: the only form a server builds for a file op. */
-function isPlainAbsolute(file: string): boolean {
-  return path.isAbsolute(file) && !file.split(/[\\/]/).includes("..");
+/**
+ * `<dir>/__baselines__/<flow>/<name>.png`, absolute and with no `..` segment:
+ * the only file the tool-server reads or writes through this client, beside
+ * the root flow's real file.
+ */
+function isBaselinePath(file: string): boolean {
+  const keyDir = path.dirname(file);
+  return (
+    path.isAbsolute(file) &&
+    !file.split(/[\\/]/).includes("..") &&
+    file.endsWith(".png") &&
+    path.basename(path.dirname(keyDir)) === "__baselines__" &&
+    FLOW_NAME_PATTERN.test(path.basename(keyDir))
+  );
+}
+
+function notBaseline(file: string, verb: "serves" | "writes"): string {
+  return (
+    `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
+    `this client ${verb} baselines only`
+  );
 }
 
 /**
@@ -216,12 +239,8 @@ export async function createClientServicesHandler(opts: {
   // path beside the root flow's real file, so there is nothing to resolve.
   async function readFile(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
     const file = args.path;
-    if (typeof file !== "string" || !isPlainAbsolute(file)) {
-      return refuse(id, "read-file needs an absolute path with no .. segment");
-    }
-    if (!file.endsWith(".png")) {
-      return refuse(id, `${file} is not a .png file; this client serves snapshot baselines only`);
-    }
+    if (typeof file !== "string") return refuse(id, "read-file needs a string path");
+    if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "serves"));
     const resolved = await resolveForFence(file);
     if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
     // A `.png` name that links to another kind of file (a `.env`) would send it.
@@ -242,26 +261,17 @@ export async function createClientServicesHandler(opts: {
     if (typeof file !== "string" || typeof content !== "string") {
       return refuse(id, "write-file needs string path and content");
     }
+    if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "writes"));
     const keyDir = path.dirname(file);
-    if (
-      !isPlainAbsolute(file) ||
-      !file.endsWith(".png") ||
-      path.basename(path.dirname(keyDir)) !== "__baselines__" ||
-      !FLOW_NAME_PATTERN.test(path.basename(keyDir))
-    ) {
-      return refuse(
-        id,
-        `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
-          `this client writes baselines only`
-      );
-    }
     // Fenced before the directory is created, so a symlinked `__baselines__`
     // that leads out of the roots gets no directory made there either.
     if (!isInsideRoots(await resolveForFence(keyDir), roots)) {
       return refuse(id, `${file} is ${outsideRoots}`);
     }
     const bytes = Buffer.from(content, "base64");
-    if (bytes.length > CLIENT_CONTENT_CAP_BYTES) return refuse(id, tooLarge(file));
+    if (bytes.length > CLIENT_CONTENT_CAP_BYTES) {
+      return refuse(id, `${file}: the baseline is larger than the 32 MiB cap on a file it writes`);
+    }
     await fs.mkdir(keyDir, { recursive: true });
     // Again on the file itself: a baseline that is a symlink writes through.
     // A dangling one would create its target, wherever it points, and the
@@ -278,9 +288,13 @@ export async function createClientServicesHandler(opts: {
     if (!resolved!.endsWith(".png")) {
       return refuse(id, `${file} links to a file that is not a PNG file`);
     }
+    const replaced = await fs.stat(file).then(
+      () => true,
+      () => false
+    );
     logRequest("write-file", file);
     await fs.writeFile(file, bytes);
-    const answer: WriteFileAnswer = { written: file };
+    const answer: WriteFileAnswer = { written: file, replaced };
     return { id, ok: true, ...answer };
   }
 
