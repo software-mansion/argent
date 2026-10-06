@@ -61,7 +61,7 @@ The client adds a `client_services` parameter to the arguments of a call when al
 | `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements                                                                                                                                                              |
 | `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of `flow_path` when the arguments carry one, and the directory of the real file behind the root flow. A root inside another root is not sent |
 
-The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server ignores `client_services` on a call without that header and runs the call without client services. The tool-server takes `client_services` off the arguments before it validates them, so the input schema of `flow-execute` does not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
+The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. On a call without that header, the tool-server ignores a valid `client_services` and runs the call without client services. A malformed `client_services` gets a 400 on any call. The tool-server takes `client_services` off the arguments before it validates them, so the input schema of `flow-execute` does not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
 
 Each request line must reach the client at once, because the run waits for the answer. For this reason, the client sends `Accept-Encoding: identity` with the call, and the tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. Each reverse proxy between the client and the tool-server must:
 
@@ -188,15 +188,19 @@ The tool-server waits 30 s for each answer.
 | The HTTP response of the call closes     | The tool-server rejects every pending request and aborts the run                                                                                                                                                                                |
 | The client closes before the call starts | The tool-server does not run the call                                                                                                                                                                                                           |
 
-The reason of a timeout names the op, the target and the usual causes: a paused or sleeping client, a proxy that buffers the stream, and a proxy that does not forward the answer.
+The reason of a timeout names the op and the target. It also names the usual causes:
+
+- a paused or sleeping client
+- a proxy that buffers the stream
+- a proxy that does not forward the answer
 
 ## Client policy
 
 The client enforces these rules. The tool-server checks only the shape of each answer and the 32 MiB cap. The tool-server already holds the bearer token, so the rules protect the files of the project, not the token.
 
-1. The client reads nothing outside the roots it sent. Before it reads a file or lists a directory, it checks the real location of both against the roots. It refuses a symlink that points outside a root. It refuses a target that leaves a root through `..`.
+1. The client reads nothing outside the roots it sent. Before it reads a file or lists a directory, it checks the real location of both against the roots. It refuses a symlink that points outside a root. It refuses a target that ends outside a root, for example through `..`.
 2. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
-3. `resolve-file` serves `.yaml` files only. The client refuses a `.yaml` name that links to a file of another kind.
+3. `resolve-file` serves `.yaml` names only. The client refuses a `.yaml` name that links to a file that is not a YAML file (`.yaml` or `.yml`).
 4. The client refuses a file above 32 MiB. The error names the cap.
 5. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
 6. The client answers a directory with the `EISDIR` error and an unreadable file with the error of the read, for example `EACCES`. It answers a target in a directory that does not exist as a missing file.

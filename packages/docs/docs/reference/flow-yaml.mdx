@@ -445,7 +445,12 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 | A `tool:` step that records a flow, for example `flow-add-step`                                                        | The tool-server rejects the flow before the first step                                                                  |
 | A relative `launch: { chromium: <path> }`                                                                              | The launch fails. Use an absolute path on the tool-server                                                               |
 
-The tool-server asks the client for each `run:` fragment during the run. The exchange is documented in the [Tool-server API reference](/docs/reference/tool-server-api). The client serves only files under the project root, under its `.argent/flows` directory, under the directory of an explicit flow path, and beside the real file of a flow that is a symlink. For a flow with a `run:` step, the CLI must keep running until the run ends. Each reverse proxy between the CLI and the tool-server must pass the response stream through without buffering. A flow without `run:` steps does not need either. The other rows of the table still need a run without a link. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs.
+The tool-server asks the client for each `run:` fragment during the run. The exchange is documented in the [Tool-server API reference](/docs/reference/tool-server-api). The client serves only files under the project root, under its `.argent/flows` directory, under the directory of an explicit flow path, and beside the real file of a flow that is a symlink. The CLI must keep running until the run ends, because the tool-server stops a run when the CLI disconnects. A flow with a `run:` step also needs these conditions:
+
+- The CLI answers each request within 30 s. A paused or sleeping CLI fails the run.
+- Each reverse proxy between the CLI and the tool-server passes the response stream through without buffering.
+
+The other rows of the table still need a run without a link. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs.
 
 For each rejection in the table, the error lists the steps that caused it.
 
@@ -453,7 +458,16 @@ The tool-server runs the uploaded copy even when it has a file at the same path.
 
 A rejected flow gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected flow on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next flow and keeps the rejected flow in its `flows` array.
 
-When the CLI does not answer a request of the tool-server within 30 s, the flow fails with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `timeout`. The reason names the usual causes: a paused or sleeping CLI, a proxy that buffers the stream, and a proxy that does not forward the answer. A directory run stops at that flow and marks the flows after it as skipped.
+When the CLI does not answer a request of the tool-server within 30 s, the effect depends on the request:
+
+- A request before the first step fails the flow with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `timeout`. A directory run stops at that flow and marks the flows after it as skipped.
+- A request at a `run:` step makes that step report `error`. The flow fails, and a directory run continues with the next flow.
+
+The reason names the usual causes:
+
+- a paused or sleeping CLI
+- a proxy that buffers the stream
+- a proxy that does not forward the answer
 
 When the CLI cannot connect to the tool-server that a link names, the flow does not run. The CLI prints the address of that tool-server, the setting that names it and the reason, for example `connection refused`. The exit code is 2. The JSON object holds `"error_code": "TOOL_SERVER_UNREACHABLE"` and `"error_kind": "network"`. A directory run stops at that flow and marks the flows after it as skipped.
 
