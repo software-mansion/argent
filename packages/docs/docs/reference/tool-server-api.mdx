@@ -50,16 +50,16 @@ The client adds a `client_services` parameter to the arguments of a call when al
   "project_root": "/work/proj",
   "device": "chromium-cdp-9471",
   "client_services": {
-    "ops": ["resolve-file", "read-file", "write-file"],
+    "ops": ["resolve-file", "read-file"],
     "roots": ["/work/proj"]
   }
 }
 ```
 
-| Field   | Value                                                                                                                                                                                                                                                          |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements                                                                                                                                                              |
-| `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of `flow_path` when the arguments carry one, and the directory of the real file behind the root flow. A root inside another root is not sent |
+| Field   | Value                                                                                                                                                                                                                                                                                                               |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements. The client offers `write-file` only when the arguments set `updateBaselines: true`                                                                                                                               |
+| `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of `flow_path` when the arguments carry one, and the directory of the real file behind the root flow. A root inside another root is not sent. A `name` that is not a valid flow name adds no root |
 
 The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 with `HTTP_ZOD_VALIDATION_FAILED` to a call that carries `client_services` without that header, or with a malformed `client_services`. A proxy that rewrites `Accept` therefore gets this 400. The tool-server takes `client_services` off the arguments before it validates them, so the input schema of `flow-execute` does not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
 
@@ -175,7 +175,7 @@ The runner applies the same rules to the answer as to a file on its own disk: th
 
 ### `read-file`
 
-The tool-server sends `read-file` at each `snapshot:` step, to get the baseline. The tool-server builds the path of the baseline beside the real file of the root flow on the client: `<dir>/__baselines__/<flow>/<key>.png`. `<flow>` is the name of the root flow. `<key>` is the baseline key of the snapshot. See [Snapshots](/docs/reference/flow-yaml#snapshots). A `snapshot:` step in a fragment uses the baselines of the root flow.
+The tool-server sends `read-file` at each `snapshot:` step that compares, to get the baseline. The tool-server builds the path of the baseline beside the real file of the root flow on the client: `<dir>/__baselines__/<flow>/<key>.png`. `<flow>` is the name of that real file without `.yaml`. When that name is not a valid flow name, `<flow>` is the name of the flow. `<key>` is the baseline key of the snapshot. See [Snapshots](/docs/reference/flow-yaml#snapshots). A `snapshot:` step in a fragment uses the baselines of the root flow.
 
 Request `args`:
 
@@ -196,7 +196,7 @@ An answer with `exists: false` is not a refusal. The step then fails with the re
 
 ### `write-file`
 
-The tool-server sends `write-file` at each `snapshot:` step when the call sets `updateBaselines`. The request carries the new baseline. Before this request, the tool-server sends `read-file` for the same path. The step reason then says whether the baseline is new or updated.
+The tool-server sends `write-file` at each `snapshot:` step when the call sets `updateBaselines`. The request carries the new baseline. The tool-server sends no `read-file` for this step. The answer tells whether a baseline was at the path, so the step reason says `baseline written` or `baseline updated`.
 
 Request `args`:
 
@@ -209,13 +209,14 @@ The content travels in the request line on the NDJSON stream, not in an answer. 
 
 Answer:
 
-| Field     | Value                          |
-| --------- | ------------------------------ |
-| `written` | The path that the client wrote |
+| Field      | Value                                               |
+| ---------- | --------------------------------------------------- |
+| `written`  | The path that the client wrote                      |
+| `replaced` | `true` when a file was at the path before the write |
 
 ### Reserved op names
 
-The protocol also defines the op name `run-script`. The client does not serve it yet. The client lists only the ops it serves, so the tool-server never sends a request for it.
+The protocol also defines the op name `run-script`. No client serves it. The client lists only the ops it serves, so the tool-server never sends a request for it.
 
 ## Timeouts and failures
 
@@ -239,16 +240,17 @@ The reason of a timeout names the op, and the target or the path of the request.
 The client enforces these rules. The tool-server checks only the shape of each answer and the 32 MiB cap. The tool-server already holds the bearer token, so the rules protect the files of the project, not the token.
 
 1. The client reads and writes nothing outside the roots it sent. Before it reads a file, writes a file or lists a directory, it checks the real location against the roots. It refuses a symlink that points outside a root. It refuses a target that ends outside a root, for example through `..`.
-2. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
-3. `read-file` and `write-file` take an absolute path. The client refuses a path with a `..` segment.
+2. The client refuses a path when it cannot find the real location of the path. For example, the real location can be longer than the path limit of the system.
+3. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
 4. `resolve-file` serves `.yaml` names only. The client refuses a `.yaml` name that links to a file that is not a YAML file (`.yaml` or `.yml`).
-5. `read-file` serves `.png` names only. The client refuses a `.png` name that links to a file that is not a PNG file (`.png`).
-6. `write-file` writes only a path of the form `<dir>/__baselines__/<flow>/<key>.png`. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path.
-7. Before `write-file` creates `__baselines__/<flow>/`, the client checks the real location of that directory against the roots. Before it writes the file, the client checks the real location of the file again. It refuses a file that links outside a root, to a file that is not a PNG file, or to a file that does not exist.
-8. The client refuses a file above 32 MiB, for a read and for a write. The error names the cap.
-9. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
-10. The client answers a directory with the `EISDIR` error and an unreadable file with the error of the read, for example `EACCES`. It answers a target or a path in a directory that does not exist as a missing file.
-11. By default, the client prints nothing for a request it serves. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line per served request to stderr. The line holds the op and the path, for example `[client-services] write-file <path>`. The client never prints the content.
+5. `read-file` and `write-file` take only an absolute path of the form `<dir>/__baselines__/<flow>/<key>.png`, with no `..` segment. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path.
+6. The client refuses a `.png` name that links to a file that is not a PNG file (`.png`).
+7. The client offers `write-file` only for a call that sets `updateBaselines: true`. A run that compares baselines cannot change them.
+8. Before `write-file` creates `__baselines__/<flow>/`, the client checks the real location of that directory against the roots. Before it writes the file, the client checks the real location of the file again. The client refuses a link to a file that does not exist.
+9. The client refuses a file above 32 MiB, for a read and for a write. The error names the cap.
+10. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
+11. The client answers a directory with the `EISDIR` error and an unreadable file with the error of the read, for example `EACCES`. It answers a target or a path in a directory that does not exist as a missing file.
+12. By default, the client prints nothing for a request it serves. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line per served request to stderr. The line holds the op and the path, for example `[client-services] write-file <path>`. The client never prints the content. The client prints no line for a request that it refuses.
 
 ## A client or tool-server without client services
 
@@ -259,12 +261,12 @@ The client enforces these rules. The tool-server checks only the shape of each a
 | Without client services | With client services    | The call has no `client_services`. The tool-server rejects the flow before the first step and adds: "This tool-server serves run: steps for a client that sends client services. Update the argent CLI or MCP adapter on the client." |
 | Without client services | Without client services | The tool-server rejects the flow before the first step                                                                                                                                                                                |
 
-A `snapshot:` step needs the `read-file` and `write-file` ops on both sides. A client or tool-server without client services has neither op.
+A `snapshot:` step that compares needs `resolve-file` and `read-file` on both sides. A `snapshot:` step that updates baselines needs `resolve-file` and `write-file`. A client or tool-server without client services has none of these ops.
 
-| Client                               | Tool-server                          | Result for a `snapshot:` step over a link                                                                                                                                                                                             |
-| ------------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| With `read-file` and `write-file`    | With `read-file` and `write-file`    | The client serves the baseline and writes each new baseline through client services                                                                                                                                                   |
-| Without `read-file` and `write-file` | With `read-file` and `write-file`    | The tool-server rejects the flow before the first step and adds: "This tool-server serves snapshot: steps for a client that offers the read-file and write-file client services. Update the argent CLI or MCP adapter on the client." |
-| Any                                  | Without `read-file` and `write-file` | The tool-server rejects the flow before the first step                                                                                                                                                                                |
+| Client                             | Tool-server                          | Result for a `snapshot:` step over a link                                                                                                                                                                                                           |
+| ---------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| With `read-file` and `write-file`  | With `read-file` and `write-file`    | The client serves the baseline and writes each new baseline through client services                                                                                                                                                                 |
+| Without the op that the step needs | With `read-file` and `write-file`    | The tool-server rejects the flow before the first step and adds: "This tool-server serves snapshot: steps for a client that offers the resolve-file, read-file and write-file client services. Update the argent CLI or MCP adapter on the client." |
+| Any                                | Without `read-file` and `write-file` | The tool-server rejects the flow before the first step                                                                                                                                                                                              |
 
 `script:` steps, and `tool:` steps that take a file or record a flow, need a run without a link in every row. In the root flow, the tool-server rejects them before the first step and lists each one. In a fragment that the client serves, the tool-server rejects them when the `run:` step loads the fragment: that step reports `error` with the same list, and no step of the fragment runs. The tool-server rejects a `snapshot:` step that the client cannot serve at the same points.
