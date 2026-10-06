@@ -1,0 +1,73 @@
+---
+sidebar_position: 3
+sidebar_label: Node client
+title: Node client reference
+sidebar_custom_props:
+  icon: file-code
+---
+
+The `@swmansion/argent/client` module calls Argent tools from a Node.js program. It uses the same tool-server as `argent run` and the MCP server.
+
+```js
+import { createArgentClient, ArgentToolError } from "@swmansion/argent/client";
+
+const argent = createArgentClient();
+const { data } = await argent.callTool("list-devices");
+const simulator = data.devices.find((d) => d.platform === "ios" && d.state === "Booted");
+const shot = await argent.callTool("screenshot", { udid: simulator.udid });
+console.log(shot.data); // the result, with the screenshot as a local file path
+```
+
+## Install
+
+Add `@swmansion/argent` to the project. Import the client as an ES module.
+
+```bash
+npm install --save-dev @swmansion/argent
+```
+
+When you bundle the program, keep `@swmansion/argent` external, for example with `--external:@swmansion/argent` in esbuild. The client finds the tool-server next to its own file in the installed package.
+
+## Tool-server
+
+The client connects to the tool-server of the installed package. When no tool-server runs, the client starts one. The `argent run` command and the client share that tool-server.
+
+When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the client uses that tool-server.
+
+## API
+
+| Member                            | Description                                                                                                                                                       |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createArgentClient()`            | Returns an `ArgentClient`                                                                                                                                         |
+| `listTools(options?)`             | Returns the tools: `name`, `description` and `inputSchema` (a JSON Schema of the arguments)                                                                       |
+| `callTool(name, args?, options?)` | Calls one tool and returns `{ data, note? }`. See [TypeScript](#typescript)                                                                                       |
+| `options.onProgress(event)`       | Receives progress events from a long-running tool                                                                                                                 |
+| `options.signal`                  | An `AbortSignal`. When it aborts, the client stops the call. `listTools` also accepts it                                                                          |
+| `stopServer()`                    | Stops the local tool-server of the installed package, like `argent server stop`. Returns `false` when no tool-server runs. The next call starts a new tool-server |
+| `listFlags()`                     | Returns the feature flags, like `argent flags`: `name`, `description` and `enabled`                                                                               |
+| `ArgentToolError`                 | The error of a rejected or failed call: `message`, `code?`, `kind?` and `issues?`                                                                                 |
+
+When `options.signal` aborts, the call throws the reason of the signal, not an `ArgentToolError`. The client closes the connection, and the tool-server then aborts the signal of the tool. Some tools, for example `run-sequence` and `await-ui-element`, stop. Other tools continue to the end. If the tool-server is not running, the call starts it first. An abort during the start takes effect when the start is complete.
+
+A validation failure sets `issues`. When the client cannot reach the tool-server, `callTool` and `listTools` throw a plain `Error`, not an `ArgentToolError`.
+
+## TypeScript
+
+The client includes types for the tools of the installed version. TypeScript rejects a tool name that does not exist and arguments that do not match the schema of the tool. You can omit `args` only when the tool has no required arguments. `ArgentToolName` and `ArgentToolArgs` are exported. A tool name of type `string`, for example from `listTools()`, needs a cast to `ArgentToolName`. The type of `data` is `unknown`. To set a different type, give it as the second type argument, for example `callTool<"list-devices", MyDevices>("list-devices")`.
+
+### Upgrade from 0.27.0 and earlier
+
+In 0.27.0 and earlier, `callTool` accepts any `string` as the tool name, and its only type argument is the type of `data`. The typed `callTool` changes the code that follows:
+
+| Code in 0.27.0                               | Change                                                      |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| `callTool<MyDevices>("list-devices")`        | Write `callTool<"list-devices", MyDevices>("list-devices")` |
+| `callTool(name)`, with `name: string`        | Cast the name: `callTool(name as ArgentToolName)`           |
+| An argument that is not in the schema        | Remove the argument                                         |
+| No `args` for a tool with required arguments | Give the required arguments                                 |
+
+Code that gives no type argument, a literal tool name and valid arguments does not change.
+
+The arguments and results of each tool are in the [Tools reference](./tools.mdx). Run `argent tools describe <name>` to see the argument schema of one tool.
+
+In `data`, the client replaces each artifact, for example a screenshot or a recording, with the path of a local file. When the tool-server is remote, the client downloads the file first.

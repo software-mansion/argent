@@ -1,30 +1,8 @@
-import { zodObjectToJsonSchema, type Registry, type ToolDefinition } from "@argent/registry";
-import { pasteTool } from "../../src/tools/paste";
-import { createProposeVariantTool } from "../../src/tools/variants/propose-variant";
-import { awaitUserSelectionTool } from "../../src/tools/variants/await-user-selection";
+import { zodObjectToJsonSchema, type ToolDefinition } from "@argent/registry";
+export { listToolDefinitions as definitionsById } from "../../src/utils/setup-registry";
 
 /** Every tool argent can serve. Bump deliberately when a tool is added or removed. */
-export const EXPECTED_TOOL_COUNT = 77;
-
-/**
- * The full catalog, keyed by id. Two groups never reach `registry.registerTool`
- * on every platform, so they are added by hand and CI covers one catalog
- * everywhere: the Lens tools register only on macOS, and `paste` is not
- * registered at all.
- */
-export function definitionsById(registry: Registry): Map<string, ToolDefinition<any, any>> {
-  const definitions = new Map<string, ToolDefinition<any, any>>();
-  for (const id of registry.getSnapshot().tools) {
-    definitions.set(id, registry.getTool(id)!);
-  }
-
-  definitions.set("propose_variant", createProposeVariantTool(registry));
-  definitions.set("await_user_selection", awaitUserSelectionTool);
-
-  // This definition intentionally exists outside createRegistry.
-  definitions.set("paste", pasteTool);
-  return definitions;
-}
+export const EXPECTED_TOOL_COUNT = 79;
 
 /**
  * The schema a client actually receives: the explicit one if a definition

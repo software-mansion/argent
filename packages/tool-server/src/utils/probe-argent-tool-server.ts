@@ -1,16 +1,12 @@
 import * as http from "node:http";
 
 /**
- * Probe whether a healthy argent tool-server is already listening on
- * `host:port`. Used to tell a redundant/overlapping instance (which lost the
- * bind with EADDRINUSE) that the port is owned by a live peer, so it can defer
- * cleanly instead of crash-looping.
+ * Whether a healthy argent tool-server already owns `host:port`, so an instance
+ * that lost the bind with EADDRINUSE can exit 0 instead of crash-looping.
  *
- * An argent tool-server answers `GET /tools` with 200 (the tools JSON) or, when
- * an auth token is configured, 401 — either proves a live argent peer. No token
- * is sent: reachability + argent-shaped response is all we need. A wedged peer
- * that never answers within the timeout resolves `false`, so we still surface a
- * genuinely stuck port as a crash rather than deferring to a dead server.
+ * `GET /tools` answering 200, or 401 when an auth token is configured, both
+ * prove a live argent peer; no token is sent. A peer that never answers within
+ * the timeout resolves `false`, so a wedged port still surfaces as a crash.
  */
 export function probeArgentToolServer(
   host: string,
@@ -22,7 +18,7 @@ export function probeArgentToolServer(
       { host, port, path: "/tools", method: "GET", timeout: timeoutMs },
       (res) => {
         const isArgentPeer = res.statusCode === 200 || res.statusCode === 401;
-        res.resume(); // drain the response so the socket can close
+        res.resume(); // drain so the socket can close
         resolve(isArgentPeer);
       }
     );

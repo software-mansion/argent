@@ -1,27 +1,16 @@
 import bytesUtil from "bytes";
 
 /**
- * Format a byte count as a compact, no-space size string (`512B`, `1.5KB`,
- * `2GB`) for profiler report tables. Shared by the combined report and the
- * stack-query renderer; note the iOS analysis report uses a distinct spaced
- * format (`1.5 MB`).
- *
- * Delegates to `bytes` (base-1024, KB/MB/GB/TB labels) so leak totals above
- * 1 GB render as `2.1GB` instead of the old hand-rolled helper's `2148.0MB`
- * (it capped at an MB tier).
+ * Compact, no-space size string (`512B`, `1.5KB`, `2GB`) for profiler report
+ * tables. The iOS analysis report uses a spaced variant (`1.5 MB`) instead.
  */
 export function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1 }) ?? `${bytes}B`;
 }
 
 /**
- * Escape a value for interpolation into a GFM table cell: GFM splits cells on
- * unescaped `|` even inside code spans, so a demangled C++ frame such as
- * `folly::operator|(...)` would shift every column after it. Used by every
- * profiler report table that interpolates a demangled symbol — the leak tables
- * (analyze + leak_stacks), the CPU-hotspot summary, and the function
- * caller/callee and thread-breakdown tables — since `dominantFunction` is a real
- * demangled frame in every capture mode, not only under malloc_stack_logging.
+ * GFM splits table cells on unescaped `|` even inside code spans, and demangled
+ * C++ frames such as `folly::operator|(...)` contain one.
  */
 export function escapeMarkdownTableCell(value: string): string {
   return value.replace(/\|/g, "\\|");

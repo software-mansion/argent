@@ -9,7 +9,8 @@ import type {
 import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
-import { iosRequires, describeIos } from "./platforms/ios";
+import { iosRequires, describeIos, withBootCaveatOncePerDevice } from "./platforms/ios";
+import { describeIosDevice } from "./platforms/ios-device";
 import { describeChromium } from "./platforms/chromium";
 import { describeTv } from "./platforms/tv";
 import { describeVega, vegaRequires } from "./platforms/vega";
@@ -19,11 +20,8 @@ import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { formatDescribeTree } from "./format-tree";
 
-// In-between layer between the per-platform adapters (which still own all
-// pruning — the Android v2 trimmer in uiautomator-parser stays untouched) and
-// the public DescribeResult. The internal `tree` is converted to a token-
-// efficient text rendering here and then dropped, so the caller (LLM) never
-// pays for the JSON tree.
+// Renders the adapter-internal `tree` to text and drops it, so the caller (LLM)
+// never pays for the JSON tree. Pruning stays in the per-platform adapters.
 function withDescription(data: DescribeTreeData): DescribeResult {
   const out: DescribeResult = {
     description: formatDescribeTree(data.tree, { source: data.source }),
@@ -47,7 +45,8 @@ const zodSchema = z.object({
     .describe(
       "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
         "and the describe tool falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium."
+        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium, " +
+        "and on a physical iOS device."
     ),
 });
 
@@ -65,23 +64,16 @@ interface ChromiumServices {
   chromium: ChromiumCdpApi;
 }
 
-// `describe` doesn't fit dispatchByPlatform's standard service-typed
-// signature because the iOS handler resolves AX / native-devtools through
-// `registry` (closed over here) rather than via the registry's services()
-// declaration. We still feed `iosRequires` / `androidRequires` to the
-// dispatcher so the per-branch host-binary preflight fires uniformly. The
-// Chromium branch *does* go through services() since the CDP session lives in
-// the registry as a normal service blueprint.
+// The service type params are untyped because the iOS handler resolves AX /
+// native-devtools through the closed-over `registry` rather than the
+// registry's services() declaration; only the Chromium CDP session is a normal
+// service blueprint. `iosRequires` / `androidRequires` still go through the
+// dispatcher so the per-branch host-binary preflight fires uniformly.
 //
-// TV targets are handled *inside* the platform branches rather than as a
-// fourth branch: TV is not a `platform` (a tvOS sim classifies as "ios" and an
-// Android TV emulator as "android" by id shape), it's a `runtimeKind` that
-// spans both. So each platform branch runtime-probes its own TV kind and
-// delegates to the shared focus-driven `describeTv` (in platforms/tv.ts) —
-// returning the focused / focusable view instead of the iOS ax-service or
-// Android uiautomator tree, which a focus-driven UI either can't serve or
-// shouldn't be tapped from. One `describe` thus covers phones, tablets, and
-// TVs through the normal dispatch.
+// TV is not a `platform` but a `runtimeKind` spanning two (a tvOS sim
+// classifies as "ios", an Android TV emulator as "android" by id shape), so
+// instead of a fourth branch the iOS and Android branches runtime-probe their
+// own TV kind and delegate to the shared focus-driven `describeTv`.
 function makeDescribeExecute(
   registry: Registry
 ): (
@@ -105,23 +97,36 @@ function makeDescribeExecute(
         // Probe tvOS once here, then pass the verdict into describeIos.
         (await isTvOsSimulator(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+          : withDescription(
+              withBootCaveatOncePerDevice(
+                device.id,
+                await describeIos(registry, device, params, { isTvOs: false })
+              )
+            ),
+    },
+    iosDevice: {
+      requires: iosRequires,
+      handler: async (_services, _params, device) =>
+        withDescription(await describeIosDevice(registry, device)),
     },
     iosRemote: {
-      // describeIos already handles both ax-service (TCP) and native-devtools
-      // fallback — both blueprints route through sim-remote when the device is
-      // ios-remote. Only the preflight dep differs. Remote sims are iOS-only
-      // (never tvOS), so the isTvOs verdict is always false.
+      // Both the ax-service and native-devtools blueprints route through
+      // sim-remote for an ios-remote device, so only the preflight dep differs
+      // from the ios branch.
       requires: ["sim-remote"],
       handler: async (_services, params, device) =>
-        withDescription(await describeIos(registry, device, params, { isTvOs: false })),
+        withDescription(
+          withBootCaveatOncePerDevice(
+            device.id,
+            await describeIos(registry, device, params, { isTvOs: false })
+          )
+        ),
     },
     android: {
       requires: androidRequires,
       handler: async (_services, params, device) =>
-        // Resolve the form factor once and route on it: a TV goes to the
-        // focus-driven describe, a phone to the uiautomator tree — and pass the
-        // known `isTv: false` through so describeAndroid doesn't re-probe.
+        // Resolve the form factor once and thread the known `isTv: false`
+        // through so describeAndroid doesn't re-probe.
         (await isAndroidTv(device.id))
           ? describeTv(registry, device)
           : withDescription(await describeAndroid(registry, params.udid, params.bundleId, false)),
@@ -146,7 +151,8 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     },
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
-system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.
+system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
+covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
@@ -156,6 +162,7 @@ app (the toolkit attaches at launch) and try again.
 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
+On a physical iOS device, launch-app \`com.apple.springboard\` first to read system dialogs.
 
 Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
@@ -165,9 +172,11 @@ gesture-tap / gesture-swipe / gesture-pinch.
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
 can be applied to a line in isolation.
+The tree carries no z-order or occlusion information: an element listed at a point may be covered
+by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
-use native-describe-screen with an explicit bundleId instead (iOS only).
+use native-describe-screen with an explicit bundleId instead (iOS simulator only).
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.
 
 On a TV target (Apple TV / Android TV — a \`list-devices\` entry with runtimeKind 'tv') this returns

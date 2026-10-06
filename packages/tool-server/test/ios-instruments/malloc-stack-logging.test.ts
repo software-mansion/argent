@@ -87,12 +87,11 @@ async function importStart() {
 }
 
 // startNativeProfilerIos reads ARGENT_IOS_CAPTURE (via the capture-strategy
-// resolver), and exporting it globally is a documented operator setup for
-// degraded Xcodes — scrub it for every test so an ambient value can't flip the
-// resolved strategy (=all-processes would refuse every malloc start here), and
-// restore the ambient value afterwards. Tests that exercise the override still
-// set it themselves after the scrub.
-const AMBIENT_IOS_CAPTURE = process.env.ARGENT_IOS_CAPTURE;
+// resolver), so clear it around every test: a value left behind by one of the
+// tests that exercise the override would flip the resolved strategy for the
+// next one (=all-processes refuses every malloc start here). There is no
+// ambient value to preserve, because test/setup/clear-argent-env.ts strips
+// every ARGENT_* override before this module is imported.
 
 describe("native-profiler-start malloc_stack_logging", () => {
   beforeEach(() => {
@@ -102,11 +101,7 @@ describe("native-profiler-start malloc_stack_logging", () => {
   });
 
   afterEach(() => {
-    if (AMBIENT_IOS_CAPTURE === undefined) {
-      delete process.env.ARGENT_IOS_CAPTURE;
-    } else {
-      process.env.ARGENT_IOS_CAPTURE = AMBIENT_IOS_CAPTURE;
-    }
+    delete process.env.ARGENT_IOS_CAPTURE;
     vi.useRealTimers();
     vi.doUnmock("child_process");
     vi.doUnmock("../../src/utils/react-profiler/debug/dump");

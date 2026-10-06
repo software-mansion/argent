@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FILE_INPUT_MARKER, type FileInputSpec } from "@argent/registry";
 import { resolveFileInputs, FileInputError } from "../src/file-inputs";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 let tmpDir: string;
 
@@ -11,7 +12,13 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "file-inputs-test-"));
 });
 
+// resolveFileInputs hands its caller the cleanup for whatever it materialized;
+// in production the dispatcher calls it. A test that keeps the result must too,
+// or the upload's temp dir outlives the run.
+const cleanups: Array<() => Promise<void>> = [];
+
 afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -27,6 +34,38 @@ describe("resolveFileInputs", () => {
     const { args, fileInputs } = await resolveFileInputs({ fileInputs: FILE_SPEC }, body);
     expect(args).toEqual(body);
     expect(fileInputs).toBeUndefined();
+  });
+
+  it("reports which targets the CLIENT derived, so an error need not read them back", async () => {
+    const filePath = path.join(tmpDir, "derived.yaml");
+    await fs.writeFile(filePath, "steps: []\n");
+    const st = await fs.stat(filePath);
+    const specs: FileInputSpec[] = [
+      { target: "input", path: "${input}", kind: "file" },
+      { target: "derived", path: "${root}/flows/${input}.yaml", kind: "file" },
+    ];
+
+    const { derivedTargets } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        input: wire({ path: filePath, size: st.size, mtimeMs: st.mtimeMs }),
+        derived: wire({ path: filePath, size: st.size, mtimeMs: st.mtimeMs }),
+      }
+    );
+
+    expect(derivedTargets).toEqual(["derived"]);
+  });
+
+  it("does not call a derived target the client's when the CALLER set it as a plain value", async () => {
+    const specs: FileInputSpec[] = [
+      { target: "derived", path: "${root}/flows/${input}.yaml", kind: "file" },
+    ];
+    const { args, derivedTargets } = await resolveFileInputs(
+      { fileInputs: specs },
+      { derived: "/caller/wrote/this.yaml" }
+    );
+    expect(derivedTargets).toEqual([]);
+    expect(args.derived).toBe("/caller/wrote/this.yaml");
   });
 
   it("uses the wrapper path in place when it matches on this host", async () => {
@@ -102,7 +141,7 @@ describe("resolveFileInputs", () => {
     await fs.writeFile(filePath, "stale");
     const content = Buffer.from("fresh client bytes");
 
-    const { args, fileInputs } = await resolveFileInputs(
+    const { args, fileInputs, cleanup } = await resolveFileInputs(
       { fileInputs: FILE_SPEC },
       {
         input: wire({
@@ -112,6 +151,7 @@ describe("resolveFileInputs", () => {
         }),
       }
     );
+    cleanups.push(cleanup);
 
     expect(args.input).not.toBe(filePath);
     expect(await fs.readFile(args.input as string, "utf8")).toBe("fresh client bytes");
@@ -122,7 +162,7 @@ describe("resolveFileInputs", () => {
     const clientPath = path.join(tmpDir, "not-here", "flow.yaml");
     const content = Buffer.from("steps: []\n");
 
-    const { args } = await resolveFileInputs(
+    const { args, cleanup } = await resolveFileInputs(
       { fileInputs: FILE_SPEC },
       {
         input: wire({
@@ -132,6 +172,7 @@ describe("resolveFileInputs", () => {
         }),
       }
     );
+    cleanups.push(cleanup);
 
     expect(await fs.readFile(args.input as string, "utf8")).toBe("steps: []\n");
   });
@@ -158,6 +199,8 @@ describe("resolveFileInputs", () => {
       }
     );
 
+    cleanups.push(cleanup);
+
     const materialized = args.b as string;
     expect(await fs.readFile(materialized, "utf8")).toBe("uploaded bytes");
 
@@ -177,27 +220,39 @@ describe("resolveFileInputs", () => {
       { target: "b", path: "${b}", kind: "file" },
     ];
 
+    // resolveFileInputs materializes into mkdtemp(join(os.tmpdir(),
+    // "argent-file-input-")). Scope the tmpdir to this test so the listing
+    // below covers only dirs this run created — the machine-wide tmpdir also
+    // holds the in-flight dirs of any concurrent run, which would read as an
+    // uncleaned leak.
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-file-input-scan-"));
+    const restoreTmpdir = redirectTmpdir(scratch);
+
     const listInputTempDirs = async () => {
-      const entries = await fs.readdir(os.tmpdir());
+      const entries = await fs.readdir(scratch);
       return entries.filter((e) => e.startsWith("argent-file-input-"));
     };
-    const before = await listInputTempDirs();
 
-    await expect(
-      resolveFileInputs(
-        { fileInputs: specs },
-        {
-          a: wire({
-            path: "/client/a.png",
-            size: content.length,
-            content: content.toString("base64"),
-          }),
-          b: wire({ path: path.join(tmpDir, "ghost.png") }),
-        }
-      )
-    ).rejects.toThrow(FileInputError);
+    try {
+      await expect(
+        resolveFileInputs(
+          { fileInputs: specs },
+          {
+            a: wire({
+              path: "/client/a.png",
+              size: content.length,
+              content: content.toString("base64"),
+            }),
+            b: wire({ path: path.join(tmpDir, "ghost.png") }),
+          }
+        )
+      ).rejects.toThrow(FileInputError);
 
-    expect(await listInputTempDirs()).toEqual(before);
+      expect(await listInputTempDirs()).toEqual([]);
+    } finally {
+      restoreTmpdir();
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
   });
 
   it("rejects a missing file with no uploaded content", async () => {

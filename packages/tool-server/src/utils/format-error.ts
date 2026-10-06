@@ -1,11 +1,9 @@
 import { FAILURE_CODES, FailureError, type FailureCode } from "@argent/registry";
 
 /**
- * Walk the error `.cause` chain and build a single message containing the
- * top-level message plus any unique root-cause details the agent wouldn't
- * otherwise see (e.g. `fetch failed` wrapping `connect ECONNREFUSED …`).
- * Keeps output concise: skips causes whose text is already present in an
- * earlier part of the chain.
+ * Flatten the error `.cause` chain into one message so the agent sees root
+ * causes (`connect ECONNREFUSED …` behind `fetch failed`), skipping causes
+ * whose text already appears earlier in the chain.
  */
 export function formatErrorForAgent(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
@@ -13,8 +11,7 @@ export function formatErrorForAgent(err: unknown): string {
   const parts: string[] = [err.message];
   const seen = new Set<unknown>([err]);
   let current = err.cause;
-  // Bounded walk with a cycle guard: a self-referential `.cause` (e.g. an error
-  // re-wrapped as its own ancestor) would otherwise loop forever.
+  // Cycle guard: a self-referential `.cause` would otherwise loop forever.
   for (let depth = 0; depth < 8 && current instanceof Error && !seen.has(current); depth++) {
     seen.add(current);
     const msg = current.message;
@@ -31,11 +28,10 @@ export function formatErrorForAgent(err: unknown): string {
  * Convert a network-level fetch error (timeout, ECONNREFUSED, ECONNRESET, …)
  * into a descriptive Error the agent can act on.
  *
- * @param toolLabel  Human-readable tool name used as the message prefix (e.g. "Describe", "Screenshot").
+ * @param toolLabel  Tool name used as the message prefix.
  * @param err        The raw error thrown by `fetch()`.
  * @param apiUrl     The simulator-server base URL that was being contacted.
- * @param fallbackHint  Optional extra sentence appended to timeout/generic messages
- *                      (e.g. "use the screenshot tool to visually inspect the screen instead.").
+ * @param fallbackHint  Extra sentence appended to the timeout and generic messages only.
  */
 export function toSimulatorNetworkError(
   toolLabel: string,

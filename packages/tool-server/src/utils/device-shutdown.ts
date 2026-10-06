@@ -6,15 +6,16 @@ import { simctlArgsForUdid } from "./ios-device-sets";
 
 const execFileAsync = promisify(execFile);
 
+// A wedged adb daemon or CoreSimulatorService never answers, and both ignore
+// execFile's default SIGTERM, so only timeout + SIGKILL keeps these awaits from
+// hanging forever (as ADB_KILL_SIGNAL in `adb.ts`, SIMCTL_KILL_SIGNAL in
+// `simctl-config.ts`); 30s is runAdb's ceiling.
+const SHUTDOWN_EXEC_OPTIONS = { timeout: 30_000, killSignal: "SIGKILL" } as const;
+
 /**
  * Shut down a device that Argent Lens booted itself (see
- * `VariantProposalStore.takeOwnedDevices`). Best-effort: every failure is
- * swallowed — a device that's already gone, or a CLI that isn't on PATH, must
- * not break session teardown.
- *
- * iOS → `simctl shutdown`; Android emulator → `adb -s <serial> emu kill`.
- * Chromium / Vega are never owned by `/preview/boot` (the preview only streams
- * iOS / Android), so they're left untouched.
+ * `VariantProposalStore.takeOwnedDevices`). Best-effort: a device that's
+ * already gone, or a CLI that isn't on PATH, must not break session teardown.
  */
 export async function shutdownOwnedDevice(id: string): Promise<void> {
   let platform: string;
@@ -24,23 +25,26 @@ export async function shutdownOwnedDevice(id: string): Promise<void> {
     return;
   }
   if (platform === "ios") {
-    await execFileAsync("xcrun", await simctlArgsForUdid(id, ["shutdown", id])).catch(() => {});
+    await execFileAsync(
+      "xcrun",
+      await simctlArgsForUdid(id, ["shutdown", id]),
+      SHUTDOWN_EXEC_OPTIONS
+    ).catch(() => {});
   } else if (platform === "android") {
-    // Resolve adb like every other android path (SDK fallback off-PATH — on
-    // Windows adb usually isn't on PATH at all); bare "adb" as a last resort.
+    // adb often isn't on PATH (notably on Windows); resolveAndroidBinary falls
+    // back to the SDK roots.
     const adb = (await resolveAndroidBinary("adb")) ?? "adb";
-    await execFileAsync(adb, ["-s", id, "emu", "kill"]).catch(() => {});
+    await execFileAsync(adb, ["-s", id, "emu", "kill"], SHUTDOWN_EXEC_OPTIONS).catch(() => {});
   }
 }
 
-/** Shut down every owned device, in parallel, swallowing individual failures. */
 export async function shutdownOwnedDevices(ids: readonly string[]): Promise<void> {
   await Promise.all(ids.map((id) => shutdownOwnedDevice(id)));
 }
 
-export interface ShutdownResult {
+interface ShutdownResult {
   ok: boolean;
-  /** Present when ok=false — a human-readable reason to surface in the UI. */
+  /** Present when ok=false — human-readable reason for the UI. */
   error?: string;
 }
 
@@ -49,10 +53,6 @@ export interface ShutdownResult {
  * best-effort {@link shutdownOwnedDevice}, which swallows every error for
  * session teardown. Backs the preview window's right-click "Shut down" action,
  * so the UI can report why a shutdown failed.
- *
- * iOS simulator → `simctl shutdown`; Android emulator → `adb -s <serial> emu
- * kill`. A physical Android device can't be shut down remotely, and
- * Chromium / Vega have no equivalent — those are rejected with a reason.
  */
 export async function shutdownDevice(id: string): Promise<ShutdownResult> {
   let device: { platform: string; kind: string };
@@ -63,12 +63,16 @@ export async function shutdownDevice(id: string): Promise<ShutdownResult> {
   }
   try {
     if (device.platform === "ios") {
-      await execFileAsync("xcrun", await simctlArgsForUdid(id, ["shutdown", id]));
+      await execFileAsync(
+        "xcrun",
+        await simctlArgsForUdid(id, ["shutdown", id]),
+        SHUTDOWN_EXEC_OPTIONS
+      );
       return { ok: true };
     }
     if (device.platform === "android" && device.kind === "emulator") {
       const adb = (await resolveAndroidBinary("adb")) ?? "adb";
-      await execFileAsync(adb, ["-s", id, "emu", "kill"]);
+      await execFileAsync(adb, ["-s", id, "emu", "kill"], SHUTDOWN_EXEC_OPTIONS);
       return { ok: true };
     }
     return {

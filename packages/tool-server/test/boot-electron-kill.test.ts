@@ -13,6 +13,9 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scopeTempHome } from "./helpers/temp-home";
+
+scopeTempHome("argent-boot-electron-kill-home-");
 
 const spawnMock = vi.fn();
 
@@ -108,6 +111,10 @@ async function bootFakeChild(): Promise<{ child: FakeChild; port: number; close:
   const { port } = srv.address() as { port: number };
 
   await bootElectronApp({ appPath: appDir, port, readyTimeoutMs: 5000 });
+  // Both guards are load-bearing: the mock above has to actually intercept
+  // trackChromiumPort — deleted or calling through, it is invisible — and the
+  // scoped HOME keeps the port every boot here persists out of the real file.
+  expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(false);
   return { child, port, close: () => srv.close() };
 }
 

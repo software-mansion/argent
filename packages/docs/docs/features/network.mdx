@@ -1,0 +1,62 @@
+---
+sidebar_position: 4
+sidebar_label: Network inspection
+title: Network inspection
+sidebar_custom_props:
+  icon: network
+---
+
+Argent records the HTTP requests of the running app. The agent reads this record. The agent tells you which request the app sent, which response came back, and what the payload contains.
+
+<Video
+  src="/video/native-network-inspector.mp4"
+  width={1656}
+  height={1080}
+  caption="The agent finds a wrong endpoint name in the requests that the app sent"
+/>
+
+## Capture layers
+
+Argent captures the traffic in three different layers.
+
+| Layer                    | Platforms             | Content                                                         |
+| ------------------------ | --------------------- | --------------------------------------------------------------- |
+| JS runtime               | iOS, Android, Vega    | The `fetch()` calls of your JavaScript code                     |
+| Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers |
+| Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets  |
+
+Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
+
+In React Native, Argent changes the `fetch()` function only. In React Native, the `fetch()` function uses `XMLHttpRequest`. If Argent changed both functions, it would count each request two times. Native code does not use the `fetch()` function. For native code, use the iOS native layer.
+
+## The request record
+
+First the agent reads the list of requests. Each line has this format:
+
+```
+{id: rn-net-4} "GET /v1/users" 200 OK Fetch 12.4 kB 143 ms
+```
+
+Then the agent reads the details of one request. The details contain the headers of the request and of the response, the times, the initiator, and the body of the response.
+
+For the JS runtime and Chrome DevTools Protocol layers, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. Argent also shortens a body that is longer than 1000 characters. The message shows the initial length. The native `NSURLProtocol` layer does not redact headers. See the Limits section.
+
+Argent removes the bundle traffic and the HMR traffic of Metro from the record. Thus the record contains the requests of your app only.
+
+## Example instructions
+
+- "The list screen is empty. Examine the response of the API."
+- "Compare the payload of the request before and after my change."
+- "Show the requests that this screen sends at mount. Show their durations."
+- "Make sure that the app sends the second request after the error 500."
+
+## Limits
+
+- Argent starts the capture at one of these three moments: the debugger connects, Argent attaches to the Chromium app, or you activate the native inspection. Argent does not capture the earlier requests. Do the operation again after the agent connects.
+- The record keeps the most recent requests only. The limits are 2000 requests for the JS layer and 1000 requests for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native record holds fewer than 1000 requests.
+- For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
+- The `NSURLProtocol` layer is available on iOS only. On Android, use the JS layer.
+- Argent does not replace the data in the bodies of the requests and of the responses. Protect a record of requests as you protect other data of the app.
+- On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a record of native requests as you protect other data of the app.
+
+Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.

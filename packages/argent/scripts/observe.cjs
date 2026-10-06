@@ -7,13 +7,11 @@ const os = require("os");
 
 const LOG_FILE = process.env.ARGENT_MCP_LOG ?? path.join(os.homedir(), ".argent", "mcp-calls.log");
 
-// Ensure log file exists
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 if (!fs.existsSync(LOG_FILE)) {
   fs.writeFileSync(LOG_FILE, "");
 }
 
-// ANSI colours
 const DIM = "\x1b[2m";
 const CYAN = "\x1b[36m";
 const GREEN = "\x1b[32m";
@@ -56,7 +54,7 @@ function formatEntry(entry) {
   return `${DIM}${time}${RESET} ${JSON.stringify(entry)}`;
 }
 
-// Seek to end of file — only tail new lines
+// Skip everything already written; tail only new lines
 let filePos = fs.statSync(LOG_FILE).size;
 
 console.log(`Waiting for calls at ${LOG_FILE} ...\n`);
@@ -66,7 +64,7 @@ let buffer = "";
 function readNewLines() {
   const stat = fs.statSync(LOG_FILE);
   if (stat.size < filePos) {
-    // File was truncated/rotated — reset
+    // Truncated or rotated
     filePos = 0;
     buffer = "";
   }

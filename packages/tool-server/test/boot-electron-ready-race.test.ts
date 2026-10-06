@@ -14,7 +14,10 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scopeTempHome } from "./helpers/temp-home";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+
+scopeTempHome("argent-boot-electron-race-home-");
 
 const spawnMock = vi.fn();
 
@@ -173,6 +176,11 @@ describe("bootElectronApp — ready-vs-exit confirmation window", () => {
       expect(result.port).toBe(port);
       expect(result.pid).toBe(FAKE_PID);
       expect(trackChromiumPort).toHaveBeenCalledWith(port);
+      // ...through the mock, and no further: one that calls through satisfies
+      // the line above while still persisting the port for real.
+      expect(fs.existsSync(path.join(os.homedir(), ".argent", "chromium-cdp-ports.json"))).toBe(
+        false
+      );
 
       // The handle was retained: teardown kills through it, not the raw pid.
       killChromiumByPort(port, FAKE_PID);

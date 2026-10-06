@@ -10,7 +10,8 @@ import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
-import { startCapture, type PointerControl } from "./capture";
+import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../../utils/foldable";
+import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
@@ -80,10 +81,9 @@ Returns { status: "recording", timeLimitSeconds, outputFile } — the video is r
 Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported).`,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     zodSchema,
-    // simulator-server is resolved inside execute, not declared here: a tvOS
-    // udid classifies as iOS by shape, and an eager service would spawn
-    // simulator-server for a device it cannot drive and hang on its ready
-    // timeout (same reasoning as `screenshot`).
+    // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
+    // iOS by shape, so an eager service would spawn simulator-server for a
+    // device it cannot drive and hang on its ready timeout (as in `screenshot`).
     services: (params) => ({
       session: screenRecordingSessionRef(resolveDevice(params.udid)),
     }),
@@ -108,12 +108,11 @@ Fails if a recording is already running on the device, the device is not booted,
 
       const timeLimitSeconds = params.timeLimitSeconds ?? DEFAULT_TIME_LIMIT_SECONDS;
 
-      // Frames come from the same simulator-server instance that already serves
-      // `screenshot` and every input tool; resolving it here attaches to that
-      // instance (or starts it, if this tool is the first to need it).
+      // The same simulator-server instance `screenshot` and the input tools use;
+      // resolving here attaches to it, or starts it if nothing else needed it yet.
       const ref = simulatorServerRef(device);
       const simulator = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
-      const streamUrl = simulator.streamUrl;
+      let streamUrl = simulator.streamUrl;
       if (!streamUrl || !/^https?:\/\//.test(streamUrl)) {
         throw new FailureError(
           `simulator-server is not exposing a frame stream for device ${device.id}, so there is ` +
@@ -129,11 +128,33 @@ Fails if a recording is already running on the device, the device is not booted,
         );
       }
 
-      // Touch visualizer: capture.ts arms it right after the encoder is live and
-      // restores it to off when the recording ends. It drives the same
-      // simulator-server instance resolved above; the toggles are best-effort
-      // (a failure only costs the overlay, surfaced as a warning at stop), and
-      // remote sims never reach here — they are gated out by the stream check.
+      // A foldable's stream is per panel. The recording starts on the panel the
+      // device renders to now, and follows it across folds (capture.ts) with
+      // the same resolution every touch and screenshot makes. A start that
+      // resolves nothing records the main screen, as every command then
+      // targets it, says so in its result, and counts it for stop's warning;
+      // the checks move the capture as soon as a source answers.
+      let followPanel: PanelFollow | undefined;
+      let warning: string | undefined;
+      if (simulator.display?.foldable) {
+        const base = streamUrl;
+        const initial = await resolveLivePanel(device.id);
+        streamUrl = streamUrlForScreen(base, initial.screen);
+        followPanel = {
+          initial,
+          streamUrlForScreen: (screen) => streamUrlForScreen(base, screen),
+          resolveLivePanel: () => resolveLivePanel(device.id),
+        };
+        if (initial.source === "unknown") {
+          warning =
+            `${unresolvedPanelNote(device.id, initial.reason, "the recording started on", simulator.display.panels)} ` +
+            "It moves to the panel the device renders to as soon as a check resolves it.";
+        }
+      }
+
+      // capture.ts arms the visualizer once the encoder is live and restores it
+      // to off when the recording ends. The toggles are best-effort: a failure
+      // only costs the overlay, surfaced as a warning at stop.
       const showTouches = params.showTouches ?? true;
       const pointer: PointerControl | undefined = showTouches
         ? makePointerControl(simulator)
@@ -141,33 +162,33 @@ Fails if a recording is already running on the device, the device is not booted,
 
       // Read the flag live per call so `argent enable/disable video-watermark`
       // takes effect without restarting the long-lived tool-server.
-      return startCapture(api, {
+      const started = await startCapture(api, {
         streamUrl,
         timeLimitSeconds,
         watermark: isFeatureEnabled("video-watermark"),
         trimStatic: params.trimStatic ?? true,
         pointer,
+        followPanel,
       });
+      return warning !== undefined ? { ...started, warning } : started;
     },
   };
 }
 
 /**
- * Build the touch-visualizer control capture.ts arms for the life of a
- * recording. `enable` sets the comet trail, then flips the overlay on; the
- * returned success reflects the show toggle (the overlay itself), since the
- * trail is only a cosmetic enhancement.
+ * Touch-visualizer control for the life of a recording. `enable`'s result
+ * reflects only the `show` toggle; the trail is cosmetic.
  *
- * `disable` waits for any in-flight `enable` to settle before sending its own
- * `show:false`. Enabling is the one suspension point after a recording is
- * stamped, so a dispose (shutdown, or a stop-all-simulator-servers teardown of
- * this device) can call `disable` while `enable`'s
- * `show:true` request is still outstanding. Without this barrier the two
- * requests race and the earlier-issued `show:false` can be overtaken by the
- * later `show:true`, leaving simulator-server's overlay stuck on after the
- * recording is gone — where it then draws touch markers into subsequent
- * non-recording screenshots. Serializing the two guarantees `show:false` is
- * both issued and applied last, so the overlay always ends off.
+ * Neither toggle names a screen: on a foldable the server then applies the
+ * setting to every panel, so the markers keep landing in the recording after
+ * it has moved to the other panel. Each touch is drawn on the stream of the
+ * screen the touch named, which is the one the recording follows.
+ *
+ * `disable` waits for an in-flight `enable` first: enabling is the one
+ * suspension point after a recording is stamped, so a dispose can call
+ * `disable` while `show:true` is still outstanding, and unserialized the later
+ * `show:true` overtakes `show:false` — leaving the overlay stuck on and drawing
+ * markers into subsequent non-recording screenshots.
  */
 export function makePointerControl(simulator: SimulatorServerApi): PointerControl {
   let enabling: Promise<unknown> | null = null;

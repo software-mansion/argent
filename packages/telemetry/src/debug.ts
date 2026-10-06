@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import { argentHomeDir, debugLogPath } from "./paths.js";
 
-// ARGENT_TELEMETRY_DEBUG=1 mirrors sanitized payloads and SDK errors locally.
 export function isDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = env.ARGENT_TELEMETRY_DEBUG;
   if (!v) return false;
@@ -9,7 +8,7 @@ export function isDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return norm === "1" || norm === "true" || norm === "yes" || norm === "on";
 }
 
-export interface DebugPayload {
+interface DebugPayload {
   event: string;
   distinctId: string;
   properties: Record<string, unknown>;

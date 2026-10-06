@@ -6,26 +6,22 @@ import { iosImpl, iosRemoteImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 const capability: ToolCapability = {
-  // Simulator only. A physical iPhone's motion comes from real hardware; there
-  // is no host-side hook to fake it, so `device` stays false and a paired phone
-  // gets a clean 400 instead of a silent no-op.
+  // Simulator only: a physical iPhone's motion is real hardware, with no
+  // host-side hook to fake it.
   apple: { simulator: true },
-  // A remote simulator is still a simulator: `sim-remote spawn` runs the same
-  // in-simulator `notifyutil` argv the local path does.
+  // `sim-remote spawn` runs the same in-simulator `notifyutil` argv the local
+  // path does.
   appleRemote: { simulator: true },
-  // Android emulators only, for the same reason as iOS: a physical phone's
-  // accelerometer can't be driven from the host. `unknown` is allowed through
-  // because a serial that didn't resolve may still be an emulator; the handler
-  // re-checks and rejects a non-emulator serial explicitly.
+  // Emulators only, for the same reason as iOS. `unknown` is let through and
+  // the handler rejects a serial with no emulator console.
   android: { emulator: true, unknown: true },
-  // No `vega`: a Fire TV is rejected here, by the absent block.
+  // No `vega` block, so a Fire TV is rejected by the capability gate.
   //
-  // TV targets that are NOT separate platforms cannot be excluded here. An
-  // Apple TV simulator is `ios`/`simulator` and an Android TV emulator is
-  // `android`/`emulator` — identical to a phone by id shape and device kind, so
-  // the matrix admits them and each platform handler probes the runtime and
-  // rejects a TV. `supports` can't do it: it is synchronous, while the runtime
-  // kind is an async `simctl list` / `adb` probe.
+  // A TV that is not a separate platform can't be excluded here: an Apple TV
+  // simulator is `ios`/`simulator` and an Android TV emulator is
+  // `android`/`emulator`. Each platform handler probes the runtime and rejects
+  // a TV instead; `supports` can't, being synchronous while the probe is an
+  // async `simctl list` / `adb` call.
 };
 
 export const shakeTool: ToolDefinition<ShakeParams, ShakeResult> = {
@@ -47,8 +43,8 @@ Only phone/tablet simulators and emulators are supported.`,
   searchHint: "shake motion accelerometer undo typing dev menu gesture",
   zodSchema: shakeZodSchema,
   capability,
-  // Talks to `simctl` / `adb` directly, so no simulator-server is resolved —
-  // avoids spawning one (and its ready-wait) for a tool that never uses it.
+  // No simulator-server is resolved: `simctl`/`adb` are called directly, so a
+  // tool that never uses one doesn't spawn it or wait for it to be ready.
   services: () => ({}),
   execute: dispatchByPlatform<ShakeServices, ShakeServices, ShakeParams, ShakeResult>({
     toolId: "shake",

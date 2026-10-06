@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-/**
- * Copies skills/ → .claude/skills/ and agents/ → .claude/agents/ in the nearest git root.
- * Run: node packages/skills/scripts/install.js
- */
+/** Copies skills/ and agents/ into .claude/ at the nearest git root (cwd if none). */
 import { execSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";

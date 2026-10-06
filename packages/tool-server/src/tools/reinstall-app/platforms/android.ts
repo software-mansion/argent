@@ -15,17 +15,15 @@ export const androidImpl: PlatformImpl<
     const absolute = resolvePath(appPath);
 
     // Match iOS semantics: uninstall first so the reinstall is a clean wipe.
-    // `pm uninstall` is non-fatal if the package isn't installed (returns
-    // "Failure [DELETE_FAILED_INTERNAL_ERROR]" or similar); swallow that case.
     try {
       await runAdb(["-s", udid, "uninstall", bundleId], { timeoutMs: 30_000 });
     } catch {
-      // App may not be installed — continue to install
+      // App may not be installed
     }
 
-    // -r - Allow app overwriting (no-op after uninstall, but harmless)
-    // -d - Allow installations with lower versions
-    // -g - Prevent permissions popup
+    // -r - allow overwrite (no-op after the uninstall above)
+    // -d - allow version downgrade
+    // -g - grant runtime permissions up front, so no permission prompt
     const args = ["-s", udid, "install", "-r", "-d", "-g", absolute];
     const { stdout, stderr } = await runAdb(args, { timeoutMs: 180_000 });
     const output = `${stdout}\n${stderr}`;

@@ -6,6 +6,12 @@ import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debu
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-metro-integration-home-");
 
 /**
  * Integration test using a mock Metro HTTP + CDP WebSocket server.
@@ -145,7 +151,7 @@ beforeAll(async () => {
       ws.on("message", (raw) => handleCDPMessage(ws, raw.toString()));
     });
 
-    mockServer.listen(0, () => {
+    mockServer.listen(0, "127.0.0.1", () => {
       mockPort = (mockServer.address() as { port: number }).port;
       resolve();
     });

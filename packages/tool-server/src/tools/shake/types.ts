@@ -5,9 +5,9 @@ export type ShakeParams = z.infer<typeof shakeZodSchema>;
 
 export interface ShakeResult {
   shaken: true;
-  /** Number of shake gestures delivered. */
+  /** Shake gestures delivered. */
   count: number;
 }
 
-/** This tool talks to `simctl` / `adb` directly, so it declares no services. */
+/** No services — `simctl`/`adb` are called directly. */
 export type ShakeServices = Record<string, never>;

@@ -1,15 +1,12 @@
 import type { ZodError } from "zod";
 
 /**
- * Telemetry-safe list of parameter names that failed zod validation.
+ * Privacy contract (Telemetry.md): only names declared in Argent's own tool schema
+ * may be emitted, never user-typed keys or values — hence the literal
+ * "unrecognized_keys" token in place of the offending key names.
  *
- * Privacy contract (see Telemetry.md): only names DECLARED in Argent's own tool
- * schema may be emitted — never user-typed keys and never values. A strict
- * object's unknown-key violation is reported as the literal token
- * "unrecognized_keys" rather than the offending key names.
- *
- * Capped at 16 HERE because the telemetry sanitize layer's array validator
- * voids the whole property (not just the overflow) for longer arrays.
+ * Capped at 16 because the telemetry sanitize layer's arrayOf voids the whole
+ * property (not just the overflow) for longer arrays.
  */
 export function deriveInvalidParams(error: ZodError, declared: Set<string>): string[] {
   const out: string[] = [];

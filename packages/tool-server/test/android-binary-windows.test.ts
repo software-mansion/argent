@@ -10,7 +10,14 @@ vi.mock("../src/utils/command-on-path", () => ({
   commandOnPath: vi.fn(async () => null),
 }));
 
-const ENV_KEYS = ["PATH", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME", "LOCALAPPDATA"] as const;
+const ENV_KEYS = [
+  "PATH",
+  "ANDROID_HOME",
+  "ANDROID_SDK_ROOT",
+  "HOME",
+  "USERPROFILE",
+  "LOCALAPPDATA",
+] as const;
 const originalEnv: Record<string, string | undefined> = {};
 const originalPlatform = process.platform;
 
@@ -31,6 +38,7 @@ async function loadResolverAsWin32(): Promise<typeof import("../src/utils/androi
 
 describe("resolveAndroidBinary on Windows", () => {
   let tmpRoot: string;
+  let homeRoot: string;
 
   beforeEach(async () => {
     for (const k of ENV_KEYS) originalEnv[k] = process.env[k];
@@ -40,6 +48,19 @@ describe("resolveAndroidBinary on Windows", () => {
     delete process.env.ANDROID_HOME;
     delete process.env.ANDROID_SDK_ROOT;
     tmpRoot = await mkdtemp(join(tmpdir(), "argent-android-win-"));
+    // The resolver derives four roots from the home directory, and one of them
+    // — `<home>/Android/Sdk`, the Linux Studio default — is scanned BEFORE the
+    // win32 `%LOCALAPPDATA%\Android\Sdk` root. Give home its own empty
+    // directory rather than tmpRoot, which is where the tests below plant the
+    // fixture and point LOCALAPPDATA: sharing one root lets the home entry
+    // satisfy the lookup first, and %LOCALAPPDATA% stops being covered at all.
+    // os.homedir() reads USERPROFILE on Windows and HOME elsewhere, and this
+    // file runs on a real windows-latest host, so pin both — that is also what
+    // keeps a stock Studio install under the developer's profile from
+    // satisfying a lookup the last test expects to fail.
+    homeRoot = await mkdtemp(join(tmpdir(), "argent-android-win-home-"));
+    process.env.HOME = homeRoot;
+    process.env.USERPROFILE = homeRoot;
   });
 
   afterEach(async () => {
@@ -50,6 +71,7 @@ describe("resolveAndroidBinary on Windows", () => {
     setPlatform(originalPlatform);
     vi.resetModules();
     await rm(tmpRoot, { recursive: true, force: true });
+    await rm(homeRoot, { recursive: true, force: true });
   });
 
   it("appends .exe and finds adb under %LOCALAPPDATA%\\Android\\Sdk", async () => {
@@ -84,6 +106,24 @@ describe("resolveAndroidBinary on Windows", () => {
     __resetAndroidBinaryCacheForTesting();
 
     expect(await resolveAndroidBinary("emulator")).toBe(emuExe);
+  });
+
+  it("falls back to <home>\\AppData\\Local\\Android\\Sdk when LOCALAPPDATA is unset", async () => {
+    // A GUI-spawned MCP server can start without %LOCALAPPDATA% in its
+    // environment, which is the only reason the resolver also derives that
+    // path from the home directory.
+    const adbDir = join(homeRoot, "AppData", "Local", "Android", "Sdk", "platform-tools");
+    await mkdir(adbDir, { recursive: true });
+    const adbExe = join(adbDir, "adb.exe");
+    await writeFile(adbExe, "", { mode: 0o755 });
+    await chmod(adbExe, 0o755);
+    delete process.env.LOCALAPPDATA;
+
+    const { resolveAndroidBinary, __resetAndroidBinaryCacheForTesting } =
+      await loadResolverAsWin32();
+    __resetAndroidBinaryCacheForTesting();
+
+    expect(await resolveAndroidBinary("adb")).toBe(adbExe);
   });
 
   it("returns null when only the extensionless binary exists (Windows can't exec it)", async () => {

@@ -1,16 +1,7 @@
 /**
  * Stage 1: Reduce
  *
- * React: one pass over commits[] to group by component using Welford accumulators.
- *        First-mount commits are stripped before statistics.
- *
- * anyRuntimeCompilerDetected is seeded from sessionMeta.anyCompilerOptimized (scanned
- * in react-profiler-stop before hot-commit filtering) so React Compiler detection works even
- * when compiler-optimized components render fast and appear only in cold commits.
- *
- * totalCommits fix: counts unique commitIndex values (actual React reconciler
- * batches), not individual fiber render entries. The old count is exposed as
- * fiberRenders for reference.
+ * First-mount commits are excluded from the per-component statistics.
  */
 import type { DevToolsCommitTree } from "../types/input";
 import type {
@@ -37,16 +28,14 @@ export function reduce(
   recordingMs: number,
   sessionAnyCompilerOptimized?: boolean
 ): ReduceOutput {
-  // -------------------------------------------------------------------------
-  // React: group commits by component, accumulate Welford stats
-  // -------------------------------------------------------------------------
   const components = new Map<string, ComponentAccumulator>();
   const componentHadRerender = new Set<string>();
   const componentFirstMountOnly = new Set<string>();
   const seenCommitIndices = new Set<number>();
-  let fiberRenders = 0; // total fiber render entries
+  let fiberRenders = 0;
   let totalFirstMounts = 0;
-  // Seed from pre-profiling-stop scan (captures compiler-optimized components in cold commits)
+  // Seeded from a scan taken in react-profiler-stop before hot-commit filtering, so
+  // compiler-optimized components that render fast and appear only in cold commits still count.
   let anyRuntimeCompilerDetected = sessionAnyCompilerOptimized === true;
 
   for (const commit of commitTree.commits) {
@@ -117,7 +106,6 @@ export function reduce(
       }
     }
 
-    // hookTypeNames: first non-null value wins
     if (!acc.hookTypeNames && commit.hookTypes != null && commit.hookTypes.length > 0) {
       acc.hookTypeNames = commit.hookTypes;
     }
@@ -126,7 +114,7 @@ export function reduce(
       acc.parentFreq.set(commit.parentName, (acc.parentFreq.get(commit.parentName) ?? 0) + 1);
     }
 
-    // Root cause votes (annotated by Stage 0 preprocess)
+    // rootCause* fields are annotated by Stage 0 preprocess.
     if (commit.rootCauseParent && commit.rootCauseReason) {
       const existing = acc.rootCauseVotes.get(commit.rootCauseParent);
       if (existing) {

@@ -42,9 +42,16 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-/** ToolContext carrying only the progress hook — the flows under test touch nothing else. */
+/**
+ * ToolContext carrying only the progress hook — the flows under test touch
+ * nothing else. Each event is copied when it is emitted, as the HTTP stream
+ * serializes it then: a field set on a report after it streamed (a step's
+ * `durationMs`, say) must not reach the copy.
+ */
 function progressCtx(events: StepReport[]): ToolContext {
-  return { emitProgress: (e: unknown) => events.push(e as StepReport) } as unknown as ToolContext;
+  return {
+    emitProgress: (e: unknown) => events.push(structuredClone(e) as StepReport),
+  } as unknown as ToolContext;
 }
 
 beforeEach(async () => {
@@ -75,7 +82,7 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
       )
     );
 
-    // Every appended report streamed, in order, as the same objects.
+    // Every appended report streamed, in order, already complete.
     expect(events).toEqual(result.steps);
     expect(events.map((e) => `${e.kind}:${e.status}`)).toEqual([
       "echo:pass",
@@ -191,8 +198,50 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
       'hidden "] outer Touchable"',
       'id=total contains "Total"',
       '"Nested touchables" (up)',
-      "into id=email",
+      'into id=email ← "a@b.c"',
       '"home"',
+    ]);
+  });
+
+  it("labels swipe reports with their travel and optional starting target", async () => {
+    // Stop before executing gestures: skipped directives still need complete
+    // labels so the CLI can identify every swipe in a failed flow.
+    await writeFlow("swipe-labels", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "boom", args: {} },
+        { kind: "swipe", direction: "left" },
+        {
+          kind: "swipe",
+          from: { selector: { text: "Card", loose: true } },
+          direction: "right",
+        },
+        { kind: "swipe", by: { x: 0.25, y: -0.4 } },
+        {
+          kind: "swipe",
+          from: { x: 0.5, y: 0.8 },
+          to: { selector: { identifier: "archive" } },
+        },
+        {
+          kind: "swipe",
+          from: { selector: { textMatches: "^Card \\d+$" } },
+          to: { x: 0.1, y: 0.5 },
+        },
+      ],
+    });
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute({}, { name: "swipe-labels", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.steps.map((s) => s.target)).toEqual([
+      undefined,
+      "left",
+      'right from "Card"',
+      "by x=0.25, y=-0.4",
+      "to id=archive from (0.5, 0.8)",
+      "to (0.1, 0.5) from /^Card \\d+$/",
     ]);
   });
 

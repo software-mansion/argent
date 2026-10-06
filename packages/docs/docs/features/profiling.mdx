@@ -1,0 +1,76 @@
+---
+sidebar_position: 3
+sidebar_label: Profiling
+title: Profiling
+sidebar_custom_props:
+  icon: gauge
+---
+
+Argent records a profile of the running app. The agent reads the profile. The agent tells you which component renders too often, which function uses the CPU, and where the app hangs or leaks memory.
+
+<Video
+  src="/video/profiling.mp4"
+  width={1508}
+  height={1080}
+  caption="The agent profiles a comments screen and finds a component that renders on every tick"
+/>
+
+## Profilers
+
+Argent has two profilers. The agent can run one profiler or both profilers at the same time.
+
+| Profiler | Platforms    | Engine                    | Data                                                              |
+| -------- | ------------ | ------------------------- | ----------------------------------------------------------------- |
+| React    | iOS, Android | Hermes and React DevTools | JS CPU samples, React commits, renders of each component          |
+| Native   | iOS          | Xcode Instruments         | Native CPU time, UI hangs, memory leaks                           |
+| Native   | Android      | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
+
+The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. The native profiler attaches to the process of the app on the device. The native profiler does not need a special build.
+
+## A profiling session
+
+A profiling session has four steps. The agent does each step with one tool.
+
+1. The agent starts the profiler. From this moment, Argent records the data.
+2. You or the agent use the app. The agent can tap, swipe and type in the app with the [interaction tools](/docs/features/interacting-with-apps). This is the only part of the session that the profile contains.
+3. The agent stops the profiler. Argent collects the data and writes it to disk.
+4. The agent analyzes the data. Argent returns a report in Markdown.
+
+When the agent runs both profilers, the agent can also ask for a combined report. Argent aligns the native hangs with the React commits on the wall clock. Thus the report tells you which React commit caused which hang.
+
+## The report
+
+The React report lists the hot commits. A commit is hot when it takes 16 ms or more. For each hot commit, the report shows which components rendered, which component triggered the cascade, and which props changed. The report ends with a table of the components that rendered most.
+
+The native report lists the CPU hotspots, the hangs and the memory leaks. Each entry has a severity indicator and a suggestion.
+
+The agent can find the source of a component in the report. Argent returns the file, the line, the memoization status, and 50 lines of source. Thus the agent can propose a fix for the component.
+
+## Further investigation
+
+After the report, the agent can query the stored data without a new recording.
+
+| Query         | Content                                                                                             |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| Commits       | The commits of one component, the commits in a time window, or the cascade tree of a commit         |
+| CPU           | The top functions, the CPU in a time window, the call tree of a function, or the CPU of a component |
+| Native stacks | The stacks during a hang, the callers of a function, the CPU of each thread, or the leaked objects  |
+
+Argent writes each session to disk in a directory with the name `argent-profiler-cwd` in the temporary directory of the system. The agent can load a session from disk later and query it again. Thus you can compare the profile before and after a change.
+
+## Example instructions
+
+- "This screen scrolls slowly. Profile the scroll and tell me which component causes it."
+- "Start both profilers, open the details screen, and show me the hangs."
+- "Find the components that render more than 50 times during the session."
+- "Apply the fix, profile the same interaction again, and compare the results."
+
+## Limits
+
+- The React profiler is available in React Native apps with Hermes only. Argent does not profile Chromium and Electron apps.
+- Argent records the data from the start of the session only. Start the session before you do the interaction.
+- One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
+- A component that unmounts before the session stops can lose its name in the report. The report shows the duration of this work under "unattributed".
+- The memory leak data is available on iOS only. On Android, Argent reports memory growth as a weak signal.
+
+Argent does this with the `react-profiler-*`, `native-profiler-*` and `profiler-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

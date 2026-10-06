@@ -11,18 +11,10 @@ import { resizeDecodedPng } from "../tools/screenshot-diff/resize";
 /**
  * Capture the VVD screen as a PNG.
  *
- * The Vega Virtual Device is an Android-emulator-derived QEMU, so the emulator
- * console can capture the *composited* display host-side (including the GL
- * surface) via `screenrecord screenshot`. We reach the console through
- * `adb emu`, which manages the emulator console auth token
- * (`~/.emulator_console_auth_token`) automatically; talking to the console
- * socket directly would require that token, which the VVD does not generate.
- *
- * This is the only capture path: QMP `screendump` cannot read the GL-accelerated
- * surface on macOS (it returns a blank frame) and the on-device
- * `gwsi-tool-screenshooter` segfaults on the VVD, so neither is a usable
- * fallback. `captureViaEmulatorConsole` throws an actionable error if `adb emu`
- * itself fails.
+ * The VVD is an Android-emulator-derived QEMU, so its emulator console captures
+ * the composited display (GL surface included) host-side. We go through
+ * `adb emu` because it manages the console auth token that the VVD never
+ * generates but a direct console socket would require.
  */
 export async function captureVegaScreenshotPng(opts: { scale?: number } = {}): Promise<string> {
   return captureViaEmulatorConsole(opts);
@@ -33,8 +25,8 @@ async function captureViaEmulatorConsole(opts: { scale?: number }): Promise<stri
   const serial = `emulator-${port}`;
   const outDir = await mkdtemp(join(tmpdir(), "vega-shot-"));
   try {
-    // `screenrecord screenshot <dir>` writes a host-side PNG named
-    // `Screenshot_<epoch>.png` into the directory and prints "OK".
+    // `screenrecord screenshot <dir>` writes the PNG host-side into the
+    // directory under a name it picks.
     await runAdb(["-s", serial, "emu", "screenrecord", "screenshot", outDir], {
       timeoutMs: 20_000,
     });
@@ -58,12 +50,9 @@ async function captureViaEmulatorConsole(opts: { scale?: number }): Promise<stri
 }
 
 /**
- * Downscale a decoded RGBA PNG by `scale`. Defaults and resampling are shared
- * with the other platforms rather than re-derived here: the default + range
- * handling comes from `getScreenshotScale()` (the iOS/Android env parser, which
- * rejects out-of-(0,1] values and falls back to 0.3), and the resample is the
- * lanczos3 `resizeDecodedPng()` used by screenshot-diff — so Vega screenshots
- * honour `ARGENT_SCREENSHOT_SCALE` identically and at the same quality.
+ * Downscale a decoded RGBA PNG, reusing the other platforms' default
+ * (`getScreenshotScale()`, which parses `ARGENT_SCREENSHOT_SCALE`) and
+ * screenshot-diff's lanczos3 resampler, so Vega captures match them.
  */
 function scalePng(src: PNG, scale?: number): PNG {
   const s = scale ?? getScreenshotScale();

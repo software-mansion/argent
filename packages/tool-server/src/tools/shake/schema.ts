@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-/** Upper bound on `count`, so a typo can't hold the device in a shake loop for minutes. */
+/** Cap on `count`, so a typo can't hold the device shaking for minutes. */
 const MAX_SHAKE_COUNT = 10;
 
 export const shakeZodSchema = z.object({

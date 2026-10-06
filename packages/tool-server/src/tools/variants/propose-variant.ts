@@ -124,14 +124,9 @@ it does not wait for the user.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      // Auto-capture this variant's crop frame. When the agent didn't pass one,
-      // describe the device NOW — the variant is on screen at propose time — and
-      // match the element, so EVERY variant crops to its own current layout
-      // instead of inheriting the first variant's frozen frame (the bug where
-      // the first thumbnail looked right but the rest were mis-cropped). The
-      // agent can still override by passing variant.frame explicitly.
-      // Best-effort: a failed/empty describe leaves the frame undefined and the
-      // preview UI falls back, so propose_variant never fails over this.
+      // Describe NOW — the variant is on screen at propose time — so each variant
+      // crops to its own layout instead of inheriting the first variant's frame.
+      // Best-effort: failure leaves the frame undefined and the preview UI falls back.
       let frame = params.variant.frame;
       if (!frame && params.udid) {
         const match = params.match ?? { by: "text" as const, value: params.element };
@@ -142,10 +137,8 @@ it does not wait for the user.`,
         ...params,
         variant: { ...params.variant, frame },
       });
-      // In an `argent lens` CLI session there is no await_user_selection to call
-      // (it's hidden) — the user's feedback is relayed back as a message, so the
-      // agent should simply end its turn once every element is covered. Outside a
-      // CLI session, point it at the blocking await as before.
+      // In an `argent lens` CLI session await_user_selection is hidden and the
+      // user's feedback arrives as a message instead.
       const finish = variantProposalStore.isCliSession()
         ? "end your turn — the user's feedback will arrive as a message"
         : "call await_user_selection once";

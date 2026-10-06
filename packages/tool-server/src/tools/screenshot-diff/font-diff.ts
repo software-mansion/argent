@@ -52,11 +52,11 @@ export interface FontGeometryEvidence {
 }
 
 export interface FontGeometryFeatures {
-  /** Original OCR/text bounds in image coordinates. */
+  /** OCR text bounds, in image coordinates. */
   bounds: DiffBounds;
-  /** Alias for bounds; kept explicit so all feature geometry is image-space. */
+  /** Alias for bounds. */
   regionBounds: DiffBounds;
-  /** Actual sampled crop including detector padding, in image coordinates. */
+  /** Sampled crop: bounds padded by CROP_PADDING_PX, clamped to the image. */
   cropBounds: DiffBounds;
   /** Detected ink bounds in image coordinates. */
   inkBounds?: DiffBounds;

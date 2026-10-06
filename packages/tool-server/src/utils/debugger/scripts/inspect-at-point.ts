@@ -1,10 +1,3 @@
-/**
- * Verbose error message returned when the React DevTools hook is missing.
- * Exported so the tool layer can recognise the same diagnosis without string
- * matching on bespoke phrasings. Mirrored by `react-profiler-start` so the
- * operator sees one consistent explanation regardless of which entry point
- * they hit first.
- */
 export const INSPECT_NO_DEVTOOLS_HOOK_ERROR =
   "React DevTools hook (__REACT_DEVTOOLS_GLOBAL_HOOK__) is not present in this app's JavaScript runtime. " +
   "Component inspection requires a development build with React DevTools enabled. " +
@@ -22,43 +15,32 @@ export const INSPECT_NO_FIBER_ROOT_ERROR =
   "Wait for the app to render its first frame and retry.";
 
 /**
- * Generate a JS script that calls getInspectorDataForViewAtPoint at (x, y)
- * and pushes the result via __argent_callback binding with a requestId
- * for correlation.
+ * JS script that calls getInspectorDataForViewAtPoint at (x, y) and pushes the
+ * component chain back through the __argent_callback binding, tagged with
+ * requestId for correlation.
  *
- * Uses data.closestInstance (the fiber at the touch point) and walks UP the
- * fiber tree via .return pointers. This is more robust than searching globally
- * by name — it correctly resolves fibers when multiple components share a name
- * (e.g. several <Button /> instances in different parents).
+ * Walks up from data.closestInstance via .return pointers, so components
+ * sharing a name still resolve to the right instance. RN 0.81+ returns no
+ * closestInstance and data.componentStack (a string) is parsed instead.
  *
- * Supports both Fabric (new architecture) and Paper (old architecture), across
- * RN versions whose getInspectorDataForViewAtPoint contract differs:
- * - Anchor: Fabric uses the host fiber's public instance; Paper anchors at the
- *   FiberRoot container (its native tag) because the first host fiber is often a
- *   sibling subtree that does not contain the point, so findSubviewIn would
- *   resolve nothing. (Older Paper builds without a containerTag fall back to the
- *   host fiber, recognised via stateNode.canonical or stateNode._nativeTag.)
- * - Result: older RN returns a walkable data.closestInstance; RN 0.81+ returns
- *   data.componentStack (a stack string) instead -- both are handled.
+ * Hit-test anchor: Fabric uses the host fiber's public instance; Paper uses the
+ * FiberRoot container tag, because its first host fiber is often a sibling
+ * subtree that does not contain the point (Paper builds without a containerTag
+ * fall back to the host fiber).
  *
- * Source resolution: tries _debugStack first (bundled frame needing symbolication),
- * then falls back to _debugSource ({ fileName, lineNumber, columnNumber } from
- * @babel/plugin-transform-react-jsx-source). Frames from _debugSource are flagged
- * with `original: true` since they already contain the real source path.
+ * Frames come from _debugStack (bundled, needs symbolication) or _debugSource,
+ * which is already a real source path and is flagged `original: true`.
  *
- * Production-build guards: dereferencing __REACT_DEVTOOLS_GLOBAL_HOOK__ blindly
- * would throw `Cannot read property 'renderers' of undefined` on release builds
- * where DevTools is stripped. The script reports these conditions through the
- * same __argent_callback error channel as `no host fiber`, so the tool surfaces
- * a verbose diagnostic instead of a generic TypeError.
+ * Missing hook / renderer / fiber root report through the same callback error
+ * channel instead of throwing, so a release build yields a diagnosis rather
+ * than a TypeError.
  */
 export function makeInspectScript(x: number, y: number, requestId: string): string {
   const noHookMsg = JSON.stringify(INSPECT_NO_DEVTOOLS_HOOK_ERROR);
   const noRendererMsg = JSON.stringify(INSPECT_NO_RENDERER_ERROR);
   const noRootMsg = JSON.stringify(INSPECT_NO_FIBER_ROOT_ERROR);
-  // JSON.stringify yields a valid JS string literal — escapes quotes/newlines
-  // that a bare '${requestId}' would inject raw (consistent with the network
-  // detail script; requestId is a randomUUID today, so this is defense-in-depth).
+  // Escape as a JS string literal (as the network detail script does);
+  // requestId is a randomUUID today, so this is defense-in-depth.
   const ridLiteral = JSON.stringify(requestId);
   return `(function() {
   function __argent_fail(msg) {

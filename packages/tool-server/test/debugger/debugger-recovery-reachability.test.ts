@@ -7,6 +7,12 @@ import {
 } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
 import { startMockMetroCdp, type MockMetroCdp } from "./metro-cdp-harness";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-debugger-recovery-home-");
 
 /**
  * Reachability proof for the Metro blueprint's dispose-and-retry recovery

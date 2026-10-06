@@ -439,7 +439,9 @@ describe("the log record that goes on the wire", () => {
   });
 
   it("omits a null-valued property rather than sending an explicit null", () => {
-    // OTel rejects null attribute values, so toAttributes drops those keys.
+    // The SDK would accept a null attribute and serialize it as an empty OTLP
+    // value, indistinguishable downstream from a property that really was empty;
+    // toAttributes drops the key instead.
     const client = getClient()!;
     client.emit({
       distinctId: "d",

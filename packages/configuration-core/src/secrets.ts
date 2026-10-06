@@ -5,54 +5,33 @@ import { findProjectRoot } from "./flags.js";
 import { resolveHomeDir, type ConfigPathOptions } from "./paths.js";
 
 /**
- * Where `{{secret:NAME}}` values come from.
+ * Where `{{secret:NAME}}` values come from. The placeholder mechanism itself
+ * lives in the tool-server's `secrets.ts`; this module owns only what NAME is
+ * worth here.
  *
- * The placeholder mechanism itself lives in the tool-server's `secrets.ts`
- * (it is the typing tools' concern, not configuration's); this module owns the
- * only question it delegates — *what is NAME worth here*. Originally that was a
- * single source, the `ARGENT_SECRET_<NAME>` environment variable, which is
- * CI-native but poor ergonomics interactively: an editor-hosted tool-server
- * inherits the environment its editor was launched with, so exporting a
- * variable means restarting the editor, and there is nowhere to write a
- * credential down that survives a reboot.
+ * Sources are read fresh on every resolution, so editing a file takes effect
+ * with no server restart — an editor-hosted tool-server inherits the
+ * environment its editor was launched with, so an `ARGENT_SECRET_<NAME>`
+ * variable alone would mean restarting the editor to add a secret.
  *
- * So a name now resolves through an ordered chain of sources — the environment
- * first, then dotenv files — read fresh on every resolution, so editing a file
- * takes effect on the next keystroke with no server restart. This mirrors the
- * runtime-read design the rest of the configuration surface already uses (see
- * `configuredAdditionalDeviceSets`).
- *
- * ── What each source exposes ──────────────────────────────────────────
- *
- * The security property the env prefix bought must survive the new sources: an
- * agent composes the tool call, so whatever is reachable through
+ * An agent composes the tool call, so whatever is reachable through
  * `{{secret:…}}` is exfiltratable by a prompt-injected agent (type it into a
- * field, read the field back). "Which values may argent type" therefore has to
- * stay an allowlist the user wrote deliberately — never "everything on the
- * host", and never "everything in the app's .env".
+ * field, read the field back). What argent may type therefore stays an
+ * allowlist the user wrote deliberately, one rule per kind of file:
  *
- * Two kinds of file, one rule each:
- *
- * - A **dedicated** argent secrets file (`.argent/secrets.env`) exists for no
- *   other purpose, so the file *is* the allowlist: every key in it is a secret
- *   argent may type. An `ARGENT_SECRET_` prefix is accepted but redundant there
- *   and stripped, so both spellings name the same secret.
+ * - A **dedicated** file (`.argent/secrets.env`) exists for no other purpose,
+ *   so the file *is* the allowlist: every key is exposed. An `ARGENT_SECRET_`
+ *   prefix is redundant there and stripped, so both spellings name one secret.
  *
  * - A **shared** file the app also uses (`.env`, `.env.local`) exposes only its
- *   `ARGENT_SECRET_`-prefixed keys — exactly the rule that governs the process
- *   environment, and for exactly the same reason: the file holds unrelated
- *   application config (API keys, tokens) that argent must not be able to type.
- *   Adding `ARGENT_SECRET_` to one line is the deliberate act that exposes it.
- *
- * ── Scopes ────────────────────────────────────────────────────────────
+ *   `ARGENT_SECRET_`-prefixed keys; the rest is unrelated application config
+ *   argent must not be able to type. Adding the prefix to one line is the
+ *   deliberate act that exposes it.
  *
  * Project sources sit under the project root discovered from the tool-server's
- * cwd — the same walk-up (`.argent` / `.git` / `package.json`) every other
- * project-scoped configuration uses. When the cwd is not inside a project at
- * all, project sources are skipped rather than anchored at an arbitrary
- * directory. The global scope (`~/.argent/secrets.env`) needs no discovery and
- * is therefore the source that always works — including for a tool-server
- * whose cwd its editor set to `/`.
+ * cwd, and are skipped when the cwd is not inside a project rather than
+ * anchored at an arbitrary directory. The global scope (`~/.argent/secrets.env`)
+ * needs no discovery and so always works.
  */
 
 /** The mandatory prefix for a secret exposed through a shared environment or file. */
@@ -62,17 +41,16 @@ export const SECRET_ENV_PREFIX = "ARGENT_SECRET_";
 const SECRETS_FILE_NAME = "secrets.env";
 
 /**
- * Shared dotenv files consulted in the project root, nearest-wins first.
- * `.env.local` precedes `.env` because that is the universal convention for
- * "my machine's overrides, not committed" — the natural home for a personal
- * test account.
+ * Shared dotenv files in the project root, highest precedence first.
+ * `.env.local` wins by the usual convention that it holds uncommitted
+ * per-machine overrides — the natural home for a personal test account.
  */
 const SHARED_ENV_FILES = [".env.local", ".env"] as const;
 
 /**
- * Secret names are restricted to the identifier grammar the placeholder itself
- * accepts, so a key dotenv tolerates but `{{secret:…}}` could never reference
- * (dots, dashes) is not advertised as available.
+ * The identifier grammar `{{secret:…}}` itself accepts, so a key dotenv
+ * tolerates but the placeholder could never reference (dots, dashes) is not
+ * advertised as available.
  */
 const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -83,18 +61,18 @@ type FileExposure = "dedicated" | "shared";
 export interface SecretSource {
   /** Where this source came from, for diagnostics — never its values. */
   label: string;
-  /** The environment is always there; a file may not be — see {@link present}. */
+  /** The environment is always present; a file may not be. */
   kind: "env" | "file";
-  /** Whether the source exists at all (a file that is not there). */
+  /** False only for a file that is not there. */
   present: boolean;
   /** The secret names it defines, sorted. */
   names: string[];
-  /** Values by name. Empty when the source is absent or exposes nothing. */
+  /** Values by name; empty when the source is absent or exposes nothing. */
   values: Map<string, string>;
   /**
-   * Set on a *present* source that exposes nothing because of the prefix rule —
-   * the "my .env has the value but argent can't see it" case, which the error
-   * message has to explain or the user will assume the file was ignored.
+   * Set on a *present* source that exposes nothing because of the prefix rule.
+   * The error message has to explain that case or the user assumes the file was
+   * ignored.
    */
   needsPrefix?: boolean;
 }
@@ -124,15 +102,12 @@ function envSource(env: NodeJS.ProcessEnv): SecretSource {
 /**
  * Read one dotenv file into a source. A missing, unreadable, or directory path
  * degrades to an absent source rather than throwing: a broken secrets file must
- * not take down every typing call, and the chain's later sources may well hold
- * the name.
+ * not take down every typing call, and a later source in the chain may hold the
+ * name.
  *
  * Absence is probed with a non-throwing `stat` rather than left to the read's
- * ENOENT, because most sources are absent on most calls — a setup with only
- * `~/.argent/secrets.env` misses three of four every time a secret is typed —
- * and constructing the rejected Error (stack capture included) costs an order
- * of magnitude more than the probe: measured on a Pi 5, 40.6µs to throw versus
- * 3.0µs to stat. The read stays wrapped anyway: `stat` cannot rule out a
+ * ENOENT, because most sources are absent on most calls and throwing costs far
+ * more than the probe. The read stays wrapped anyway: `stat` cannot rule out a
  * directory, a permission error, or a file deleted between the two calls.
  */
 function fileSource(filePath: string, exposure: FileExposure): SecretSource {
@@ -154,15 +129,15 @@ function fileSource(filePath: string, exposure: FileExposure): SecretSource {
 
   const values = new Map<string, string>();
   let skippedUnprefixed = false;
-  // dotenv owns the grammar (export prefixes, quoted values containing `=`,
-  // multi-line quoted values) — the same parser gather-workspace-data uses.
+  // dotenv owns the grammar: export prefixes, quoted values containing `=`,
+  // multi-line quoted values.
   for (const [key, value] of Object.entries(parseDotenv(content))) {
     const prefixed = key.startsWith(SECRET_ENV_PREFIX);
     if (exposure === "shared" && !prefixed) {
       skippedUnprefixed = true;
       continue;
     }
-    // A dedicated file accepts both spellings; the prefix is redundant there.
+    // A dedicated file accepts both spellings for one secret.
     const name = prefixed ? key.slice(SECRET_ENV_PREFIX.length) : key;
     if (SECRET_NAME_RE.test(name)) values.set(name, value);
   }
@@ -182,9 +157,9 @@ function fileSource(filePath: string, exposure: FileExposure): SecretSource {
  * environment overrides every file (a CI job's secret beats a stale checked-out
  * file) and the project overrides the user's global file.
  *
- * Paths are deduplicated: when the cwd is a project rooted at the home
- * directory itself, the project and global secrets files are the same file, and
- * listing it twice would report it twice in every diagnostic.
+ * Paths are deduplicated because a project rooted at the home directory itself
+ * makes the project and global secrets files one file, which would then be
+ * reported twice in every diagnostic.
  */
 export function secretSources(options: SecretSourceOptions = {}): SecretSource[] {
   const sources: SecretSource[] = [envSource(options.env ?? process.env)];
@@ -233,9 +208,8 @@ export function secretNames(sources: SecretSource[]): string[] {
 
 /**
  * The source chain rendered for an unknown-name error: one line per source,
- * saying whether it exists and how many secrets it contributed — enough to see
- * *why* a name did not resolve (file not where you thought, or found but its
- * keys need the prefix) without disclosing a single value.
+ * enough to see *why* a name did not resolve (file not where you thought, or
+ * found but its keys need the prefix) without disclosing a single value.
  */
 export function describeSecretSources(sources: SecretSource[]): string {
   return sources
@@ -252,9 +226,9 @@ export function describeSecretSources(sources: SecretSource[]): string {
 }
 
 /**
- * Where to put a secret that is missing, in words. Named after the scope that
- * always works: the global file needs no project discovery, so it is the advice
- * that cannot be wrong, with the project-local alternatives listed after it.
+ * Where to put a missing secret, in words. The global file leads because it
+ * needs no project discovery and so cannot be wrong advice; project-local
+ * alternatives follow.
  */
 export function secretPlacementAdvice(name: string, options: SecretSourceOptions = {}): string {
   const globalFile = path.join(resolveHomeDir(options), ".argent", SECRETS_FILE_NAME);

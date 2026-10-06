@@ -130,6 +130,32 @@ describe("shake tool — iOS", () => {
     await expect(shakeTool.execute(services, { udid: iosUdid })).rejects.toThrow(/Failed to shake/);
     expect(mockShaker.settle).not.toHaveBeenCalled();
   });
+
+  it("points a shut-down simulator at boot-device", async () => {
+    // Verbatim stderr from `xcrun simctl spawn <shut-down udid> notifyutil`.
+    // `spawn` is the only verb this tool runs and it words the state error
+    // differently from the host-side verbs ("Unable to lookup in current
+    // state: Shutdown"), so matching on those alone never fires here.
+    vi.mocked(execFile).mockImplementationOnce(((
+      _file: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (e: Error | null) => void
+    ) =>
+      cb(
+        new Error(
+          "An error was encountered processing the command " +
+            "(domain=com.apple.CoreSimulator.SimError, code=405):\n" +
+            "Process spawn via launchd failed because device is not booted.\n" +
+            "Underlying error (domain=com.apple.SimLaunchHostService.RequestError, code=3):\n" +
+            `\tBad or unknown session: com.apple.CoreSimulator.SimDevice.${iosUdid}`
+        )
+      )) as never);
+
+    await expect(shakeTool.execute(services, { udid: iosUdid })).rejects.toThrow(
+      /must be booted first — use boot-device\./
+    );
+  });
 });
 
 describe("shake tool — remote iOS (sim-remote)", () => {

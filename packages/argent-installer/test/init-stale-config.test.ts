@@ -8,9 +8,14 @@ import { cleanupStaleMcpConfigs } from "../src/init-stale-config.js";
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Same pattern as mcp-configs.test.ts: redirect homedir() to a temp path so
 // hidden-scope probes (~/.claude.json, VS Code user profile) never touch the
-// real home directory.
+// real home directory. On Windows the VS Code probe does not go through
+// homedir() at all — vscodeUserDirs() reads %APPDATA% there — so the beforeEach
+// below pins that as well. Without it the two user-profile tests write their
+// one-entry fixture over the developer's own Code\User\mcp.json and then
+// assert that remove() deleted it.
 
 let homedirOverride: string | undefined;
+let originalAppData: string | undefined;
 
 vi.mock("node:os", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:os")>();
@@ -66,11 +71,15 @@ beforeEach(() => {
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(root, { recursive: true });
   homedirOverride = home;
+  originalAppData = process.env.APPDATA;
+  process.env.APPDATA = path.join(home, "AppData", "Roaming");
   globallyInstalled = false;
 });
 
 afterEach(() => {
   homedirOverride = undefined;
+  if (originalAppData === undefined) delete process.env.APPDATA;
+  else process.env.APPDATA = originalAppData;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -264,6 +273,30 @@ describe("vscodeAdapter.findShadowingConfigs", () => {
 
     expect(findings[0].remove()).toBe(true);
     expect(fs.existsSync(userMcpJsonPath())).toBe(false);
+  });
+
+  it("resolves the user profile from %APPDATA% on Windows", () => {
+    // vscodeUserDirs() reads process.platform at call time and takes a %APPDATA%
+    // branch that never touches homedir(), so this is the one arm the homedir
+    // mock cannot reach — and the arm whose remove() deletes a real user's
+    // mcp.json. Without this the branch can be deleted with every suite green.
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const appDataMcpJson = path.join(process.env.APPDATA!, "Code", "User", "mcp.json");
+      writeJsonFile(appDataMcpJson, {
+        servers: { argent: { type: "stdio", command: "argent", args: ["mcp"] } },
+      });
+
+      const findings = vscode.findShadowingConfigs!(root, "local");
+      expect(findings).toHaveLength(1);
+      expect(findings[0].location).toBe(appDataMcpJson);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
   });
 
   it("returns nothing when no user-profile config exists", () => {

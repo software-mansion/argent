@@ -4,9 +4,10 @@ import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/regist
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -35,14 +36,11 @@ export const debuggerReloadMetroTool: ToolDefinition<
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
 Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method, deviceName, appName, logicalDeviceId } indicating which reload path was used and which device/app was targeted. Fails if Metro is not running on the given port.`,
   zodSchema,
-  // Metro-only: Chromium loads from disk, not from a bundler. The closest
-  // analog (Page.reload against the renderer) would behave differently enough
-  // — preserving the URL but re-fetching index.html, blowing away in-memory
-  // app state — that calling it under the same tool name would mislead. If we
-  // want that on Chromium later, it deserves its own tool.
+  // RN-only: reloading a Chromium page is a different operation from restarting
+  // the Metro bundle, so it would need its own tool.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
+    debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, _params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -53,8 +51,6 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
         api.cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(() => {})
       );
 
-    // Primary: CDP Page.reload — works reliably with RN 0.76+ (Fusebox/Bridgeless).
-    // Triggers a full JS execution context teardown and restart without touching the native shell.
     const context = {
       deviceName: api.deviceName,
       appName: api.appName,
@@ -66,11 +62,9 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
       void disableLogBox();
       return { reloaded: true, port, method: "cdp", ...context };
     } catch {
-      // Fall through to HTTP fallback
+      /* fall through */
     }
 
-    // Fallback: Metro's HTTP /reload endpoint (RN CLI classic, older Expo setups).
-    // Not always present — Expo SDK 52+ / RN 0.76+ may not expose it.
     const res = await fetch(`http://127.0.0.1:${port}/reload`, {
       method: "POST",
     });

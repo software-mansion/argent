@@ -4,17 +4,13 @@ import * as path from "node:path";
 import { configDir, configFilePath, type ConfigPathOptions } from "./paths.js";
 import type { FlagScope } from "./flags.js";
 
-// Shared read/write for the `.argent/config.json` documents. The config holds
-// several independent keys (telemetry consent, first-run notices, Lens
-// preferences, ...) at two scopes — `global` (`~/.argent`) and `project`
-// (`<project-root>/.argent`) — so every writer must merge rather than
-// overwrite, and publish atomically so an interrupted write can never truncate
-// keys it does not own.
+// Shared read/write for the `.argent/config.json` documents, at both the
+// `global` (`~/.argent`) and `project` (`<project-root>/.argent`) scopes. One
+// document holds independent keys owned by different writers (telemetry
+// consent, first-run notices, Lens preferences), so every write merges and
+// publishes atomically rather than truncating keys it does not own.
 
-/**
- * Parse a scope's config document, returning an empty object when
- * missing/malformed. Defaults to the global scope for backward compatibility.
- */
+/** Parse a scope's config document; `{}` when missing or malformed. */
 export function readConfigObject(
   scope: FlagScope = "global",
   options: ConfigPathOptions = {}
@@ -31,10 +27,8 @@ export function readConfigObject(
   return {};
 }
 
-// ── dotted-path access ────────────────────────────────────────────────────
-// Config keys are dotted paths (`ios.deviceSet`) into the nested document.
-// These helpers read/write/remove a leaf while refusing prototype-polluting
-// segments so a crafted key can never reach `Object.prototype`.
+// Config keys are dotted paths into the nested document. The helpers below
+// refuse segments through which a crafted key could reach `Object.prototype`.
 
 const FORBIDDEN_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -84,16 +78,14 @@ export function setAtPath(obj: Record<string, unknown>, dottedKey: string, value
 /**
  * Delete the leaf at a dotted key. Returns true when something was removed.
  *
- * A container left empty by the delete is removed along with it, so unsetting
- * the last key under a group restores the document to what it was before the
- * group existed rather than leaving `{ "ios": {} }` behind — noise in a project
- * config that gets committed. Only containers this delete emptied are removed:
- * the walk stops at the first ancestor that still holds something, and the root
- * object always survives (an emptied config is `{}`, never a deleted file).
+ * Containers this delete emptied are removed with it, so unsetting the last key
+ * under a group leaves no `{ "ios": {} }` behind. The unwind stops at the first
+ * ancestor that still holds something, and the root always survives (an emptied
+ * config is `{}`, never a deleted file).
  */
 export function deleteAtPath(obj: Record<string, unknown>, dottedKey: string): boolean {
   const parts = splitKey(dottedKey);
-  // Every container on the way to the leaf, so the emptied ones can be unwound
+  // Every container on the way to the leaf, so emptied ones can be unwound
   // afterwards. chain[i] holds parts[i].
   const chain: Record<string, unknown>[] = [obj];
   for (let i = 0; i < parts.length - 1; i++) {
@@ -112,18 +104,16 @@ export function deleteAtPath(obj: Record<string, unknown>, dottedKey: string): b
   return true;
 }
 
-// A read → mutate → publish cycle completes in well under a second; a lock held
-// longer than this is treated as orphaned by a crashed/`kill -9`'d writer and
-// stolen, so a dead process can't wedge config writes forever.
+// A read → mutate → publish cycle takes well under a second, so a lock older
+// than this is treated as orphaned by a dead writer and stolen — a crashed
+// process can't wedge config writes forever.
 const LOCK_STALE_MS = 10_000;
-// Total time to wait for the lock before giving up and proceeding unlocked.
-// Degrading to the old (lock-free) behavior is strictly no worse than before
-// this lock existed and keeps a stuck peer from blocking the user's command.
+// Wait budget before giving up and proceeding unlocked: degrading to the old
+// lock-free behavior beats letting a stuck peer block the user's command.
 const LOCK_MAX_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 25;
 
-// Block the (single-threaded) script for `ms` without busy-spinning. Only ever
-// reached under real cross-process contention, never in the common case.
+// Block the (single-threaded) script for `ms` without busy-spinning.
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -133,11 +123,10 @@ interface ConfigLock {
   lockPath: string;
 }
 
-// Acquire an exclusive on-disk lock for config.json, or return null if it
-// couldn't be taken within the budget (caller then proceeds best-effort). A
-// non-null result must be released. Stale-lock recovery is best-effort: in the
-// pathological case of two writers observing the same orphaned lock at once the
-// steal can race, but that is vastly rarer than the lost-update it replaces.
+// Exclusive on-disk lock for config.json; null when it couldn't be taken within
+// the budget, and the caller then proceeds best-effort. A non-null result must
+// be released. Two writers seeing the same orphaned lock can both steal it, but
+// that is vastly rarer than the lost update the lock replaces.
 function acquireConfigLock(finalPath: string): ConfigLock | null {
   const lockPath = finalPath + ".lock";
   const deadline = Date.now() + LOCK_MAX_WAIT_MS;
@@ -152,18 +141,15 @@ function acquireConfigLock(finalPath: string): ConfigLock | null {
       return { fd, lockPath };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
-      // Held by another process. Steal it if it looks orphaned.
       try {
         if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) {
           fs.unlinkSync(lockPath);
           continue;
         }
       } catch {
-        // Lock vanished between open and stat, or the stat/unlink itself
-        // failed. Fall through to the deadline + backoff guard rather than
+        // Fall through to the deadline + backoff guard rather than
         // `continue`-ing: a persistent stat failure paired with a persistent
-        // EEXIST on open would otherwise spin this into a tight, unbounded loop
-        // (no deadline check, no sleep). The next iteration retries the open.
+        // EEXIST on open would otherwise spin this into a tight, unbounded loop.
       }
       if (Date.now() >= deadline) return null;
       sleepSync(LOCK_RETRY_MS);
@@ -175,27 +161,25 @@ function releaseConfigLock(lock: ConfigLock): void {
   try {
     fs.closeSync(lock.fd);
   } catch {
-    /* already closed */
+    /* best-effort */
   }
   try {
     fs.unlinkSync(lock.lockPath);
   } catch {
-    /* already removed (e.g. stolen as stale by a peer) */
+    /* already removed, e.g. stolen as stale by a peer */
   }
 }
 
 /**
  * Apply `mutate` to the current config and persist the result atomically.
  *
- * Reads the existing document (preserving keys this caller does not touch),
- * lets `mutate` patch it in place, then writes to a temp file and renames so a
- * crash mid-write leaves the previous config intact.
+ * `mutate` patches the existing document in place, which is then written to a
+ * temp file and renamed, so a crash mid-write leaves the previous config intact.
  *
- * The whole read → mutate → publish cycle runs under a cross-process lock so a
- * concurrent writer touching a *different* key can't clobber ours: without it
- * two processes both read the old document, each patches only its own key, and
- * the last `rename` wins — silently dropping the other's change (e.g. a
- * telemetry opt-out lost behind a first-run-notice write).
+ * The whole read → mutate → publish cycle runs under a cross-process lock:
+ * without it two processes both read the old document, each patches only its
+ * own key, and the last `rename` wins — silently dropping the other's change
+ * (e.g. a telemetry opt-out lost behind a first-run-notice write).
  */
 export function updateConfig(
   mutate: (config: Record<string, unknown>) => void,

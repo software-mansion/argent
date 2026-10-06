@@ -2,18 +2,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // The launcher captures STATE_DIR from `homedir()` at module load. Redirect
 // HOME to a per-file temp dir BEFORE the dynamic import runs so the entire
 // state-file API operates against an isolated sandbox.
 let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
+let restoreHome: () => void;
 let STATE_DIR: string;
 let LEGACY_STATE_FILE: string;
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-state-test-"));
-  process.env.HOME = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   STATE_DIR = launcher.STATE_PATHS.STATE_DIR;
@@ -22,6 +24,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
@@ -187,13 +190,13 @@ describe("readAllToolsServerStates", () => {
 
 describe("killToolServer — empty state cases", () => {
   it("is a no-op when no state file exists", async () => {
-    await expect(launcher.killToolServer()).resolves.toBeUndefined();
-    await expect(launcher.killToolServer(BUNDLE)).resolves.toBeUndefined();
+    await expect(launcher.killToolServer()).resolves.toBe(false);
+    await expect(launcher.killToolServer(BUNDLE)).resolves.toBe(false);
   });
 
   it("clears state pointing at a long-dead pid without throwing", async () => {
     await launcher.writeToolsServerState({ ...sampleState, pid: DEAD_PID });
-    await launcher.killToolServer(BUNDLE);
+    expect(await launcher.killToolServer(BUNDLE)).toBe(false);
     expect(await launcher.readToolsServerState(BUNDLE)).toBeNull();
   });
 
@@ -208,6 +211,18 @@ describe("killToolServer — empty state cases", () => {
     expect(await launcher.readToolsServerState(BUNDLE)).toBeNull();
     expect(await launcher.readToolsServerState(OTHER_BUNDLE)).not.toBeNull();
   });
+
+  // win32 has no `ps`, so the guard is deliberately disabled there — this test
+  // would SIGTERM the test runner itself.
+  it.skipIf(process.platform === "win32")(
+    "signals nothing and keeps the record when the LIVE pid is not our tool-server",
+    async () => {
+      // A recycled pid: alive, but its command line is the vitest runner.
+      await launcher.writeToolsServerState({ ...sampleState, pid: process.pid });
+      expect(await launcher.killToolServer(BUNDLE)).toBe(false);
+      expect(await launcher.readToolsServerState(BUNDLE)).not.toBeNull();
+    }
+  );
 });
 
 describe("killToolServerForInstallDir", () => {

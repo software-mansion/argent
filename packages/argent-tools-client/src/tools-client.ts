@@ -12,6 +12,8 @@ export interface ToolMeta {
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
+  /** Listed for programmatic callers only; the MCP adapter skips it. */
+  hideFromMcp?: boolean;
 }
 
 export interface ToolInvocationResult {
@@ -21,48 +23,52 @@ export interface ToolInvocationResult {
 
 export interface CallToolOptions {
   /**
-   * Receive live progress events while the tool runs. Setting this asks the
-   * server for an NDJSON stream (`Accept: application/x-ndjson`); a server
-   * that predates streaming ignores the header and replies with plain JSON,
-   * in which case no events fire and the call behaves exactly as before.
+   * Receive live progress events while the tool runs, by asking the server for
+   * an NDJSON stream. A server that answers with plain JSON fires no events.
    */
   onProgress?: (event: unknown) => void;
+  /**
+   * Stop waiting for the call. Every request rejects with the signal's reason,
+   * as `fetch` does, never with a ToolInvocationError.
+   */
+  signal?: AbortSignal;
 }
 
-/**
- * The CLI and MCP server each instantiate a client bound to the bundled paths
- * known by the published package. Keeping it as a factory avoids a hidden
- * module-level singleton and makes testing easier.
- */
 export interface ToolsClient {
-  fetchTools(): Promise<ToolMeta[]>;
-  fetchTool(name: string): Promise<ToolMeta | null>;
+  fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]>;
+  fetchTool(name: string, opts?: { signal?: AbortSignal }): Promise<ToolMeta | null>;
   callTool(name: string, args: unknown, opts?: CallToolOptions): Promise<ToolInvocationResult>;
   /** Returns the tool-server base URL + auth token, spawning if needed. */
   baseUrl(): Promise<ToolsServerHandle>;
 }
 
 export interface CreateToolsClientOptions {
-  /** Locations of bundled artifacts. Required when ARGENT_TOOLS_URL is unset. */
+  /** Locations of bundled artifacts. Required unless a tool-server URL is configured. */
   paths?: ToolsServerPaths;
 }
 
 /**
- * A tool invocation the SERVER answered with an error — an HTTP error status
- * or the NDJSON stream's terminal `error` line — as opposed to a plain `Error`
- * from callTool, which means the transport itself failed (fetch rejection,
- * stream cut mid-run). `errorKind`/`errorCode` carry the server's failure
- * signal (e.g. kind "validation" for a request the server deliberately
- * rejected) when it sent one; a pre-signal server leaves them undefined.
+ * A tool invocation the SERVER answered with an error — an HTTP error status or
+ * the NDJSON stream's terminal `error` line. `errorKind`/`errorCode` carry the
+ * server's failure signal (e.g. kind "validation") when it sent one.
+ *
+ * `issues` is the issue list a 400 carries beside its prose message, so a caller
+ * can map a rejected field back to the flag its user typed. Undefined for an
+ * older server.
  */
 export class ToolInvocationError extends Error {
   readonly errorCode?: string;
   readonly errorKind?: string;
-  constructor(message: string, signal?: { errorCode?: string; errorKind?: string }) {
+  readonly issues?: readonly unknown[];
+  constructor(
+    message: string,
+    signal?: { errorCode?: string; errorKind?: string; issues?: readonly unknown[] }
+  ) {
     super(message);
     this.name = "ToolInvocationError";
     this.errorCode = signal?.errorCode;
     this.errorKind = signal?.errorKind;
+    this.issues = signal?.issues;
   }
 }
 
@@ -70,15 +76,11 @@ function authHeaders(token: string | undefined): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/**
- * Read an NDJSON tool-invocation stream: each `progress` line fires the
- * callback as it arrives, the terminal `result` line becomes the return value,
- * and a terminal `error` line throws — mirroring the buffered path's contract.
- * A stream that ends with no terminal line means the connection died mid-run.
- */
+/** Read an NDJSON tool-invocation stream, mirroring the buffered path's contract. */
 async function consumeToolStream(
   body: ReadableStream<Uint8Array>,
-  onProgress: (event: unknown) => void
+  onProgress: (event: unknown) => void,
+  signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
   const handleLine = (line: string): void => {
@@ -111,6 +113,8 @@ async function consumeToolStream(
       buffered += decoder.decode(value, { stream: true });
       let newline: number;
       while ((newline = buffered.indexOf("\n")) !== -1) {
+        // fetch errors the body on abort, but not a chunk it already handed over.
+        signal?.throwIfAborted();
         const line = buffered.slice(0, newline);
         buffered = buffered.slice(newline + 1);
         handleLine(line);
@@ -119,12 +123,13 @@ async function consumeToolStream(
     buffered += decoder.decode();
     if (buffered.trim()) handleLine(buffered);
   } catch (err) {
-    // Terminal `error` line or a mid-stream parse/read failure: drop the rest
-    // of the stream (the server has ended it anyway) and surface the error.
+    // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
     throw err;
   }
 
+  // Before the missing-result check: a trailing progress callback may abort.
+  signal?.throwIfAborted();
   if (!final) {
     throw new Error("tool stream ended without a result — connection lost mid-run?");
   }
@@ -133,16 +138,27 @@ async function consumeToolStream(
   return { data, note: final.note };
 }
 
+/**
+ * A schema rejection sends the raw issue JSON in `error`, which is what a CLI
+ * released before `issues` parses, and the prose in `message`. Every other error
+ * body sends `error` alone.
+ */
+export function errorBodyMessage(body: {
+  error?: string;
+  message?: string;
+  issues?: unknown;
+}): string | undefined {
+  if (Array.isArray(body.issues) && typeof body.message === "string") return body.message;
+  return body.error ?? body.message;
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
 
   async function baseUrl(): Promise<ToolsServerHandle> {
-    // Resolution precedence (ARGENT_TOOLS_URL env > ~/.argent/link.json > none)
-    // lives in getResolvedToolsUrl. When a remote target is configured, the
-    // matching auth token comes from ARGENT_AUTH_TOKEN — empty/unset means the
-    // caller owns an unauthenticated server (legacy / dev). With no override
-    // (the default when the user never ran `argent link`), fall through to a
-    // locally auto-spawned, token-authenticated tool-server.
+    // Precedence lives in getResolvedToolsUrl. An override without a token means
+    // the caller owns an unauthenticated server; with no override, auto-spawn a
+    // local, token-authenticated one.
     const resolved = await getResolvedToolsUrl();
     if (resolved.url) {
       return { url: resolved.url, token: resolved.token ?? "" };
@@ -157,16 +173,23 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return cached;
   }
 
-  async function fetchTools(): Promise<ToolMeta[]> {
+  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+    opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
-    const res = await fetch(`${url}/tools`, { headers: authHeaders(token) });
+    const res = await fetch(`${url}/tools`, {
+      headers: authHeaders(token),
+      signal: opts?.signal,
+    });
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
   }
 
-  async function fetchTool(name: string): Promise<ToolMeta | null> {
-    const tools = await fetchTools();
+  async function fetchTool(
+    name: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<ToolMeta | null> {
+    const tools = await fetchTools(opts);
     return tools.find((t) => t.name === name) ?? null;
   }
 
@@ -175,20 +198,21 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     args: unknown,
     opts?: CallToolOptions
   ): Promise<ToolInvocationResult> {
+    // An aborted signal must not start a tool-server.
+    opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
 
-    // File boundary, outbound: wrap declared file-path args so the server can
-    // read them in place (co-located) or from inlined content (remote). The
-    // tool's advertised metadata drives this — an older server that doesn't
-    // declare fileInputs gets the args verbatim.
+    // File boundary, outbound: wrap args the tool declares as file paths so the
+    // server can read them in place (co-located) or from inlined content (remote).
     let finalArgs = args;
-    const meta = await fetchTool(name);
+    const meta = await fetchTool(name, { signal: opts?.signal });
     if (meta?.fileInputs?.length) {
       const { url: routedUrl } = await getResolvedToolsUrl();
       const isRemote = routedUrl !== null;
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
         includeContent: isRemote,
         uploadEndpoint: isRemote ? { url, token } : undefined,
+        signal: opts?.signal,
       });
     }
 
@@ -200,35 +224,38 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         ...authHeaders(token),
       },
       body: JSON.stringify(finalArgs ?? {}),
+      signal: opts?.signal,
     });
-    // The server only streams when the request asked for it AND every
-    // pre-invoke gate passed (validation errors stay plain JSON with their
-    // status codes); a pre-streaming server ignores the Accept header
-    // entirely. Content-Type is therefore the authoritative mode signal.
+    // The server commits to streaming only after every pre-invoke gate passes —
+    // validation errors stay plain JSON with their status codes — so Content-Type
+    // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
     if (opts?.onProgress && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      return consumeToolStream(res.body, opts.onProgress);
+      return consumeToolStream(res.body, opts.onProgress, opts.signal);
     }
-    const json = (await res.json().catch(() => ({}))) as {
+    const json = (await res.json().catch(() => {
+      // An abort while reading the body is not an empty body.
+      opts?.signal?.throwIfAborted();
+      return {};
+    })) as {
       data?: unknown;
       error?: string;
       message?: string;
       note?: string;
       error_code?: string;
       error_kind?: string;
+      issues?: unknown;
     };
     if (!res.ok) {
-      throw new ToolInvocationError(
-        json.error ?? json.message ?? `${res.status} ${res.statusText}`,
-        {
-          errorCode: json.error_code,
-          errorKind: json.error_kind,
-        }
-      );
+      throw new ToolInvocationError(errorBodyMessage(json) ?? `${res.status} ${res.statusText}`, {
+        errorCode: json.error_code,
+        errorKind: json.error_kind,
+        issues: Array.isArray(json.issues) ? json.issues : undefined,
+      });
     }
-    // File boundary, inbound: persist any client-write directives (files that
-    // belong in the caller's project, e.g. recorded flow YAMLs) and rewrite
-    // them to the written paths.
+    opts?.signal?.throwIfAborted();
+    // File boundary, inbound: persist client-write directives (e.g. recorded
+    // flow YAMLs) and rewrite them to the written paths.
     const { result: data } = await applyClientFileDirectives(json.data);
     return { data, note: json.note };
   }

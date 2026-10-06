@@ -7,6 +7,7 @@ import type { Registry } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
+import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
@@ -143,6 +144,31 @@ function addStep(root: string, name: string, marker: string) {
 
 function addEcho(root: string, name: string, message: string) {
   return flowInsertEchoTool.execute({}, { name, project_root: root, message });
+}
+
+async function writeScript(root: string, source: string): Promise<void> {
+  await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+  await fs.writeFile(path.join(root, "scripts", "seed.mjs"), source, "utf8");
+}
+
+/**
+ * Call the tool with the .mjs already on disk.
+ *
+ * The file write is a real await, so a test that races this call against a
+ * lock-holding tool needs the session resolved on the FIRST turn — writing the
+ * script inside the call would let the race resolve first.
+ */
+function runAddScript(root: string, name: string) {
+  return flowAddScriptTool.execute({}, {
+    name,
+    project_root: root,
+    path: "../../scripts/seed.mjs",
+  } as never);
+}
+
+async function addScript(root: string, name: string, source = "output.ok = true;") {
+  await writeScript(root, source);
+  return runAddScript(root, name);
 }
 
 function finish(root: string, name: string) {
@@ -1112,9 +1138,9 @@ describe("appending to a recording whose file was hand-edited", () => {
     expect(await readMarkers(root, "alpha")).toEqual(["echo:s1", "echo:s2"]);
 
     // Removing a bad step by editing the .yaml is what both recording tools'
-    // descriptions tell the agent to do. It only survives because the host-mode
-    // append re-reads from disk; serializing the in-memory copy instead would
-    // silently resurrect the deleted step on the very next append.
+    // descriptions tell the agent to do after the finish, not during. It only
+    // survives because the host-mode append re-reads from disk. Serializing the
+    // in-memory copy would resurrect the deleted step on the next append.
     await fs.writeFile(
       flowPath(root, "alpha"),
       'executionPrerequisite: ""\nsteps:\n  - echo: s2\n',
@@ -1245,7 +1271,7 @@ describe("restarting a recording on one key", () => {
   });
 
   it("counts the steps the FILE held, not the ones this session appended", async () => {
-    // Hand-editing the .yaml mid-recording is a documented workflow, and in
+    // A mid-recording hand edit is advised against and not prevented, and in
     // host mode the file is the take: every other host-mode operation re-reads
     // it, and the in-memory copy only catches up on the next append. The
     // restart is the one destructive operation, so counting from memory would
@@ -1374,6 +1400,90 @@ describe("a restart that lands while a step is still running", () => {
     expect((err as Error).message).not.toContain("already ran on the device");
   });
 
+  it("tells a superseded SCRIPT that the script ran, not that a device did", async () => {
+    const root = await makeRoot("supersede-script");
+    await start(root, "alpha");
+
+    // flow-add-script runs the script BEFORE it takes the flow-file lock, so a
+    // restart queued ahead of it lands first, exactly as it would for a script
+    // that took minutes.
+    const gate = openGate();
+    const held = withFlowFileLock(root, "alpha", () => gate.promise);
+    const restarting = start(root, "alpha");
+    const recording = addScript(root, "alpha");
+
+    gate.open();
+    await held;
+    expect((await restarting).restarted).toBe(true);
+
+    const err = await captureFailure(recording);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_session_superseded");
+    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).toContain("the script already ran");
+    expect((err as Error).message).not.toContain("already ran on the device");
+    expect((err as Error).message).toContain("fresh name");
+    expect((err as Error).message).toContain("passed, but the step was not recorded");
+    expect((err as Error).message).toContain("Check the script's changes before you retry");
+
+    expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("tells a superseded FAILING script that its recording is gone, not that the flow is intact", async () => {
+    // The passing case above throws from the append guard. A script that FAILS
+    // never reaches an append, so this exit is the tool's own — and on the
+    // base wording it answered a restarted take with "the flow is exactly as
+    // it was" plus a step count read back off the replacement's file.
+    const root = await makeRoot("supersede-script-fail");
+    await start(root, "alpha");
+    await addEcho(root, "alpha", "one");
+    await addEcho(root, "alpha", "two");
+
+    await writeScript(root, "throw new Error('boom');");
+    const gate = openGate();
+    const held = withFlowFileLock(root, "alpha", () => gate.promise);
+    const restarting = start(root, "alpha");
+    const recording = runAddScript(root, "alpha");
+
+    gate.open();
+    await held;
+    expect((await restarting).restarted).toBe(true);
+
+    const result = (await recording) as { status: string; stepCount: number; message: string };
+    expect(result.status).toBe("fail");
+    expect(result.message).not.toContain("the flow is exactly as it was");
+    expect(result.message).toContain('Recording "alpha" was replaced');
+    expect(result.message).toContain("Use a new flow name");
+    // The replacement take owns the file and holds no steps; the count that
+    // comes back is this take's own, and the message says which it is.
+    expect(result.stepCount).toBe(2);
+    expect(result.message).toContain("stepCount is from the ended recording");
+    expect(await readMarkers(root, "alpha")).toEqual([]);
+  });
+
+  it("names the finished take, not a competing one, when a finish superseded the script", async () => {
+    // `gone` is the other half of the guard's split: the key is free, and the
+    // file holds the take that just finished rather than a rival's.
+    const root = await makeRoot("supersede-script-finish");
+    await start(root, "alpha");
+    await addEcho(root, "alpha", "one");
+
+    await writeScript(root, "throw new Error('boom');");
+    const gate = openGate();
+    const held = withFlowFileLock(root, "alpha", () => gate.promise);
+    const finishing = finish(root, "alpha");
+    const recording = runAddScript(root, "alpha");
+
+    gate.open();
+    await held;
+    await finishing;
+
+    const result = (await recording) as { status: string; stepCount: number; message: string };
+    expect(result.status).toBe("fail");
+    expect(result.message).toContain('Recording "alpha" ended');
+    expect(result.message).toContain("Use a new flow name");
+    expect(result.message).not.toContain("the flow is exactly as it was");
+  });
+
   it("truncates and re-registers only once the flow's lock is free", async () => {
     const root = await makeRoot("restart-lock");
     await start(root, "alpha");
@@ -1479,7 +1589,10 @@ describe("a finish that lands while a step is still running", () => {
     const onDisk = await readMarkers(root, "alpha");
     expect(markers(parseFlow(report.flowFile).steps)).toEqual(onDisk);
     expect(report.steps).toBe(onDisk.length);
-    expect(report.summary).toHaveLength(onDisk.length);
+    // A step with a cross-tree verdict adds a second, indented `warning:` line,
+    // so lines and steps are not always 1:1. These fixtures hold no
+    // `await-ui-element`, but count the step lines rather than rely on that.
+    expect(report.summary.filter((line) => /^\d+\. /.test(line))).toHaveLength(onDisk.length);
     expect(report.path).toBe(flowPath(root, "alpha"));
     expect(report.savedTo).toBe(flowPath(root, "alpha"));
     expect(await getRecordingSession(root, "alpha")).toBeUndefined();
@@ -1599,8 +1712,8 @@ describe("a finish that lands while a step is still running", () => {
 // ── A finish whose file a hand-edit broke ────────────────────────────
 
 describe("a finish on a flow file that no longer parses", () => {
-  // Hand-editing the .yaml mid-recording is a documented workflow, so parseFlow
-  // can legitimately throw inside flow-finish-recording's critical section. The
+  // Nothing prevents a mid-recording hand edit, so parseFlow can legitimately
+  // throw inside flow-finish-recording's critical section. The
   // session must survive that: clearing the key first leaves the agent unable to
   // retry the finish after repairing the file — flow-finish-recording answers
   // "No active recording", and the only tool that re-establishes the key,
@@ -1962,9 +2075,9 @@ describe("finishing a recording whose YAML was hand-edited into an unrenderable 
     await start(root, "alpha");
     await addStep(root, "alpha", "a1");
 
-    // Hand-editing mid-recording is a documented workflow, and `args:` is the
-    // one step body the parser does not constrain — a cyclic YAML anchor
-    // reaches the summarizer as a cyclic object, which JSON.stringify throws on.
+    // A hand edit can land mid-recording, and `args:` is the one step body the
+    // parser does not constrain. A cyclic YAML anchor reaches the summarizer as
+    // a cyclic object, which JSON.stringify throws on.
     await fs.writeFile(
       flowPath(root, "alpha"),
       'executionPrerequisite: ""\nsteps:\n  - tool: keyboard\n    args: &a\n      self: *a\n',

@@ -36,6 +36,12 @@ import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-stat
 import { resetDeviceAliases } from "../../src/utils/debugger/device-alias";
 import type { DebuggerNotConnectedResult } from "../../src/tools/debugger/not-connected";
 import { freePort, startMockMetroCdp } from "./metro-cdp-harness";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-debugger-status-home-");
 
 const mockTrack = vi.mocked(track);
 const outcomeCalls = () =>
@@ -67,7 +73,7 @@ async function startEmptyMetro(): Promise<MockMetro> {
     res.statusCode = 404;
     res.end();
   });
-  await new Promise<void>((resolve) => server.listen(0, () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const port = (server.address() as AddressInfo).port;
   return {
     port,

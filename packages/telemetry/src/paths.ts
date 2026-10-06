@@ -1,23 +1,19 @@
 import * as path from "node:path";
 import { argentHomeDir, configFilePath } from "@argent/configuration-core";
 
-// `argentHomeDir` and `configFilePath` (the shared `~/.argent` home and
-// config.json) now live in `@argent/configuration-core` — they are general,
-// not telemetry-specific. Re-export them here so the telemetry modules that
-// already import from `./paths.js` keep working unchanged.
+// The shared `~/.argent` paths live in `@argent/configuration-core`; re-exported
+// here so telemetry's existing `./paths.js` importers keep working.
 export { argentHomeDir, configFilePath };
 
 /**
- * Telemetry identity file (mode 0600, atomic create). In steady state it holds
- * the 64-hex host fingerprint (a one-way hash of stable hardware ids) used as
- * the telemetry distinct_id; a dashed random UUID v4 is only the fallback shape
- * kept when the fingerprint can't be resolved.
+ * Telemetry identity file (mode 0600). Holds the 64-hex host fingerprint used as
+ * the distinct_id, or a dashed UUID v4 when no fingerprint can be resolved.
  */
 export function identityFilePath(): string {
   return path.join(argentHomeDir(), "telemetry-id");
 }
 
-/** Local payload audit log emitted when `ARGENT_TELEMETRY_DEBUG=1`. */
+/** Payload log appended when `ARGENT_TELEMETRY_DEBUG` is on. */
 export function debugLogPath(): string {
   return path.join(argentHomeDir(), "telemetry-debug.log");
 }

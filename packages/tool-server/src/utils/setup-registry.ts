@@ -1,6 +1,7 @@
-import { Registry } from "@argent/registry";
+import { Registry, type ToolDefinition } from "@argent/registry";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
+import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
@@ -35,15 +36,17 @@ import { gesturePinchTool } from "../tools/gesture-pinch";
 import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { createKeyboardTool } from "../tools/keyboard";
+import { createPasteTool } from "../tools/paste";
 import { rotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
 import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro";
-import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
 import { createDebuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
@@ -77,27 +80,38 @@ import { stopMetroTool } from "../tools/simulator/stop-metro";
 import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
+import { flowAddScriptTool } from "../tools/flows/flow-add-script";
 import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
 import { createRunFlowTool } from "../tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
-import { screenshotDiffTool } from "../tools/screenshot-diff";
+import { createScreenshotDiffTool } from "../tools/screenshot-diff";
 import { createProposeVariantTool } from "../tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
+import { resolveDevice } from "./device-info";
+import { setLivePanelSourceProvider } from "./foldable";
 
 export function createRegistry(): Registry {
-  // Inject the real feature-flag check so the gate is enforced for EVERY
-  // dispatch path (flow-execute, flow-add-step, run-sequence) — not only the
-  // HTTP edge in http.ts. Re-read per invocation, so `argent enable/disable
-  // <flag>` takes effect without restarting the long-lived tool-server.
+  // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
+  // just the HTTP edge in http.ts. Re-read per invocation, so `argent
+  // enable/disable <flag>` needs no tool-server restart.
   const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
+  // The panel a foldable renders to is asked of the ax-service before every
+  // touch and capture (`utils/foldable.ts`); that daemon is a service of this
+  // registry, started on first use like a `describe` starts it.
+  setLivePanelSourceProvider((udid) => {
+    const ref = axServiceRef(resolveDevice(udid));
+    return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+  });
   registry.registerBlueprint(simulatorServerBlueprint);
+  registry.registerBlueprint(iosDeviceRunnerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
@@ -119,7 +133,7 @@ export function createRegistry(): Registry {
   registry.registerTool(settingsPermissionsTool);
   registry.registerTool(openUrlTool);
   registry.registerTool(createScreenshotTool(registry));
-  registry.registerTool(screenshotDiffTool);
+  registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
   registry.registerTool(gestureTapTool);
@@ -134,15 +148,17 @@ export function createRegistry(): Registry {
   registry.registerTool(gestureRotateTool);
   registry.registerTool(buttonTool);
   registry.registerTool(createKeyboardTool(registry));
+  registry.registerTool(createPasteTool(registry));
   registry.registerTool(rotateTool);
   registry.registerTool(shakeTool);
+  registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(debuggerComponentTreeTool);
+  registry.registerTool(createDebuggerComponentTreeTool(registry));
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
@@ -175,37 +191,39 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeViewAtPointTool);
   registry.registerTool(nativeUserInteractableViewAtPointTool);
 
-  // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
 
-  // Flow tools
   registry.registerTool(flowStartRecordingTool);
   registry.registerTool(createFlowAddStepTool(registry));
   registry.registerTool(flowInsertEchoTool);
+  registry.registerTool(flowAddScriptTool);
   registry.registerTool(flowFinishRecordingTool);
   registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));
 
-  // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
 
-  // Variant proposal tools (non-blocking propose + single blocking await) —
-  // the Argent Lens surface. macOS-only: the Lens preview window + `argent lens`
-  // drive Terminal/iTerm and the simulator stream through macOS-only paths, so
-  // the tools are not registered off-darwin at all (they vanish from GET /tools
-  // and any invocation is rejected as unknown). On darwin they additionally
-  // declare `featureFlag: "argent-lens"`, so the HTTP layer (http.ts) hides them
-  // until the flag is enabled — re-checked on every request, so `argent
-  // enable/disable argent-lens` takes effect on the next tools/list WITHOUT
-  // restarting the long-lived tool-server. Platform gates at registration; the
-  // flag gates at the exposure boundary.
+  // Argent Lens is macOS-only, so these are not registered off-darwin at all —
+  // unknown there rather than hidden. On darwin their `featureFlag:
+  // "argent-lens"` gates exposure in http.ts, re-checked per request.
   if (process.platform === "darwin") {
-    registry.registerTool(createProposeVariantTool(registry));
-    registry.registerTool(awaitUserSelectionTool);
+    for (const tool of createLensTools(registry)) registry.registerTool(tool);
   }
 
   return registry;
+}
+
+function createLensTools(registry: Registry): ToolDefinition<any, any>[] {
+  return [createProposeVariantTool(registry), awaitUserSelectionTool];
+}
+
+/** Every tool argent can serve, keyed by id, including the Lens tools off macOS. */
+export function listToolDefinitions(registry: Registry): Map<string, ToolDefinition<any, any>> {
+  const definitions = new Map<string, ToolDefinition<any, any>>();
+  for (const id of registry.getSnapshot().tools) definitions.set(id, registry.getTool(id)!);
+  for (const tool of createLensTools(registry)) definitions.set(tool.id, tool);
+  return definitions;
 }

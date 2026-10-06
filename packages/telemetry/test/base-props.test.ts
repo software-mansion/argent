@@ -14,10 +14,9 @@ describe("base-props", () => {
   beforeEach(() => _resetBasePropsCacheForTest());
 
   it("returns the full base set with coarse CI telemetry", () => {
-    const restore = snapshotEnv(["CI", "GITHUB_ACTIONS"]);
+    const restore = snapshotEnv(["CI"]);
     try {
       process.env.CI = "false";
-      delete process.env.GITHUB_ACTIONS;
       const props = getBaseProps("cli");
       expect(Object.keys(props).sort()).toEqual(
         [
@@ -59,8 +58,11 @@ describe("base-props", () => {
   });
 
   it("sets cloud_agent when a cloud/remote agent runtime is detected", () => {
-    // REPLIT_AGENT is an env-only signal (no filesystem check) and is not the
-    // ambient env of this test process, so it resolves deterministically.
+    // REPLIT_AGENT is an env-only signal (no filesystem check). detectCloudAgent
+    // ranks claude_code, cursor and copilot ahead of it, and those are the
+    // literal ambient env of a Claude Code / Cursor / Copilot cloud runner;
+    // test/setup/clear-telemetry-env.ts clears every one of them suite-wide, so
+    // setting this one is what pins the replit branch.
     const restore = snapshotEnv(["REPLIT_AGENT"]);
     try {
       process.env.REPLIT_AGENT = "1";

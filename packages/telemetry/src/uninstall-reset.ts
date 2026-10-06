@@ -9,17 +9,13 @@ export interface TelemetryResetResult {
   noticeReset: boolean;
 }
 
-// Local cleanup run on uninstall: delete the on-disk telemetry id and clear the
-// first-run-notice marker so a later reinstall surfaces the privacy notice again
-// (uninstall does not remove ~/.argent/config.json, so without this the marker
-// would persist and silently suppress the notice on reinstall).
+// Uninstall leaves ~/.argent/config.json in place, so the first-run-notice marker
+// must be cleared here or a reinstall would silently suppress the privacy notice.
 //
-// This is NOT an identity erasure. The distinct_id IS the host fingerprint (a
-// 64-hex one-way hash of stable hardware ids, used verbatim), so deleting the id
-// file does not mint a fresh identity — while consent stays enabled the next
-// tracked event re-derives the identical id. A genuine, lasting opt-out is `markDisabled()` /
-// `argent telemetry disable`, which this deliberately leaves untouched so a
-// persisted opt-out survives a reinstall.
+// Not an identity erasure: the id is the host fingerprint when one resolves, so
+// while consent stays enabled the next tracked event re-derives the identical id.
+// A lasting opt-out is `markDisabled()` / `argent telemetry disable`, deliberately
+// left untouched so it survives a reinstall.
 //
 // Errors are debug-only because uninstall must keep moving.
 export async function resetLocalTelemetryState(): Promise<TelemetryResetResult> {

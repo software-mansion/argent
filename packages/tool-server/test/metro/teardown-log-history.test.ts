@@ -24,6 +24,12 @@ import {
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-metro-teardown-log-home-");
 
 let mockServer: http.Server;
 let wss: WebSocketServer;
@@ -71,7 +77,7 @@ beforeAll(async () => {
     wss = new WebSocketServer({ server: mockServer });
     wss.on("connection", (ws) => ws.on("message", (raw) => handleCDPMessage(ws, raw.toString())));
 
-    mockServer.listen(0, () => {
+    mockServer.listen(0, "127.0.0.1", () => {
       mockPort = (mockServer.address() as { port: number }).port;
       resolve();
     });

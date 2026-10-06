@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { NativeProfilerSessionApi } from "../../src/blueprints/native-profiler-session";
 
 // The iOS pipeline parses xctrace XML off disk; stub it so analyze runs
@@ -18,6 +21,21 @@ import { analyzeNativeProfilerIos } from "../../src/tools/profiler/native-profil
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// The renderer writes a real report file next to the trace, named after it
+// (deriveReportPath: `<traceFile without extension>-report.md`), so this
+// fixture path decides where that lands. Own the directory: a literal one would
+// have every concurrent run write the same name, and nothing would ever remove
+// it.
+let traceDir: string;
+
+beforeEach(async () => {
+  traceDir = await mkdtemp(join(tmpdir(), "argent-ios-freshness-"));
+});
+
+afterEach(async () => {
+  await rm(traceDir, { recursive: true, force: true });
+});
+
 function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
   return {
     deviceId: "ios-sim",
@@ -28,7 +46,7 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
     captureProcess: null,
-    traceFile: "/tmp/native-profiler-ios.trace",
+    traceFile: join(traceDir, "native-profiler-ios.trace"),
     // null exporter paths → checkExportFileMissing short-circuits (no fs access);
     // the freshness note still renders in the all-clear header regardless.
     exportedFiles: { cpu: null, hangs: null, leaks: null },

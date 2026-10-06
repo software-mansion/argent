@@ -1,0 +1,58 @@
+---
+sidebar_position: 2
+sidebar_label: Debugging
+title: Debugging
+sidebar_custom_props:
+  icon: bug
+---
+
+Argent connects the agent to the JavaScript runtime of the running app. The agent reads the console logs, runs JavaScript in the app, and reads the component tree of the current screen. With this data the agent finds the cause of a bug without your help at the keyboard.
+
+<Video
+  src="/video/debugger.mp4"
+  width={1256}
+  height={900}
+  caption="The agent reads the network log of a running app, then reports the request details"
+/>
+
+## Console logs
+
+Argent collects the console output of the app. The agent reads a summary of the logs. The agent sees the warnings and the errors, their count, and their source. Thus the agent knows about a crash or a failed render before you describe it.
+
+## Code evaluation
+
+The agent runs JavaScript in the runtime of the app. On a device, the runtime is Hermes. In a Chromium or Electron app, the runtime is V8. The agent reads the state of a store, calls a function, or changes a value to test a theory. The app stays open during this work.
+
+## Component trees
+
+The agent reads the current screen as a text tree of React components. The agent also inspects the component at one point of the screen. Thus the agent sees which component renders an element, and which props the component receives.
+
+On iOS, the agent also reads the native UIKit view tree. The agent searches views by class or by accessibility label. The agent finds the view at one point of the screen, and the view that receives the touch at that point. With this data the agent explains why a tap does not reach a button.
+
+## Network traffic
+
+Argent records the HTTP requests of the app. The agent reads the list of requests and the details of one request. The [Network inspection](/docs/features/network) page describes this feature.
+
+## Chromium and Electron
+
+For Chromium and Electron apps, Argent uses the Chrome DevTools Protocol. The agent lists the tabs, reads and writes cookies, and reads and writes the storage of the active page. The agent debugs the renderer of an Electron app in the same way as a web page.
+
+## Reproduction
+
+The agent reproduces a failed state. The agent restarts the app, reloads the Metro bundle, grants or resets a permission, or opens a URL. Then the agent does the steps again, and reads the logs and the component tree after each step.
+
+## Example instructions
+
+- "The profile screen shows an empty list. Find the cause."
+- "Read the console errors after I tap the submit button."
+- "Which component renders the red banner at the top of the screen?"
+- "Print the content of the user store after the login."
+- "This button does not react to a tap. Find the view that gets the touch."
+
+## Limits
+
+- Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
+- The native view tree is available on iOS only.
+- The agent connects to one app at a time.
+
+Argent does this with the `debugger-*`, `native-*` and `chromium-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

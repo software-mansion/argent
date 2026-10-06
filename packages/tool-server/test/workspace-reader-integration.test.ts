@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readWorkspaceSnapshot } from "../src/utils/workspace-reader";
@@ -10,6 +10,8 @@ import { readWorkspaceSnapshot } from "../src/utils/workspace-reader";
  */
 
 let projectDir: string;
+let binDir: string;
+let savedPath: string | undefined;
 
 async function writeJson(dir: string, name: string, data: unknown) {
   await writeFile(join(dir, name), JSON.stringify(data, null, 2));
@@ -21,6 +23,20 @@ async function writeText(path: string, content: string) {
 
 beforeAll(async () => {
   projectDir = await mkdtemp(join(tmpdir(), "rn-project-integration-"));
+
+  // readWorkspaceSnapshot probes eight tool versions by spawning
+  // `<tool> --version` off PATH (node, npm, yarn, pnpm, bun, pod, eas, expo).
+  // Three of them fetch themselves on first run rather than reporting absent:
+  // corepack pulls yarn and pnpm into ~/.cache/node/corepack, and eas populates
+  // ~/Library/Caches/eas-cli — ~44 MB off the network, measured, into the
+  // developer's real home. Only `node` is asserted
+  // below, so restrict PATH to a directory holding just that: every other
+  // probe then fails to resolve and reports null, which is also what this test
+  // wants from a machine that lacks the tool.
+  binDir = await mkdtemp(join(tmpdir(), "rn-project-integration-bin-"));
+  await symlink(process.execPath, join(binDir, "node"));
+  savedPath = process.env.PATH;
+  process.env.PATH = binDir;
 
   // ── package.json ───────────────────────────────────────────────
   await writeJson(projectDir, "package.json", {
@@ -192,113 +208,124 @@ module.exports = mergeConfig(getDefaultConfig(__dirname), config);
 });
 
 afterAll(async () => {
+  if (savedPath === undefined) delete process.env.PATH;
+  else process.env.PATH = savedPath;
   await rm(projectDir, { recursive: true, force: true });
+  await rm(binDir, { recursive: true, force: true });
 });
 
-describe("workspace-reader integration (realistic RN project)", () => {
-  it("returns all expected fields", async () => {
-    const snap = await readWorkspaceSnapshot(projectDir);
+// The PATH pin in beforeAll makes this file POSIX-only. symlink() to a file needs an
+// elevated process or Developer Mode on Windows, so beforeAll throws EPERM there — and
+// swapping in a copy would not rescue it, because the shim is an extensionless `node`
+// and Windows resolves a bare command name through PATHEXT, leaving even the one probe
+// this file asserts unresolvable. Skipping keeps beforeAll from running at all.
+describe.skipIf(process.platform === "win32")(
+  "workspace-reader integration (realistic RN project)",
+  () => {
+    it("returns all expected fields", async () => {
+      const snap = await readWorkspaceSnapshot(projectDir);
 
-    // Top-level workspace path
-    expect(snap.workspace_path).toBe(projectDir);
+      // Top-level workspace path
+      expect(snap.workspace_path).toBe(projectDir);
 
-    // package.json parsed correctly
-    expect(snap.package_json).toBeDefined();
-    expect(snap.package_json!.name).toBe("IntegrationTestApp");
-    expect(snap.package_json!.version).toBe("2.1.0");
-    const scripts = snap.package_json!.scripts as Record<string, string>;
-    expect(scripts["start:local"]).toContain("LOCAL_API");
+      // package.json parsed correctly
+      expect(snap.package_json).toBeDefined();
+      expect(snap.package_json!.name).toBe("IntegrationTestApp");
+      expect(snap.package_json!.version).toBe("2.1.0");
+      const scripts = snap.package_json!.scripts as Record<string, string>;
+      expect(scripts["start:local"]).toContain("LOCAL_API");
 
-    // Metro config
-    expect(snap.metro_config_raw).toContain("mergeConfig");
-    expect(snap.metro_config_raw).toContain("port: 8082");
-    expect(snap.metro_port).toBe(8082);
+      // Metro config
+      expect(snap.metro_config_raw).toContain("mergeConfig");
+      expect(snap.metro_config_raw).toContain("port: 8082");
+      expect(snap.metro_port).toBe(8082);
 
-    // Babel config
-    expect(snap.babel_config_raw).toContain("react-native-reanimated/plugin");
+      // Babel config
+      expect(snap.babel_config_raw).toContain("react-native-reanimated/plugin");
 
-    // app.json
-    expect(snap.app_json).toMatchObject({
-      name: "IntegrationTestApp",
-      displayName: "Integration Test App",
+      // app.json
+      expect(snap.app_json).toMatchObject({
+        name: "IntegrationTestApp",
+        displayName: "Integration Test App",
+      });
+
+      // eas.json
+      expect(snap.eas_json).toBeDefined();
+      expect(snap.eas_json!.build).toBeDefined();
+
+      // tsconfig
+      expect(snap.tsconfig).toBeDefined();
+      expect((snap.tsconfig!.compilerOptions as Record<string, unknown>).strict).toBe(true);
+
+      // Platform directories
+      expect(snap.has_ios_dir).toBe(true);
+      expect(snap.has_android_dir).toBe(true);
+      expect(snap.ios_workspace).toBe("IntegrationTestApp.xcworkspace");
+      expect(snap.ios_has_podfile).toBe(true);
+
+      // Lockfile
+      expect(snap.lockfile).toBe("yarn.lock");
+
+      // .env files (keys only, no values)
+      expect(snap.env_files).toHaveLength(2);
+      const envMain = snap.env_files.find((e) => e.name === ".env")!;
+      expect(envMain.keys).toContain("API_URL");
+      expect(envMain.keys).toContain("ANALYTICS_KEY");
+      const envLocal = snap.env_files.find((e) => e.name === ".env.local")!;
+      expect(envLocal.keys).toContain("API_URL");
+      expect(envLocal.keys).toContain("DEBUG_MODE");
+
+      // Verify no secrets leaked
+      const serialized = JSON.stringify(snap.env_files);
+      expect(serialized).not.toContain("prod_key_123");
+      expect(serialized).not.toContain("https://api.production.example.com");
+      expect(serialized).not.toContain("http://localhost:3000");
+
+      // Tool versions
+      expect(snap.tool_versions).toHaveProperty("node");
+      expect(snap.tool_versions.node).toBeTruthy();
+
+      // scripts/ directory
+      expect(snap.scripts_dir_entries).toContain("seed-data.sh");
+      expect(snap.scripts_dir_entries).toContain("migrate.js");
+
+      // .husky/ hooks
+      expect(snap.husky_hooks).toContain("pre-commit");
+
+      // CI config
+      expect(snap.ci_config).toBe("github-actions");
+
+      // Makefile targets
+      expect(snap.makefile_targets).toEqual(
+        expect.arrayContaining(["setup", "lint", "test", "typecheck"])
+      );
+
+      // lint-staged config
+      expect(snap.lint_staged_config).toEqual({
+        "*.{ts,tsx}": ["eslint --fix", "prettier --write"],
+      });
+
+      // Config files found
+      expect(snap.config_files_found).toEqual(
+        expect.arrayContaining([
+          "metro.config.js",
+          "babel.config.js",
+          "tsconfig.json",
+          "app.json",
+          "eas.json",
+          ".eslintrc.json",
+          "jest.config.js",
+          "Makefile",
+          ".vscode/launch.json",
+        ])
+      );
     });
 
-    // eas.json
-    expect(snap.eas_json).toBeDefined();
-    expect(snap.eas_json!.build).toBeDefined();
-
-    // tsconfig
-    expect(snap.tsconfig).toBeDefined();
-    expect((snap.tsconfig!.compilerOptions as Record<string, unknown>).strict).toBe(true);
-
-    // Platform directories
-    expect(snap.has_ios_dir).toBe(true);
-    expect(snap.has_android_dir).toBe(true);
-    expect(snap.ios_workspace).toBe("IntegrationTestApp.xcworkspace");
-    expect(snap.ios_has_podfile).toBe(true);
-
-    // Lockfile
-    expect(snap.lockfile).toBe("yarn.lock");
-
-    // .env files (keys only, no values)
-    expect(snap.env_files).toHaveLength(2);
-    const envMain = snap.env_files.find((e) => e.name === ".env")!;
-    expect(envMain.keys).toContain("API_URL");
-    expect(envMain.keys).toContain("ANALYTICS_KEY");
-    const envLocal = snap.env_files.find((e) => e.name === ".env.local")!;
-    expect(envLocal.keys).toContain("API_URL");
-    expect(envLocal.keys).toContain("DEBUG_MODE");
-
-    // Verify no secrets leaked
-    const serialized = JSON.stringify(snap.env_files);
-    expect(serialized).not.toContain("prod_key_123");
-    expect(serialized).not.toContain("https://api.production.example.com");
-    expect(serialized).not.toContain("http://localhost:3000");
-
-    // Tool versions
-    expect(snap.tool_versions).toHaveProperty("node");
-    expect(snap.tool_versions.node).toBeTruthy();
-
-    // scripts/ directory
-    expect(snap.scripts_dir_entries).toContain("seed-data.sh");
-    expect(snap.scripts_dir_entries).toContain("migrate.js");
-
-    // .husky/ hooks
-    expect(snap.husky_hooks).toContain("pre-commit");
-
-    // CI config
-    expect(snap.ci_config).toBe("github-actions");
-
-    // Makefile targets
-    expect(snap.makefile_targets).toEqual(
-      expect.arrayContaining(["setup", "lint", "test", "typecheck"])
-    );
-
-    // lint-staged config
-    expect(snap.lint_staged_config).toEqual({
-      "*.{ts,tsx}": ["eslint --fix", "prettier --write"],
+    it("completes in under 5 seconds", async () => {
+      const start = performance.now();
+      await readWorkspaceSnapshot(projectDir);
+      const elapsed = performance.now() - start;
+      expect(elapsed).toBeLessThan(5_000);
     });
-
-    // Config files found
-    expect(snap.config_files_found).toEqual(
-      expect.arrayContaining([
-        "metro.config.js",
-        "babel.config.js",
-        "tsconfig.json",
-        "app.json",
-        "eas.json",
-        ".eslintrc.json",
-        "jest.config.js",
-        "Makefile",
-        ".vscode/launch.json",
-      ])
-    );
-  });
-
-  it("completes in under 5 seconds", async () => {
-    const start = performance.now();
-    await readWorkspaceSnapshot(projectDir);
-    const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(5_000);
-  });
-});
+  }
+);

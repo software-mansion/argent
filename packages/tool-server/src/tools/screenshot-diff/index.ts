@@ -5,15 +5,24 @@ import path from "path";
 import { z } from "zod";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type {
+  DeviceInfo,
   FileInputSpec,
+  Registry,
   ServiceRef,
   ToolContext,
   ToolCapability,
   ToolDefinition,
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
-import { httpScreenshot } from "../../utils/simulator-client";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
+import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
+import { httpScreenshot, resolveCapturePanel } from "../../utils/simulator-client";
+import { foldablePostureHint } from "../../utils/foldable";
+import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
+import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
+import type { RotationPeek } from "../../utils/device-orientation";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
 
@@ -48,7 +57,9 @@ const zodSchema = z
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
-      .describe("Orientation override for live baseline/current captures."),
+      .describe(
+        "Orientation override for live baseline/current captures. Ignored on physical iPhones."
+      ),
     outputDir: z
       .string()
       .min(1)
@@ -61,12 +72,12 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-export interface ScreenshotDiffResult {
+interface ScreenshotDiffResult {
   summary: string;
   /**
-   * Artifact handles (not raw host paths): the client materializes the diff
-   * images to files on ITS machine, so the agent can open them — and the MCP
-   * adapter can inline `contextDiff` — even when the tool-server is remote.
+   * Artifact handles, not host paths: the client materializes them locally so the
+   * agent can open them — and the MCP adapter can inline the context diff — even
+   * when the tool-server is remote.
    */
   diffPath?: ArtifactHandle;
   contextDiffPath?: ArtifactHandle;
@@ -80,12 +91,8 @@ const capability: ToolCapability = {
 };
 
 /**
- * The saved PNGs live on the AGENT's machine (typically materialized there by
- * an earlier full-res `screenshot` call), so both path params cross the file
- * boundary as `file` inputs. `outputDir` is only probed: when the agent-chosen
- * directory doesn't exist on this host, the tool creates it if its parent is
- * already here (a local agent naming a fresh folder) and otherwise falls back to
- * its temp default rather than recreating an agent-side path tree here.
+ * The saved PNGs live on the AGENT's machine, so both path params cross the file
+ * boundary as `file` inputs. `outputDir` is only probed — see resolveOutputDir.
  */
 const fileInputs: FileInputSpec[] = [
   { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
@@ -101,9 +108,10 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
+Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
 Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
@@ -113,12 +121,17 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
   capability,
   fileInputs,
   services: (params): Record<string, ServiceRef> => {
-    // Only request the SimulatorServer when a live capture is actually needed.
-    // Requesting it unconditionally causes it to be resolved (and started) even
-    // for pure static-PNG diffs, which fails on tvOS simulators that have no
-    // SimulatorServer backend.
+    // Only a live capture needs a capture backend. Requesting one
+    // unconditionally would resolve and start it even for pure static-PNG
+    // diffs, which fails on tvOS simulators that have no SimulatorServer
+    // backend and would build the XCUITest runner for a diff that never
+    // touches the device.
     if (params.captureBaseline || params.captureCurrent) {
-      return { simulatorServer: simulatorServerRef(resolveDevice(params.udid)) };
+      const device = resolveDevice(params.udid);
+      if (isIosPhysicalDevice(device)) {
+        return { iosDeviceRunner: iosDeviceRunnerRef(device) };
+      }
+      return { simulatorServer: simulatorServerRef(device) };
     }
     return {};
   },
@@ -127,20 +140,41 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
   },
 };
 
+/**
+ * The registered form: same tool, but live captures can read a rotated Android
+ * device's rotation from the android-devtools helper when it is already running
+ * (~1 ms) instead of probing over adb (~8 ms). `screenshotDiffTool` itself stays
+ * registry-free for callers and tests that have no registry.
+ */
+export function createScreenshotDiffTool(
+  registry: Registry
+): ToolDefinition<Params, ScreenshotDiffResult> {
+  return {
+    ...screenshotDiffTool,
+    async execute(services, params, options) {
+      return executeScreenshotDiffTool(services, params, options, httpScreenshot, (device) =>
+        androidDevtoolsRotationPeek(registry, device)
+      );
+    },
+  };
+}
+
 export async function executeScreenshotDiffTool(
   services: Record<string, unknown>,
   params: Params,
   options?: Partial<ToolContext>,
-  captureScreenshot: CaptureScreenshot = httpScreenshot
+  captureScreenshot: CaptureScreenshot = httpScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
 ): Promise<ScreenshotDiffResult> {
   const outputDir = await resolveOutputDir(params, options);
 
-  const { baselinePath, currentPath } = await resolveInputPaths(
+  const { baselinePath, currentPath, warnings } = await resolveInputPaths(
     services,
     params,
     outputDir,
     options,
-    captureScreenshot
+    captureScreenshot,
+    peekFor
   );
 
   const result = await diffPngFiles({
@@ -149,15 +183,40 @@ export async function executeScreenshotDiffTool(
     outputDir,
   });
 
+  // A live capture of a foldable whose panel could not be resolved is of the
+  // cover panel; the summary is the one channel this result has, so it says so
+  // there, once per distinct warning.
+  let summary = result.summary;
+  for (const warning of new Set(warnings)) summary = `${summary}\n- panel: ${warning}`;
+  // On a foldable an aspect mismatch is usually a posture mismatch: the two
+  // panels differ in size, and a baseline belongs to the posture that produced
+  // it. Name the posture behind each size; every other device is unchanged.
+  if (result.dimensionMismatch) {
+    const posture = await foldablePostureHint(
+      params.udid,
+      result.dimensionMismatch.expected,
+      result.dimensionMismatch.actual
+    );
+    if (posture) summary = `${summary}\n- posture: ${posture}`;
+  }
+
   const artifacts = requireArtifacts(options);
   return {
-    summary: result.summary,
+    summary,
     ...(result.diffPath
-      ? { diffPath: await artifacts.register(result.diffPath, { mimeType: "image/png" }) }
+      ? {
+          diffPath: await artifacts.register({
+            hostPath: result.diffPath,
+            kind: "screenshot-diff",
+            mimeType: "image/png",
+          }),
+        }
       : {}),
     ...(result.contextDiffPath
       ? {
-          contextDiffPath: await artifacts.register(result.contextDiffPath, {
+          contextDiffPath: await artifacts.register({
+            hostPath: result.contextDiffPath,
+            kind: "screenshot-diff-context",
             mimeType: "image/png",
           }),
         }
@@ -166,20 +225,14 @@ export async function executeScreenshotDiffTool(
 }
 
 /**
- * Where diff artifacts (and live-capture intermediates) are written on this
- * host. An agent-supplied outputDir is honored when it is usable here — i.e.
- * not flagged absent by the boundary probe (a remote client's local directory).
- * Everything else gets a per-call temp dir; the diff images travel back as
- * artifacts, so the directory's location no longer matters to the agent.
+ * An agent-supplied outputDir is honored when it is usable on this host;
+ * everything else gets a per-call temp dir (the diffs travel back as artifacts
+ * either way).
  *
- * The probe only answers "does this path already exist on this host", so a local
- * agent naming a fresh output directory is indistinguishable from a remote
- * client's own path — both come back `presentOnHost: false`. Creating the
- * directory non-recursively separates them: it succeeds only when the parent
- * already exists here, which is true for a local agent picking a new subfolder
- * and false for a remote client's unrelated directory tree. Without this, a
- * perfectly good local `outputDir` was silently swapped for a temp dir and the
- * caller was never told, so the diffs never appeared where they asked.
+ * The probe only answers "does this path already exist here", so a local agent
+ * naming a fresh directory is indistinguishable from a remote client's own path —
+ * both come back `presentOnHost: false`. The non-recursive mkdir separates them:
+ * it succeeds only when the parent already exists here.
  */
 async function resolveOutputDir(params: Params, options?: Partial<ToolContext>): Promise<string> {
   const probe = options?.fileInputs?.outputDir;
@@ -191,10 +244,9 @@ async function resolveOutputDir(params: Params, options?: Partial<ToolContext>):
       await fs.mkdir(params.outputDir);
       return params.outputDir;
     } catch (err) {
-      // EEXIST means it raced into existence between probe and now — still ours.
+      // EEXIST: it appeared since the probe — still a usable host directory.
       if ((err as NodeJS.ErrnoException).code === "EEXIST") return params.outputDir;
-      // Anything else (missing parent, not writable) means this path is not
-      // meaningful on this host; fall back to the temp dir below.
+      // Missing parent or unwritable: not a meaningful path here — use temp below.
     }
   }
   const dir = path.join(
@@ -211,33 +263,45 @@ async function resolveInputPaths(
   params: Params,
   outputDir: string,
   options: Partial<ToolContext> | undefined,
-  captureScreenshot: CaptureScreenshot
-): Promise<{ baselinePath: string; currentPath: string }> {
+  captureScreenshot: CaptureScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
+): Promise<{ baselinePath: string; currentPath: string; warnings: string[] }> {
   validateInputSources(params);
 
+  // What the live captures had to say: on a foldable whose panel could not be
+  // resolved, that the capture is of the cover panel.
+  const warnings: string[] = [];
+  // Physical iPhones capture through the on-device XCUITest runner. Simulators
+  // and Android capture through the simulator-server.
+  const captureLive = async (name: "baseline" | "current"): Promise<string> => {
+    const device = resolveDevice(params.udid);
+    if (isIosPhysicalDevice(device)) {
+      return captureIosDeviceLiveInput({
+        runner: requireIosDeviceRunner(services),
+        outputDir,
+        name,
+      });
+    }
+    const captured = await captureLiveInput({
+      api: requireSimulatorServer(services),
+      device,
+      peekFor,
+      outputDir,
+      name,
+      rotation: params.rotation,
+      signal: options?.signal,
+      captureScreenshot,
+    });
+    if (captured.warning !== undefined) warnings.push(captured.warning);
+    return captured.path;
+  };
+
   const baselinePath = params.captureBaseline
-    ? await captureLiveInput({
-        api: requireSimulatorServer(services),
-        outputDir,
-        name: "baseline",
-        rotation: params.rotation,
-        signal: options?.signal,
-        captureScreenshot,
-      })
+    ? await captureLive("baseline")
     : params.baselinePath!;
+  const currentPath = params.captureCurrent ? await captureLive("current") : params.currentPath!;
 
-  const currentPath = params.captureCurrent
-    ? await captureLiveInput({
-        api: requireSimulatorServer(services),
-        outputDir,
-        name: "current",
-        rotation: params.rotation,
-        signal: options?.signal,
-        captureScreenshot,
-      })
-    : params.currentPath!;
-
-  return { baselinePath, currentPath };
+  return { baselinePath, currentPath, warnings };
 }
 
 function validateInputSources(params: Params): void {
@@ -280,14 +344,10 @@ function validateInputSources(params: Params): void {
   }
 }
 
-// simulatorServer is declared as an unconditional service dependency, so the
-// registry resolves it before execute() runs. Guard anyway: executeScreenshotDiffTool
-// is exported and a direct caller (e.g. a test) can pass a services map without it —
-// a clear error beats a downstream TypeError on `.captureScreenshot`. Only the
-// live-capture branches call this, so non-capture diffs never require the service.
-// Because the service is always resolved on the registry path, this can only trip
-// for a direct/test caller (never the telemetry path), so it stays a plain Error
-// without a code — a code here could never bucket a real failure.
+// On the registry path the service is always resolved before a live-capture branch
+// runs, so this can only trip a direct caller of the exported
+// executeScreenshotDiffTool (e.g. a test) — hence a plain Error with no failure
+// code, which could never bucket a real failure.
 function requireSimulatorServer(services: Record<string, unknown>): SimulatorServerApi {
   const api = services.simulatorServer as SimulatorServerApi | undefined;
   if (!api) {
@@ -296,32 +356,91 @@ function requireSimulatorServer(services: Record<string, unknown>): SimulatorSer
   return api;
 }
 
+// Same reasoning as requireSimulatorServer. The registry resolves the runner
+// before a physical-device live capture runs, so only a direct caller of the
+// exported executeScreenshotDiffTool can trip this.
+function requireIosDeviceRunner(services: Record<string, unknown>): IosDeviceRunnerApi {
+  const runner = services.iosDeviceRunner as IosDeviceRunnerApi | undefined;
+  if (!runner) {
+    throw new Error(
+      "Live screenshot capture on a physical iPhone requires an iosDeviceRunner service."
+    );
+  }
+  return runner;
+}
+
+/**
+ * Physical-iOS live capture through the on-device XCUITest runner. The runner
+ * returns one full-resolution device-wide PNG, so no app session is required
+ * and the simulator scale fallback does not apply. The rotation parameter is
+ * deliberately not forwarded, because the capture always follows the device's
+ * real orientation, the same behaviour as the screenshot tool on hardware.
+ */
+async function captureIosDeviceLiveInput(params: {
+  runner: IosDeviceRunnerApi;
+  outputDir: string;
+  name: "baseline" | "current";
+}): Promise<string> {
+  const png = await captureRunnerScreenshotPng(params.runner, RUNNER_COMMAND_TIMEOUT_MS);
+  const suffix = crypto.randomBytes(4).toString("hex");
+  const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
+  await fs.mkdir(params.outputDir, { recursive: true });
+  await fs.writeFile(destination, png);
+  return destination;
+}
+
 async function captureLiveInput(params: {
-  // Resolved and validated by requireSimulatorServer at the call site, so it is
-  // never undefined here.
   api: SimulatorServerApi;
+  // Needed so a live capture picks up the device's rotation the same way the
+  // `screenshot` tool does. Without it a rotated-Android `captureCurrent` would
+  // come back sideways and diff at ~100% against an upright saved baseline.
+  device: DeviceInfo;
+  peekFor?: (device: DeviceInfo) => RotationPeek;
   outputDir: string;
   name: "baseline" | "current";
   rotation?: Params["rotation"];
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
-}): Promise<string> {
-  // Prefer a full-resolution capture for maximum diff fidelity. Some Android
-  // emulator configurations cannot stream a full-res frame — the simulator-server
-  // rejects it with a "wrong data size" framebuffer mismatch — which previously
-  // made the entire baselinePath + captureCurrent flow unusable on Android. Fall
-  // back to the server's default scale, which captures reliably; same-aspect
-  // normalization in diffPngFiles keeps a scaled capture diff-compatible with a
-  // baseline saved at any scale. Full-res is preserved wherever it works (iOS).
+}): Promise<{ path: string; warning?: string }> {
+  // Full-res gives the best diff fidelity, but some Android emulators reject a
+  // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
+  // baselinePath + captureCurrent flow there. The server's default scale captures
+  // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
+  // comparable to a baseline saved at any scale.
+  // On a foldable the panel is resolved now, whoever moved the hinge, and
+  // handed to both attempts, so the retry is of the same panel.
+  const panel = await resolveCapturePanel(params.api);
+  const captureScreenshot: CaptureScreenshot = panel
+    ? (a, r, s, sc) => params.captureScreenshot(a, r, s, sc, panel.screen)
+    : params.captureScreenshot;
   let capture: Awaited<ReturnType<CaptureScreenshot>>;
   try {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
+    capture = await captureScreenshotUpright(
+      params.api,
+      params.device,
+      params.rotation,
+      params.signal,
+      1.0,
+      captureScreenshot,
+      params.peekFor?.(params.device)
+    );
   } catch {
-    capture = await params.captureScreenshot(params.api, params.rotation, params.signal);
+    capture = await captureScreenshotUpright(
+      params.api,
+      params.device,
+      params.rotation,
+      params.signal,
+      undefined,
+      captureScreenshot,
+      params.peekFor?.(params.device)
+    );
   }
   const suffix = crypto.randomBytes(4).toString("hex");
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
   await fs.mkdir(params.outputDir, { recursive: true });
   await fs.copyFile(capture.path, destination);
-  return destination;
+  return {
+    path: destination,
+    ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
+  };
 }

@@ -67,10 +67,8 @@ Listing tools contacts the argent tool-server, starting one if none is running.
   }
 
   const json = argv.includes("--json");
-  // A help flag in the subcommand slot is a request for this command's usage.
-  // It has to be recognised before anything contacts the tool-server, and it
-  // must not swallow a later one: `argent tools describe <name> --help` asks
-  // for that tool's flags, which `describeTool` prints.
+  // Checked before contacting the tool-server, and only in the subcommand slot so
+  // `argent tools describe <name> --help` still reaches describeTool's flag output.
   const isHelpFlag = (a: string) => a === "--help" || a === "-h";
   const positional = argv.filter((a) => !a.startsWith("--") || isHelpFlag(a));
   const sub = positional[0];

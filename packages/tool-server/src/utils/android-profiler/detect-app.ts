@@ -6,14 +6,12 @@ const DETECT_TIMEOUT_MS = 10_000;
 /**
  * Validate an explicitly-provided `app_process` before recording.
  *
- * Android Perfetto scopes the `linux.perf` data source to a cmdline, but it
- * does NOT verify that cmdline exists — a typo or a not-installed package
- * silently yields a trace with zero samples, whose failure only surfaces
- * (misattributed to "non-debuggable / missing <profileable>") at analyze time,
- * minutes later. Fail fast here instead, with the real reason.
+ * Perfetto scopes `linux.perf` to a cmdline but never checks that cmdline
+ * exists: a typo silently yields a zero-sample trace, whose failure surfaces
+ * only at analyze time, misattributed to "non-debuggable / missing
+ * <profileable>".
  *
- * Accepts the target if it is either an installed package or a currently
- * running process. adb/device errors propagate (they are not "not found").
+ * adb/device errors propagate; they are not "not found".
  */
 export async function validateAndroidAppProcess(serial: string, appProcess: string): Promise<void> {
   let packagesOut: string;
@@ -29,10 +27,9 @@ export async function validateAndroidAppProcess(serial: string, appProcess: stri
   }
   if (parseUserPackages(packagesOut).has(appProcess)) return;
 
-  // Not an installed package — maybe a bare process name that is running.
   // `pidof` exits non-zero when nothing matches; `|| true` makes that an empty
-  // stdout so a genuine adb/device failure still propagates (per this
-  // function's contract) instead of being misread as "process not running".
+  // stdout so a genuine adb/device failure still propagates instead of being
+  // misread as "process not running".
   let pidOut: string;
   try {
     pidOut = await adbShell(serial, `pidof ${shellQuote(appProcess)} || true`, {
@@ -62,15 +59,9 @@ export async function validateAndroidAppProcess(serial: string, appProcess: stri
 }
 
 /**
- * Auto-detect the foreground app on an Android device. Mirrors the iOS
- * `detectRunningApp` contract in semantics: returns a single package name, or
- * fails fast with an actionable message when zero or multiple user apps match.
- *
- * Strategy:
- *   1. `dumpsys activity activities` → parse ResumedActivity / topResumedActivity
- *      lines for the foreground package.
- *   2. Cross-check against `pm list packages -3` (user-installed apps only) so
- *      a system overlay (launcher, system UI) cannot masquerade as the target.
+ * Auto-detect the foreground app: the resumed activity's package, cross-checked
+ * against `pm list packages -3` so a system overlay (launcher, system UI) cannot
+ * masquerade as the target.
  */
 export async function detectAndroidRunningApp(serial: string): Promise<string> {
   let activitiesOut: string;
@@ -146,14 +137,11 @@ export async function detectAndroidRunningApp(serial: string): Promise<string> {
 }
 
 /**
- * Extract the resumed/top-resumed package name(s) from `dumpsys activity activities`
- * output. The relevant lines look like:
+ * Pull package names out of `dumpsys activity activities` lines like:
  *
  *   ResumedActivity: ActivityRecord{... com.example.app/.MainActivity ...}
  *   topResumedActivity=ActivityRecord{... com.example.app/.MainActivity ...}
  *   mResumedActivity: ActivityRecord{... u0 com.example.app/.MainActivity ...}
- *
- * We extract the `pkg/Activity` slug, then drop the `/Activity` half.
  */
 export function extractResumedPackages(output: string): Set<string> {
   const result = new Set<string>();
@@ -167,11 +155,10 @@ export function extractResumedPackages(output: string): Set<string> {
 }
 
 /**
- * Parse `pm list packages` output into a Set of package names. Each line has
- * the shape `package:com.example.app`. Caller-dependent scope: auto-detect
- * passes `-3` (user-installed only, to reject system overlays) while explicit
- * app_process validation passes the unfiltered list (an explicit target may
- * legitimately be any installed package, including a system one).
+ * Parse `pm list packages` output (`package:com.example.app` per line) into a Set.
+ * Scope is the caller's: auto-detect passes `-3` to reject system overlays, while
+ * explicit app_process validation passes the unfiltered list — an explicit target
+ * may legitimately be a system package.
  */
 export function parseUserPackages(output: string): Set<string> {
   const result = new Set<string>();
