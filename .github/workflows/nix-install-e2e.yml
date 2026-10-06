@@ -28,7 +28,7 @@ on:
       # bundle those commands run (dist/installer.mjs): every one of them puts
       # code in it, so a change confined to one reaches every assertion here
       # without touching an installer file. update-core is inlined through its
-      # compiled dist/, which `npx tsc --build` makes from the source listed.
+      # compiled dist/, which `npm run build` makes from the source listed.
       - "packages/registry/src/**"
       - "packages/telemetry/src/**"
       - "packages/configuration-core/src/**"
@@ -88,7 +88,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: npm ci
-      - run: npx tsc --build
+      - run: npm run build
       - run: npm run build -w @swmansion/argent
 
       - name: Pack the argent tarball
