@@ -30,8 +30,8 @@ vi.mock("../src/utils/update-checker", () => ({
 }));
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const ADVERT = { ops: ["resolve-file", "list-dir"] as const };
-const CLIENT_SERVICES = { ops: ["resolve-file", "list-dir"], roots: ["/proj"] };
+const ADVERT = { ops: ["resolve-file"] as const };
+const CLIENT_SERVICES = { ops: ["resolve-file"], roots: ["/proj"] };
 const RESOLVE_ARGS = { anchorDir: "/proj/flows", target: "login.yaml", kind: "flow" };
 
 type ToolImpl = (params: unknown, options: InvokeToolOptions | undefined) => Promise<unknown>;
@@ -176,7 +176,7 @@ describe("HTTP client services", () => {
       (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
     );
     expect(byName.get("served-tool")!.clientServices).toEqual({
-      ops: ["resolve-file", "list-dir"],
+      ops: ["resolve-file"],
     });
     expect(byName.get("plain-tool")).not.toHaveProperty("clientServices");
   });
@@ -200,7 +200,7 @@ describe("HTTP client services", () => {
 
     expect(parseLines(res.body as string)).toEqual([{ event: "result", data: { ok: true } }]);
     expect(seen?.clientServices).toMatchObject({
-      ops: ["resolve-file", "list-dir"],
+      ops: ["resolve-file"],
       roots: ["/proj"],
     });
     expect(seen?.clientServices?.request).toBeTypeOf("function");
@@ -371,8 +371,8 @@ describe("HTTP client services", () => {
     handle = createHttpApp(
       stubRegistry(async (_params, options) => {
         const request = options!.clientServices!.request;
-        const first = await request("list-dir", { path: "/proj" }, 30_000);
-        const second = await request("list-dir", { path: "/proj/flows" }, 30_000);
+        const first = await request("resolve-file", { path: "/proj" }, 30_000);
+        const second = await request("resolve-file", { path: "/proj/flows" }, 30_000);
         return { first, second };
       })
     );

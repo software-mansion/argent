@@ -7,7 +7,7 @@
  *
  * The handler enforces every rule of the channel; the server enforces none:
  * it serves a path only when its realpath lies inside one of the roots the
- * client itself sent, serves `.yaml` files and directories only, refuses a
+ * client itself sent, serves `.yaml` files only, refuses a
  * file above the 32 MiB cap, and refuses an op it did not offer. The resolution
  * itself is the registry's `canonicalFlowPath` + `classifyOnDiskSpelling`, so a
  * `run:` target keeps its kernel meaning on the machine that has the files.
@@ -24,7 +24,6 @@ import {
   type ClientResponseBody,
   type ClientServiceOp,
   type ClientServicesParam,
-  type ListDirAnswer,
   type ResolveFileAnswer,
 } from "@argent/registry";
 
@@ -38,7 +37,7 @@ export interface ClientServicesHandler {
 }
 
 /** The ops this client serves, in the order they are offered. */
-const IMPLEMENTED_OPS: readonly ClientServiceOp[] = ["resolve-file", "list-dir"];
+const IMPLEMENTED_OPS: readonly ClientServiceOp[] = ["resolve-file"];
 
 const LOG_ENV = "ARGENT_CLIENT_SERVICES_LOG";
 
@@ -173,25 +172,13 @@ export async function createClientServicesHandler(opts: {
     return { id, ok: true, ...answer };
   }
 
-  async function listDir(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
-    const { path: dir } = args;
-    if (typeof dir !== "string") return refuse(id, "list-dir needs a string path");
-    if (!isInsideRoots(await resolveForFence(dir), roots)) {
-      return refuse(id, `${dir} is ${outsideRoots}`);
-    }
-    logRequest("list-dir", dir);
-    const answer: ListDirAnswer = { entries: await fs.readdir(dir).catch(() => null) };
-    return { id, ok: true, ...answer };
-  }
-
   async function handle(line: ClientRequestLine): Promise<ClientResponseBody> {
     const id = typeof line.id === "string" ? line.id : String(line.id);
     const op = String(line.op);
     try {
       if (!ops.includes(line.op)) return refuse(id, `op ${op} is not served by this client`);
       if (!isRecord(line.args)) return refuse(id, `${op} request carries no args object`);
-      if (line.op === "resolve-file") return await resolveFile(id, line.args);
-      return await listDir(id, line.args);
+      return await resolveFile(id, line.args);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return refuse(id, `${op} failed on this client: ${message}`);

@@ -55,23 +55,6 @@ export type OnDiskSpelling =
   | { state: "absent" };
 
 /**
- * {@link classifyOnDiskSpelling} over a listing already in hand — the
- * tool-server applies it to the entries a remote client returned for
- * `list-dir`, where no directory of its own is there to read. A null listing
- * (readdir failed) vouches for nothing and so is `listed`.
- */
-export function classifyListedSpelling(
-  entries: readonly string[] | null,
-  base: string,
-  addressable: RegExp = FLOW_FILE_NAME_PATTERN
-): OnDiskSpelling {
-  if (entries === null || entries.includes(base)) return { state: "listed" };
-  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
-  if (actual === undefined) return { state: "absent" };
-  return { state: "case_folded", actual, addressable: addressable.test(actual) };
-}
-
-/**
  * Classify the supplied basename against `dir`'s listing. One classifier serves
  * every route that turns a caller's spelling into a file it will open — a flow,
  * or since the `script:` step a plain `.mjs` — so they can never drift apart in
@@ -95,7 +78,10 @@ export async function classifyOnDiskSpelling(
   addressable: RegExp = FLOW_FILE_NAME_PATTERN
 ): Promise<OnDiskSpelling> {
   const entries = await fs.readdir(dir).catch(() => null);
-  return classifyListedSpelling(entries, base, addressable);
+  if (entries === null || entries.includes(base)) return { state: "listed" };
+  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
+  if (actual === undefined) return { state: "absent" };
+  return { state: "case_folded", actual, addressable: addressable.test(actual) };
 }
 
 export interface ResolvedFlowRelativeFile {

@@ -17,16 +17,14 @@ import { z } from "zod";
 import type { OnDiskSpelling } from "./flow-file-refs";
 
 /**
- * Every op name the protocol reserves. Only `resolve-file` and `list-dir` are
- * served today; the others are defined so the schema accepts them once their
- * handlers exist.
+ * Every op name the protocol reserves. Only `resolve-file` is served today;
+ * the others are defined so the schema accepts them once their handlers exist.
  */
 export const CLIENT_SERVICE_OPS = [
   "resolve-file",
   "read-file",
   "write-file",
   "run-script",
-  "list-dir",
 ] as const;
 export type ClientServiceOp = (typeof CLIENT_SERVICE_OPS)[number];
 
@@ -77,16 +75,6 @@ export interface ResolveFileAnswer {
   mtimeMs?: number;
   /** The file as base64, when `exists` and the kind is read whole (`flow`). */
   content?: string;
-}
-
-export interface ListDirArgs {
-  /** Absolute client path of a directory. */
-  path: string;
-}
-
-export interface ListDirAnswer {
-  /** `fs.readdir(path)` on the client, or null when readdir failed. */
-  entries: string[] | null;
 }
 
 /** How long the server waits for the answer to a file op. */

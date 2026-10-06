@@ -120,14 +120,12 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
 
 /**
  * A client-services channel as the HTTP layer hands it to the runner: serves
- * `files` (keyed by client path) for `resolve-file` and `listing` (keyed by
- * directory) for `list-dir`, and records every request. `ops` narrows what the
- * client claims to serve.
+ * `files` (keyed by client path) for `resolve-file` and records every request.
+ * `ops` narrows what the client claims to serve.
  */
 function fakeClientServices(
   files: Record<string, string>,
   opts: {
-    listing?: Record<string, string[] | null>;
     ops?: ClientServiceOp[];
     /** Client paths that are symlinks, mapped to where they really live. */
     realpaths?: Record<string, string>;
@@ -138,7 +136,7 @@ function fakeClientServices(
 } {
   const calls: Array<{ op: string; args: Record<string, unknown> }> = [];
   const services: NonNullable<ToolContext["clientServices"]> = {
-    ops: opts.ops ?? ["resolve-file", "list-dir"],
+    ops: opts.ops ?? ["resolve-file"],
     roots: ["/client"],
     request: vi.fn(async (op: ClientServiceOp, args: Record<string, unknown>) => {
       calls.push({ op, args });
@@ -156,7 +154,6 @@ function fakeClientServices(
           content: Buffer.from(text, "utf8").toString("base64"),
         };
       }
-      if (op === "list-dir") return { entries: opts.listing?.[String(args.path)] ?? null };
       throw new Error(`unexpected op ${op}`);
     }),
   };
@@ -1755,32 +1752,21 @@ describe("flow composition (run:)", () => {
       );
     });
 
-    it("refuses an uploaded name that the client listing matches only case-folded", async () => {
-      const { services, calls } = fakeClientServices(
-        { "/client/.argent/flows/login.yaml": fragmentYaml("x") },
-        { listing: { "/client/.argent/flows": ["Main.yaml", "login.yaml"] } }
-      );
-
-      const err = await runUploaded(services).catch((e: unknown) => e as Error);
-
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NAME_INVALID);
-      expect((err as Error).message).toContain('Pass name "Main".');
-      expect(calls).toEqual([{ op: "list-dir", args: { path: "/client/.argent/flows" } }]);
-    });
-
-    it("refuses an uploaded flow_path whose client listing lacks its basename", async () => {
-      const { services } = fakeClientServices({}, { listing: { "/client/flows": ["other.yaml"] } });
+    it("runs an uploaded flow_path with no run: step without asking the client anything", async () => {
+      // A self-contained upload must not depend on the channel: a proxy that
+      // holds the stream would otherwise fail every run before step 1.
+      const { services, calls } = fakeClientServices({});
       await fs.writeFile(uploadedPath, fragmentYaml("root"), "utf8");
 
-      const err = await createRunFlowTool(mockRegistry())
-        .execute(
+      const result = asRun(
+        await createRunFlowTool(mockRegistry()).execute(
           {},
           { flow_path: uploadedPath, project_root: tmpDir, device: DEVICE },
           {
             artifacts: new ArtifactStore(),
             fileInputs: {
               flow_path: {
-                clientPath: "/client/flows/main.yaml",
+                clientPath: "/client/flows/Main.yaml",
                 presentOnHost: false,
                 viaUpload: true,
               },
@@ -1788,22 +1774,10 @@ describe("flow composition (run:)", () => {
             clientServices: services,
           }
         )
-        .catch((e: unknown) => e as Error);
-
-      expect(getFailureSignal(err)?.failure_stage).toBe("flow_path_casing");
-      expect((err as Error).message).toContain("Pass the basename exactly as it appears on disk.");
-    });
-
-    it("skips the listing gate when the client did not offer list-dir", async () => {
-      const { services, calls } = fakeClientServices(
-        { "/client/.argent/flows/login.yaml": fragmentYaml("served") },
-        { listing: { "/client/.argent/flows": ["Main.yaml"] }, ops: ["resolve-file"] }
       );
 
-      const result = asRun(await runUploaded(services));
-
       expect(result.ok).toBe(true);
-      expect(calls.map((c) => c.op)).toEqual(["resolve-file", "resolve-file"]);
+      expect(calls).toEqual([]);
     });
 
     it("refuses a client-served fragment whose steps the client did not offer to serve, at the run: step", async () => {
@@ -1837,7 +1811,7 @@ describe("flow composition (run:)", () => {
       expect(reason).not.toContain("Update the argent CLI");
       // Nothing of the fragment ran, and nothing was asked for its script.
       expect(result.steps.map((s) => s.message)).not.toContain("fragment start");
-      expect(calls.map((c) => c.op)).toEqual(["list-dir", "resolve-file", "resolve-file"]);
+      expect(calls.map((c) => c.op)).toEqual(["resolve-file", "resolve-file"]);
     });
 
     it("anchors run: targets beside the root flow's real file when the root is a symlink on the client", async () => {
@@ -1931,52 +1905,19 @@ describe("flow composition (run:)", () => {
       expect(calls.filter((c) => c.args.target === "login.yaml")).toEqual([]);
     });
 
-    it("does not ask where the root flow really is when the flow has no run: step", async () => {
+    it("asks the client nothing when the uploaded flow has no run: step", async () => {
       await fs.writeFile(uploadedPath, fragmentYaml("no composition"), "utf8");
       const { services, calls } = fakeClientServices({});
 
       const result = asRun(await runUploaded(services));
 
       expect(result.ok).toBe(true);
-      expect(calls.map((c) => c.op)).toEqual(["list-dir"]);
-    });
-
-    it("skips the listing gate when the client refuses list-dir", async () => {
-      // A flows directory symlinked outside the project is a layout the client
-      // may decline to list; declining vouches for nothing, exactly like an
-      // unreadable listing on the host, and must not fail a run that base
-      // versions ran without the gate.
-      const refusal = new FailureError(
-        'the client refused the list-dir request for "/client/.argent/flows": outside every root',
-        {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "client_request_refused",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
-      const { services } = fakeClientServices({
-        "/client/.argent/flows/login.yaml": fragmentYaml("served"),
-      });
-      const underlying = services.request as ReturnType<typeof vi.fn>;
-      const serve = underlying.getMockImplementation() as (
-        op: ClientServiceOp,
-        args: Record<string, unknown>
-      ) => Promise<Record<string, unknown>>;
-      underlying.mockImplementation(async (op: ClientServiceOp, args: Record<string, unknown>) => {
-        if (op === "list-dir") throw refusal;
-        return serve(op, args);
-      });
-
-      const result = asRun(await runUploaded(services));
-
-      expect(result.ok).toBe(true);
-      expect(result.steps[2]).toMatchObject({ kind: "echo", message: "served" });
+      expect(calls).toEqual([]);
     });
 
     it("keeps host resolution for a co-located flow_file even when the caller sent client_services", async () => {
-      // A loopback link: the probe found the file in place (viaUpload false),
-      // so the run reads this host's disk and never asks the client.
+      // A flow found in place (viaUpload false) is read from this host's
+      // disk, so the run never asks the client.
       await writeFlow("login", {
         executionPrerequisite: "",
         steps: [{ kind: "echo", message: "composed on the host" }],

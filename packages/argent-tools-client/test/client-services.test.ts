@@ -33,7 +33,7 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-const ALL: ClientServiceOp[] = ["resolve-file", "list-dir"];
+const ALL: ClientServiceOp[] = ["resolve-file"];
 
 async function handlerFor(roots: string[], advertised: ClientServiceOp[] = ALL) {
   const handler = await createClientServicesHandler({ roots, advertised });
@@ -56,26 +56,16 @@ function resolveLine(
   };
 }
 
-function listLine(dir: string): ClientRequestLine {
-  return {
-    event: "client-request",
-    invocation: "inv-1",
-    id: "req-2",
-    op: "list-dir",
-    args: { path: dir },
-  };
-}
-
 describe("createClientServicesHandler", () => {
   it("realpaths the roots, drops a missing one and offers the implemented ops in order", async () => {
     const linkToProject = path.join(tmpDir, "proj-link");
     await fs.symlink(projectDir, linkToProject);
     const handler = await handlerFor(
       [linkToProject, path.join(tmpDir, "nope")],
-      ["list-dir", "read-file", "resolve-file"]
+      ["read-file", "resolve-file"]
     );
     expect(handler.param).toEqual({
-      ops: ["resolve-file", "list-dir"],
+      ops: ["resolve-file"],
       roots: [projectDir],
     });
   });
@@ -215,11 +205,6 @@ describe("resolve-file", () => {
     const handler = await handlerFor([projectDir], ["resolve-file"]);
     expect(handler.param.ops).toEqual(["resolve-file"]);
 
-    expect(await handler.handle(listLine(flowsDir))).toEqual({
-      id: "req-2",
-      ok: false,
-      error: "op list-dir is not served by this client",
-    });
     expect(
       await handler.handle({ ...resolveLine(flowsDir, "frag.yaml"), op: "read-file" })
     ).toMatchObject({ ok: false, error: "op read-file is not served by this client" });
@@ -241,10 +226,6 @@ describe("resolve-file", () => {
     expect(
       await handler.handle({ ...resolveLine(flowsDir, "frag.yaml"), args: null as never })
     ).toMatchObject({ ok: false, error: expect.stringContaining("no args object") });
-    expect(await handler.handle({ ...listLine(flowsDir), args: {} })).toMatchObject({
-      ok: false,
-      error: "list-dir needs a string path",
-    });
   });
 
   it("reports case_folded spelling exactly as classifyOnDiskSpelling does", async () => {
@@ -284,54 +265,24 @@ describe("resolve-file", () => {
 
     vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "1");
     await handler.handle(resolveLine(flowsDir, "frag.yaml"));
-    await handler.handle(listLine(flowsDir));
 
     expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
       `[client-services] resolve-file ${path.join(flowsDir, "frag.yaml")}\n`,
-      `[client-services] list-dir ${flowsDir}\n`,
     ]);
   });
 });
 
-describe("list-dir", () => {
-  it("answers list-dir with the directory entries and null when readdir fails", async () => {
-    const handler = await handlerFor([projectDir]);
-
-    const entries = await fs.readdir(flowsDir);
-    expect([...entries].sort()).toEqual(["frag.yaml", "root.yaml"]);
-    expect(await handler.handle(listLine(flowsDir))).toEqual({ id: "req-2", ok: true, entries });
-
-    const missing = await handler.handle(listLine(path.join(projectDir, ".argent", "nope")));
-    expect(missing).toEqual({ id: "req-2", ok: true, entries: null });
-  });
-
-  it("refuses a directory outside every root, through .. and through a symlink", async () => {
-    const elsewhere = path.join(tmpDir, "elsewhere");
-    await fs.mkdir(elsewhere);
-    await fs.symlink(elsewhere, path.join(projectDir, "escape"));
-    const handler = await handlerFor([projectDir]);
-
-    expect(await handler.handle(listLine(path.join(flowsDir, "..", "..", "..")))).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("outside every root"),
-    });
-    expect(await handler.handle(listLine(path.join(projectDir, "escape")))).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("outside every root"),
-    });
-    expect(await handler.handle(listLine(tmpDir))).toMatchObject({ ok: false });
-  });
-
-  it("serves the root itself and a second root", async () => {
+describe("roots", () => {
+  it("serves a file under a second root", async () => {
     const other = path.join(tmpDir, "other");
     await fs.mkdir(other);
     await fs.writeFile(path.join(other, "a.yaml"), "steps: []\n");
     const handler = await handlerFor([projectDir, other]);
 
-    expect(await handler.handle(listLine(projectDir))).toMatchObject({
+    expect(await handler.handle(resolveLine(other, "a.yaml"))).toMatchObject({
       ok: true,
-      entries: [".argent"],
+      canonical: path.join(await fs.realpath(other), "a.yaml"),
+      exists: true,
     });
-    expect(await handler.handle(listLine(other))).toMatchObject({ ok: true, entries: ["a.yaml"] });
   });
 });

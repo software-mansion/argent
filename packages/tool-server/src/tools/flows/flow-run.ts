@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   canonicalFlowPath,
-  classifyListedSpelling,
   classifyOnDiskSpelling,
   clientServicesParamSchema,
   FAILURE_CODES,
@@ -19,7 +18,6 @@ import type {
   DeviceInfo,
   FailureSignal,
   FileInputSpec,
-  OnDiskSpelling,
   Registry,
   ResolvedFileInput,
   ToolContext,
@@ -1363,7 +1361,7 @@ one-off interaction use the gesture tools instead, and to author a flow use flow
 exactly one flow source: name (under project_root) or flow_path.
 Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
     longRunning: true,
-    clientServices: { ops: ["resolve-file", "list-dir"] },
+    clientServices: { ops: ["resolve-file"] },
     zodSchema,
     fileInputs,
     services: () => ({}),
@@ -1373,8 +1371,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
         params,
         ctx?.fileInputs?.flow_file,
-        ctx?.fileInputs?.flow_path,
-        ctx?.clientServices
+        ctx?.fileInputs?.flow_path
       );
       // Where the run's file references resolve: on this host, unless the
       // root flow arrived as an upload from a client that offered to serve its
@@ -3014,8 +3011,7 @@ export async function resolveFlowSource(
     flow_path?: string;
   },
   fileInput?: ResolvedFileInput,
-  flowPathInput?: ResolvedFileInput,
-  clientServices?: ToolContext["clientServices"]
+  flowPathInput?: ResolvedFileInput
 ): Promise<{ filePath: string; flowName: string; viaUpload: boolean }> {
   // The schemas' superRefine already enforces this for flow-execute and
   // flow-read-prerequisite; this copy covers direct execute() callers (tests,
@@ -3053,12 +3049,6 @@ export async function resolveFlowSource(
     if (flowPathInput?.viaUpload) {
       const clientPath = flowPathInput.clientPath;
       assertFlowPathShape(clientPath);
-      // The listing that could disagree with the spelling is the client's;
-      // a client that serves `list-dir` lets this gate read it after all.
-      assertFlowPathSpelling(
-        clientPath,
-        await clientSpelling(clientServices, clientPath, path.basename(clientPath))
-      );
       return { filePath: params.flow_path, flowName: flowNameOf(clientPath), viaUpload: true };
     }
 
@@ -3099,10 +3089,32 @@ export async function resolveFlowSource(
     // refuses either way here — unlike the name branch below, this path arrives
     // with the boundary's stat vouching for the file, so a listing that lacks it
     // entirely is the same phantom spelling.
-    assertFlowPathSpelling(
-      clientPath,
-      await classifyOnDiskSpelling(path.dirname(params.flow_path), path.basename(clientPath))
-    );
+    const suppliedBase = path.basename(clientPath);
+    const spelling = await classifyOnDiskSpelling(path.dirname(params.flow_path), suppliedBase);
+    if (spelling.state !== "listed") {
+      // Hint the real spelling only when this same ladder would accept it (a
+      // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
+      // needs a rename.
+      const recovery =
+        spelling.state === "absent"
+          ? `Pass the basename exactly as it appears on disk.`
+          : spelling.addressable
+            ? `Pass flow_path with the on-disk basename "${spelling.actual}".`
+            : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`;
+      throw new FailureError(
+        `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
+          `filesystem matched "${suppliedBase}" case-insensitively` +
+          (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
+          `, so the flow name (which keys the report and __baselines__/) would be one no ` +
+          `directory entry carries. ${recovery}`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "flow_path_casing",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
 
     return { filePath: params.flow_path, flowName, viaUpload: false };
   }
@@ -3116,20 +3128,14 @@ export async function resolveFlowSource(
   // directory there is to list is that temp dir, whose single entry this server
   // named from `name` itself, so the comparison could only ever agree with
   // itself. The listing that could disagree is the remote client's, on a host
-  // this process cannot read — unless the client serves `list-dir`, in which
-  // case the gate reads that listing below. That temp dir is also what a run
-  // takes flowsDir from, where `run:` targets and `__baselines__/` are not —
-  // the same contract as an uploaded flow_path above: a self-contained flow
-  // runs; execute() refuses one whose steps use files on the client before any
-  // step, naming those steps rather than a missing fragment or baseline, and
-  // serves one that composes from the client when the client offered to.
-  if (params.flow_file && fileInput?.viaUpload) {
-    assertFlowNameSpelling(
-      flowName,
-      await clientSpelling(clientServices, fileInput.clientPath, `${flowName}.yaml`)
-    );
+  // this process cannot read. That temp dir is also what a run takes flowsDir
+  // from, where `run:` targets and `__baselines__/` are not — the same contract
+  // as an uploaded flow_path above: a self-contained flow runs; execute()
+  // refuses one whose steps use files on the client before any step, naming
+  // those steps rather than a missing fragment or baseline, and serves one that
+  // composes from the client when the client offered to.
+  if (params.flow_file && fileInput?.viaUpload)
     return { filePath: params.flow_file, flowName, viaUpload: true };
-  }
   if (
     params.flow_file &&
     (!path.isAbsolute(params.flow_file) ||
@@ -3157,100 +3163,30 @@ export async function resolveFlowSource(
   // on a case-sensitive volume. Only a case-folded match refuses: a name that
   // matches nothing at all is an ordinary missing flow, and the read that
   // follows says so far better than a casing complaint would.
-  assertFlowNameSpelling(
-    flowName,
-    await classifyOnDiskSpelling(path.dirname(expected), `${flowName}.yaml`)
-  );
+  const spelling = await classifyOnDiskSpelling(path.dirname(expected), `${flowName}.yaml`);
+  if (spelling.state === "case_folded") {
+    // Hand back a name only when one can reach the file: an on-disk .YAML is
+    // addressable by no name at all (this branch always builds "<name>.yaml"),
+    // it is omitted from `argent flow list`, and flow_path refuses it too.
+    const recovery = spelling.addressable
+      ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
+      : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
+        `lowercase .yaml.`;
+    throw new FailureError(
+      `Invalid flow name "${flowName}": no saved flow is named "${flowName}.yaml" — this ` +
+        `filesystem matched it case-insensitively to "${spelling.actual}", so the flow name ` +
+        `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
+        recovery,
+      {
+        error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+        failure_stage: "flow_name_casing",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 
   // Either the boundary's own path for this flow (containment-checked above,
   // so it resolves to `expected`) or `expected` itself.
   return { filePath: params.flow_file || expected, flowName, viaUpload: false };
-}
-
-/**
- * The on-disk spelling of an uploaded root flow, read from the CLIENT's
- * listing of the flow's own directory — the one directory the gate cannot
- * read itself. A client that did not offer `list-dir`, or that refused the
- * request, leaves the verdict `listed`, which vouches for nothing and so
- * refuses nothing, exactly as an unreadable listing does on the host.
- */
-async function clientSpelling(
-  clientServices: ToolContext["clientServices"],
-  clientPath: string,
-  base: string
-): Promise<OnDiskSpelling> {
-  if (!clientServices?.ops.includes("list-dir")) return { state: "listed" };
-  const project = new ClientProjectAccess(clientServices);
-  let entries: string[] | null;
-  try {
-    entries = await project.listDir(path.dirname(clientPath));
-  } catch (err) {
-    // A client that declines to list the directory (one it does not serve)
-    // vouches for nothing, like a listing it cannot read; only a channel that
-    // does not answer at all fails the run.
-    if (!isClientRequestRefusal(err)) throw err;
-    entries = null;
-  }
-  return classifyListedSpelling(entries, base);
-}
-
-/**
- * Refuse a `flow_path` whose supplied basename is not in its directory listing
- * byte-for-byte. Absence refuses too: this path arrives with a stat vouching
- * for the file (the boundary's on the host, the client's read for an upload),
- * so a listing that lacks it entirely is the same phantom spelling.
- */
-function assertFlowPathSpelling(clientPath: string, spelling: OnDiskSpelling): void {
-  if (spelling.state === "listed") return;
-  const suppliedBase = path.basename(clientPath);
-  // Hint the real spelling only when this same ladder would accept it (a
-  // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
-  // needs a rename.
-  const recovery =
-    spelling.state === "absent"
-      ? `Pass the basename exactly as it appears on disk.`
-      : spelling.addressable
-        ? `Pass flow_path with the on-disk basename "${spelling.actual}".`
-        : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`;
-  throw new FailureError(
-    `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
-      `filesystem matched "${suppliedBase}" case-insensitively` +
-      (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
-      `, so the flow name (which keys the report and __baselines__/) would be one no ` +
-      `directory entry carries. ${recovery}`,
-    {
-      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-      failure_stage: "flow_path_casing",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    }
-  );
-}
-
-/**
- * Refuse a flow `name` that its directory listing matches only case-folded: a
- * name that matches nothing at all is an ordinary missing flow, which the read
- * that follows reports far better than a casing complaint would.
- */
-function assertFlowNameSpelling(flowName: string, spelling: OnDiskSpelling): void {
-  if (spelling.state !== "case_folded") return;
-  // Hand back a name only when one can reach the file: an on-disk .YAML is
-  // addressable by no name at all (this branch always builds "<name>.yaml"),
-  // it is omitted from `argent flow list`, and flow_path refuses it too.
-  const recovery = spelling.addressable
-    ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
-    : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
-      `lowercase .yaml.`;
-  throw new FailureError(
-    `Invalid flow name "${flowName}": no saved flow is named "${flowName}.yaml" — this ` +
-      `filesystem matched it case-insensitively to "${spelling.actual}", so the flow name ` +
-      `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
-      recovery,
-    {
-      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
-      failure_stage: "flow_name_casing",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    }
-  );
 }

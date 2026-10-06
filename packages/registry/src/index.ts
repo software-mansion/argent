@@ -45,7 +45,6 @@ export type {
 } from "./file-inputs";
 export {
   canonicalFlowPath,
-  classifyListedSpelling,
   classifyOnDiskSpelling,
   resolveFlowRelativeFile,
 } from "./flow-file-refs";
@@ -65,8 +64,6 @@ export type {
   ClientResponseBody,
   ResolveFileArgs,
   ResolveFileAnswer,
-  ListDirArgs,
-  ListDirAnswer,
 } from "./client-services";
 export { parseURN } from "./urn";
 export {

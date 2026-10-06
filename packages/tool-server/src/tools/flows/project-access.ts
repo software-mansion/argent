@@ -5,7 +5,6 @@ import {
   FailureError,
   FLOW_FILE_NAME_PATTERN,
   resolveFlowRelativeFile,
-  type ListDirArgs,
   type OnDiskSpelling,
   type ResolveFileArgs,
   type ToolContext,
@@ -41,8 +40,6 @@ export interface ProjectAccess {
   readonly mode: "host" | "client";
   /** Resolve a `run:` target against the directory of the file that names it, and read it. */
   resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile>;
-  /** The entries of a project directory, or null when it cannot be listed. */
-  listDir(dir: string): Promise<string[] | null>;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -73,10 +70,6 @@ export class HostProjectAccess implements ProjectAccess {
         }
       },
     };
-  }
-
-  listDir(dir: string): Promise<string[] | null> {
-    return fs.readdir(dir).catch(() => null);
   }
 }
 
@@ -127,19 +120,5 @@ export class ClientProjectAccess implements ProjectAccess {
     if (typeof content !== "string") throw invalidAnswer("resolve-file", target);
     const text = Buffer.from(content, "base64").toString("utf8");
     return { canonical, spelling, read: async () => text };
-  }
-
-  async listDir(dir: string): Promise<string[] | null> {
-    const answer = await this.services.request(
-      "list-dir",
-      { path: dir } satisfies ListDirArgs,
-      CLIENT_FILE_OP_TIMEOUT_MS
-    );
-    const { entries } = answer;
-    if (entries === null) return null;
-    if (!Array.isArray(entries) || !entries.every((entry) => typeof entry === "string")) {
-      throw invalidAnswer("list-dir", dir);
-    }
-    return entries;
   }
 }

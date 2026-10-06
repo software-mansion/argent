@@ -32,7 +32,7 @@ interface Recorded {
   body: unknown;
 }
 
-const ADVERT = { ops: ["resolve-file", "list-dir"] };
+const ADVERT = { ops: ["resolve-file"] };
 
 let server: Server;
 let url: string;
@@ -156,7 +156,7 @@ describe("callTool client services", () => {
     expect(invoke.body).toEqual({
       project_root: projectDir,
       name: "root",
-      client_services: { ops: ["resolve-file", "list-dir"], roots: [projectDir] },
+      client_services: { ops: ["resolve-file"], roots: [projectDir] },
     });
   });
 
@@ -306,7 +306,11 @@ describe("callTool client services", () => {
 
   it("posts a refusal when the handler declines a request", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
-    streamOneRequest({ id: "req-9", op: "list-dir", args: { path: tmpdir() } });
+    streamOneRequest({
+      id: "req-9",
+      op: "resolve-file",
+      args: { anchorDir: tmpdir(), target: "x.yaml", kind: "flow" },
+    });
     const { callTool } = createToolsClient();
 
     const result = await callTool("flow-execute", { project_root: projectDir });
@@ -321,24 +325,28 @@ describe("callTool client services", () => {
 
   it("returns the result of a stream that carried client-request lines when the caller passed no onProgress", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
-    streamOneRequest({ id: "req-2", op: "list-dir", args: { path: flowsDir } });
+    streamOneRequest({
+      id: "req-2",
+      op: "resolve-file",
+      args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+    });
     const { callTool } = createToolsClient();
 
     const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     expect(result).toEqual({ data: { ran: true }, note: "done" });
     expect(answerRequests()).toHaveLength(1);
-    expect(answerRequests()[0]!.body).toEqual({
-      id: "req-2",
-      ok: true,
-      entries: await fs.readdir(flowsDir),
-    });
+    expect(answerRequests()[0]!.body).toMatchObject({ id: "req-2", ok: true, exists: true });
   });
 
   it("logs a failed answer POST to stderr and still resolves with the result line", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     answerStatus = 500;
-    streamOneRequest({ id: "req-3", op: "list-dir", args: { path: flowsDir } });
+    streamOneRequest({
+      id: "req-3",
+      op: "resolve-file",
+      args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+    });
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const { callTool } = createToolsClient();
 
@@ -347,7 +355,7 @@ describe("callTool client services", () => {
     expect(result).toEqual({ data: { ran: true }, note: "done" });
     const lines = write.mock.calls.map((c) => String(c[0]));
     expect(lines).toEqual([
-      "[client-services] answer to list-dir request req-3 failed: 500 Internal Server Error\n",
+      "[client-services] answer to resolve-file request req-3 failed: 500 Internal Server Error\n",
     ]);
   });
 
@@ -360,8 +368,8 @@ describe("callTool client services", () => {
           event: "client-request",
           invocation: "inv-1",
           id: "req-4",
-          op: "list-dir",
-          args: { path: flowsDir },
+          op: "resolve-file",
+          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
         })}\n`
       );
       res.end(`${JSON.stringify({ event: "error", error: "kaput" })}\n`);
@@ -384,8 +392,8 @@ describe("callTool client services", () => {
           event: "client-request",
           invocation: "inv-1",
           id: "req-5",
-          op: "list-dir",
-          args: { path: flowsDir },
+          op: "resolve-file",
+          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
         })}\n`
       );
       res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
