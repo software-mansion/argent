@@ -897,8 +897,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
       // Client services: the caller offers to serve its own project files during
       // the call (see client-requests.ts). Validated after the tool's own schema
-      // and used only on an NDJSON request, since the request line rides the
-      // progress stream; a plain JSON call runs as if it had not offered.
+      // and accepted only on an NDJSON request, since the request line rides
+      // the progress stream. The argent clients always stream when they offer,
+      // so a plain JSON call that offers names a custom caller or a proxy that
+      // rewrote Accept; it gets a 400 that says so rather than a run that
+      // silently cannot reach the client.
       let clientServicesParam: ClientServicesParam | undefined;
       if (rawClientServices !== undefined) {
         const parsed = clientServicesParamSchema.safeParse(rawClientServices);
@@ -918,7 +921,25 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           });
           return;
         }
-        if (wantsStream) clientServicesParam = parsed.data;
+        if (!wantsStream) {
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+              failure_stage: "http_client_services_stream",
+              failure_area: "http",
+              error_kind: "validation",
+            },
+            parsedData
+          );
+          res.status(400).json({
+            error:
+              "client_services requires an NDJSON request (Accept: application/x-ndjson): its " +
+              "requests travel on the response stream. A proxy that rewrites Accept removes it.",
+            error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+          });
+          return;
+        }
+        clientServicesParam = parsed.data;
       }
 
       // Capability gate fires BEFORE the global requires preflight: an android

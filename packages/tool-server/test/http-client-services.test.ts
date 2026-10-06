@@ -279,19 +279,22 @@ describe("HTTP client services", () => {
     expect(seen).not.toHaveProperty("clientServices");
   });
 
-  it("runs a plain JSON call that carries client_services as if it had not offered them", async () => {
+  it("answers 400 with an error_code when client_services arrives without Accept: application/x-ndjson", async () => {
     const registry = stubRegistry();
     handle = createHttpApp(registry);
 
-    await supertest(handle.app)
+    const res = await supertest(handle.app)
       .post("/tools/served-tool")
-      .send({ client_services: CLIENT_SERVICES, other: 1 })
-      .expect(200);
+      .send({ client_services: CLIENT_SERVICES })
+      .expect(400);
 
-    const [, params, options] = (registry.invokeTool as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    // The key comes off the arguments, so the tool never sees it.
-    expect(params).toEqual({ other: 1 });
-    expect(options).not.toHaveProperty("clientServices");
+    expect(res.body).toEqual({
+      error:
+        "client_services requires an NDJSON request (Accept: application/x-ndjson): its " +
+        "requests travel on the response stream. A proxy that rewrites Accept removes it.",
+      error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+    });
+    expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
   it("answers 400 with HTTP_ZOD_VALIDATION_FAILED for a malformed client_services", async () => {
