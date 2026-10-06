@@ -32,10 +32,45 @@ export async function ensureCdpReachable(
  * is roughly most-recently-focused first.
  */
 export async function listPageTargets(port: number, signal?: AbortSignal): Promise<CdpTarget[]> {
-  const targets = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
-  return targets.filter(
-    (t) => t.type === "page" && !!t.webSocketDebuggerUrl && !t.url.startsWith("devtools://")
+  return (await fetchTargetList(port, signal)).filter(isDrivablePage);
+}
+
+/**
+ * Selects on every field it reads, so an entry that is not shaped like a target
+ * is dropped rather than dereferenced. The list arrives from whatever holds the
+ * debug port, and an entry Argent cannot read is one it cannot drive either -
+ * leaving none is `no page target`, which the recovery already routes.
+ */
+function isDrivablePage(entry: unknown): entry is CdpTarget {
+  const t = entry as Partial<CdpTarget> | null | undefined;
+  return (
+    t?.type === "page" &&
+    typeof t.webSocketDebuggerUrl === "string" &&
+    t.webSocketDebuggerUrl.length > 0 &&
+    typeof t.url === "string" &&
+    !t.url.startsWith("devtools://")
   );
+}
+
+/**
+ * `/json/list`, checked for the one thing every caller does with it. A squatter
+ * that answers valid JSON of another shape gets past `fetchJson`, and the array
+ * method that meets it next throws a TypeError no failure code classifies —
+ * escaping the reached-but-malformed class this belongs to.
+ */
+async function fetchTargetList(port: number, signal?: AbortSignal): Promise<unknown[]> {
+  const url = `http://127.0.0.1:${port}/json/list`;
+  const body = await fetchJson<unknown>(url, signal);
+  if (!Array.isArray(body))
+    throw new FailureError(`Chromium CDP discovery: GET ${url} did not return a target list`, {
+      error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
+      failure_stage: "chromium_cdp_discovery_parse",
+      failure_area: "tool_server",
+      error_kind: "network",
+      failure_command: "cdp",
+      network_failure: "invalid_response",
+    });
+  return body;
 }
 
 /**
@@ -48,8 +83,8 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
   const pages = await listPageTargets(port, signal);
   if (pages.length === 0) {
     // Re-fetch unfiltered to tell "no pages" from "only devtools://".
-    const all = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
-    if (all.some((t) => t.type === "page")) {
+    const all = await fetchTargetList(port, signal);
+    if (all.some((t) => (t as Partial<CdpTarget> | null)?.type === "page")) {
       throw new FailureError(
         `Chromium CDP on port ${port} has only devtools:// pages (the main BrowserWindow may be hidden or closed). ` +
           `Bring the app window to the foreground and retry.`,

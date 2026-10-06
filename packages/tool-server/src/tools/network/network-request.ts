@@ -47,7 +47,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial) — the same id used with debugger-connect."
+      "Device id from list-devices (iOS simulator UDID, Android serial, Vega serial, or chromium-cdp-<port>) — the same id used with debugger-connect."
     ),
   requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
   includeBody: z.coerce

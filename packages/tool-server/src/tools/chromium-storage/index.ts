@@ -61,7 +61,7 @@ export const chromiumStorageTool: ToolDefinition<Params, Result> = {
 - action="clear": empty the store.
 Set \`store\` to "local" or "session". Storage is per-origin, so it reflects the active tab's document.
 Use when seeding feature flags / auth tokens before a flow or asserting persisted app state after one.
-Returns { value } for a single key, { entries, count } for all, or a status object ({ set } / { removed } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or set is missing key/value. Chromium-only.`,
+Returns { value } for a single key, { entries, count } for all, or a status object ({ set } / { removed } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or set is missing key/value. It resolves through the active page, so an app that is up with no open tab/window fails before it runs; ask the user to reopen a window. Chromium-only.`,
   searchHint:
     "storage localstorage sessionstorage local session get set remove clear key value chromium",
   zodSchema,

@@ -149,13 +149,12 @@ describe("doRegister consults the allowlist", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  // `sourceMapURL` is a bare cast over socket JSON — cdp-client reads
-  // `params.sourceMapURL as string | undefined` off a Debugger.scriptParsed
-  // frame and js-runtime-debugger forwards it unchecked, so a CDP peer can put
-  // a number there. Everything doRegister does with it must therefore sit
-  // inside the try. Hoisting the `data:` test out of it (866d90ce) let the
-  // TypeError escape as a rejected promise nothing awaits before the next
-  // tick, which index.ts turns into crashShutdown.
+  // `registerFromScriptParsed` is exported and takes `sourceMapURL` as a string
+  // it never checks, so a caller that has one from anywhere but cdp-client's own
+  // coercion can put a number there. Everything doRegister does with it must
+  // therefore sit inside the try: with the `data:` test hoisted out of it
+  // (866d90ce) the TypeError escapes as a rejected promise nothing awaits before
+  // the next tick, which index.ts turns into crashShutdown.
   //
   // The tick matters: waitForPending() attaches allSettled synchronously, so
   // calling it straight after register hides the bug. Production has a real
