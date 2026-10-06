@@ -115,7 +115,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file and the tool-server runs the uploaded copy; with Argent 0.27 or later on both sides, the client serves each run: fragment during the run. An uploaded flow must not have script: or snapshot: steps, or tool: steps that take a file or record a flow. Without a link, the tool-server reads the file in place and all step kinds run."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, the tool-server runs the uploaded copy, and the client serves each run: fragment during the run. An uploaded flow must not have script: or snapshot: steps, or tool: steps that take a file or record a flow. Without a link, the tool-server reads the file in place and all step kinds run."
       ),
     device: z
       .string()

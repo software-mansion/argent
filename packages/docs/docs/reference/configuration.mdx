@@ -212,6 +212,7 @@ An environment variable changes the behavior of the process that reads it. Expor
 | `ARGENT_MCP_LOG`                          | `~/.argent/mcp-calls.log`  | Path of the log of tool calls that the MCP server writes                                                                                                               |
 | `ARGENT_AUTO_SCREENSHOT_DELAY_MS`         | per tool, `1400` otherwise | Minimum milliseconds between an interaction tool and its automatic screenshot. Raises the per-tool default; it cannot lower it. See the `disable-auto-screenshot` flag |
 | `ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT` | unset                      | Set `1` to stop the tool-server when the editor closes the MCP server                                                                                                  |
+| `ARGENT_CLIENT_SERVICES_LOG`              | unset                      | Set `1` to print one stderr line for each file that the MCP server or the CLI serves to a linked tool-server. The line holds the op and the path, never the content    |
 
 ### Telemetry
 
