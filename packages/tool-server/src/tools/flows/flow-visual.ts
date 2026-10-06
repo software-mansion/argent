@@ -20,6 +20,7 @@ import {
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { foldablePostureHint } from "../../utils/foldable";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
+import { clientBaselinePath, type ProjectAccess } from "./project-access";
 
 /** Default visual tolerance (percent of pixels) when a step sets none. */
 export const DEFAULT_MAX_MISMATCH = 0.5;
@@ -160,10 +161,16 @@ async function cropPngFile(
  * resolves to a frame before the capture (settle + auto-wait, like the
  * directives), and the CROPPED image is what gets compared, stored as the
  * baseline, and registered as the `current` artifact.
+ *
+ * The baseline is read and written through `project`: on this host beside the
+ * root flow, or, for an upload whose client serves its files, on the client
+ * beside the root flow's real file there. The capture, the differ and every
+ * artifact stay on this host.
  */
 export async function runSnapshot(
   env: ActionEnv,
   opts: {
+    /** The root flow's canonical directory on this host; the baselines' anchor in host mode. */
     flowsDir: string;
     /**
      * The `__baselines__/<segment>` key, NOT necessarily the name the run
@@ -172,6 +179,14 @@ export async function runSnapshot(
      * disagreement lets two distinct flows share a store.
      */
     flowName: string;
+    /** Where the baseline is read and written. */
+    project: ProjectAccess;
+    /**
+     * The real CLIENT path of the root flow, set exactly when `project` is the
+     * client: the baseline then lives beside it, and `flowsDir` is only the
+     * temp dir the upload landed in.
+     */
+    clientFlowPath?: string;
     name: string;
     maxMismatch: number;
     updateBaselines: boolean;
@@ -250,8 +265,10 @@ export async function runSnapshot(
   // different device classes, which is the check the key exists for.
   const snapshotKey = `${opts.name}__${authoringPlatform(env.device.platform)}-${w}x${h}${cropSuffix}`;
   const key = `${snapshotKey}.png`;
-  const dir = baselineDir(opts.flowsDir, opts.flowName);
-  const baselinePath = path.join(dir, key);
+  const baselinePath =
+    opts.clientFlowPath === undefined
+      ? path.join(baselineDir(opts.flowsDir, opts.flowName), key)
+      : clientBaselinePath(opts.clientFlowPath, opts.flowName, key);
 
   // The key carries no app component (it names a committed, machine-portable
   // baseline file), so a run that moved onto another app can recompute a key it
@@ -294,6 +311,25 @@ export async function runSnapshot(
     });
   };
 
+  // The differ and the artifact store read files on THIS host, so a client
+  // baseline gets a copy here, under its own key filename. Not in the diff
+  // scratch dir: that one keeps only the context diff, and a registered
+  // baseline must outlive this call for a client to download it. On the host
+  // the baseline file itself serves both.
+  let baselineCopyDir: string | undefined;
+  let keepBaselineCopy = false;
+  const hostBaseline = async (bytes: Buffer): Promise<string> => {
+    if (opts.clientFlowPath === undefined) return baselinePath;
+    baselineCopyDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-baseline-"));
+    const copy = path.join(baselineCopyDir, key);
+    await fs.writeFile(copy, bytes);
+    return copy;
+  };
+  const baselineArtifact = (hostPath: string): Promise<ArtifactHandle> => {
+    keepBaselineCopy = true;
+    return store.register({ hostPath, kind: "screenshot", mimeType: "image/png" });
+  };
+
   try {
     if (cropFrame !== undefined) {
       cropDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-crop-"));
@@ -314,19 +350,12 @@ export async function runSnapshot(
       currentPath = croppedPath;
     }
 
-    const exists = await fs
-      .access(baselinePath)
-      .then(() => true)
-      .catch(() => false);
+    const stored = await opts.project.readFile(baselinePath);
 
     if (opts.updateBaselines) {
-      await fs.mkdir(dir, { recursive: true });
-      await fs.copyFile(currentPath, baselinePath);
-      const baseline = await store.register({
-        hostPath: baselinePath,
-        kind: "screenshot",
-        mimeType: "image/png",
-      });
+      const bytes = await fs.readFile(currentPath);
+      await opts.project.writeBaseline(baselinePath, bytes);
+      const baseline = await baselineArtifact(await hostBaseline(bytes));
       // The folded key makes this the file a local run compares against, so a
       // remote capture replacing it says so. Otherwise a cloud refresh of a
       // committed baseline reads exactly like a local one.
@@ -334,15 +363,16 @@ export async function runSnapshot(
       return {
         ...captureWarned,
         status: "pass",
-        reason: exists
-          ? `baseline updated${source} (${key})`
-          : `baseline written${source} (${key})`,
+        reason:
+          stored !== null
+            ? `baseline updated${source} (${key})`
+            : `baseline written${source} (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };
     }
 
-    if (!exists) {
+    if (stored === null) {
       // Fail WITHOUT seeding: writing here would make this unreviewed capture
       // the truth a re-run silently passes against, and a workspace that never
       // persists baselines (ephemeral CI) would gate nothing forever.
@@ -363,11 +393,12 @@ export async function runSnapshot(
     // artifact below (its host path is materialized later) — the finally sweeps
     // the rest, or a long-lived tool-server running snapshot flows would
     // accrete argent-flow-diff-* directories forever.
+    const localBaseline = await hostBaseline(stored);
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
     let keepInOutputDir: string | undefined;
     try {
       const result = await diffPngFiles({
-        baselinePath,
+        baselinePath: localBaseline,
         currentPath,
         outputDir,
         // A crop compares EVERY pixel of the element's region, wherever it
@@ -407,11 +438,7 @@ export async function runSnapshot(
             (posture ? `. ${posture}` : ""),
           snapshotKey,
           artifacts: {
-            baseline: await store.register({
-              hostPath: baselinePath,
-              kind: "screenshot",
-              mimeType: "image/png",
-            }),
+            baseline: await baselineArtifact(localBaseline),
             current: await currentArtifact(),
           },
         };
@@ -424,11 +451,7 @@ export async function runSnapshot(
       }
 
       const artifacts: SnapshotArtifacts = {
-        baseline: await store.register({
-          hostPath: baselinePath,
-          kind: "screenshot",
-          mimeType: "image/png",
-        }),
+        baseline: await baselineArtifact(localBaseline),
         current: await currentArtifact(),
       };
       // The annotated context diff — the image a client renders inline so the
@@ -449,6 +472,12 @@ export async function runSnapshot(
   } finally {
     if (cropDir !== undefined) {
       await cleanupDiffDir(cropDir, keepCropped ? currentPath : undefined);
+    }
+    if (baselineCopyDir !== undefined) {
+      await cleanupDiffDir(
+        baselineCopyDir,
+        keepBaselineCopy ? path.join(baselineCopyDir, key) : undefined
+      );
     }
   }
 }

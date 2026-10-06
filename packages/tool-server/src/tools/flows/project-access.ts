@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
   CLIENT_FILE_OP_TIMEOUT_MS,
   FAILURE_CODES,
@@ -6,8 +7,10 @@ import {
   FLOW_FILE_NAME_PATTERN,
   resolveFlowRelativeFile,
   type OnDiskSpelling,
+  type ReadFileArgs,
   type ResolveFileArgs,
   type ToolContext,
+  type WriteFileArgs,
 } from "@argent/registry";
 
 /**
@@ -26,20 +29,35 @@ export interface ResolvedFlowFile {
 }
 
 /**
- * The one seam every project read in the flow runner goes through. The runner
- * stays on the tool-server; the project is wherever the caller's files are.
- * {@link HostProjectAccess} reads this host's disk — a co-located caller, or a
- * flow the tool-server found in place. {@link ClientProjectAccess} sends each
- * read to the caller over the client-services channel, for a flow that
- * arrived as an upload from a client that offered to serve its files.
+ * The one seam every project read and write in the flow runner goes through.
+ * The runner stays on the tool-server; the project is wherever the caller's
+ * files are. {@link HostProjectAccess} uses this host's disk — a co-located
+ * caller, or a flow the tool-server found in place. {@link ClientProjectAccess}
+ * sends each read and write to the caller over the client-services channel,
+ * for a flow that arrived as an upload from a client that offered to serve its
+ * files.
  *
- * In client mode `canonical` is a CLIENT path: the runner uses it as a key (the
- * `run:` cycle guard) and for display, and never opens it.
+ * In client mode every path is a CLIENT path: `canonical` serves the runner as
+ * a key (the `run:` cycle guard) and for display, and the snapshot baselines
+ * are read and written there through the client, never on this host.
  */
 export interface ProjectAccess {
   readonly mode: "host" | "client";
   /** Resolve a `run:` target against the directory of the file that names it, and read it. */
   resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile>;
+  /** The bytes of a project file, or null when nothing is there. */
+  readFile(filePath: string): Promise<Buffer | null>;
+  /** Write a snapshot baseline, creating its `__baselines__/<key>/` directory. */
+  writeBaseline(filePath: string, bytes: Buffer): Promise<void>;
+}
+
+/**
+ * Where a snapshot baseline lives on the client: beside the real file of the
+ * root flow, as on one computer. POSIX joins, because it is a client path and
+ * a link serves POSIX clients only.
+ */
+export function clientBaselinePath(clientFlowPath: string, key: string, file: string): string {
+  return path.posix.join(path.posix.dirname(clientFlowPath), "__baselines__", key, file);
 }
 
 function isEnoent(err: unknown): boolean {
@@ -71,6 +89,20 @@ export class HostProjectAccess implements ProjectAccess {
       },
     };
   }
+
+  async readFile(filePath: string): Promise<Buffer | null> {
+    try {
+      return await fs.readFile(filePath);
+    } catch (err) {
+      if (!isEnoent(err)) throw err;
+      return null;
+    }
+  }
+
+  async writeBaseline(filePath: string, bytes: Buffer): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, bytes);
+  }
 }
 
 type ClientServices = NonNullable<ToolContext["clientServices"]>;
@@ -95,11 +127,12 @@ function isSpelling(value: unknown): value is OnDiskSpelling {
 }
 
 /**
- * The client-services implementation: each read is one request line on the
- * call's stream, answered by the client from its own disk through the same
- * resolution code the host implementation runs. The client decides what it
- * serves (its roots, the file kinds, the size cap); this side only checks that
- * an answer has the shape the op promises.
+ * The client-services implementation: each read or write is one request line
+ * on the call's stream, answered by the client from its own disk through the
+ * same resolution code the host implementation runs. The client decides what
+ * it serves and accepts (its roots, the file kinds, the size cap, where a
+ * baseline may land); this side only checks that an answer has the shape the
+ * op promises.
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;
@@ -120,5 +153,27 @@ export class ClientProjectAccess implements ProjectAccess {
     if (typeof content !== "string") throw invalidAnswer("resolve-file", target);
     const text = Buffer.from(content, "base64").toString("utf8");
     return { canonical, spelling, read: async () => text };
+  }
+
+  async readFile(filePath: string): Promise<Buffer | null> {
+    const answer = await this.services.request(
+      "read-file",
+      { path: filePath } satisfies ReadFileArgs,
+      CLIENT_FILE_OP_TIMEOUT_MS
+    );
+    const { exists, content } = answer;
+    if (typeof exists !== "boolean") throw invalidAnswer("read-file", filePath);
+    if (!exists) return null;
+    if (typeof content !== "string") throw invalidAnswer("read-file", filePath);
+    return Buffer.from(content, "base64");
+  }
+
+  async writeBaseline(filePath: string, bytes: Buffer): Promise<void> {
+    const answer = await this.services.request(
+      "write-file",
+      { path: filePath, content: bytes.toString("base64") } satisfies WriteFileArgs,
+      CLIENT_FILE_OP_TIMEOUT_MS
+    );
+    if (typeof answer.written !== "string") throw invalidAnswer("write-file", filePath);
   }
 }

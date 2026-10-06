@@ -165,6 +165,14 @@ function uploadedFlowFile(clientPath = "/client/.argent/flows/main.yaml") {
   return { flow_file: { clientPath, presentOnHost: false, viaUpload: true } };
 }
 
+/** What a client that serves both `run:` fragments and snapshot baselines offers. */
+const BASELINE_OPS: ClientServiceOp[] = ["resolve-file", "read-file", "write-file"];
+
+/** The end of an upload refusal whose snapshot steps a newer client would get served. */
+const SNAPSHOT_UPDATE_HINT =
+  " This tool-server serves snapshot: steps for a client that offers the read-file and " +
+  "write-file client services. Update the argent CLI or MCP adapter on the client.";
+
 const fragmentYaml = (message: string): string =>
   serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message }] });
 
@@ -1524,7 +1532,7 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  describe("run: composition served by the client over client services", () => {
+  describe("run: composition and snapshot baselines served by the client over client services", () => {
     const rootSteps = [
       { kind: "echo" as const, message: "before" },
       { kind: "run" as const, flow: "login.yaml" },
@@ -1542,12 +1550,19 @@ describe("flow composition (run:)", () => {
       // fragment must come from the client, never from here.
       await fs.writeFile(path.join(tmpDir, "login.yaml"), fragmentYaml("server-local file"));
     });
+    // A test that fails before its run reaches the snapshot leaves its queued
+    // runSnapshot outcome behind, and a later test would consume it. Back to
+    // the factory stub, so a failure stays this test's own.
+    afterEach(() => {
+      vi.mocked(runSnapshot).mockReset();
+    });
 
     function runUploaded(
       services: NonNullable<ToolContext["clientServices"]>,
-      extra: Partial<ToolContext> = {}
+      extra: Partial<ToolContext> = {},
+      registry = mockRegistry()
     ) {
-      return createRunFlowTool(mockRegistry()).execute(
+      return createRunFlowTool(registry).execute(
         {},
         { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
         {
@@ -1881,6 +1896,74 @@ describe("flow composition (run:)", () => {
       expect(calls.map((c) => c.op)).toEqual(["resolve-file", "resolve-file"]);
     });
 
+    it("refuses a client-served fragment's snapshot for a client that serves no baselines, naming the update", async () => {
+      const { services } = fakeClientServices({
+        "/client/.argent/flows/login.yaml": serializeFlow({
+          executionPrerequisite: "",
+          steps: [
+            { kind: "echo", message: "fragment start" },
+            { kind: "snapshot", name: "home", maxMismatch: 0.5 },
+          ],
+        }),
+      });
+      vi.mocked(runSnapshot).mockClear();
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "echo:pass",
+        "run:error",
+        "echo:skip",
+      ]);
+      const reason = result.steps[1]?.reason ?? "";
+      expect(reason).toContain('The fragment "login.yaml" is not self-contained');
+      expect(reason).toContain("  - step 2: snapshot: home\n");
+      expect(reason.slice(-SNAPSHOT_UPDATE_HINT.length)).toBe(SNAPSHOT_UPDATE_HINT);
+      expect(result.steps.map((s) => s.message)).not.toContain("fragment start");
+      expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    });
+
+    it("runs a client-served fragment's snapshot keyed to the root flow's real client file", async () => {
+      // The client analog of "keys a fragment's snapshot to a symlinked root's
+      // REAL file": the snapshot is authored in vault/frag.yaml, the run was
+      // addressed as main.yaml, and the root's real file is vault/smoke.yaml.
+      // Only the last names the store, on the client.
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({ executionPrerequisite: "", steps: [{ kind: "run", flow: "frag.yaml" }] }),
+        "utf8"
+      );
+      const { services } = fakeClientServices(
+        {
+          "/client/vault/frag.yaml": serializeFlow({
+            executionPrerequisite: "",
+            steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+          }),
+        },
+        {
+          ops: BASELINE_OPS,
+          realpaths: { "/client/.argent/flows/main.yaml": "/client/vault/smoke.yaml" },
+        }
+      );
+      vi.mocked(runSnapshot).mockClear();
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "run:pass",
+        "snapshot:pass",
+      ]);
+      expect(result.steps[1]?.flow).toBe("frag");
+      expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          flowName: "smoke",
+          clientFlowPath: "/client/vault/smoke.yaml",
+          project: expect.objectContaining({ mode: "client" }),
+        })
+      );
+    });
+
     it("anchors run: targets beside the root flow's real file when the root is a symlink on the client", async () => {
       // Co-located runs realpath the root before anchoring; the client's
       // spelling is a symlink here, so the runner asks the client where the
@@ -2012,6 +2095,192 @@ describe("flow composition (run:)", () => {
       expect(result.ok).toBe(true);
       expect(result.steps[2]).toMatchObject({ kind: "echo", message: "composed on the host" });
       expect(calls).toEqual([]);
+    });
+
+    const snapshotThenEcho = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "snapshot", name: "home", maxMismatch: 0.5 },
+        { kind: "echo", message: "after" },
+      ],
+    });
+
+    it("anchors and keys an uploaded snapshot beside the real client file of the root flow", async () => {
+      // The client analog of "anchors a symlinked root flow's snapshot
+      // baselines beside the real file": the upload was spelled
+      // .argent/flows/a.yaml on the client, a link to vault/b.yaml. The store
+      // sits beside the real file and keys by its stem, as a local run through
+      // the same link would; the temp copy on this host names neither.
+      await fs.writeFile(uploadedPath, snapshotThenEcho, "utf8");
+      const { services, calls } = fakeClientServices(
+        {},
+        {
+          ops: BASELINE_OPS,
+          realpaths: { "/client/.argent/flows/a.yaml": "/client/vault/b.yaml" },
+        }
+      );
+      vi.mocked(runSnapshot).mockClear();
+
+      const result = asRun(
+        await createRunFlowTool(mockRegistry()).execute(
+          {},
+          { flow_path: uploadedPath, project_root: tmpDir, device: DEVICE },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: {
+              flow_path: {
+                clientPath: "/client/.argent/flows/a.yaml",
+                presentOnHost: false,
+                viaUpload: true,
+              },
+            },
+            clientServices: services,
+          }
+        )
+      );
+
+      expect(result.ok).toBe(true);
+      // The report keeps the as-written identity; only the store moved.
+      expect(result.flow).toBe("a");
+      expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ clientFlowPath: "/client/vault/b.yaml", flowName: "b" })
+      );
+      expect(calls.map((c) => c.args)).toEqual([
+        { anchorDir: "/client/.argent/flows", target: "a.yaml", kind: "flow" },
+      ]);
+    });
+
+    it("asks the client for the root of a snapshot flow with no run: step", async () => {
+      // A snapshot alone reads the root's real location, so the client is
+      // asked for it once, before step 1. A flow with neither a run: nor a
+      // snapshot step still asks nothing, even of a client that serves both.
+      await fs.writeFile(uploadedPath, snapshotThenEcho, "utf8");
+      const { services, calls } = fakeClientServices({}, { ops: BASELINE_OPS });
+      let askedBeforeStep1: unknown;
+      vi.mocked(runSnapshot)
+        .mockClear()
+        .mockImplementationOnce(async () => {
+          askedBeforeStep1 = calls.map((c) => c.args);
+          return { status: "pass", reason: "snapshot stubbed" };
+        });
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.ok).toBe(true);
+      expect(askedBeforeStep1).toEqual([
+        { anchorDir: "/client/.argent/flows", target: "main.yaml", kind: "flow" },
+      ]);
+      expect(calls).toHaveLength(1);
+
+      await fs.writeFile(uploadedPath, fragmentYaml("neither run: nor snapshot"), "utf8");
+      const quiet = fakeClientServices({}, { ops: BASELINE_OPS });
+      expect(asRun(await runUploaded(quiet.services)).ok).toBe(true);
+      expect(quiet.calls).toEqual([]);
+    });
+
+    it("fails a snapshot flow before step 1 when the client refuses its root", async () => {
+      // Keying the store beside the spelling instead would compare against,
+      // or overwrite, another flow's baselines, so the refusal is the run's
+      // verdict, as it is for a composing flow.
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [
+            { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+            { kind: "snapshot", name: "home", maxMismatch: 0.5 },
+          ],
+        }),
+        "utf8"
+      );
+      const refusal = new FailureError(
+        'the client refused the resolve-file request for "main.yaml": outside every root',
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "client_request_refused",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+      const { services, calls } = fakeClientServices({}, { ops: BASELINE_OPS });
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp, args: Record<string, unknown>) => {
+          calls.push({ op, args });
+          throw refusal;
+        }
+      );
+      const registry = mockRegistry();
+      vi.mocked(runSnapshot).mockClear();
+
+      const err = await runUploaded(services, {}, registry).catch((e: unknown) => e as Error);
+
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "client_root_refused",
+      });
+      expect((err as Error).message).toContain(
+        "Its run: targets and snapshot baselines resolve beside the file's real location"
+      );
+      expect(calls.map((c) => c.args.target)).toEqual(["main.yaml"]);
+      // No step ran: neither the tap nor the snapshot reached anything.
+      expect(registry.invokeTool).not.toHaveBeenCalled();
+      expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+    });
+
+    it("reports a client disconnect during a snapshot as an aborted skip", async () => {
+      // The baseline read or write was in flight when the response closed:
+      // the run's own cancellation, as for a run: step, not a failed snapshot.
+      await fs.writeFile(uploadedPath, snapshotThenEcho, "utf8");
+      const controller = new AbortController();
+      const { services } = fakeClientServices({}, { ops: BASELINE_OPS });
+      vi.mocked(runSnapshot)
+        .mockClear()
+        .mockImplementationOnce(async () => {
+          // What the broker rejects a pending request with on close.
+          controller.abort();
+          const err = new Error("the client disconnected before answering the read-file request");
+          err.name = "AbortError";
+          throw err;
+        });
+
+      const result = asRun(await runUploaded(services, { signal: controller.signal }));
+
+      expect(result.ok).toBe(false);
+      expect(result.aborted).toBe(true);
+      expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.reason ?? ""}`)).toEqual([
+        "snapshot:skip:run aborted",
+        "echo:skip:run aborted",
+      ]);
+    });
+
+    it("reports a client refusal during a snapshot as a step error", async () => {
+      // The channel works, but the client would not serve or store the
+      // baseline: the snapshot itself failed, so it errors and stops the run.
+      await fs.writeFile(uploadedPath, snapshotThenEcho, "utf8");
+      const refusal = new FailureError(
+        "the client refused the write-file request for " +
+          '"/client/.argent/flows/__baselines__/main/home__ios-390x844.png": ' +
+          "path is outside every served root",
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "client_request_refused",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+      const { services } = fakeClientServices({}, { ops: BASELINE_OPS });
+      vi.mocked(runSnapshot).mockClear().mockRejectedValueOnce(refusal);
+
+      const result = asRun(await runUploaded(services));
+
+      expect(result.ok).toBe(false);
+      expect(result.aborted).toBeUndefined();
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "snapshot:error",
+        "echo:skip",
+      ]);
+      expect(result.steps[0]?.reason).toBe(refusal.message);
     });
   });
 
@@ -2270,86 +2539,118 @@ describe("flow composition (run:)", () => {
     });
   });
 
-  it("rejects a snapshot step when the root flow was uploaded (no durable baseline dir)", async () => {
-    // Baselines anchor beside the flow's file, and an uploaded flow
-    // materializes to a fresh temp directory each call — a plain snapshot can
-    // only fail on a missing baseline, and updateBaselines would write PNGs no
-    // later run can find. Rejected preflight, like uploaded run: composition.
-    vi.mocked(runSnapshot).mockClear();
-    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
-    await fs.writeFile(
-      uploadedPath,
-      serializeFlow({
-        executionPrerequisite: "",
-        steps: [
-          { kind: "echo", message: "before" },
-          { kind: "snapshot", name: "home", maxMismatch: 0.5 },
-        ],
-      }),
-      "utf8"
-    );
-
-    const registry = mockRegistry();
-    const err = await createRunFlowTool(registry)
-      .execute(
-        {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
-        {
-          artifacts: new ArtifactStore(),
-          fileInputs: {
-            flow_file: {
-              clientPath: "/client/.argent/flows/main.yaml",
-              presentOnHost: false,
-              viaUpload: true,
-            },
-          },
-        }
-      )
-      .then(
-        () => null,
-        (e: unknown) => e
+  it.each([
+    ["sends no client services", undefined],
+    // An older client: it serves run: fragments, not the baselines.
+    ["offers only resolve-file", ["resolve-file"] as ClientServiceOp[]],
+    // The baselines anchor beside the root's real file, which only
+    // resolve-file can tell, so the file ops alone serve nothing.
+    [
+      "offers read-file and write-file without resolve-file",
+      ["read-file", "write-file"] as ClientServiceOp[],
+    ],
+  ])(
+    "rejects a snapshot step when the root flow was uploaded and the client %s (no durable baseline dir)",
+    async (_client, ops) => {
+      // Baselines anchor beside the flow's file, and an uploaded flow
+      // materializes to a fresh temp directory each call — a plain snapshot can
+      // only fail on a missing baseline, and updateBaselines would write PNGs no
+      // later run can find. Rejected preflight, like uploaded run: composition,
+      // unless the client serves the baselines; the message names that update.
+      vi.mocked(runSnapshot).mockClear();
+      const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({
+          executionPrerequisite: "",
+          steps: [
+            { kind: "echo", message: "before" },
+            { kind: "snapshot", name: "home", maxMismatch: 0.5 },
+          ],
+        }),
+        "utf8"
       );
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("step 2: snapshot: home");
-    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
-    // Preflight, not mid-run: nothing was dispatched to the device and the
-    // differ was never pointed at the temp materialization dir.
-    expect(registry.invokeTool).not.toHaveBeenCalled();
-    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
-  });
+      const client = ops ? fakeClientServices({}, { ops }) : undefined;
 
-  it("rejects an uploaded flow whose snapshot hides behind a when: block that would not fire", async () => {
-    // Same preflight walk as run: — a guard-gated snapshot must not report
-    // green on one platform and only surface the contract error where the
-    // guard first fires (e.g. in CI).
-    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
-    await fs.writeFile(
-      uploadedPath,
-      "steps:\n  - when:\n      platform: android\n    steps:\n      - snapshot:\n          name: home\n",
-      "utf8"
-    );
-
-    const err = await createRunFlowTool(mockRegistry())
-      .execute(
-        {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
-        {
-          artifacts: new ArtifactStore(),
-          fileInputs: {
-            flow_file: {
-              clientPath: "/client/.argent/flows/main.yaml",
-              presentOnHost: false,
-              viaUpload: true,
+      const registry = mockRegistry();
+      const err = await createRunFlowTool(registry)
+        .execute(
+          {},
+          { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: {
+              flow_file: {
+                clientPath: "/client/.argent/flows/main.yaml",
+                presentOnHost: false,
+                viaUpload: true,
+              },
             },
-          },
-        }
-      )
-      .then(
-        () => null,
-        (e: unknown) => e
+            ...(client ? { clientServices: client.services } : {}),
+          }
+        )
+        .then(
+          () => null,
+          (e: unknown) => e
+        );
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      expect(message).toContain("  - step 2: snapshot: home\n");
+      expect(message.slice(-SNAPSHOT_UPDATE_HINT.length)).toBe(SNAPSHOT_UPDATE_HINT);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_upload_snapshot_baseline",
+      });
+      // Preflight, not mid-run: nothing was dispatched to the device, the
+      // differ was never pointed at the temp materialization dir, and the
+      // client was not even asked for the root.
+      expect(registry.invokeTool).not.toHaveBeenCalled();
+      expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+      expect(client?.calls ?? []).toEqual([]);
+    }
+  );
+
+  it.each([
+    ["sends no client services", undefined],
+    ["offers only resolve-file", ["resolve-file"] as ClientServiceOp[]],
+  ])(
+    "rejects an uploaded flow whose snapshot hides behind a when: block that would not fire, when the client %s",
+    async (_client, ops) => {
+      // Same preflight walk as run: — a guard-gated snapshot must not report
+      // green on one platform and only surface the contract error where the
+      // guard first fires (e.g. in CI).
+      const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+      await fs.writeFile(
+        uploadedPath,
+        "steps:\n  - when:\n      platform: android\n    steps:\n      - snapshot:\n          name: home\n",
+        "utf8"
       );
-    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
-  });
+
+      const err = await createRunFlowTool(mockRegistry())
+        .execute(
+          {},
+          { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: {
+              flow_file: {
+                clientPath: "/client/.argent/flows/main.yaml",
+                presentOnHost: false,
+                viaUpload: true,
+              },
+            },
+            ...(ops ? { clientServices: fakeClientServices({}, { ops }).services } : {}),
+          }
+        )
+        .then(
+          () => null,
+          (e: unknown) => e
+        );
+      expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
+      const message = (err as Error).message;
+      expect(message.slice(-SNAPSHOT_UPDATE_HINT.length)).toBe(SNAPSHOT_UPDATE_HINT);
+    }
+  );
 
   it("lists every run:, script: and snapshot step of an uploaded flow in one rejection", async () => {
     // One rejection names the whole repair: an author fixing the flow for a
@@ -2398,6 +2699,13 @@ describe("flow composition (run:)", () => {
     expect(message).toContain(
       "  - step 2: run: frag.yaml\n  - step 4: script: { path: seed.mjs }\n  - step 5: snapshot: title"
     );
+    // A client that sent no client_services would get both its run: and its
+    // snapshot step served after the update, and one sentence says so.
+    const combinedHint =
+      " This tool-server serves run: steps for a client that sends client services, and " +
+      "snapshot: steps for a client that offers the read-file and write-file client services. " +
+      "Update the argent CLI or MCP adapter on the client.";
+    expect(message.slice(-combinedHint.length)).toBe(combinedHint);
     // validation is what lets a directory run move on to the next flow.
     expect(getFailureSignal(err)).toMatchObject({
       failure_stage: "flow_upload_run_composition",
@@ -2405,6 +2713,37 @@ describe("flow composition (run:)", () => {
     });
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+  });
+
+  it("lists only the script: step of that flow for a client that serves run: fragments and baselines", async () => {
+    // The same flow from a current client: its fragment and its baselines come
+    // over the channel, so only the script stays on the list, and since no
+    // update serves a script, no update hint follows the remedy.
+    const { services, calls } = fakeClientServices({}, { ops: BASELINE_OPS });
+    const registry = mockRegistry();
+    const err = await rejectUpload(
+      [
+        { kind: "echo", message: "before" },
+        { kind: "run", flow: "frag.yaml" },
+        { kind: "echo", message: "between" },
+        { kind: "script", path: "seed.mjs" },
+        { kind: "snapshot", name: "title", maxMismatch: 0.5 },
+      ],
+      registry,
+      services
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "which stay on the client:\n  - step 4: script: { path: seed.mjs }\nRun the flow"
+    );
+    expect(message).not.toContain("Update the argent CLI");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_upload_script_step",
+    });
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   it("rejects an uploaded flow whose nested tool: flow-execute names a flow on the client", async () => {
@@ -2463,7 +2802,11 @@ describe("flow composition (run:)", () => {
   });
 
   /** Run an uploaded flow with these steps and return what it threw. */
-  async function rejectUpload(steps: FlowStep[], registry = mockRegistry()): Promise<unknown> {
+  async function rejectUpload(
+    steps: FlowStep[],
+    registry = mockRegistry(),
+    clientServices?: NonNullable<ToolContext["clientServices"]>
+  ): Promise<unknown> {
     const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
     await fs.writeFile(uploadedPath, serializeFlow({ executionPrerequisite: "", steps }), "utf8");
     return createRunFlowTool(registry)
@@ -2479,6 +2822,7 @@ describe("flow composition (run:)", () => {
               viaUpload: true,
             },
           },
+          ...(clientServices ? { clientServices } : {}),
         }
       )
       .then(

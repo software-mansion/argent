@@ -693,7 +693,7 @@ describe("flow-execute over client services", () => {
     server = undefined;
   });
 
-  it("advertises resolve-file and keeps client_services out of its input schema", async () => {
+  it("advertises its client-services ops and keeps client_services out of its input schema", async () => {
     handle = createHttpApp(flowRegistry());
 
     const res = await supertest(handle.app).get("/tools").expect(200);
@@ -701,7 +701,7 @@ describe("flow-execute over client services", () => {
     const entry = (res.body.tools as Record<string, unknown>[]).find(
       (t) => t.name === "flow-execute"
     )!;
-    expect(entry.clientServices).toEqual({ ops: ["resolve-file"] });
+    expect(entry.clientServices).toEqual({ ops: ["resolve-file", "read-file", "write-file"] });
     const properties = (entry.inputSchema as { properties: Record<string, unknown> }).properties;
     expect(Object.keys(properties)).toContain("flow_path");
     expect(Object.keys(properties)).not.toContain("client_services");

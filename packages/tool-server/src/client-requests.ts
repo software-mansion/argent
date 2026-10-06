@@ -45,6 +45,7 @@ interface OpenInvocation {
 
 function requestSubject(op: ClientServiceOp, args: Record<string, unknown>): string {
   if (typeof args.target === "string") return args.target;
+  if (typeof args.path === "string") return args.path;
   return op;
 }
 

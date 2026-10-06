@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry, ToolContext } from "@argent/registry";
+import type { ClientServiceOp, Registry, ToolContext } from "@argent/registry";
 import { ArtifactStore } from "@argent/registry";
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -183,6 +183,90 @@ describe("the stem a valid flow_path derives", () => {
       path.join("__baselines__", "checkout", "shot__ios-390x844.png"),
       "checkout.yaml",
     ]);
+  });
+
+  it("keys the adopted baseline under __baselines__/<stem> on the client for an uploaded flow_path", async () => {
+    // The same key over a link: the flow arrived as an upload, landed here
+    // under a temp name, and its client serves the baselines. The write goes
+    // to <dirname(real client file)>/__baselines__/<stem>/ on the client, and
+    // nothing lands beside the temp copy on this host.
+    const clientFlowPath = "/work/proj/.argent/flows/withsnap.yaml";
+    const yaml = ["executionPrerequisite: ''", "steps:", "  - snapshot: shot", ""].join("\n");
+    const uploaded = path.join(flowDir, "materialized-upload.yaml");
+    await fs.writeFile(uploaded, yaml, "utf8");
+    const calls: Array<{ op: ClientServiceOp; args: Record<string, unknown> }> = [];
+    const clientServices: NonNullable<ToolContext["clientServices"]> = {
+      ops: ["resolve-file", "read-file", "write-file"],
+      roots: ["/work/proj"],
+      request: vi.fn(async (op: ClientServiceOp, args: Record<string, unknown>) => {
+        calls.push({ op, args });
+        if (op === "resolve-file") {
+          return {
+            canonical: clientFlowPath,
+            spelling: { state: "listed" },
+            exists: true,
+            size: Buffer.byteLength(yaml),
+            mtimeMs: 1,
+            content: Buffer.from(yaml, "utf8").toString("base64"),
+          };
+        }
+        if (op === "read-file") return { exists: false };
+        if (op === "write-file") return { written: args.path };
+        throw new Error(`unexpected op ${op}`);
+      }),
+    };
+
+    const runFlow = createRunFlowTool(mockRegistry());
+    const result = asRun(
+      await runFlow.execute(
+        {},
+        {
+          project_root: "/work/proj",
+          flow_path: uploaded,
+          device: IOS_DEVICE,
+          updateBaselines: true,
+        },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_path: { clientPath: clientFlowPath, presentOnHost: false, viaUpload: true },
+          },
+          clientServices,
+        }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.flow).toBe("withsnap");
+    expect(result.steps).toEqual([
+      expect.objectContaining({
+        kind: "snapshot",
+        status: "pass",
+        flow: "withsnap",
+        reason: "baseline written (shot__ios-390x844.png)",
+      }),
+    ]);
+    const baseline = "/work/proj/.argent/flows/__baselines__/withsnap/shot__ios-390x844.png";
+    expect(calls).toEqual([
+      {
+        op: "resolve-file",
+        args: { anchorDir: "/work/proj/.argent/flows", target: "withsnap.yaml", kind: "flow" },
+      },
+      { op: "read-file", args: { path: baseline } },
+      {
+        op: "write-file",
+        args: { path: baseline, content: (await fs.readFile(capture)).toString("base64") },
+      },
+    ]);
+    expect(await fs.readdir(flowDir, { recursive: true })).toEqual(["materialized-upload.yaml"]);
+
+    // What the caller downloads is a copy on this host, outside the flow's
+    // directory. The registered copy outlives the run by design, so the test
+    // removes it.
+    const copy = result.steps[0]?.artifacts?.baseline?.hostPath;
+    expect(copy).toBeDefined();
+    expect(await fs.readFile(copy!)).toEqual(await fs.readFile(capture));
+    await fs.rm(path.dirname(copy!), { recursive: true, force: true });
   });
 
   it("seeds run: cycle detection, so a sibling cycling back to the top flow is caught", async () => {

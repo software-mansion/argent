@@ -101,6 +101,17 @@ describe("ClientRequestBroker", () => {
 
     broker.close("inv-1");
 
+    // A file op names its path.
+    broker.open("inv-3", () => {});
+    const read = rejectionOf(
+      broker.request("inv-3", "read-file", { path: "/proj/__baselines__/a/x.png" }, 30_000)
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(((await read) as Error).message).toMatch(
+      /^the client did not answer the read-file request for "\/proj\/__baselines__\/a\/x\.png" within 30 s\. /
+    );
+    broker.close("inv-3");
+
     // The message falls back to the op when the args name neither target nor path.
     broker.open("inv-2", () => {});
     const bare = rejectionOf(broker.request("inv-2", "run-script", { step: 3 }, 2_500));

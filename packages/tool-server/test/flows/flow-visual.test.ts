@@ -4,7 +4,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import {
+  HostProjectAccess,
+  type ProjectAccess,
+  type ResolvedFlowFile,
+} from "../../src/tools/flows/project-access";
 import { ArtifactStore } from "../../src/artifacts";
 import {
   diffPngFiles,
@@ -33,6 +39,13 @@ const h = vi.hoisted(() => ({
   diffTopMask: "" as "" | NonNullable<DiffPngFilesOptions["topMask"]>,
   /** Set by the differ mock: the normalizeSizes option it was passed. */
   diffNormalizeSizes: undefined as boolean | undefined,
+  /** Set by the differ mock: the baselinePath it was asked to compare. */
+  diffBaselinePath: "",
+  /**
+   * Set by the differ mock: that file's bytes, read during the call — a client
+   * baseline's server copy is swept before a test could read it.
+   */
+  diffBaselineBytes: null as null | Buffer,
   /** What the waitForFrame mock resolves a cropOn selector to. */
   cropFrame: undefined as
     | undefined
@@ -61,18 +74,21 @@ vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
 
 vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
   diffPngFiles: vi.fn(async (options: DiffPngFilesOptions) => {
+    const { readFile, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
     h.outputDir = options.outputDir;
     h.diffCurrentPath = options.currentPath;
     h.diffTopMask = options.topMask ?? "status-bar";
     h.diffNormalizeSizes = options.normalizeSizes;
+    h.diffBaselinePath = options.baselinePath;
+    // Like the real differ, which reads the baseline before anything else.
+    h.diffBaselineBytes = await readFile(options.baselinePath);
     // The real differ bails before writing anything on a dimension mismatch.
     if (h.dimensionMismatch) {
       return { mismatchPercentage: 0, dimensionMismatch: h.dimensionMismatch };
     }
     // Emulate the real differ: the full-res diff always lands in outputDir,
     // the downscaled context diff only when a test asks for one.
-    const { writeFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
     await writeFile(join(options.outputDir, "shot-diff.png"), Buffer.alloc(4));
     let contextDiffPath: string | undefined;
     if (h.writeContextDiff) {
@@ -156,6 +172,7 @@ function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
     updateBaselines: false,
     appIdentity: "/apps/app-a",
     seenKeys: new Map<string, string>(),
+    project: new HostProjectAccess(),
     ...overrides,
   };
 }
@@ -179,6 +196,8 @@ beforeEach(async () => {
   h.diffCurrentPath = "";
   h.diffTopMask = "";
   h.diffNormalizeSizes = undefined;
+  h.diffBaselinePath = "";
+  h.diffBaselineBytes = null;
   h.cropFrame = undefined;
   h.cropFrameError = null;
   h.dimensionMismatch = null;
@@ -809,5 +828,215 @@ describe("runSnapshot on a remote simulator", () => {
     expect(remote.reason).toContain(`${local.snapshotKey}.png`);
     const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
     expect(files).toEqual([`${local.snapshotKey}.png`]);
+  });
+});
+
+describe("runSnapshot with a client project", () => {
+  // An upload over a link: flowsDir is the server temp dir the upload landed
+  // in, and the baselines live beside the root flow's real file on the client.
+  const clientFlowPath = "/client/proj/.argent/flows/withsnap.yaml";
+  const clientBaseline = "/client/proj/.argent/flows/__baselines__/withsnap/home__ios-390x844.png";
+
+  /** The client's side of the channel: answers every read with `stored`, records reads and writes. */
+  const clientProject = (stored: Buffer | null) => ({
+    mode: "client" as const,
+    resolveFlowFile: vi.fn(async (): Promise<ResolvedFlowFile> => {
+      throw new Error("unused");
+    }),
+    readFile: vi.fn(async (_filePath: string): Promise<Buffer | null> => stored),
+    writeBaseline: vi.fn(async (_filePath: string, _bytes: Buffer): Promise<void> => {}),
+  });
+
+  const clientOpts = (
+    project: ProjectAccess,
+    overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}
+  ) => opts({ flowName: "withsnap", project, clientFlowPath, ...overrides });
+
+  /** os.tmpdir() is this test's own, so these are this run's leftover copies only. */
+  const baselineCopyDirs = async () =>
+    (await fs.readdir(osTmpdir)).filter((e) => e.startsWith("argent-flow-baseline-"));
+
+  it("reads the baseline from the client and passes on a match", async () => {
+    const project = clientProject(await fs.readFile(h.shotPath));
+
+    const r = await runSnapshot(env, clientOpts(project));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toContain("diff 0.00%");
+    expect(project.readFile.mock.calls).toEqual([[clientBaseline]]);
+    expect(project.writeBaseline).not.toHaveBeenCalled();
+    // The differ compared a server copy under the key filename, not the client path.
+    expect(path.dirname(path.dirname(h.diffBaselinePath))).toBe(osTmpdir);
+    expect(path.basename(h.diffBaselinePath)).toBe("home__ios-390x844.png");
+    expect(h.diffBaselineBytes).toEqual(await fs.readFile(h.shotPath));
+  });
+
+  it("fails a missing client baseline without a write", async () => {
+    const project = clientProject(null);
+    vi.mocked(diffPngFiles).mockClear();
+
+    const r = await runSnapshot(env, clientOpts(project));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toMatch(/^no baseline for "home"/);
+    expect(r.reason).toContain(`expected ${clientBaseline},`);
+    expect(project.writeBaseline).not.toHaveBeenCalled();
+    expect(vi.mocked(diffPngFiles)).not.toHaveBeenCalled();
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    expect(r.artifacts?.baseline).toBeUndefined();
+    await expect(baselineCopyDirs()).resolves.toEqual([]);
+  });
+
+  it("writes the baseline to the client under updateBaselines", async () => {
+    const project = clientProject(null);
+    const capture = await fs.readFile(h.shotPath);
+
+    const r = await runSnapshot(env, clientOpts(project, { updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
+    expect(project.writeBaseline.mock.calls).toEqual([[clientBaseline, capture]]);
+    // The handle points at a server copy a client can download, named like the
+    // host-mode baseline file.
+    const baseline = r.artifacts?.baseline as { hostPath: string };
+    expect(baseline).toMatchObject({
+      __argentArtifact: true,
+      kind: "screenshot",
+      mimeType: "image/png",
+      filename: "home__ios-390x844.png",
+    });
+    expect(baseline.hostPath).not.toBe(clientBaseline);
+    await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(capture);
+  });
+
+  it("says updated when the client already had a baseline", async () => {
+    const project = clientProject(Buffer.from("old pixels"));
+
+    const r = await runSnapshot(env, clientOpts(project, { updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe("baseline updated (home__ios-390x844.png)");
+    expect(project.writeBaseline.mock.calls).toEqual([
+      [clientBaseline, await fs.readFile(h.shotPath)],
+    ]);
+  });
+
+  it("returns the context diff as an artifact on a client mismatch", async () => {
+    const stored = Buffer.from("old pixels");
+    const project = clientProject(stored);
+    h.mismatchPercentage = 3.1;
+    h.writeContextDiff = true;
+
+    const r = await runSnapshot(env, clientOpts(project));
+
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("diff 3.10% > 0.5%");
+    expect(project.writeBaseline).not.toHaveBeenCalled();
+    // The differ compared the CLIENT's bytes, not anything on the server.
+    expect(h.diffBaselineBytes).toEqual(stored);
+    expect(r.artifacts?.diff).toMatchObject({
+      kind: "screenshot-diff-context",
+      hostPath: h.contextDiffPath,
+      filename: "home__ios-390x844-diff.png",
+    });
+    expect(r.artifacts?.current).toMatchObject({ hostPath: h.shotPath });
+    const baseline = r.artifacts?.baseline as { hostPath: string; filename: string };
+    expect(baseline.filename).toBe("home__ios-390x844.png");
+    await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(stored);
+  });
+
+  it("stores the cropped region on the client under cropOn", async () => {
+    await writeCoordPng(h.shotPath, 100, 200);
+    // 100×200 capture; the frame's pixel rect is x 25–75, y 50–100 → a 50×50 crop.
+    h.cropFrame = { x: 0.25, y: 0.25, width: 0.5, height: 0.25 };
+    const project = clientProject(null);
+
+    const r = await runSnapshot(
+      env,
+      clientOpts(project, { updateBaselines: true, cropOn: { text: "Header", loose: true } })
+    );
+
+    expect(r.status).toBe("pass");
+    expect(r.snapshotKey).toMatch(/^home__ios-100x200-crop-[0-9a-f]{8}$/);
+    expect(project.writeBaseline).toHaveBeenCalledTimes(1);
+    const [written, bytes] = project.writeBaseline.mock.calls[0];
+    expect(written).toBe(`/client/proj/.argent/flows/__baselines__/withsnap/${r.snapshotKey}.png`);
+    // The crop, not the full capture: its corner pixels encode the frame's rect.
+    const png = PNG.sync.read(bytes);
+    expect({ w: png.width, h: png.height }).toEqual({ w: 50, h: 50 });
+    expect([...png.data.subarray(0, 3)]).toEqual([25, 50, 75]);
+    const last = (49 * 50 + 49) * 4;
+    expect([...png.data.subarray(last, last + 3)]).toEqual([74, 99, 173]);
+    const baseline = r.artifacts?.baseline as { hostPath: string };
+    await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(bytes);
+  });
+
+  it("removes the baseline copy on a pass", async () => {
+    const project = clientProject(await fs.readFile(h.shotPath));
+    h.writeContextDiff = true;
+
+    const r = await runSnapshot(env, clientOpts(project));
+
+    expect(r.status).toBe("pass");
+    expect(h.diffBaselinePath).not.toBe("");
+    await expect(baselineCopyDirs()).resolves.toEqual([]);
+  });
+
+  it("keeps only the registered baseline copy on a failure", async () => {
+    const project = clientProject(Buffer.from("old pixels"));
+    h.mismatchPercentage = 3.1;
+
+    const r = await runSnapshot(env, clientOpts(project));
+
+    expect(r.status).toBe("fail");
+    const baseline = r.artifacts?.baseline as { hostPath: string };
+    const copyDirs = await baselineCopyDirs();
+    expect(copyDirs).toEqual([path.basename(path.dirname(baseline.hostPath))]);
+    await expect(fs.readdir(path.join(osTmpdir, copyDirs[0]))).resolves.toEqual([
+      "home__ios-390x844.png",
+    ]);
+  });
+
+  it("never writes a client baseline on the server", async () => {
+    const capture = await fs.readFile(h.shotPath);
+    // Every outcome a client baseline reaches: written, updated, matched,
+    // mismatched, missing.
+    await runSnapshot(env, clientOpts(clientProject(null), { updateBaselines: true }));
+    await runSnapshot(env, clientOpts(clientProject(capture), { updateBaselines: true }));
+    await runSnapshot(env, clientOpts(clientProject(capture)));
+    h.mismatchPercentage = 3.1;
+    h.writeContextDiff = true;
+    await runSnapshot(env, clientOpts(clientProject(Buffer.from("old pixels"))));
+    await runSnapshot(env, clientOpts(clientProject(null)));
+
+    // flowsDir holds os.tmpdir() too, so this also covers the scratch dirs.
+    const entries = await fs.readdir(tmpDir, { recursive: true });
+    expect(entries.filter((e) => e.split(path.sep).includes("__baselines__"))).toEqual([]);
+  });
+
+  it("propagates a client read failure", async () => {
+    const project = clientProject(null);
+    const failure = new FailureError("the client did not answer the read-file request", {
+      error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
+      failure_stage: "client_request_timeout",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    });
+    project.readFile.mockRejectedValueOnce(failure);
+
+    await expect(runSnapshot(env, clientOpts(project))).rejects.toBe(failure);
+    expect(project.writeBaseline).not.toHaveBeenCalled();
+    await expect(baselineCopyDirs()).resolves.toEqual([]);
+  });
+
+  it("propagates a client write failure instead of reporting the baseline written", async () => {
+    const project = clientProject(null);
+    const refusal = new Error("the client refused to write outside its roots");
+    project.writeBaseline.mockRejectedValueOnce(refusal);
+
+    await expect(runSnapshot(env, clientOpts(project, { updateBaselines: true }))).rejects.toBe(
+      refusal
+    );
+    await expect(baselineCopyDirs()).resolves.toEqual([]);
   });
 });
