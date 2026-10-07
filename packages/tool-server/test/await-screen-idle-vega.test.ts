@@ -48,6 +48,22 @@ describe("await-screen-idle on Vega", () => {
     expect(fetchVegaPageSource).toHaveBeenCalledTimes(result.polls);
   });
 
+  it("does not settle while the page source keeps changing", async () => {
+    const moved = PAGE_SOURCE.replace("<text>Libraries</text>", "<text>Loading</text>");
+    expect(moved).not.toBe(PAGE_SOURCE);
+    let call = 0;
+    fetchVegaPageSource.mockImplementation(async () => (call++ % 2 ? moved : PAGE_SOURCE));
+    const tool = createAwaitScreenIdleTool({} as any);
+
+    const result = await tool.execute(
+      {},
+      { udid: VEGA_SERIAL, timeoutMs: 150, pollIntervalMs: 10, minStableMs: 20 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.polls).toBeGreaterThan(2);
+  });
+
   it("does not settle while the toolkit is unreachable", async () => {
     fetchVegaPageSource.mockRejectedValue(new Error("ECONNREFUSED"));
     const tool = createAwaitScreenIdleTool({} as any);

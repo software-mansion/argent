@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import type { DeviceInfo } from "@argent/registry";
 
-// The Android empty-focus fallback shells out to uiautomator via describeAndroid;
-// stub it so the TV-describe routing can be tested without adb.
+// The Android empty-focus fallback is describeAndroid's full UI tree; stub it so
+// the TV-describe routing can be tested without adb.
 const describeAndroidMock = vi.fn();
 vi.mock("../src/tools/describe/platforms/android", () => ({
   describeAndroid: (...a: unknown[]) => describeAndroidMock(...a),
@@ -119,34 +119,6 @@ const ANDROID_TV_DEVICE: DeviceInfo = {
   kind: "emulator",
 };
 
-describe("describe (TV) — Android skips the focus-engine retries", () => {
-  it("does not retry or recycle on an empty Android focus set — one probe then the uiautomator fallback", async () => {
-    // On Android TV an empty focus set is steady state, not a transition — the
-    // retry loop and the no-op recycle would just repeat the empty dump. One
-    // probe, then straight to the full-tree fallback.
-    const describeFn = vi.fn().mockResolvedValue(empty);
-    const recycleAx = vi.fn().mockResolvedValue(undefined);
-    const frame = { x: 0, y: 0, width: 100, height: 50 };
-    describeAndroidMock.mockResolvedValue({
-      tree: {
-        role: "RCTView",
-        frame,
-        children: [{ role: "AXButton", label: "Play", frame, children: [] }],
-      },
-      source: "uiautomator",
-    });
-
-    const res = await describeTv(makeRegistry(makeApi(describeFn, recycleAx)), ANDROID_TV_DEVICE);
-
-    // Exactly one probe before the fallback — no retry loop, no recycle.
-    expect(recycleAx).not.toHaveBeenCalled();
-    expect(describeFn).toHaveBeenCalledTimes(1);
-    // The Android uiautomator fallback supplied the rendering + its hint.
-    expect(describeAndroidMock).toHaveBeenCalledTimes(1);
-    expect(res.hint).toMatch(/Android TV focus engine/i);
-  });
-});
-
 describe("describe (Android TV) — reads through the android-devtools helper", () => {
   // A running helper holds the device's only UiAutomation connection, so a
   // `uiautomator dump` (api.describe) beside it dies `Killed`.
@@ -163,6 +135,37 @@ describe("describe (Android TV) — reads through the android-devtools helper", 
       ),
     } as never;
   }
+
+  it("goes straight to the full-tree fallback on an empty helper focus view", async () => {
+    // On Android TV an empty focus set is steady state (react-native-tvos's own
+    // focus engine), not a transition: no retry loop, no recycle, no dump.
+    const describeFn = vi.fn().mockResolvedValue(populated);
+    const recycleAx = vi.fn().mockResolvedValue(undefined);
+    const getHierarchy = vi.fn(async () => ({
+      xml: `<?xml version='1.0'?><hierarchy rotation="0"><node class="android.view.View" text="" content-desc="" focusable="false" focused="false" package="com.example.tv" /></hierarchy>`,
+    }));
+    const frame = { x: 0, y: 0, width: 100, height: 50 };
+    describeAndroidMock.mockReset();
+    describeAndroidMock.mockResolvedValue({
+      tree: {
+        role: "RCTView",
+        frame,
+        children: [{ role: "AXButton", label: "Play", frame, children: [] }],
+      },
+      source: "android-devtools",
+    });
+
+    const res = await describeTv(
+      routedRegistry(makeApi(describeFn, recycleAx), async () => ({ getHierarchy })),
+      ANDROID_TV_DEVICE
+    );
+
+    expect(getHierarchy).toHaveBeenCalledTimes(1);
+    expect(describeFn).not.toHaveBeenCalled();
+    expect(recycleAx).not.toHaveBeenCalled();
+    expect(describeAndroidMock).toHaveBeenCalledTimes(1);
+    expect(res.hint).toMatch(/Android TV focus engine/i);
+  });
 
   it("takes the focus view from the helper without a uiautomator dump", async () => {
     const describeFn = vi.fn().mockResolvedValue(empty);

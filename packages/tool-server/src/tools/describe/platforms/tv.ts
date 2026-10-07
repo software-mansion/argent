@@ -107,8 +107,7 @@ function renderFocusView(res: TvDescribeResponse): string {
 /**
  * `describe` for a TV target (Apple TV simulator or Android TV / leanback
  * device): the focus-driven view instead of the touch element tree, since a TV
- * UI has no tap coordinates — the agent moves the highlight with `tv-remote`
- * and re-reads with `describe`.
+ * UI has no tap coordinates — the agent moves the highlight with `tv-remote`.
  */
 export async function describeTv(registry: Registry, device: DeviceInfo): Promise<DescribeResult> {
   const api: TvControlApi = await resolveTvApi(registry, device.id);
