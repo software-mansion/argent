@@ -492,7 +492,7 @@ describe("callTool client services", () => {
     const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     const invoke = invokeRequest();
-    expect(invoke.body).toEqual({ project_root: projectDir });
+    expect(invoke.body).toEqual({ project_root: projectDir, name: "root" });
     expect(invoke.headers.accept ?? "").not.toContain("application/x-ndjson");
     expect(result.data).toEqual({ ok: true });
   });
@@ -509,7 +509,7 @@ describe("callTool client services", () => {
     await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     const invoke = invokeRequest();
-    expect(invoke.body).toEqual({ project_root: projectDir });
+    expect(invoke.body).toEqual({ project_root: projectDir, name: "root" });
     expect(invoke.headers.accept ?? "").not.toContain("application/x-ndjson");
   });
 

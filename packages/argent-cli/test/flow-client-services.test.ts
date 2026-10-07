@@ -79,8 +79,11 @@ beforeEach(async () => {
   projectDir = await fsp.realpath(await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-services-")));
   flowsDir = path.join(projectDir, ".argent", "flows");
   await fsp.mkdir(flowsDir, { recursive: true });
+  // Both flows compose, so the client offers client services for either one
+  // (a directory run has each of them as its root) and serves the other; the
+  // stub tool-server runs neither.
   await fsp.writeFile(path.join(flowsDir, "root.yaml"), "steps:\n  - run: frag.yaml\n");
-  await fsp.writeFile(path.join(flowsDir, "frag.yaml"), "steps:\n  - echo: hi\n");
+  await fsp.writeFile(path.join(flowsDir, "frag.yaml"), "steps:\n  - run: root.yaml\n");
 
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
     req.resume();
@@ -185,6 +188,7 @@ describe("argent flow run over a link: client-services diagnostics", () => {
 describe("argent flow run over a link: a local read that never finishes", () => {
   it("exits once the tool-server reports the run, without waiting for the read", async () => {
     await fsp.writeFile(path.join(flowsDir, "hang.yaml"), "steps:\n  - echo: never\n");
+    await fsp.writeFile(path.join(flowsDir, "root.yaml"), "steps:\n  - run: hang.yaml\n");
     onInvoke = async (res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
       res.write(
