@@ -400,7 +400,21 @@ export async function runSnapshot(
       };
     }
 
-    const stored = await opts.project.readFile(baselinePath);
+    // A read error from this host's disk does not always say which file it hit
+    // (a directory at the baseline path fails the read with a bare EISDIR), so
+    // it names the baseline as the differ names a file it cannot decode. A
+    // client's errors name their request, and the run's own abort must stay
+    // an abort.
+    const stored = await opts.project.readFile(baselinePath).catch((err: unknown) => {
+      if (
+        opts.project.mode !== "host" ||
+        !(err instanceof Error) ||
+        err.message.includes(baselinePath)
+      ) {
+        throw err;
+      }
+      throw new Error(`Could not read PNG at ${baselinePath}: ${err.message}`, { cause: err });
+    });
     if (stored === null) {
       // Fail WITHOUT seeding: writing here would make this unreviewed capture
       // the truth a re-run silently passes against, and a workspace that never

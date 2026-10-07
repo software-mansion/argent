@@ -290,7 +290,25 @@ describe("runSnapshot baselines", () => {
     // "No baseline" would steer the author to adopt the current screen.
     await fs.mkdir(baselinePath(), { recursive: true });
 
-    await expect(runSnapshot(env, opts())).rejects.toThrow(/EISDIR/);
+    const err = await runSnapshot(env, opts()).catch((e: unknown) => e);
+
+    // The read error alone does not name the file it hit, so the step does.
+    expect((err as Error).message).toMatch(/EISDIR/);
+    const prefix = `Could not read PNG at ${baselinePath()}: `;
+    expect((err as Error).message.slice(0, prefix.length)).toBe(prefix);
+    expect((err as Error & { cause?: unknown }).cause).toMatchObject({ code: "EISDIR" });
+  });
+
+  it("names an unreadable baseline once when the read error names it already", async () => {
+    if (process.getuid?.() === 0) return;
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+    await fs.chmod(baselinePath(), 0o000);
+
+    const err = await runSnapshot(env, opts()).catch((e: unknown) => e);
+
+    expect((err as { code?: unknown }).code).toBe("EACCES");
+    expect((err as Error).message.split(baselinePath())).toHaveLength(2);
   });
 
   it("names the baseline file when it does not decode", async () => {
@@ -1113,6 +1131,19 @@ describe("runSnapshot with a client project", () => {
     });
     // The copy it no longer names is gone.
     await expect(baselineCopyDirs()).resolves.toEqual([]);
+  });
+
+  it("passes a client's read error through as it is", async () => {
+    const project = clientProject(null);
+    // The run's own abort must stay an AbortError, which the runner reports as
+    // a skip; the client names every other failure itself.
+    const abort = Object.assign(
+      new Error("the client disconnected before answering the read-file request"),
+      { name: "AbortError" }
+    );
+    project.readFile.mockRejectedValueOnce(abort);
+
+    await expect(runSnapshot(env, clientOpts(project))).rejects.toBe(abort);
   });
 
   it("propagates a client read failure", async () => {
