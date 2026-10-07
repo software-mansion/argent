@@ -353,10 +353,11 @@ export async function createClientServicesHandler(opts: {
     if (isLink && (await fs.realpath(file).catch(() => null)) === null) {
       return refuse(id, `${file} is a symbolic link to a missing file`);
     }
-    const replaced = await fs.stat(file).then(
-      () => true,
-      () => false
-    );
+    // Only a regular file is a baseline to replace: a write to a FIFO blocks
+    // until a reader opens it, so the call would never end.
+    const existing = await fs.stat(file).catch(() => null);
+    if (existing !== null && !existing.isFile()) return refuse(id, `${file} is not a regular file`);
+    const replaced = existing !== null;
     await fs.writeFile(file, bytes);
     logRequest("write-file", file);
     const answer: WriteFileAnswer = { written: file, replaced };

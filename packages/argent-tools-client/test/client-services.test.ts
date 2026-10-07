@@ -1030,6 +1030,34 @@ describe("read-file and write-file", () => {
     expect(await fs.readFile(path.join(projectDir, ".env"), "utf8")).toBe("SECRET=1\n");
   });
 
+  it("refuses to write over a FIFO, a link to one or a directory", async () => {
+    // A write to a FIFO blocks until a reader opens it, so the CLI would never exit.
+    await fs.mkdir(keyDir, { recursive: true });
+    const dir = path.join(keyDir, "dir.png");
+    await fs.mkdir(dir);
+    const fifo = path.join(keyDir, "fifo.png");
+    const viaLink = path.join(keyDir, "via-link.png");
+    const targets = [dir];
+    try {
+      execFileSync("mkfifo", [fifo]);
+      await fs.symlink("fifo.png", viaLink);
+      targets.unshift(fifo, viaLink);
+    } catch {
+      // No mkfifo on this system: the directory case still runs.
+    }
+    const handler = await handlerFor([projectDir]);
+
+    for (const file of targets) {
+      expect(await handler.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: `${file} is not a regular file`,
+      });
+    }
+    expect((await fs.lstat(dir)).isDirectory()).toBe(true);
+    if (targets.includes(fifo)) expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+  });
+
   it("writes a baseline under a root that is the real location of a symlinked .argent/flows", async () => {
     // The project keeps its flows in a tree outside it; the tools client sends
     // the project and its `.argent/flows`, and the server names the baseline
