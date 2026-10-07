@@ -279,9 +279,12 @@ describe("HTTP client services", () => {
     expect(seen).not.toHaveProperty("clientServices");
   });
 
-  it("answers 400 with an error_code when client_services arrives without Accept: application/x-ndjson", async () => {
+  // Marked validation: the CLI's directory run fails only the flow it rejects
+  // and goes on, as for any rejection of one call.
+  it("answers 400 marked validation when client_services arrives without Accept: application/x-ndjson", async () => {
+    const recordFailure = vi.fn();
     const registry = stubRegistry();
-    handle = createHttpApp(registry);
+    handle = createHttpApp(registry, { recordFailure });
 
     const res = await supertest(handle.app)
       .post("/tools/served-tool")
@@ -293,11 +296,22 @@ describe("HTTP client services", () => {
         "client_services requires an NDJSON request (Accept: application/x-ndjson): its " +
         "requests travel on the response stream. A proxy that rewrites Accept removes it.",
       error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+      error_kind: "validation",
     });
     expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(recordFailure).toHaveBeenCalledWith(
+      "served-tool",
+      expect.any(Object),
+      expect.objectContaining({
+        error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+        failure_stage: "http_client_services_stream",
+        error_kind: "validation",
+      }),
+      expect.any(Number)
+    );
   });
 
-  it("answers 400 with HTTP_ZOD_VALIDATION_FAILED for a malformed client_services", async () => {
+  it("answers 400 with HTTP_ZOD_VALIDATION_FAILED, marked validation, for a malformed client_services", async () => {
     const recordFailure = vi.fn();
     const registry = stubRegistry();
     handle = createHttpApp(registry, { recordFailure });
@@ -312,6 +326,7 @@ describe("HTTP client services", () => {
     expect(res.body).toEqual({
       error: "client_services: each root must be an absolute path",
       error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+      error_kind: "validation",
     });
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(recordFailure).toHaveBeenCalledWith(
@@ -320,6 +335,7 @@ describe("HTTP client services", () => {
       expect.objectContaining({
         error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
         failure_stage: "http_zod_validation",
+        error_kind: "validation",
       }),
       expect.any(Number)
     );

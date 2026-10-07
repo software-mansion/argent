@@ -901,7 +901,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // the progress stream. The argent clients always stream when they offer,
       // so a plain JSON call that offers names a custom caller or a proxy that
       // rewrote Accept; it gets a 400 that says so rather than a run that
-      // silently cannot reach the client.
+      // silently cannot reach the client. Both 400s are marked `validation`, a
+      // rejection of this one call: a directory run fails this flow and goes on
+      // to the next, which may make no offer and so run through the same proxy.
       let clientServicesParam: ClientServicesParam | undefined;
       if (rawClientServices !== undefined) {
         const parsed = clientServicesParamSchema.safeParse(rawClientServices);
@@ -918,6 +920,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(400).json({
             error: `client_services: ${parsed.error.issues[0]?.message ?? "invalid value"}`,
             error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+            error_kind: "validation",
           });
           return;
         }
@@ -936,6 +939,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
               "client_services requires an NDJSON request (Accept: application/x-ndjson): its " +
               "requests travel on the response stream. A proxy that rewrites Accept removes it.",
             error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+            error_kind: "validation",
           });
           return;
         }
