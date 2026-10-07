@@ -23,11 +23,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const EMPTY_RETRY_ATTEMPTS = 3;
 const EMPTY_RETRY_DELAY_MS = 600;
 const EMPTY_HINT =
-  "No focusable elements after retrying and recycling the read path. The app is most likely " +
-  "still launching (splash / loading screen) or mid-transition — this is normal right after " +
-  "launch-app / restart-app. Wait ~2-3s and call describe again; a React Native app only " +
-  "exposes focus once its JS bundle has loaded. If it stays empty, take a screenshot to confirm " +
-  "what's actually on screen.";
+  "No focusable elements after retrying and recycling the read path. Either the app is still " +
+  "loading or mid-transition (after launch-app / restart-app, or a press that opened an app), " +
+  "or the screen has nothing focusable (sleep, screensaver, video playback). Wait ~2-3s and " +
+  "call describe again; a React Native app only exposes focus once its JS bundle has loaded. " +
+  "If it stays empty, take a screenshot to confirm what's actually on screen.";
 
 // Android TV reads focus from the OS accessibility tree, which
 // does not expose focus driven by react-native-tvos's own focus engine — so the

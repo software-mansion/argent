@@ -40,8 +40,10 @@ export function tvControlRef(device: DeviceInfo): {
   };
 }
 
+// Per tool-server process, so `reapAxReaders` never touches another server's
+// reader and a reader left by an earlier process can't unlink ours.
 function axSocketPath(udid: string): string {
-  return `/tmp/argent-tv-ax-${udid.slice(0, 8)}.sock`;
+  return `/tmp/argent-tv-ax-${udid.slice(0, 8)}-${process.pid}.sock`;
 }
 
 function hidSocketPath(udid: string): string {
@@ -127,6 +129,16 @@ function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   const tag = udid.slice(0, 8);
   proc.stderr?.on("data", (data: string) => process.stderr.write(`[tvos-ax ${tag}] ${data}`));
   return proc;
+}
+
+// Kills every in-sim reader bound to `socketPath`. SIGKILLing `simctl spawn`
+// does not reach its reader, and a reader left running unlinks the path when
+// its idle `--timeout` fires (or on SIGTERM), even after a newer reader has
+// bound it. SIGKILL, so the reader never runs that unlink.
+function reapAxReaders(socketPath: string): Promise<void> {
+  const pattern = `tvos-ax-service --socket ${socketPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
+  // pkill exits 1 when nothing matched, the common case.
+  return new Promise((resolve) => execFile("pkill", ["-KILL", "-f", pattern], () => resolve()));
 }
 
 // Run the HID injector on the host. It loads SimulatorKit and holds one
@@ -302,11 +314,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       axProc.removeListener("error", onAxError);
       hidProc.removeListener("exit", onHidExit);
       hidProc.removeListener("error", onHidError);
-      // SIGKILL the ax daemon: under `simctl spawn` SIGTERM doesn't reliably
-      // reach the in-sim process, which would orphan it. The hid daemon is a
-      // direct host process, so SIGTERM reaps it.
+      // The ax reader is reaped by `reapAxReaders`. The hid daemon is a direct
+      // host process, so SIGTERM reaps it.
       if (!axProc.killed) axProc.kill("SIGKILL");
       if (!hidProc.killed) hidProc.kill("SIGTERM");
+      await reapAxReaders(axSock);
       // Drop any socket a daemon already bound, so a stale file can't make the
       // next factory's accept-probe read as "ready" against a dead socket.
       for (const p of [axSock, hidSock]) {
@@ -334,6 +346,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       } catch {
         /* no stale socket to remove */
       }
+      await reapAxReaders(axSock);
       axProc = spawnAxDaemon(udid, axSock);
       axProc.on("exit", onAxExit);
       axProc.on("error", onAxError);
@@ -465,11 +478,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
             /* respawn failed — nothing extra to kill beyond the current axProc */
           }
         }
-        // SIGKILL for the same reason as spawnFreshAx: under `simctl spawn`
-        // SIGTERM doesn't reliably reach the in-sim process, which would leave
-        // it orphaned. The hid daemon is a direct host process, so SIGTERM does.
+        // The ax reader is reaped by `reapAxReaders`. The hid daemon is a
+        // direct host process, so SIGTERM reaps it.
         if (!axProc.killed) axProc.kill("SIGKILL");
         if (!hidProc.killed) hidProc.kill("SIGTERM");
+        await reapAxReaders(axSock);
         for (const p of [axSock, hidSock]) {
           try {
             fs.unlinkSync(p);
