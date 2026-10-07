@@ -21,6 +21,7 @@ import {
   classifyOnDiskSpelling,
   describeSelector,
   flowsDirFor,
+  foldStepFromArgs,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -653,7 +654,7 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(
+    const { tree, source, uiOrientation } = await fetchFlowTree(
       registry,
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
@@ -667,8 +668,9 @@ async function captureTapSelector(
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer.
-    const resolved = selectorToFrame(tree, selector);
+    // silently retarget and coordinates are safer. Ranked in the reading order
+    // replay will rank in: the UI's, on a landscape UI.
+    const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (!resolved) {
       // Defensive: a selector derived from a visible node matches that node
       // under matchNode's semantics, so this should be unreachable. Kept in
@@ -796,6 +798,8 @@ function isToolNotFound(err: unknown, command: string): boolean {
 export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
   // A real `rotate` tool is registered, so the not-found path never fires.
   "rotate",
+  // Likewise `fold`: the tool runs, and the recorder rewrites it into `fold:`.
+  "fold",
   // `command` already is the tool name a `tool:` step wants.
   "tool",
 ];
@@ -1324,15 +1328,36 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A recorded `restart-app` is captured as the portable `launch` directive
       // (same terminate-and-relaunch semantics, plus the runner's post-launch
       // settle and readiness gate at replay). Recorded first, it makes the flow
-      // an e2e flow. Only the plain bundleId form maps; extra args (e.g. an
-      // Android `activity`) keep the raw tool step. `launch-app` is NOT
-      // rewritten — it foregrounds without terminating.
+      // an e2e flow. Only the plain bundleId form maps, plus `launchArgs` on an
+      // iOS device, which records as the `ios: { app, args }` entry beside a
+      // `native` id so the flow still replays elsewhere; other extra args (e.g.
+      // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
+      // no args. `launch-app` is NOT rewritten — it foregrounds without
+      // terminating.
       const strippedArgs = stripDeviceKeys(args);
+      const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
+      const noLaunchArgs =
+        launchArgs === undefined || (Array.isArray(launchArgs) && launchArgs.length === 0);
+      const iosArgs =
+        !noLaunchArgs &&
+        Array.isArray(launchArgs) &&
+        launchArgs.every((a) => typeof a === "string") &&
+        platformOf(args.udid) === "ios"
+          ? (launchArgs as string[])
+          : undefined;
       const isLaunch =
         params.command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
-        Object.keys(strippedArgs).length === 1;
+        Object.keys(extraLaunchArgs).length === 0 &&
+        (noLaunchArgs || iosArgs !== undefined);
+
+      // A recorded `fold` becomes the `fold:` directive, the same posture change
+      // the tool made; args the directive does not take keep the raw tool step.
+      const foldStep =
+        params.command === "fold" && params.delayMs === undefined
+          ? foldStepFromArgs(strippedArgs)
+          : undefined;
 
       // A multi-tap (`clickCount: 2` = double-tap) must survive the rewrite as
       // `times`, or replay would fire a single tap for a recorded double.
@@ -1354,7 +1379,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
         warning = captured?.warning;
       } else if (isLaunch) {
-        step = { kind: "launch", app: strippedArgs.bundleId as string };
+        const bundleId = strippedArgs.bundleId as string;
+        step = {
+          kind: "launch",
+          app: iosArgs ? { native: bundleId, ios: { app: bundleId, args: iosArgs } } : bundleId,
+        };
+      } else if (foldStep) {
+        step = foldStep;
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
       } else {

@@ -225,6 +225,37 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
+  it("counts the hoisted boot in the launch that settles it, as a later launch counts its own", async () => {
+    // Only Date is faked and only a boot moves it, so each time is the boots
+    // that step owns.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      bootElectronApp.mockImplementation(async (opts) => {
+        vi.setSystemTime(Date.now() + 6000);
+        return defaultBoot(opts);
+      });
+      const flowFile = await writeFlow(
+        "steps:\n  - echo: start\n  - launch: { chromium: ./app1 }\n  - launch: { chromium: ./app2 }\n"
+      );
+
+      const result = await runFlow(makeRegistry(), {
+        name: "boot-timing",
+        project_root: PROJECT_ROOT,
+        flow_file: flowFile,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.steps.map((s) => [s.kind, s.durationMs])).toEqual([
+        ["echo", 0],
+        ["launch", 6000],
+        ["launch", 6000],
+      ]);
+      expect(result.durationMs).toBe(12000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("boots the leading launch of a flow that seeds a backend before it", async () => {
     const flowFile = await writeFlow(
       "steps:\n  - script: { path: ./seed.mjs }\n  - launch: { chromium: ./app }\n"

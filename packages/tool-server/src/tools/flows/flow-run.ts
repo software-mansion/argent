@@ -28,6 +28,7 @@ import {
   chromiumLaunchSpec,
   classifyOnDiskSpelling,
   getFlowPath,
+  iosLaunchArgs,
   isBlockStep,
   parseFlow,
   precedesLeadingLaunch,
@@ -252,6 +253,13 @@ export interface StepReport {
    * so renderers cannot reconstruct depth downstream.
    */
   depth?: number;
+  /**
+   * Wall-clock milliseconds the runner spent on this step. Absent on a step
+   * that reports `skip`, except an unmet `when:` marker. A `when:` marker times
+   * only its guard and a `run:` marker only the fragment load; the steps they
+   * expand time themselves.
+   */
+  durationMs?: number;
 }
 
 export interface FlowRunResult {
@@ -269,6 +277,8 @@ export interface FlowRunResult {
   skipped: number;
   errored: number;
   steps: StepReport[];
+  startedAt: number;
+  durationMs: number;
 }
 
 export interface FlowPrerequisiteNotice {
@@ -649,9 +659,14 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
+  // An ios `{ app, args }` entry's args reach only an iOS device.
+  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
   let restart: unknown;
   try {
-    restart = await invokeOnDevice(env, "restart-app", { bundleId });
+    restart = await invokeOnDevice(env, "restart-app", {
+      bundleId,
+      ...(launchArgs ? { launchArgs } : {}),
+    });
   } catch (err) {
     // A cancellation makes the sub-tool reject; that rejection is the abort,
     // not an app failure, so it must not be attributed to restart-app.
@@ -994,6 +1009,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * {@link resolveRunDevice}, so that one is here before step 1.
    */
   owned: BootedChromium[];
+  /**
+   * Time the hoisted boot took before step 1. The first `launch` step settles
+   * that instance, so it adds this time to its own.
+   */
+  hoistedBootMs?: number;
   /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
   /**
@@ -1295,6 +1315,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
+      const runStartedAt = Date.now();
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
         params,
@@ -1382,6 +1403,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // Resolve the run device (a run whose leading launch — direct, or reached
       // through a leading run: chain — is chromium boots + owns its own app; see
       // resolveRunDevice). Any instance it booted is torn down in the finally.
+      const resolveStartedAt = Date.now();
       const resolved = await resolveRunDevice(
         registry,
         ctx,
@@ -1426,6 +1448,9 @@ Returns a per-step report: the first failure stops the run and the rest report a
         // its own, which is why that step spends this verdict rather than
         // inheriting whatever the sub-run proved.
         treeOutage: {},
+        // Same shape and sharing as `treeOutage`: what the last read said about
+        // the UI's orientation, for the directives that turn a direction.
+        lastRead: {},
         flowsDir,
         viaUpload,
         baselineKey: baselineKeyFor(canonicalPath, flowName),
@@ -1434,6 +1459,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
         stopped: false,
         pinned: statusBarPinned,
         owned: resolved.booted ? [resolved.booted] : [],
+        ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
         projectRoot: params.project_root,
@@ -1473,7 +1499,8 @@ Returns a per-step report: the first failure stops the run and the rest report a
         device?.id ?? "",
         flow.executionPrerequisite,
         state.reports,
-        aborted
+        aborted,
+        { startedAt: runStartedAt, durationMs: Date.now() - runStartedAt }
       );
     },
   };
@@ -1798,7 +1825,8 @@ function summarize(
   deviceId: string,
   executionPrerequisite: string,
   steps: StepReport[],
-  aborted: boolean
+  aborted: boolean,
+  timing: { startedAt: number; durationMs: number }
 ): FlowRunResult {
   let passed = 0;
   let failed = 0;
@@ -1828,6 +1856,7 @@ function summarize(
     skipped,
     errored,
     steps,
+    ...timing,
   };
 }
 
@@ -2016,7 +2045,13 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       continue;
     }
 
+    let startedAt = Date.now();
+    if (step.kind === "launch" && state.hoistedBootMs !== undefined) {
+      startedAt -= state.hoistedBootMs;
+      state.hoistedBootMs = undefined;
+    }
     const report = await execLeafStep(state, step, index, scope);
+    if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
@@ -2100,6 +2135,7 @@ async function execWhenStep(
     ...depthOf(scope),
   } as const;
   const inner = childScope(scope);
+  const guardStartedAt = Date.now();
 
   let met: boolean;
   if (step.condition.kind === "platform") {
@@ -2121,6 +2157,7 @@ async function execWhenStep(
         ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+        durationMs: Date.now() - guardStartedAt,
       });
       state.stopped = true;
       reportBlockSkipped(state, step.steps, inner, "when guard errored");
@@ -2135,6 +2172,7 @@ async function execWhenStep(
       ...marker,
       status: "skip",
       reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
+      durationMs: Date.now() - guardStartedAt,
     });
     reportBlockSkipped(state, step.steps, inner, "when block skipped");
     return;
@@ -2142,7 +2180,12 @@ async function execWhenStep(
 
   // Marker for the block, then the guarded steps inline — same fragment
   // attribution, one level deeper, failures hard-stop as anywhere else.
-  pushReport(state, { ...marker, status: "pass", reason: `condition met (${label})` });
+  pushReport(state, {
+    ...marker,
+    status: "pass",
+    reason: `condition met (${label})`,
+    durationMs: Date.now() - guardStartedAt,
+  });
   await execSteps(state, step.steps, inner);
 }
 
@@ -2189,6 +2232,7 @@ async function execRunStep(
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
   const display = runDisplayName(target, scope);
+  const startedAt = Date.now();
 
   const fail = (reason: string): void => {
     pushReport(state, {
@@ -2199,6 +2243,7 @@ async function execRunStep(
       target,
       reason,
       ...depthOf(scope),
+      durationMs: Date.now() - startedAt,
     });
     state.stopped = true;
   };
@@ -2283,6 +2328,7 @@ async function execRunStep(
     flow: display,
     target,
     ...depthOf(scope),
+    durationMs: Date.now() - startedAt,
   });
   await execSteps(
     state,
@@ -2340,6 +2386,58 @@ async function runScriptStep(
 }
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
+
+/** Raw tool steps that can change how the UI lies on the screen. */
+const UI_TURNING_TOOLS = new Set(["rotate", "fold"]);
+
+/**
+ * A `fold:` step runs the `fold` tool on the run device. The app survives a
+ * fold, so the pinned tree target stays; what changes is the panel and its
+ * coordinate space, and the runner caches no screen geometry — every gesture
+ * that needs the screen aspect reads it afresh (`fetchScreenAspect`). A proven
+ * tree outage is retired the way a relaunch retires it: the screen the verdict
+ * was proven on is gone. So is the UI orientation the last read reported: a
+ * fold can turn the UI, and until a read reports the new one, a direction must
+ * not be turned by the old one.
+ */
+async function runFold(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "fold" }>
+): Promise<DirectiveOutcome> {
+  const { registry, ctx, signal } = state;
+  const device = deviceEnv(state).device;
+  if (signal?.aborted) return ABORTED_OUTCOME;
+  if (state.treeOutage) state.treeOutage.proven = undefined;
+  if (state.lastRead) state.lastRead.uiOrientation = undefined;
+  const args = bindDeviceArgs(registry, "fold", device.id, {
+    ...(step.posture !== undefined ? { posture: step.posture } : {}),
+    ...(step.angle !== undefined ? { angle: step.angle } : {}),
+  });
+  try {
+    const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
+      activeScreen?: number;
+      screen?: { panel?: string; width?: number; height?: number };
+      warning?: string;
+    };
+    const size =
+      result.screen?.width !== undefined && result.screen?.height !== undefined
+        ? ` ${result.screen.width}x${result.screen.height}`
+        : "";
+    // The step's own target, not the result's posture: that is set only at a
+    // preset angle, and a mid angle can leave either panel live.
+    const target = step.posture ?? `${step.angle}°`;
+    return {
+      ok: true,
+      reason: `${target}: screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`,
+      ...(result.warning !== undefined ? { warning: result.warning } : {}),
+    };
+  } catch (err) {
+    // The tool rejects when cancelled mid-fold; per ABORTED_OUTCOME that must
+    // read as an aborted skip, never a step failure with the tool's message.
+    if (signal?.aborted) return ABORTED_OUTCOME;
+    return { ok: false, reason: errMsg(err) };
+  }
+}
 
 async function execLeafStep(
   state: ExecState,
@@ -2420,6 +2518,17 @@ async function execLeafStep(
       return { ...base, status: "pass" };
     }
 
+    case "fold": {
+      const r = await runFold(state, step);
+      if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "fail",
+        reason: r.reason,
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
+    }
+
     case "snapshot": {
       try {
         const r = await runSnapshot(deviceEnv(state), {
@@ -2436,6 +2545,7 @@ async function execLeafStep(
           ...base,
           status: r.status,
           reason: r.reason,
+          ...(r.warning !== undefined ? { warning: r.warning } : {}),
           snapshotKey: r.snapshotKey,
           ...(r.snapshotKey !== undefined && state.device?.platform === "ios-remote"
             ? { snapshotRemote: true as const }
@@ -2492,6 +2602,11 @@ async function execLeafStep(
       // later gesture a window it would have skipped.
       if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
         state.treeOutage.proven = undefined;
+      }
+      // A raw `rotate` or `fold` can turn the UI, like the `fold:` directive
+      // (see runFold): the orientation the last read reported no longer holds.
+      if (UI_TURNING_TOOLS.has(step.name) && state.lastRead) {
+        state.lastRead.uiOrientation = undefined;
       }
       try {
         const result = await invokeSubTool(registry, ctx, step.name, args);

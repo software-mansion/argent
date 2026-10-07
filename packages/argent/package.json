@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.25.1",
+  "version": "0.27.0",
   "mcpName": "io.github.software-mansion/argent",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
@@ -9,13 +9,39 @@
     "url": "git+https://github.com/software-mansion/argent.git"
   },
   "type": "module",
+  "exports": {
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./assets/manifest": "./assets/manifest.json",
+    "./assets/trace-processor/engine": "./assets/trace-processor/engine.mjs",
+    "./assets/trace-processor/engine_bundle.node": "./assets/trace-processor/engine_bundle.node.js",
+    "./bin/argent-simulator-server": "./bin/argent-simulator-server.cjs",
+    "./dist/bundled-paths": "./dist/bundled-paths.js",
+    "./dist/cli": "./dist/cli.js",
+    "./dist/cli-cmds": "./dist/cli-cmds.mjs",
+    "./dist/fatal-handlers": "./dist/fatal-handlers.js",
+    "./dist/flow-script-runner": "./dist/flow-script-runner.mjs",
+    "./dist/flow-script-watchdog-deadline": "./dist/flow-script-watchdog-deadline.mjs",
+    "./dist/flow-script-watchdog-lifeline": "./dist/flow-script-watchdog-lifeline.mjs",
+    "./dist/installer": "./dist/installer.mjs",
+    "./dist/installer-help": "./dist/installer-help.js",
+    "./dist/mcp-server": "./dist/mcp-server.mjs",
+    "./dist/preview-ui/theme": "./dist/preview-ui/theme.css",
+    "./dist/preview-window/main": "./dist/preview-window/main.cjs",
+    "./dist/tool-server": "./dist/tool-server.cjs",
+    "./package": "./package.json",
+    "./*": "./*"
+  },
   "bin": {
     "argent": "dist/cli.js",
     "argent-simulator-server": "bin/argent-simulator-server.cjs"
   },
   "scripts": {
     "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
-    "build:dispatcher": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build:dispatcher": "npm run build:tool-args && rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build:tool-args": "tsc --build ../tool-server && node ../tool-server/dist/sdk-tool-args.js src/tool-args.generated.ts",
     "build:bundles": "node scripts/bundle-tools.cjs",
     "sync-readme": "node scripts/sync-readme.cjs",
     "prepack": "node scripts/sync-readme.cjs",
@@ -54,6 +80,7 @@
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",
+    "@argent/configuration-core": "file:../configuration-core",
     "@argent/installer": "file:../argent-installer",
     "@argent/mcp": "file:../argent-mcp",
     "@argent/tools-client": "file:../argent-tools-client",

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 sidebar_label: Supported platforms
 title: Supported platforms
 sidebar_custom_props:
@@ -33,22 +33,9 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   caption="The same interaction model on a physical Pixel connected over adb"
 />
 
-### DeviceHub and simulator input
+### Foldable simulators
 
-Xcode 27 replaces Simulator.app with DeviceHub. DeviceHub connects to every simulator that starts. That connection moves the simulator input devices to CoreDevice. Taps, hardware buttons and typed text from Argent then stop reaching the simulator, while the tools still report success.
-
-Argent protects a simulator that Argent starts. Start the simulator with the `boot-device` tool, or let the agent start it. Argent then holds the input devices open during startup. A simulator that was already running before Argent connected to it is not protected. Restart it with `boot-device` and `force: true`.
-
-Two limits apply:
-
-| Limit                           | Effect                                                                                                                                                                                              |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Taps and gestures               | Argent protects these on every simulator it starts.                                                                                                                                                 |
-| Hardware buttons and typed text | Argent protects these on most simulators it starts. A fast Mac can still lose them. Start the simulator again to try once more. On iOS 26 and later, Argent may not be able to protect them at all. |
-
-Do not start the simulator more than two times. If two restarts do not restore the hardware buttons and typed text, Argent cannot protect them on this simulator.
-
-You can also quit DeviceHub and start the simulator again. This restores input without Argent.
+Argent drives the iPhone Duo simulator closed, half-open and open. The agent folds and unfolds the device with the `fold` tool. Screenshots, element trees, taps and recordings use the panel that shows the UI. See the [tools reference](/docs/reference/tools).
 
 ### Physical iPhones
 

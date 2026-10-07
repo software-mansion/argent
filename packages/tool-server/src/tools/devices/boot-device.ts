@@ -1,5 +1,5 @@
 import { execFile, spawn, type StdioOptions } from "node:child_process";
-import { openSync, closeSync } from "node:fs";
+import { closeSync, existsSync, openSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -46,7 +46,6 @@ import {
   simctlListDevices as simRemoteListDevices,
   simctlShutdown as simRemoteShutdown,
 } from "../../utils/sim-remote";
-import { startHidWarmUp } from "../../utils/hid-suppression";
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
@@ -98,7 +97,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "iOS only: boot the simulator core WITHOUT opening the Simulator.app GUI window. The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega/Electron, which have no equivalent GUI step."
+      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega/Electron, which have no equivalent GUI step."
     ),
   electronAppPath: z
     .string()
@@ -455,47 +454,12 @@ async function bootIos(
     });
   }
 
-  // Protect the simulator's HID services, started BEFORE `simctl boot` rather
-  // than after it (#932). A CoreDevice client — DeviceHub attaches to every
-  // simulator that boots — suppresses them ~1.2s in, and the only way to keep
-  // them is to have sent one event per service before that. The one-shot
-  // attaches in ~170ms and retries until the device is up, so firing it here
-  // lands the first event at ~300ms, before `simctl boot` even returns.
-  //
-  // Spawning the full simulator-server instead does not work: standing up the
-  // process and its transports takes ~3s, and every measured cold boot lost all
-  // three services that way.
-  //
-  // Only when a boot is actually about to happen. On a simulator already up the
-  // window closed seconds ago, so the one-shot would protect nothing and merely
-  // fire release events at whatever is on screen while this call waits on it.
-  //
-  // That is keyed on the one state which is provably pointless, rather than on
-  // `needsPreBoot` — which is narrower than it looks. `needsPreBoot` is false
-  // for a simulator already `Booting`, whose window may well still be open, and
-  // false when `listIosSimulators` failed and `simState` is undefined, where the
-  // `simctl boot` below may still be a real cold boot. Both would go
-  // unprotected, and an unnecessary warm-up only costs a detached subprocess
-  // where a missing one costs the input services for that `backboardd` life.
-  //
-  // By state and not by boot age, so a simulator someone else started a moment
-  // ago reads as `Booted` while its window is still open, and loses a warm-up it
-  // might have won. That is already the documented "argent did not start it"
-  // case, and not worth a stat on every boot to narrow.
-  //
-  // Skipped for tvOS too. `bootIos` serves those, and they have no main-screen
-  // digitizer — an Indigo event naming a target that is not in the service table
-  // raises NSInternalInconsistencyException and takes `backboardd` down.
-  const alreadyUp = simState === "Booted" && !force;
-  const hidWarmUp = alreadyUp || isTvOs ? Promise.resolve() : startHidWarmUp(udid, deviceSet);
-
   await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-
   await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"]);
 
   // tvOS only: a boot transition orphans the host-side tvos-hid-daemon, which
@@ -536,13 +500,6 @@ async function bootIos(
   // describe surfaces a degraded-quality hint.
   await ensureAutomationEnabled(udid).catch(() => undefined);
 
-  // Collect the warm-up. It ran alongside the boot and is normally long done, so
-  // this usually costs nothing; on a device that never becomes attachable it can
-  // add up to the one-shot's own attach timeout. It never rejects, and a throw
-  // between here and the spawn above simply abandons it — harmless, since it
-  // exits on its own.
-  await hidWarmUp;
-
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   // The (re)boot wiped DYLD_INSERT_LIBRARIES from launchd. A service cached from
@@ -571,14 +528,35 @@ async function bootIos(
   // simulator-server don't need. ARGENT_SIMULATOR_NO_WINDOW forces the same skip
   // host-wide.
   if (!headless && !iosHeadlessFromEnv() && !deviceSet) {
-    // Xcode 27 replaces Simulator.app with Device Hub.app (com.apple.dt.Devices);
-    // the attach stays best-effort so a missing app never fails a boot whose core
-    // is already up.
-    await execFileAsync("open", ["-a", "Simulator.app"])
-      .catch(() => execFileAsync("open", ["-b", "com.apple.dt.Devices"]))
-      .catch(() => {});
+    // Best-effort: a missing GUI app never fails a boot whose core is already up.
+    await openSimulatorWindow(udid).catch(() => {});
   }
   return { platform: "ios", udid, booted: true };
+}
+
+/**
+ * Shows the booted device in the GUI app of the active Xcode (the one `xcrun`
+ * resolves), never one found elsewhere on the host: `open -a Simulator.app`
+ * alone would launch an older Xcode's Simulator.app on an Xcode 27 host.
+ * Xcode 27 replaces Simulator.app with Device Hub, which opens the device's
+ * own window from a `devices://device/open?id=<udid>` URL; it reports success
+ * even when it cannot show the device, so a missing window goes unnoticed.
+ * Without either app nothing is opened.
+ */
+async function openSimulatorWindow(udid: string): Promise<void> {
+  const timeout = 5_000;
+  const { stdout } = await execFileAsync("xcode-select", ["-p"], { timeout });
+  const developerDir = realpathSync(stdout.trim());
+  const simulatorApp = join(developerDir, "Applications", "Simulator.app");
+  if (existsSync(simulatorApp)) {
+    await execFileAsync("open", ["-a", simulatorApp], { timeout });
+    return;
+  }
+  const deviceHubApp = join(developerDir, "..", "Applications", "DeviceHub.app");
+  if (existsSync(deviceHubApp)) {
+    const url = `devices://device/open?id=${encodeURIComponent(udid)}`;
+    await execFileAsync("open", ["-a", deviceHubApp, url], { timeout });
+  }
 }
 
 /**

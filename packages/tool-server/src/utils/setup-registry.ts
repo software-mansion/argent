@@ -1,4 +1,4 @@
-import { Registry } from "@argent/registry";
+import { Registry, type ToolDefinition } from "@argent/registry";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
@@ -40,18 +40,20 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
 import { rotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { createDebuggerStatusTool } from "../tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
 import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro";
-import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
 import { createDebuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { createDescribeTool } from "../tools/describe";
+import { createUiTreeTool } from "../tools/ui-tree";
 import { createAwaitUiElementTool } from "../tools/await-ui-element";
 import { createAwaitScreenIdleTool } from "../tools/await-screen-idle";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
@@ -93,6 +95,9 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
+import { resolveDevice } from "./device-info";
+import { setLivePanelSourceProvider } from "./foldable";
 
 export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
@@ -100,6 +105,13 @@ export function createRegistry(): Registry {
   // enable/disable <flag>` needs no tool-server restart.
   const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
+  // The panel a foldable renders to is asked of the ax-service before every
+  // touch and capture (`utils/foldable.ts`); that daemon is a service of this
+  // registry, started on first use like a `describe` starts it.
+  setLivePanelSourceProvider((udid) => {
+    const ref = axServiceRef(resolveDevice(udid));
+    return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+  });
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(iosDeviceRunnerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
@@ -142,18 +154,20 @@ export function createRegistry(): Registry {
   registry.registerTool(createPasteTool(registry));
   registry.registerTool(rotateTool);
   registry.registerTool(shakeTool);
+  registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(debuggerComponentTreeTool);
+  registry.registerTool(createDebuggerComponentTreeTool(registry));
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(createDebuggerLogRegistryTool(registry));
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
   registry.registerTool(createDescribeTool(registry));
+  registry.registerTool(createUiTreeTool(registry));
   registry.registerTool(createAwaitUiElementTool(registry));
   registry.registerTool(createAwaitScreenIdleTool(registry));
   registry.registerTool(createReactProfilerStartTool(registry));
@@ -200,9 +214,20 @@ export function createRegistry(): Registry {
   // unknown there rather than hidden. On darwin their `featureFlag:
   // "argent-lens"` gates exposure in http.ts, re-checked per request.
   if (process.platform === "darwin") {
-    registry.registerTool(createProposeVariantTool(registry));
-    registry.registerTool(awaitUserSelectionTool);
+    for (const tool of createLensTools(registry)) registry.registerTool(tool);
   }
 
   return registry;
+}
+
+function createLensTools(registry: Registry): ToolDefinition<any, any>[] {
+  return [createProposeVariantTool(registry), awaitUserSelectionTool];
+}
+
+/** Every tool argent can serve, keyed by id, including the Lens tools off macOS. */
+export function listToolDefinitions(registry: Registry): Map<string, ToolDefinition<any, any>> {
+  const definitions = new Map<string, ToolDefinition<any, any>>();
+  for (const id of registry.getSnapshot().tools) definitions.set(id, registry.getTool(id)!);
+  for (const tool of createLensTools(registry)) definitions.set(tool.id, tool);
+  return definitions;
 }

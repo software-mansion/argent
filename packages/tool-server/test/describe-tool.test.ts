@@ -32,6 +32,8 @@ function makeAXServiceApi(
     degraded: options?.degraded ?? false,
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
+    livePanel: async () => null,
+    tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => true,
   };
 }
@@ -1069,6 +1071,8 @@ describe("describe tool — ax-service read failure", () => {
       },
       alertCheck: async () => false,
       ping: async () => true,
+      livePanel: async () => null,
+      tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     };
   }
 

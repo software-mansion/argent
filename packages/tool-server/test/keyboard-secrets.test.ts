@@ -356,7 +356,9 @@ describe("paste tool with secret placeholders", () => {
 
     const result = await tool.execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" });
 
-    expect(vi.mocked(setSimulatorClipboardText)).toHaveBeenCalledWith(api, "hunter2");
+    expect(vi.mocked(setSimulatorClipboardText)).toHaveBeenCalledWith(api, "hunter2", {
+      sensitive: true,
+    });
     expect(JSON.stringify(result)).not.toContain("hunter2");
   });
 

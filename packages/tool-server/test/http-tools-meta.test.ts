@@ -38,7 +38,7 @@ function stubRegistry(): Registry {
     getSnapshot: vi.fn(() => ({
       services: new Map(),
       namespaces: [],
-      tools: ["always-tool", "hinted-tool", "plain-tool", "device-tool", "boot-tool"],
+      tools: ["always-tool", "hinted-tool", "plain-tool", "device-tool", "boot-tool", "sdk-tool"],
     })),
     getTool: vi.fn((name: string) => {
       if (name === "always-tool") {
@@ -58,6 +58,16 @@ function stubRegistry(): Registry {
           description: "Deferred but hinted",
           inputSchema: { type: "object", properties: {} },
           searchHint: "profiling hotspots cpu",
+          services: () => ({}),
+          execute: async () => ({}),
+        };
+      }
+      if (name === "sdk-tool") {
+        return {
+          id: "sdk-tool",
+          description: "Programmatic callers only",
+          inputSchema: { type: "object", properties: {} },
+          hideFromMcp: true,
           services: () => ({}),
           execute: async () => ({}),
         };
@@ -128,6 +138,17 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(byName.get("hinted-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
+  });
+
+  it("lists a hideFromMcp tool with the flag set, and still runs it", async () => {
+    const res = await request(handle.app).get("/tools").expect(200);
+    const byName = new Map<string, Record<string, unknown>>(
+      (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
+    );
+    expect(byName.get("sdk-tool")).toMatchObject({ hideFromMcp: true });
+    expect(byName.get("plain-tool")).not.toHaveProperty("hideFromMcp");
+
+    await request(handle.app).post("/tools/sdk-tool").send({}).expect(200);
   });
 
   it("does not pass bundleId into telemetry invocation metadata", async () => {
