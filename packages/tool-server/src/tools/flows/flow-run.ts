@@ -1529,8 +1529,12 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // input, Electron leaves it minimized and hidden). Resolving the session
       // applies focus emulation, which keeps input unthrottled even while
       // minimized, and gesture-tap/-drag/-scroll carry
-      // assertChromiumWindowVisible for sessions where it could not apply.
-      if (device?.platform === "chromium") await frontChromiumPage(registry, device);
+      // assertChromiumWindowVisible for sessions where it could not apply. Like
+      // the status-bar pin, skipped on a run already cancelled: no step will
+      // use the page.
+      if (device?.platform === "chromium" && !signal?.aborted) {
+        await frontChromiumPage(registry, device);
+      }
 
       const state: ExecState = {
         registry,
@@ -1739,7 +1743,9 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  * roots it serves) fails the run before step 1: anchoring beside the symlink
  * instead would silently run a same-named fragment there, which is exactly
  * what a co-located run never does. A channel that does not answer fails the
- * run as any other request would.
+ * run as any other request would. A client that hung up cancelled the run, so
+ * the spelled path stands in for the anchor nothing will read: the run goes on
+ * to report every step as aborted, as after a hang-up at any later request.
  */
 async function clientRootCanonical(
   project: ProjectAccess,
@@ -1755,6 +1761,7 @@ async function clientRootCanonical(
     );
     return hop.canonical;
   } catch (err) {
+    if (isClientRequestAbort(err)) return clientRootPath;
     if (!isClientRequestRefusal(err)) throw err;
     throw new FailureError(
       `The client did not resolve the flow file "${clientRootPath}" (${errMsg(err)}). ` +

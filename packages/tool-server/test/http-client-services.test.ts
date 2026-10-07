@@ -10,13 +10,14 @@ import {
   CLIENT_CONTENT_CAP_BYTES,
   FAILURE_CODES,
   getFailureSignal,
-  type Registry,
+  Registry,
   type InvokeToolOptions,
   type ToolContext,
+  type ToolDefinition,
   zodObjectToJsonSchema,
 } from "@argent/registry";
 import { isClientRequestAbort } from "../src/client-requests";
-import { createRunFlowTool } from "../src/tools/flows/flow-run";
+import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
 import { serializeFlow } from "../src/tools/flows/flow-utils";
 
 // Streaming rides the same response path as the update note — pin the checker
@@ -848,5 +849,78 @@ describe("flow-execute over client services", () => {
       (step) => `${step.kind}:${step.message ?? ""}`
     );
     expect(reported).toEqual(["run:", "echo:served by the client"]);
+  });
+
+  it("reports every step as an aborted skip when the client hangs up at the root flow's request", async () => {
+    // The first request of a composing run comes before step 1. A client that
+    // hangs up there (Ctrl-C right after the start) cancelled the run, as one
+    // that hangs up at any later request did: the call completes with every
+    // step skipped, rather than failing with a stack in the log.
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry));
+    registry.registerTool({
+      id: "list-devices",
+      description: "One Chromium instance to attach to",
+      inputSchema: { type: "object", properties: {} },
+      services: () => ({}),
+      execute: async () => ({ devices: [{ platform: "chromium", id: "chromium-cdp-9999" }] }),
+    } as unknown as ToolDefinition);
+    const outcome = deferred<string>();
+    registry.events.on("toolCompleted", (id: string) => {
+      if (id === "flow-execute") outcome.resolve("toolCompleted");
+    });
+    registry.events.on("toolFailed", (id: string) => {
+      if (id === "flow-execute") outcome.resolve("toolFailed");
+    });
+    const invoke = vi.spyOn(registry, "invokeTool");
+    const resolveService = vi.spyOn(registry, "resolveService");
+    handle = createHttpApp(registry);
+    let base: string;
+    ({ server, base } = await listen(handle));
+    const root = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "root" },
+        { kind: "run", flow: "frag.yaml" },
+        { kind: "tool", name: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+
+    const controller = new AbortController();
+    const res = await startCall(
+      base,
+      "flow-execute",
+      {
+        project_root: "/client",
+        flow_path: {
+          __argentFileInput: true,
+          path: "/client/flows/root.yaml",
+          size: Buffer.byteLength(root),
+          mtimeMs: 1,
+          content: Buffer.from(root).toString("base64"),
+        },
+        client_services: { ops: ["resolve-file"], roots: ["/client"] },
+      },
+      controller.signal
+    );
+    const reader = ndjsonLines(res.body!);
+    const first = (await reader.next()).value!;
+    expect(first).toMatchObject({ event: "client-request", args: { target: "root.yaml" } });
+    controller.abort();
+    await expect(reader.next()).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(await outcome.promise).toBe("toolCompleted");
+    const call = invoke.mock.calls.findIndex(([id]) => id === "flow-execute");
+    const result = (await invoke.mock.results[call]!.value) as FlowRunResult;
+    expect(result.aborted).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.reason ?? ""}`)).toEqual([
+      "echo:skip:run aborted",
+      "run:skip:run aborted",
+      "tool:skip:run aborted",
+    ]);
+    // No step ran and no device was acted on: the listing is the only other
+    // tool call, and the Chromium page was not brought to the front.
+    expect(invoke.mock.calls.map(([id]) => id)).toEqual(["flow-execute", "list-devices"]);
+    expect(resolveService).not.toHaveBeenCalled();
   });
 });
