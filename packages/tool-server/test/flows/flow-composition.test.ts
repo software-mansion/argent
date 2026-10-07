@@ -2016,6 +2016,76 @@ describe("flow composition (run:)", () => {
       });
     });
 
+    describe("the pre-run scan of a served leading fragment", () => {
+      // The chromium hoist boots the leading launch before step 1, so it must
+      // not follow a launch into a fragment the run: step then refuses.
+      const notSelfContained = serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "launch", app: { chromium: "/abs/e2e-app" } },
+          { kind: "snapshot", name: "home" },
+        ],
+      });
+
+      async function runUnpinned(): Promise<FlowRunResult | { notice: string }> {
+        await fs.writeFile(
+          uploadedPath,
+          serializeFlow({ executionPrerequisite: "", steps: [{ kind: "run", flow: "e2e.yaml" }] }),
+          "utf8"
+        );
+        const registry = mockRegistry();
+        // One instance to attach to, so the run reaches its run: step.
+        vi.mocked(registry.invokeTool).mockImplementation(async (id: string) =>
+          id === "list-devices"
+            ? { devices: [{ platform: "chromium", id: "chromium-cdp-9999" }] }
+            : { ok: true }
+        );
+        const { services } = fakeClientServices({
+          "/client/.argent/flows/e2e.yaml": notSelfContained,
+        });
+        return createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, flow_file: uploadedPath },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: uploadedFlowFile(),
+            clientServices: services,
+          }
+        );
+      }
+
+      function expectRefusedAtRunStep(result: FlowRunResult): void {
+        expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+        expect(result.steps[0]?.reason).toContain('The fragment "e2e.yaml" is not self-contained');
+        expect(result.steps[0]?.reason).toContain("step 2: snapshot: home");
+      }
+
+      it("boots nothing for a fragment the run: step refuses, and reports that refusal", async () => {
+        bootElectronApp.mockClear();
+
+        const result = asRun(await runUnpinned());
+
+        expect(bootElectronApp).not.toHaveBeenCalled();
+        expectRefusedAtRunStep(result);
+      });
+
+      it("reports the refusal, not a boot error, when that fragment's app path does not exist", async () => {
+        bootElectronApp.mockImplementation(async () => {
+          throw new FailureError("Electron boot: path does not exist: /abs/e2e-app", {
+            error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+            failure_stage: "electron_app_path_missing",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
+        });
+        try {
+          expectRefusedAtRunStep(asRun(await runUnpinned()));
+        } finally {
+          bootElectronApp.mockReset();
+        }
+      });
+    });
+
     it("anchors run: targets beside the root flow's real file when the root is a symlink on the client", async () => {
       // Co-located runs realpath the root before anchoring; the client's
       // spelling is a symlink here, so the runner asks the client where the

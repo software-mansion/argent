@@ -1208,6 +1208,33 @@ function retiredArgReason(use: RetiredArgUse): string {
   return `${use.where} as written (echo included) passes ${use.tool}'s retired \`${use.key}\` key${use.guidance ? `: ${use.guidance}` : ""}`;
 }
 
+/**
+ * Why a loaded `run:` fragment is refused before any of its steps runs, or
+ * undefined. These are the root flow's load-time gates, in the root's order: a
+ * fragment that cannot run over the link at all says so before any key it
+ * would have to fix. One function for both callers: {@link execRunStep}, which
+ * charges the refusal to the `run:` step, and {@link scanLeadingLaunch}, which
+ * must not follow a launch into a fragment the executor refuses.
+ */
+function fragmentLoadRefusal(
+  env: Pick<ExecState, "registry" | "ctx" | "project">,
+  fragment: FlowFile,
+  target: string
+): string | undefined {
+  if (env.project.mode === "client") {
+    try {
+      assertUploadSelfContained(env.registry, fragment, env.ctx?.clientServices?.ops, {
+        subject: `The fragment "${target}"`,
+        arrival: "the client served it from a project",
+      });
+    } catch (err) {
+      return errMsg(err);
+    }
+  }
+  const retiredArg = findRetiredToolArg(env.registry, fragment.steps);
+  return retiredArg ? `fragment "${target}" ${retiredArgReason(retiredArg)}` : undefined;
+}
+
 /** The stage each step kind an upload cannot carry is refused under; each one is gated on what the client offered to serve. */
 const UPLOAD_STAGE_BY_KIND = {
   run: "flow_upload_run_composition",
@@ -1432,7 +1459,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // `launch` there is restart-app, which terminates and relaunches whatever
       // device it is handed, so those stay refused.
       if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
-        const leading = await leadingLaunch(flow, [rootEntry], project);
+        const leading = await leadingLaunch(flow, [rootEntry], { registry, ctx, project });
         if (leading) {
           // Offer the pin only where it is a real way out (see
           // chromiumPinnable): the guard also fires for unpinned runs of every
@@ -1604,7 +1631,7 @@ async function resolveRunDevice(
   if (!params.device) {
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
-    const leading = await leadingLaunch(flow, [rootEntry], project);
+    const leading = await leadingLaunch(flow, [rootEntry], { registry, ctx, project });
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
       let booted: BootedChromium;
@@ -1755,9 +1782,9 @@ async function clientRootCanonical(
 async function leadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[],
-  project: ProjectAccess
+  env: Pick<ExecState, "registry" | "ctx" | "project">
 ): Promise<{ app: Launch; flow: string } | null> {
-  const found = await scanLeadingLaunch(flow, stack, project);
+  const found = await scanLeadingLaunch(flow, stack, env);
   return found === NO_EXECUTABLE_STEP ? null : found;
 }
 
@@ -1775,16 +1802,17 @@ async function leadingLaunch(
  * The walk below IS the executor's, run ahead of time: it takes the same
  * `runStack` (seeded with the root flow) and resolves each hop through the same
  * {@link ProjectAccess.resolveFlowFile} {@link execRunStep} uses, then applies
- * the same cycle, depth, and on-disk-casing guards. A chain the executor
- * refuses never reaches its launch, so any hop it would error on stays `null`
- * (give up) here, never transparent. Anything unreadable is `null` too — a
- * client that does not answer, or refuses the fragment, included: the
- * executor reports that when it executes the step.
+ * the same cycle, depth, and on-disk-casing guards and the same load-time
+ * gates ({@link fragmentLoadRefusal}). A chain the executor refuses never
+ * reaches its launch, so any hop it would error on stays `null` (give up)
+ * here, never transparent. Anything unreadable is `null` too — a client that
+ * does not answer, or refuses the fragment, included: the executor reports
+ * that when it executes the step.
  */
 async function scanLeadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[],
-  project: ProjectAccess
+  env: Pick<ExecState, "registry" | "ctx" | "project">
 ): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
   const top = stack[stack.length - 1]!;
   for (const step of flow.steps) {
@@ -1794,7 +1822,7 @@ async function scanLeadingLaunch(
     let nested: FlowFile;
     let canonical: string;
     try {
-      const hop = await project.resolveFlowFile(path.dirname(top.canonical), step.flow);
+      const hop = await env.project.resolveFlowFile(path.dirname(top.canonical), step.flow);
       canonical = hop.canonical;
       if (stack.some((entry) => entry.canonical === canonical)) return null;
       if (stack.length >= MAX_RUN_DEPTH) return null;
@@ -1808,10 +1836,11 @@ async function scanLeadingLaunch(
       if (isClientRequestTimeout(err)) throw err;
       return null;
     }
+    if (fragmentLoadRefusal(env, nested, step.flow) !== undefined) return null;
     const inner = await scanLeadingLaunch(
       nested,
       [...stack, { canonical, display: runDisplayFor(step.flow, stack[0]!.display) }],
-      project
+      env
     );
     if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
@@ -2461,23 +2490,10 @@ async function execRunStep(
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
-  // The root flow's load-time gates, applied to the fragment at the only
-  // moment its steps exist, in the root's order: a fragment that cannot run
-  // over the link at all says so before any key it would have to fix. Charged
-  // to the run: step, so the fragment is refused whole rather than
+  // Charged to the run: step, so the fragment is refused whole rather than
   // part-executed up to the offending step.
-  if (state.project.mode === "client") {
-    try {
-      assertUploadSelfContained(state.registry, fragment, state.ctx?.clientServices?.ops, {
-        subject: `The fragment "${target}"`,
-        arrival: "the client served it from a project",
-      });
-    } catch (err) {
-      return fail(errMsg(err));
-    }
-  }
-  const retiredArg = findRetiredToolArg(state.registry, fragment.steps);
-  if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
+  const refusal = fragmentLoadRefusal(state, fragment, target);
+  if (refusal !== undefined) return fail(refusal);
 
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
