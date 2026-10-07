@@ -237,8 +237,12 @@ async function walk(spelled: string, fence: Fence): Promise<Walked> {
 
 /**
  * Build the handler for one call, or null when there is nothing to serve:
- * no root exists on this machine, or the server advertised no op this client
- * implements. `ops` keeps the implemented order; `roots` are realpaths.
+ * no root exists on this machine, the server advertised no op this client
+ * implements, or the root flow names no `run:` target (or cannot be read or
+ * parsed here). The runner asks for files only to resolve `run:` targets, so
+ * a flow that composes nothing goes out without client services, as it did
+ * before they existed, and keeps running through a proxy that rewrites
+ * `Accept`. `ops` keeps the implemented order; `roots` are realpaths.
  * `rootFlow` is the call's root flow file as the client sent it; the server
  * asks for it in the directory it is spelled in.
  */
@@ -272,19 +276,19 @@ export async function createClientServicesHandler(opts: {
   // The real paths this call may serve: the root flow, and the run: targets
   // of each file served, resolved beside that file as the runner anchors them.
   const servable = new Set<string>();
-  async function addRunTargets(canonical: string, content: string): Promise<void> {
-    for (const target of runTargets(content)) {
+  async function addRunTargets(canonical: string, targets: string[]): Promise<void> {
+    for (const target of targets) {
       const walked = await walk(path.dirname(canonical) + path.sep + target, fence);
       if (walked.kind !== "outside") servable.add(walked.canonical);
     }
   }
   const root = await walk(opts.rootFlow, fence);
-  if (root.kind !== "outside") {
-    servable.add(root.canonical);
-    const content =
-      root.kind === "found" ? await fs.readFile(root.canonical, "utf8").catch(() => null) : null;
-    if (content !== null) await addRunTargets(root.canonical, content);
-  }
+  if (root.kind !== "found") return null;
+  const rootText = await fs.readFile(root.canonical, "utf8").catch(() => null);
+  const rootTargets = rootText === null ? [] : runTargets(rootText);
+  if (rootTargets.length === 0) return null;
+  servable.add(root.canonical);
+  await addRunTargets(root.canonical, rootTargets);
 
   async function resolveFile(
     id: string,
@@ -364,7 +368,10 @@ export async function createClientServicesHandler(opts: {
       );
       return refuse(id, reason);
     }
-    await addRunTargets(canonical, Buffer.from(read.content, "base64").toString("utf8"));
+    await addRunTargets(
+      canonical,
+      runTargets(Buffer.from(read.content, "base64").toString("utf8"))
+    );
     const answer: ResolveFileAnswer = {
       canonical,
       spelling,

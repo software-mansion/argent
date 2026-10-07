@@ -395,16 +395,18 @@ export function errorBodyMessage(body: {
 /**
  * The handler for one call, or null when the arguments carry no string
  * `project_root` (nothing to serve under), name no root flow (`flow_path` or
- * `name`), or nothing under the roots exists. The handler serves the root flow
- * and what it composes ({@link createClientServicesHandler}), inside these
- * roots: the project, its `.argent/flows` directory (a project may keep that
- * one as a symlink to a tree outside the project, and the flows there are
- * still the project's own), the directory of `flow_path` when given, so a
- * flow addressed outside the project can still reach its own fragments, and
- * the directory the root flow file REALLY lives in: a `run:` target resolves
- * beside the real file, as it does on one computer, so a root flow that is a
- * symlink serves the fragments next to its target. Every root is served by
- * its real location; one that does not exist is dropped.
+ * `name`), or the root flow composes nothing ({@link
+ * createClientServicesHandler}); the call then carries no `client_services`
+ * and is not made a stream for them. The handler serves the root flow and
+ * what it composes, inside these roots: the project, its `.argent/flows`
+ * directory (a project may keep that one as a symlink to a tree outside the
+ * project, and the flows there are still the project's own), the directory
+ * of `flow_path` when given, so a flow addressed outside the project can
+ * still reach its own fragments, and the directory the root flow file REALLY
+ * lives in: a `run:` target resolves beside the real file, as it does on one
+ * computer, so a root flow that is a symlink serves the fragments next to its
+ * target. Every root is served by its real location; one that does not exist
+ * is dropped.
  */
 async function clientServicesHandlerFor(
   advert: ClientServicesAdvert,

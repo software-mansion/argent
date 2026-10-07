@@ -59,6 +59,8 @@ interface Recorded {
 }
 
 const ADVERT = { ops: ["resolve-file"] };
+/** A root flow with a run: step: only such a flow is offered client services. */
+const COMPOSING = "steps:\n  - run: frag.yaml\n";
 
 let server: Server;
 let url: string;
@@ -291,7 +293,7 @@ describe("callTool client services", () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     const outsideFlow = path.join(projectDir, "..", "shared", "x.yaml");
     await fs.mkdir(path.dirname(outsideFlow), { recursive: true });
-    await fs.writeFile(outsideFlow, "steps: []\n");
+    await fs.writeFile(outsideFlow, COMPOSING);
     const { callTool } = createToolsClient();
 
     await callTool("flow-execute", { project_root: projectDir, flow_path: outsideFlow });
@@ -312,7 +314,7 @@ describe("callTool client services", () => {
     const vault = await fs.mkdtemp(path.join(tmpdir(), "argent-vault-flows-"));
     await fs.mkdir(path.join(linked, ".argent"), { recursive: true });
     await fs.symlink(vault, path.join(linked, ".argent", "flows"));
-    await fs.writeFile(path.join(vault, "root.yaml"), "steps: []\n");
+    await fs.writeFile(path.join(vault, "root.yaml"), COMPOSING);
     const { callTool } = createToolsClient();
 
     await callTool("flow-execute", { project_root: linked, name: "root" });
@@ -329,7 +331,7 @@ describe("callTool client services", () => {
     // symlinked root's target must be reachable; by name and by path alike.
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     const vault = await fs.mkdtemp(path.join(tmpdir(), "argent-vault-root-"));
-    await fs.writeFile(path.join(vault, "linked.yaml"), "steps: []\n");
+    await fs.writeFile(path.join(vault, "linked.yaml"), COMPOSING);
     await fs.symlink(path.join(vault, "linked.yaml"), path.join(flowsDir, "linked.yaml"));
     const { callTool } = createToolsClient();
 
@@ -348,6 +350,41 @@ describe("callTool client services", () => {
     expect(byName).toEqual([projectDir, realVault]);
     expect(byPath).toEqual([projectDir, realVault]);
     await fs.rm(vault, { recursive: true, force: true });
+  });
+
+  it("sends a flow that composes nothing without client_services, so a proxy that rewrites Accept passes it", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    await fs.writeFile(path.join(flowsDir, "echo.yaml"), "steps:\n  - echo: hi\n");
+    // The tool-server refuses client_services on a call that cannot stream.
+    onInvoke = (body, res) => {
+      const accept = String(invokeRequest().headers.accept ?? "");
+      if ((body as { client_services?: unknown }).client_services && !accept.includes("ndjson")) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "client_services requires an NDJSON request" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: { ok: true } }));
+    };
+    const { callTool } = createToolsClient({
+      fetchImpl: (target, init) =>
+        fetch(target, {
+          ...init,
+          headers: { ...(init.headers as Record<string, string>), Accept: "application/json" },
+        }),
+    });
+
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "echo" });
+
+    expect(result.data).toEqual({ ok: true });
+    expect(invokeRequest().body).toEqual({ project_root: projectDir, name: "echo" });
+
+    // A flow that composes still asks for the stream, and that proxy breaks it.
+    requests.length = 0;
+    await expect(
+      callTool("flow-execute", { project_root: projectDir, name: "root" })
+    ).rejects.toThrow("client_services requires an NDJSON request");
+    expect(invokeRequest().body).toMatchObject({ client_services: { ops: ["resolve-file"] } });
   });
 
   it("sends no client_services when the listing has no clientServices", async () => {

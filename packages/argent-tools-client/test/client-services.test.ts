@@ -681,32 +681,34 @@ describe("what the handler serves", () => {
     );
   });
 
-  it("serves no fragment for a root flow that composes nothing", async () => {
-    await fs.writeFile(path.join(flowsDir, "root.yaml"), "steps:\n  - echo: hi\n");
-    const handler = await handlerFor([projectDir]);
+  it("builds no handler for a root flow that composes nothing or cannot be read here", async () => {
+    const rootFlow = path.join(flowsDir, "root.yaml");
+    const handlerWith = (content: string | null) =>
+      (content === null ? fs.rm(rootFlow) : fs.writeFile(rootFlow, content)).then(() =>
+        createClientServicesHandler({ roots: [projectDir], rootFlow, advertised: ALL })
+      );
 
-    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml"))).toEqual(
-      notComposed("frag.yaml")
-    );
+    expect(await handlerWith("steps:\n  - echo: hi\n")).toBeNull();
+    expect(await handlerWith('steps:\n  - run: "/abs.yaml"\n')).toBeNull();
+    expect(await handlerWith("steps: [ { run: frag.yaml }\n")).toBeNull();
+    expect(await handlerWith(null)).toBeNull();
+    await fs.mkdir(rootFlow);
+    expect(
+      await createClientServicesHandler({ roots: [projectDir], rootFlow, advertised: ALL })
+    ).toBeNull();
   });
 
-  it("takes no run: target from a value the runner refuses or from YAML that does not parse", async () => {
+  it("takes no run: target from a value the runner refuses", async () => {
     await fs.writeFile(path.join(flowsDir, "abs.yaml"), "steps: []\n");
     await fs.writeFile(
       path.join(flowsDir, "root.yaml"),
-      'steps:\n  - run: "/abs.yaml"\n  - run: "C:abs.yaml"\n  - run: "sub\\\\abs.yaml"\n'
+      'steps:\n  - run: frag.yaml\n  - run: "/abs.yaml"\n  - run: "C:abs.yaml"\n  - run: "sub\\\\abs.yaml"\n'
     );
     const handler = await handlerFor([projectDir]);
 
     for (const target of ["/abs.yaml", "C:abs.yaml", "sub\\abs.yaml"]) {
       expect(await handler.handle(resolveLine(flowsDir, target))).toEqual(notComposed(target));
     }
-
-    await fs.writeFile(path.join(flowsDir, "root.yaml"), "steps: [ { run: frag.yaml }\n");
-    const unparsed = await handlerFor([projectDir]);
-    expect(await unparsed.handle(resolveLine(flowsDir, "frag.yaml"))).toEqual(
-      notComposed("frag.yaml")
-    );
   });
 
   it("reads the run: targets of a flow whose steps alias themselves", async () => {
