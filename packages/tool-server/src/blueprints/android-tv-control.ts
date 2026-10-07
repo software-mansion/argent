@@ -11,6 +11,7 @@ import { UnsupportedOperationError } from "../utils/capability";
 import { withUiautomatorLock } from "../utils/uiautomator-lock";
 import {
   parseUiAutomatorXml,
+  parseUiAutomatorBounds,
   attrIsTrue,
   labelOf,
 } from "../tools/describe/platforms/android/uiautomator-parser";
@@ -61,7 +62,6 @@ const KEYEVENTS: Record<TvDirection, number> = {
 interface TvNode {
   label: string;
   value: string;
-  focused: boolean;
   selected: boolean;
   disabled: boolean;
   isButton: boolean;
@@ -78,13 +78,13 @@ function valueOf(attrs: Record<string, string>): string {
 }
 
 /**
- * Collect the focused node and every focusable node. `parseUiAutomatorDump`
+ * Collect the focused nodes and every focusable node. `parseUiAutomatorDump`
  * drops the `focused` attribute, so the focus walk needs its own pass.
  */
-function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNode[] } {
+function collectTvNodes(xml: string): { focused: TvNode[]; focusable: TvNode[] } {
   const root = parseUiAutomatorXml(xml);
   const focusable: TvNode[] = [];
-  let focused: TvNode | null = null;
+  const focused: TvNode[] = [];
   if (!root) return { focused, focusable };
 
   const stack = [root];
@@ -97,6 +97,10 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
     const isFocusable = attrIsTrue(attrs, "focusable");
     const isFocused = attrIsTrue(attrs, "focused");
     if (!isFocusable && !isFocused) continue;
+    // A view outside the display gets its far edge clamped to the screen, so
+    // its bounds come back empty or inverted; `uiautomator dump` omits it.
+    const bounds = parseUiAutomatorBounds(attrs.bounds ?? "");
+    if (bounds && (bounds.w === 0 || bounds.h === 0)) continue;
 
     const label = labelOf(attrs);
     // An unlabelled focusable is a layout focus-trap: kept out of `focusable`,
@@ -105,14 +109,13 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
     const tvNode: TvNode = {
       label,
       value: valueOf(attrs),
-      focused: isFocused,
       selected: attrIsTrue(attrs, "selected"),
       disabled: attrs.enabled === "false",
       isButton: /Button/.test(className),
       isEditable: /EditText/.test(className),
       pkg: attrs.package ?? "",
     };
-    if (isFocused && !focused) focused = tvNode;
+    if (isFocused) focused.push(tvNode);
     if (isFocusable && label) focusable.push(tvNode);
   }
   return { focused, focusable };
@@ -127,24 +130,40 @@ function traitsOf(n: TvNode): string[] {
   return traits;
 }
 
-function toTvElement(n: TvNode): TvElement {
+function toTvElement(n: TvNode, focused: TvNode | undefined): TvElement {
   return {
     label: n.label || undefined,
     traits: traitsOf(n),
     value: n.value || undefined,
-    isFocused: n.focused,
+    isFocused: n === focused,
   };
 }
 
-/** Focus view of a uiautomator-schema hierarchy (a `uiautomator dump` or the android-devtools helper). */
-export function tvFocusViewFromXml(xml: string): TvDescribeResponse {
+/**
+ * Focus view of a uiautomator-schema hierarchy (a `uiautomator dump` or the
+ * android-devtools helper). The helper emits one root per window, topmost
+ * first; with the on-screen keyboard up, both the key under the D-pad cursor
+ * and the app's text field are `focused`. The first is where the D-pad acts;
+ * `imePackage` keeps the keyboard out of `bundleId`.
+ */
+export function tvFocusViewFromXml(xml: string, imePackage?: string): TvDescribeResponse {
   const { focused, focusable } = collectTvNodes(xml);
-  const pkg = focused?.pkg || focusable.find((n) => n.pkg)?.pkg;
+  const top = focused[0];
+  const pkg = [...focused, ...focusable].find((n) => n.pkg && n.pkg !== imePackage)?.pkg;
   return {
-    bundleId: pkg || undefined,
-    focused: focused ? toTvElement(focused) : null,
-    focusable: focusable.map(toTvElement),
+    bundleId: pkg || top?.pkg || undefined,
+    focused: top ? toTvElement(top, top) : null,
+    focusable: focusable.map((n) => toTvElement(n, top)),
   };
+}
+
+/** Package of the device's current input method, or undefined when unset. */
+export async function readImePackage(serial: string): Promise<string | undefined> {
+  const out = (
+    await adbShell(serial, "settings get secure default_input_method", { timeoutMs: 5_000 })
+  ).trim();
+  const pkg = out.split("/")[0];
+  return pkg && pkg !== "null" ? pkg : undefined;
 }
 
 export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {

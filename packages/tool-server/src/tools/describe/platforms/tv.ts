@@ -3,7 +3,7 @@ import type { DescribeResult } from "../contract";
 import { formatDescribeTree } from "../format-tree";
 import { resolveTvApi } from "../../tv/tv-service";
 import { describeAndroid } from "./android";
-import { tvFocusViewFromXml } from "../../../blueprints/android-tv-control";
+import { readImePackage, tvFocusViewFromXml } from "../../../blueprints/android-tv-control";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../../blueprints/android-devtools";
 import type {
   TvControlApi,
@@ -46,18 +46,22 @@ async function readAndroidTvFocus(
   registry: Registry,
   device: DeviceInfo,
   api: TvControlApi
-): Promise<TvDescribeResponse> {
+): Promise<{ res: TvDescribeResponse; viaHelper: boolean }> {
   try {
     const ref = androidDevtoolsRef(device);
     const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-    return tvFocusViewFromXml((await devtools.getHierarchy()).xml);
+    const [{ xml }, imePackage] = await Promise.all([
+      devtools.getHierarchy(),
+      readImePackage(device.id).catch(() => undefined),
+    ]);
+    return { res: tvFocusViewFromXml(xml, imePackage), viaHelper: true };
   } catch (err) {
     console.debug(
       `[describe.tv] devtools helper failed, falling back to uiautomator dump: ${
         err instanceof Error ? err.message : String(err)
       }`
     );
-    return api.describe();
+    return { res: await api.describe(), viaHelper: false };
   }
 }
 
@@ -116,10 +120,9 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   // only: on Android TV an empty focus set is steady state for react-native-tvos
   // screens, not a transition, so retrying would just burn reads
   // before the empty-focus fallback below.
-  let res =
-    device.platform === "android"
-      ? await readAndroidTvFocus(registry, device, api)
-      : await api.describe();
+  const android =
+    device.platform === "android" ? await readAndroidTvFocus(registry, device, api) : undefined;
+  let res = android ? android.res : await api.describe();
   if (device.platform !== "android") {
     for (let attempt = 1; attempt < EMPTY_RETRY_ATTEMPTS && isEmpty(res); attempt++) {
       await sleep(EMPTY_RETRY_DELAY_MS);
@@ -143,7 +146,13 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
     // skip a redundant probe. Let a capture failure propagate: describeAndroid
     // throws an actionable error (device locked / keyguard / DRM / secure
     // overlay, or an adb failure), more useful than the generic EMPTY_HINT.
-    const data = await describeAndroid(registry, device.id, undefined, true);
+    // Without a registry it reads the dump only: the helper read just failed.
+    const data = await describeAndroid(
+      android?.viaHelper ? registry : undefined,
+      device.id,
+      undefined,
+      true
+    );
     return {
       description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {
         source: data.source,

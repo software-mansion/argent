@@ -8,6 +8,13 @@ vi.mock("../src/tools/describe/platforms/android", () => ({
   describeAndroid: (...a: unknown[]) => describeAndroidMock(...a),
 }));
 
+// The Android TV helper path reads the current input method over adb.
+const adbShellMock = vi.fn(async (..._a: unknown[]) => "null\n");
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  adbShell: (...a: unknown[]) => adbShellMock(...a),
+}));
+
 import { describeTv } from "../src/tools/describe/platforms/tv";
 import type { TvControlApi, TvDescribeResponse } from "../src/blueprints/tv-control";
 
@@ -181,6 +188,25 @@ describe("describe (Android TV) — reads through the android-devtools helper", 
     expect(res.description).toContain("Focusable (2):");
   });
 
+  it("does not start the helper a second time for the empty-focus fallback", async () => {
+    const describeFn = vi.fn().mockResolvedValue(empty);
+    const helper = vi.fn(async () => {
+      throw new Error("helper APK not installable");
+    });
+    const frame = { x: 0, y: 0, width: 100, height: 50 };
+    describeAndroidMock.mockReset();
+    describeAndroidMock.mockResolvedValue({
+      tree: { role: "RCTView", frame, children: [] },
+      source: "uiautomator",
+    });
+
+    await describeTv(routedRegistry(makeApi(describeFn), helper), ANDROID_TV_DEVICE);
+
+    expect(helper).toHaveBeenCalledTimes(1);
+    expect(describeAndroidMock).toHaveBeenCalledTimes(1);
+    expect(describeAndroidMock.mock.calls[0]![0]).toBeUndefined();
+  });
+
   it("falls back to the uiautomator dump when the helper cannot start", async () => {
     const describeFn = vi.fn().mockResolvedValue(populated);
     const registry = routedRegistry(makeApi(describeFn), async () => {
@@ -191,5 +217,84 @@ describe("describe (Android TV) — reads through the android-devtools helper", 
 
     expect(describeFn).toHaveBeenCalledTimes(1);
     expect(res.description).toContain("Focused: Home");
+  });
+});
+
+// Trimmed from real android-devtools helper captures on an Android TV API 34
+// emulator; node attributes are verbatim.
+describe("describe (Android TV) — helper hierarchy captured on a device", () => {
+  const IME = "com.google.android.inputmethod.latin";
+  // TV Settings > Network & Internet > Proxy settings > Manual, keyboard up:
+  // the helper emits the IME window first, then the app window, and each keeps
+  // its own focused view.
+  const IME_UP_XML =
+    `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">` +
+    `<node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.google.android.inputmethod.latin" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="false" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][1920,1080]">` +
+    `<node index="0" text="" resource-id="com.google.android.inputmethod.latin:id/key_pos_voice" class="android.widget.FrameLayout" package="com.google.android.inputmethod.latin" content-desc="Voice input" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[928,616][992,680]" />` +
+    `<node index="0" text="" resource-id="com.google.android.inputmethod.latin:id/key_pos_0_0" class="android.widget.FrameLayout" package="com.google.android.inputmethod.latin" content-desc="q" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="true" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[564,712][646,798]" />` +
+    `<node index="1" text="" resource-id="com.google.android.inputmethod.latin:id/key_pos_0_1" class="android.widget.FrameLayout" package="com.google.android.inputmethod.latin" content-desc="w" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="true" password="false" selected="false" bounds="[643,712][722,798]" />` +
+    `</node>` +
+    `<node index="1" text="" resource-id="" class="android.widget.FrameLayout" package="com.android.tv.settings" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="false" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][1920,1080]">` +
+    `<node index="0" text="proxy.example.com" resource-id="com.android.tv.settings:id/guidedactions_item_title" class="android.widget.EditText" package="com.android.tv.settings" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="true" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[1199,291][1671,387]" />` +
+    `</node>` +
+    `</hierarchy>`;
+
+  // Launcher on a 1080x1920 display: Details / Dismiss sit past the right edge,
+  // and the helper reports them with inverted bounds.
+  const OFFSCREEN_XML =
+    `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">` +
+    `<node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.google.android.tvlauncher" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="false" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][1080,1920]">` +
+    `<node index="2" text="Details" resource-id="com.google.android.tvlauncher:id/tray_see_more" class="android.widget.Button" package="com.google.android.tvlauncher" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[1442,257][1080,313]" />` +
+    `<node index="3" text="Dismiss" resource-id="com.google.android.tvlauncher:id/tray_dismiss" class="android.widget.Button" package="com.google.android.tvlauncher" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[1606,257][1080,313]" />` +
+    `<node index="0" text="" resource-id="com.google.android.tvlauncher:id/favorite_add_app_banner" class="android.widget.LinearLayout" package="com.google.android.tvlauncher" content-desc="Add app to favorites" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="true" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[109,447][357,608]" />` +
+    `<node index="0" text="Home" resource-id="" class="android.widget.TextView" package="com.google.android.tvlauncher" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[296,46][438,87]" />` +
+    `</node>` +
+    `</hierarchy>`;
+
+  function helperRegistry(xml: string) {
+    return {
+      resolveService: vi.fn(async (urn: string) =>
+        urn.startsWith("AndroidDevtools:")
+          ? { getHierarchy: async () => ({ xml }) }
+          : makeApi(vi.fn().mockResolvedValue(empty))
+      ),
+    } as never;
+  }
+
+  it("with the keyboard up, names the app, focuses the key under the cursor and marks only it", async () => {
+    adbShellMock.mockResolvedValueOnce(`${IME}/com.android.inputmethod.latin.LatinIME\n`);
+
+    const res = await describeTv(helperRegistry(IME_UP_XML), ANDROID_TV_DEVICE);
+
+    expect(adbShellMock).toHaveBeenCalledWith(
+      ANDROID_TV_DEVICE.id,
+      "settings get secure default_input_method",
+      expect.anything()
+    );
+    expect(res.description).toBe(
+      [
+        "App: com.android.tv.settings",
+        "Focused: q",
+        "Focusable (4):",
+        "  Voice input",
+        "→ q",
+        "  w",
+        "  proxy.example.com [textfield]",
+      ].join("\n")
+    );
+  });
+
+  it("leaves out focusable views the helper reports outside the display", async () => {
+    const res = await describeTv(helperRegistry(OFFSCREEN_XML), ANDROID_TV_DEVICE);
+
+    expect(res.description).toBe(
+      [
+        "App: com.google.android.tvlauncher",
+        "Focused: Add app to favorites",
+        "Focusable (2):",
+        "→ Add app to favorites",
+        "  Home",
+      ].join("\n")
+    );
   });
 });

@@ -13,6 +13,7 @@ vi.mock("../src/utils/adb", () => ({
 import {
   androidTvControlBlueprint,
   androidTvControlRef,
+  readImePackage,
 } from "../src/blueprints/android-tv-control";
 import type { TvControlApi } from "../src/blueprints/tv-control-types";
 import { adbShell, adbExecOutBinary, getAndroidRuntimeKind } from "../src/utils/adb";
@@ -196,5 +197,19 @@ describe("android-tv-control — recycleAx is a no-op", () => {
     mockShell.mockClear();
     await expect(api.recycleAx()).resolves.toBeUndefined();
     expect(mockShell).not.toHaveBeenCalled();
+  });
+});
+
+describe("readImePackage", () => {
+  it("returns the package of the current input method", async () => {
+    mockShell.mockResolvedValueOnce(
+      "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME\n"
+    );
+    await expect(readImePackage(SERIAL)).resolves.toBe("com.google.android.inputmethod.latin");
+  });
+
+  it("returns undefined when no input method is set", async () => {
+    mockShell.mockResolvedValueOnce("null\n");
+    await expect(readImePackage(SERIAL)).resolves.toBeUndefined();
   });
 });
