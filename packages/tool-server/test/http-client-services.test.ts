@@ -3,6 +3,7 @@ import supertest from "supertest";
 import type { Response } from "supertest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { z } from "zod";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import {
   ArtifactStore,
@@ -71,13 +72,17 @@ const RESOLVE_ARGS = { anchorDir: "/proj/flows", target: "login.yaml", kind: "fl
 
 type ToolImpl = (params: unknown, options: InvokeToolOptions | undefined) => Promise<unknown>;
 
-/** Two tools: `served-tool` advertises client services, `plain-tool` does not. */
+/**
+ * `served-tool` advertises client services, `plain-tool` does not;
+ * `strict-tool` advertises them behind a schema that refuses unknown keys, and
+ * `gated-tool` behind a dependency preflight.
+ */
 function stubRegistry(impl: ToolImpl = async () => ({ ok: true })): Registry {
   return {
     getSnapshot: vi.fn(() => ({
       services: new Map(),
       namespaces: [],
-      tools: ["served-tool", "plain-tool", "gated-tool"],
+      tools: ["served-tool", "plain-tool", "strict-tool", "gated-tool"],
     })),
     getTool: vi.fn((name: string) => {
       if (name === "served-tool") {
@@ -85,6 +90,18 @@ function stubRegistry(impl: ToolImpl = async () => ({ ok: true })): Registry {
           id: "served-tool",
           description: "A stub tool that can use client services",
           inputSchema: { type: "object", properties: {} },
+          clientServices: { ops: [...ADVERT.ops] },
+          services: () => ({}),
+          execute: async () => ({ ok: true }),
+        };
+      }
+      if (name === "strict-tool") {
+        const zodSchema = z.object({ name: z.string() }).strict();
+        return {
+          id: "strict-tool",
+          description: "A stub tool with client services and a strict schema",
+          zodSchema,
+          inputSchema: zodObjectToJsonSchema(zodSchema),
           clientServices: { ops: [...ADVERT.ops] },
           services: () => ({}),
           execute: async () => ({ ok: true }),
@@ -277,6 +294,49 @@ describe("HTTP client services", () => {
     await supertest(handle.app).post("/tools/served-tool").send({}).expect(200);
     expect(seen).toBeDefined();
     expect(seen).not.toHaveProperty("clientServices");
+  });
+
+  // The parameter comes off the arguments before the tool's schema and the
+  // tool see them: neither declares it.
+  it("hands a tool without a schema its arguments without client_services", async () => {
+    let seen: unknown;
+    handle = createHttpApp(
+      stubRegistry(async (params) => {
+        seen = params;
+        return { ok: true };
+      })
+    );
+
+    await supertest(handle.app)
+      .post("/tools/served-tool")
+      .set("Accept", "application/x-ndjson")
+      .send({ name: "main", client_services: CLIENT_SERVICES })
+      .buffer(true)
+      .parse(collectText)
+      .expect(200);
+
+    expect(seen).toEqual({ name: "main" });
+  });
+
+  it("runs a tool whose strict schema does not declare client_services", async () => {
+    let seen: unknown;
+    handle = createHttpApp(
+      stubRegistry(async (params) => {
+        seen = params;
+        return { ok: true };
+      })
+    );
+
+    const res = await supertest(handle.app)
+      .post("/tools/strict-tool")
+      .set("Accept", "application/x-ndjson")
+      .send({ name: "main", client_services: CLIENT_SERVICES })
+      .buffer(true)
+      .parse(collectText)
+      .expect(200);
+
+    expect(parseLines(res.body as string)).toEqual([{ event: "result", data: { ok: true } }]);
+    expect(seen).toEqual({ name: "main" });
   });
 
   // Marked validation: the CLI's directory run fails only the flow it rejects
