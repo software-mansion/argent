@@ -8,12 +8,13 @@
  * The handler decides what leaves and enters this machine: it reads and writes
  * nothing outside the roots the client itself sent (checked on real paths
  * before any listing, read or write), serves `.yaml` names of YAML files and
- * `.png` names of PNG files only, writes a snapshot baseline only into a
- * `__baselines__/<flow>/` directory, refuses a file above the 32 MiB cap, and
- * refuses an op it did not offer. A refusal does not say where an outside path
- * leads or whether it exists. The resolution itself is the registry's
- * `canonicalFlowPath` + `classifyOnDiskSpelling`, so a `run:` target keeps its
- * kernel meaning on the machine that has the files.
+ * `.png` names of PNG files only, reads and writes snapshot baselines only in
+ * the run's own `__baselines__/<flow>/` directory beside the root flow's real
+ * file, refuses a file above the 32 MiB cap, and refuses an op it did not
+ * offer. A refusal does not say where an outside path leads or whether it
+ * exists. The resolution itself is the registry's `canonicalFlowPath` +
+ * `classifyOnDiskSpelling`, so a `run:` target keeps its kernel meaning on the
+ * machine that has the files.
  */
 
 import * as fs from "node:fs/promises";
@@ -161,8 +162,8 @@ async function readAdmitted(
 
 /**
  * `<dir>/__baselines__/<flow>/<name>.png`, absolute, in normal form, with no `..`:
- * the only file the tool-server reads or writes through this client, beside
- * the root flow's real file.
+ * the shape of the only file the tool-server reads or writes through this
+ * client. The handler also holds the path to the run's own baseline directory.
  */
 function isBaselinePath(file: string): boolean {
   const keyDir = path.dirname(file);
@@ -187,10 +188,15 @@ function notBaseline(file: string, verb: "serves" | "writes"): string {
  * Build the handler for one call, or null when there is nothing to serve:
  * no root exists on this machine, or the server advertised no op this client
  * implements. `ops` keeps the implemented order; `roots` are realpaths.
+ * `baselineDir` is the one directory read-file and write-file may reach: the
+ * run's `<real dir of the root flow>/__baselines__/<key>`, where the
+ * tool-server keys the run's baselines. Null when the run has no such
+ * directory on this client; both ops then refuse every path.
  */
 export async function createClientServicesHandler(opts: {
   roots: string[];
   advertised: ClientServiceOp[];
+  baselineDir: string | null;
 }): Promise<ClientServicesHandler | null> {
   const resolvedRoots: string[] = [];
   for (const root of opts.roots) {
@@ -266,12 +272,23 @@ export async function createClientServicesHandler(opts: {
     return { id, ok: true, ...answer };
   }
 
-  // A snapshot baseline, read as the server names it: the server built the
-  // path beside the root flow's real file, so there is nothing to resolve.
+  // The baselines of this run only: another flow's baselines, or a
+  // `__baselines__` tree anywhere else under the roots, stay out of reach.
+  function notOfThisRun(file: string): string | null {
+    if (path.dirname(file) === opts.baselineDir) return null;
+    return opts.baselineDir === null
+      ? `${file} is not a baseline of this run; this run has no baseline directory on this client`
+      : `${file} is not a baseline of this run (${opts.baselineDir}/<name>.png)`;
+  }
+
+  // A snapshot baseline of this run, read as the server names it: the path
+  // lies in the run's baseline directory, so there is nothing to resolve.
   async function readFile(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
     const file = args.path;
     if (typeof file !== "string") return refuse(id, "read-file needs a string path");
     if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "serves"));
+    const otherRun = notOfThisRun(file);
+    if (otherRun !== null) return refuse(id, otherRun);
     const resolved = await resolveForFence(file);
     if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
     // A `.png` name that links to another kind of file (a `.env`) would send it.
@@ -284,15 +301,19 @@ export async function createClientServicesHandler(opts: {
     return { id, ok: true, ...read.answer };
   }
 
-  // A new snapshot baseline. The only file the tool-server may write here, and
-  // only into a `__baselines__/<flow>/` directory under a root: the place a
-  // run with no link writes it, beside the root flow's real file.
+  // A new snapshot baseline of this run. The only file the tool-server may
+  // write here, and only into the run's baseline directory: the place a run
+  // with no link writes it, beside the root flow's real file. That file's
+  // directory exists, so mkdir makes at most `__baselines__` and the key
+  // directory.
   async function writeFile(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
     const { path: file, content } = args;
     if (typeof file !== "string" || typeof content !== "string") {
       return refuse(id, "write-file needs string path and content");
     }
     if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "writes"));
+    const otherRun = notOfThisRun(file);
+    if (otherRun !== null) return refuse(id, otherRun);
     const keyDir = path.dirname(file);
     // Fenced before the directory is created, so a symlinked `__baselines__`
     // that leads out of the roots gets no directory made there either.

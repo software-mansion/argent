@@ -41,8 +41,23 @@ afterEach(async () => {
 
 const ALL: ClientServiceOp[] = ["resolve-file", "read-file", "write-file"];
 
-async function handlerFor(roots: string[], advertised: ClientServiceOp[] = ALL) {
-  const handler = await createClientServicesHandler({ roots, advertised });
+/**
+ * A handler as the tools client builds it. By default the run's baselines live
+ * in `.argent/flows/__baselines__/login`, beside the real file of a root flow
+ * `login.yaml`; a test of the root fence names another directory.
+ */
+async function handlerFor(
+  roots: string[],
+  opts: { advertised?: ClientServiceOp[]; baselineDir?: string | null } = {}
+) {
+  const handler = await createClientServicesHandler({
+    roots,
+    advertised: opts.advertised ?? ALL,
+    baselineDir:
+      opts.baselineDir === undefined
+        ? path.join(flowsDir, "__baselines__", "login")
+        : opts.baselineDir,
+  });
   if (!handler) throw new Error("expected a handler");
   return handler;
 }
@@ -68,10 +83,9 @@ describe("createClientServicesHandler", () => {
     await fs.symlink(projectDir, linkToProject);
     // Advertised out of order, with an op this client does not implement
     // (run-script) and without one it does (read-file).
-    const handler = await handlerFor(
-      [linkToProject, path.join(tmpDir, "nope")],
-      ["write-file", "run-script", "resolve-file"]
-    );
+    const handler = await handlerFor([linkToProject, path.join(tmpDir, "nope")], {
+      advertised: ["write-file", "run-script", "resolve-file"],
+    });
     expect(handler.param).toEqual({
       ops: ["resolve-file", "write-file"],
       roots: [projectDir],
@@ -79,13 +93,24 @@ describe("createClientServicesHandler", () => {
   });
 
   it("returns null with no existing root and with no shared op", async () => {
+    const none = { baselineDir: null };
     expect(
-      await createClientServicesHandler({ roots: [path.join(tmpDir, "nope")], advertised: ALL })
+      await createClientServicesHandler({
+        roots: [path.join(tmpDir, "nope")],
+        advertised: ALL,
+        ...none,
+      })
     ).toBeNull();
     expect(
-      await createClientServicesHandler({ roots: [projectDir], advertised: ["run-script"] })
+      await createClientServicesHandler({
+        roots: [projectDir],
+        advertised: ["run-script"],
+        ...none,
+      })
     ).toBeNull();
-    expect(await createClientServicesHandler({ roots: [projectDir], advertised: [] })).toBeNull();
+    expect(
+      await createClientServicesHandler({ roots: [projectDir], advertised: [], ...none })
+    ).toBeNull();
   });
 });
 
@@ -326,7 +351,7 @@ describe("resolve-file", () => {
   });
 
   it("refuses an op it did not offer and a kind it does not know", async () => {
-    const handler = await handlerFor([projectDir], ["resolve-file"]);
+    const handler = await handlerFor([projectDir], { advertised: ["resolve-file"] });
     expect(handler.param.ops).toEqual(["resolve-file"]);
 
     expect(
@@ -473,7 +498,7 @@ describe("read-file and write-file", () => {
       await fs.symlink(secret, file);
       await expect(fs.realpath(file)).rejects.toMatchObject({ code: "ENAMETOOLONG" });
       await expect(fs.readFile(file, "utf8")).resolves.toBe("PRIVATE KEY");
-      const handler = await handlerFor([projectDir]);
+      const handler = await handlerFor([projectDir], { baselineDir: deepKey });
 
       expect(await handler.handle(readLine(file))).toEqual({
         id: "req-1",
@@ -493,7 +518,7 @@ describe("read-file and write-file", () => {
       const file = path.join(deepKey, "home.png");
       await fs.symlink(path.join(outside, "victim.png"), file);
       await fs.writeFile(path.join(outside, "victim.png"), "untouched");
-      const handler = await handlerFor([projectDir]);
+      const handler = await handlerFor([projectDir], { baselineDir: deepKey });
 
       expect(await handler.handle(writeLine(file, PNG))).toEqual({
         id: "req-1",
@@ -609,7 +634,8 @@ describe("read-file and write-file", () => {
       error: outsideError(baseline),
     });
     const written = path.join(linkedKey, "home.png");
-    expect(await handler.handle(writeLine(written, PNG))).toEqual({
+    const otherRun = await handlerFor([projectDir], { baselineDir: linkedKey });
+    expect(await otherRun.handle(writeLine(written, PNG))).toEqual({
       id: "req-1",
       ok: false,
       error: outsideError(written),
@@ -700,7 +726,7 @@ describe("read-file and write-file", () => {
     const outside = path.join(tmpDir, "outside", "__baselines__", "login", "home.png");
     await fs.mkdir(path.dirname(outside), { recursive: true });
     await fs.writeFile(outside, PNG);
-    const handler = await handlerFor([projectDir]);
+    const handler = await handlerFor([projectDir], { baselineDir: path.dirname(outside) });
 
     expect(await handler.handle(readLine(outside))).toEqual({
       id: "req-1",
@@ -721,9 +747,9 @@ describe("read-file and write-file", () => {
     await fs.mkdir(otherFlows);
     await fs.symlink(elsewhere, path.join(otherFlows, "__baselines__"));
     const throughDir = path.join(otherFlows, "__baselines__", "login", "real.png");
-    const handler = await handlerFor([projectDir]);
 
     for (const file of [baseline, throughDir]) {
+      const handler = await handlerFor([projectDir], { baselineDir: path.dirname(file) });
       const answer = await handler.handle(readLine(file));
       expect(answer).toEqual({ id: "req-1", ok: false, error: outsideError(file) });
       // Where it points is the client's business: the server only learns "outside".
@@ -983,7 +1009,11 @@ describe("read-file and write-file", () => {
     await fs.symlink(sharedFlows, path.join(linkedProject, ".argent", "flows"));
     const file = path.join(sharedFlows, "__baselines__", "login", "home.png");
 
-    const handler = await handlerFor([linkedProject, path.join(linkedProject, ".argent", "flows")]);
+    const baselineDir = path.dirname(file);
+    const handler = await handlerFor(
+      [linkedProject, path.join(linkedProject, ".argent", "flows")],
+      { baselineDir }
+    );
     expect(handler.param.roots).toEqual([linkedProject, sharedFlows]);
 
     expect(await handler.handle(writeLine(file, PNG))).toEqual({
@@ -996,7 +1026,7 @@ describe("read-file and write-file", () => {
 
     // The flows root is what admits it: the project alone does not reach there.
     await fs.rm(path.join(sharedFlows, "__baselines__"), { recursive: true });
-    const projectOnly = await handlerFor([linkedProject]);
+    const projectOnly = await handlerFor([linkedProject], { baselineDir });
     expect(await projectOnly.handle(writeLine(file, PNG))).toEqual({
       id: "req-1",
       ok: false,
@@ -1086,10 +1116,65 @@ describe("read-file and write-file", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("refuses a baseline of another flow or in another directory, and makes nothing there", async () => {
+    const otherFlow = path.join(flowsDir, "__baselines__", "other", "home.png");
+    await fs.mkdir(path.dirname(otherFlow), { recursive: true });
+    await fs.writeFile(otherFlow, "theirs");
+    const handler = await handlerFor([projectDir]);
+
+    for (const file of [
+      otherFlow,
+      // The run's own key, under another directory.
+      path.join(projectDir, "__baselines__", "login", "home.png"),
+      path.join(projectDir, "node_modules", "pkg", "__baselines__", "login", "home.png"),
+      path.join(projectDir, ".git", "refs", "heads", "__baselines__", "main", "home.png"),
+    ]) {
+      const refusal = {
+        id: "req-1",
+        ok: false,
+        error: `${file} is not a baseline of this run (${keyDir}/<name>.png)`,
+      };
+      expect(await handler.handle(readLine(file))).toEqual(refusal);
+      expect(await handler.handle(writeLine(file, PNG))).toEqual(refusal);
+    }
+    expect(await fs.readFile(otherFlow, "utf8")).toBe("theirs");
+    expect(await fs.readdir(path.join(flowsDir, "__baselines__"))).toEqual(["other"]);
+    for (const dir of ["__baselines__", "node_modules", ".git"]) {
+      expect(await exists(path.join(projectDir, dir))).toBe(false);
+    }
+  });
+
+  it("makes no directory but the run's own key directory", async () => {
+    const before = await fs.readdir(projectDir, { recursive: true });
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(writeLine(baseline, PNG))).toMatchObject({ ok: true });
+
+    const made = [path.dirname(keyDir), keyDir, baseline].map((p) => path.relative(projectDir, p));
+    expect((await fs.readdir(projectDir, { recursive: true })).sort()).toEqual(
+      [...before, ...made].sort()
+    );
+  });
+
+  it("refuses every baseline when the run has no baseline directory on this client", async () => {
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.writeFile(baseline, PNG);
+    const handler = await handlerFor([projectDir], { baselineDir: null });
+    const refusal = {
+      id: "req-1",
+      ok: false,
+      error: `${baseline} is not a baseline of this run; this run has no baseline directory on this client`,
+    };
+
+    expect(await handler.handle(readLine(baseline))).toEqual(refusal);
+    expect(await handler.handle(writeLine(baseline, Buffer.from("new")))).toEqual(refusal);
+    expect(await fs.readFile(baseline)).toEqual(PNG);
+  });
+
   it("refuses read-file and write-file when the server did not advertise them", async () => {
     await fs.mkdir(keyDir, { recursive: true });
     await fs.writeFile(baseline, PNG);
-    const handler = await handlerFor([projectDir], ["resolve-file"]);
+    const handler = await handlerFor([projectDir], { advertised: ["resolve-file"] });
     expect(handler.param.ops).toEqual(["resolve-file"]);
 
     expect(await handler.handle(readLine(baseline))).toEqual({

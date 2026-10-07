@@ -178,7 +178,7 @@ The runner applies the same rules to the answer as to a file on its own disk: th
 
 ### `read-file`
 
-The tool-server sends `read-file` at each `snapshot:` step that compares, to get the baseline. The tool-server builds the path of the baseline beside the real file of the root flow on the client: `<dir>/__baselines__/<flow>/<key>.png`. `<flow>` is the name of that real file without `.yaml`. When that name is not a valid flow name, `<flow>` is the name of the flow. `<key>` is the baseline key of the snapshot. See [Snapshots](/docs/reference/flow-yaml#snapshots). A `snapshot:` step in a fragment uses the baselines of the root flow.
+The tool-server sends `read-file` at each `snapshot:` step that compares, to get the baseline. The tool-server builds the path of the baseline beside the real file of the root flow on the client: `<dir>/__baselines__/<flow>/<key>.png`. `<flow>` is the name of that real file without `.yaml`. When that name is not a valid flow name, `<flow>` is the name of the flow. `<key>` is the baseline key of the snapshot. See [Snapshots](/docs/reference/flow-yaml#snapshots). A `snapshot:` step in a fragment uses the baselines of the root flow. The client serves only the baselines in this directory.
 
 Request `args`:
 
@@ -208,7 +208,7 @@ Request `args`:
 | `path`    | Absolute client path of the baseline file, of the form `<dir>/__baselines__/<flow>/<key>.png` |
 | `content` | The new baseline as base64                                                                    |
 
-The content travels in the request line on the NDJSON stream, not in an answer. The client creates `__baselines__/<flow>/` when the directory does not exist. See [Client policy](#client-policy) for the paths that the client writes.
+The content travels in the request line on the NDJSON stream, not in an answer. The client writes only into the `__baselines__/<flow>/` directory of the root flow. The client creates `__baselines__/` and `__baselines__/<flow>/` beside the real file of the root flow when they do not exist. The client creates no other directory. See [Client policy](#client-policy) for the paths that the client writes.
 
 Answer:
 
@@ -247,7 +247,7 @@ The client enforces these rules. The tool-server checks only the shape of each a
 2. The client refuses a path when it cannot find the real location of the path. For example, the real location can be longer than the path limit of the system, a link on the path can be unreadable, or the client cannot search a directory on the path. This refusal has the same text as the refusal of a path outside the roots. The text names both causes.
 3. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
 4. `resolve-file` serves `.yaml` names only. The client refuses a `.yaml` name that links to a file that is not a YAML file (`.yaml` or `.yml`).
-5. `read-file` and `write-file` take only an absolute path of the form `<dir>/__baselines__/<flow>/<key>.png`, in normal form: no `..`, no `.` and no double `/`. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path.
+5. `read-file` and `write-file` take only an absolute path of the form `<dir>/__baselines__/<flow>/<key>.png`, in normal form: no `..`, no `.` and no double `/`. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path. The path must also be in the baseline directory of the run: `__baselines__/<flow>/` beside the real file of the root flow, with the `<flow>` that the tool-server uses. The client refuses a baseline of another flow and a `__baselines__` directory in another place. When the root flow is not a YAML file on the client, the client refuses every path.
 6. The client refuses a `.png` name that links to a file that is not a PNG file (`.png`).
 7. The client offers `write-file` only for a call that sets `updateBaselines: true`. A run that compares baselines cannot change them.
 8. Before `write-file` creates `__baselines__/<flow>/`, the client checks the real location of that directory against the roots. Before it writes the file, the client checks the real location of the file again. The client follows a link to a file that does not exist to check where it leads, and then refuses it.

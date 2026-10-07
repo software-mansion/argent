@@ -321,9 +321,11 @@ export function errorBodyMessage(body: {
  * symlink serves the fragments next to its target. Every root is served by
  * its real location; one that does not exist is dropped. A `name` that is not
  * a flow name (`../../x`) names no root: the tool-server refuses it anyway,
- * and it must not widen what this client serves first. `write-file` is
- * offered only for a call that updates baselines, so a plain run cannot
- * change a committed baseline.
+ * and it must not widen what this client serves first. `read-file` and
+ * `write-file` reach only the one baseline directory of this run, the one the
+ * tool-server derives from the root flow's real file; with no such file, they
+ * reach nothing. `write-file` is offered only for a call that updates
+ * baselines, so a plain run cannot change a committed baseline.
  */
 async function clientServicesHandlerFor(
   advert: ClientServicesAdvert,
@@ -340,6 +342,7 @@ async function clientServicesHandlerFor(
       : typeof name === "string" && FLOW_NAME_PATTERN.test(name)
         ? path.join(flowsDir, `${name}.yaml`)
         : undefined;
+  let baselineDir: string | null = null;
   if (rootFlow !== undefined) {
     roots.push(path.dirname(rootFlow));
     // Only the real directory of a YAML flow file, the rule resolve-file
@@ -353,12 +356,26 @@ async function clientServicesHandlerFor(
         (st) => st.isFile(),
         () => false
       ));
-    if (isFlowFile) roots.push(path.dirname(real));
+    if (isFlowFile) {
+      roots.push(path.dirname(real));
+      // Where the tool-server keys this run's baselines: beside the root
+      // flow's real file (the canonical that resolve-file answers for it),
+      // under that file's stem, or under the flow name when the stem is not
+      // a flow name (a `.yml` file, a name with a space). The flow name is
+      // `name`, or the basename of `flow_path`.
+      const flowName = typeof flow_path === "string" ? path.basename(flow_path, ".yaml") : name;
+      const stem = path.basename(real, ".yaml");
+      const key = FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
+      if (typeof key === "string" && FLOW_NAME_PATTERN.test(key)) {
+        baselineDir = path.join(path.dirname(real), "__baselines__", key);
+      }
+    }
   }
   const updatesBaselines = (args as Record<string, unknown>).updateBaselines === true;
   return createClientServicesHandler({
     roots,
     advertised: advert.ops.filter((op) => op !== "write-file" || updatesBaselines),
+    baselineDir,
   });
 }
 

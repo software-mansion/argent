@@ -287,6 +287,109 @@ describe("callTool client services", () => {
     ).toEqual([projectDir]);
   });
 
+  describe("the baseline directory of the run", () => {
+    /** The answer the client posts to one read-file request for `file` in a call with `args`. */
+    async function readFileAnswer(args: Record<string, unknown>, file: string): Promise<unknown> {
+      vi.stubEnv("ARGENT_TOOLS_URL", url);
+      listing[0] = {
+        name: "flow-execute",
+        description: "",
+        inputSchema: {},
+        clientServices: { ops: ["resolve-file", "read-file", "write-file"] },
+      };
+      requests.length = 0;
+      armAnswer();
+      streamOneRequest({ id: "req-b", op: "read-file", args: { path: file } });
+      await createToolsClient().callTool("flow-execute", args);
+      return answerRequests()[0]?.body;
+    }
+    const missing = { id: "req-b", ok: true, exists: false };
+    const notOfRun = (file: string, dir: string) => ({
+      id: "req-b",
+      ok: false,
+      error: `${file} is not a baseline of this run (${dir}/<name>.png)`,
+    });
+
+    let vault: string;
+    beforeEach(async () => {
+      vault = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "argent-vault-baselines-")));
+    });
+    afterEach(async () => {
+      await fs.rm(vault, { recursive: true, force: true });
+    });
+
+    it("serves the baselines of the root flow only, by name and by path alike", async () => {
+      const own = path.join(flowsDir, "__baselines__", "root");
+      const other = path.join(flowsDir, "__baselines__", "frag", "home.png");
+      const byName = { project_root: projectDir, name: "root" };
+      const byPath = { project_root: projectDir, flow_path: path.join(flowsDir, "root.yaml") };
+
+      for (const args of [byName, byPath]) {
+        expect(await readFileAnswer(args, path.join(own, "home.png"))).toEqual(missing);
+        expect(await readFileAnswer(args, other)).toEqual(notOfRun(other, own));
+      }
+    });
+
+    it("keys the baselines of a flow_path outside the project beside that file", async () => {
+      await fs.writeFile(path.join(vault, "x.yaml"), "steps: []\n");
+      const own = path.join(vault, "__baselines__", "x");
+      const args = { project_root: projectDir, flow_path: path.join(vault, "x.yaml") };
+      const project = path.join(flowsDir, "__baselines__", "x", "home.png");
+
+      expect(await readFileAnswer(args, path.join(own, "home.png"))).toEqual(missing);
+      expect(await readFileAnswer(args, project)).toEqual(notOfRun(project, own));
+    });
+
+    it("keys the baselines of a symlinked root flow by its real file", async () => {
+      await fs.writeFile(path.join(vault, "real-name.yaml"), "steps: []\n");
+      await fs.symlink(path.join(vault, "real-name.yaml"), path.join(flowsDir, "linked.yaml"));
+      const own = path.join(vault, "__baselines__", "real-name");
+      const beside = path.join(flowsDir, "__baselines__", "linked", "home.png");
+
+      for (const args of [
+        { project_root: projectDir, name: "linked" },
+        { project_root: projectDir, flow_path: path.join(flowsDir, "linked.yaml") },
+      ]) {
+        expect(await readFileAnswer(args, path.join(own, "home.png"))).toEqual(missing);
+        expect(await readFileAnswer(args, beside)).toEqual(notOfRun(beside, own));
+      }
+    });
+
+    it("keys by the flow name when the real file's stem is not a flow name", async () => {
+      // A `.yml` or `.YAML` file keeps its extension in the stem, and a space
+      // is not in a flow name.
+      for (const [link, real] of [
+        ["alias", "real.yml"],
+        ["upper", "Upper.YAML"],
+        ["spaced", "my flow.yaml"],
+      ] as const) {
+        await fs.writeFile(path.join(vault, real), "steps: []\n");
+        await fs.symlink(path.join(vault, real), path.join(flowsDir, `${link}.yaml`));
+        const own = path.join(vault, "__baselines__", link);
+        const beside = path.join(flowsDir, "__baselines__", link, "home.png");
+        for (const args of [
+          { project_root: projectDir, name: link },
+          { project_root: projectDir, flow_path: path.join(flowsDir, `${link}.yaml`) },
+        ]) {
+          expect(await readFileAnswer(args, path.join(own, "home.png"))).toEqual(missing);
+          expect(await readFileAnswer(args, beside)).toEqual(notOfRun(beside, own));
+        }
+      }
+    });
+
+    it("serves no baseline when the root flow is not a YAML file", async () => {
+      await fs.writeFile(path.join(vault, "notes.txt"), "not a flow\n");
+      await fs.symlink(path.join(vault, "notes.txt"), path.join(flowsDir, "text.yaml"));
+      const file = path.join(flowsDir, "__baselines__", "text", "home.png");
+
+      expect(await readFileAnswer({ project_root: projectDir, name: "text" }, file)).toEqual({
+        id: "req-b",
+        ok: false,
+        error: `${file} is not a baseline of this run; this run has no baseline directory on this client`,
+      });
+    });
+  });
+
   it("sends no client_services when the listing has no clientServices", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     listing = [{ name: "flow-execute", description: "", inputSchema: {} }];
