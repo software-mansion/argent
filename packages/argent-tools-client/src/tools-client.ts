@@ -182,17 +182,21 @@ function errorText(err: unknown): string {
 
 /**
  * The `error` of the tool-server's own refusal of an answer, or undefined when
- * the reply is not one. Its answer route sends, each with a JSON `error`: 400
- * for a malformed answer, 404 for one after its timeout or after the call
- * ended, 409 for a second one, 413 for one above the size cap (which it turns
- * into a refusal of the request). The route was reached and the request is
- * settled there, so the run goes on and its report says what became of it.
+ * the reply is not one. Its answer route sends, each as a JSON object with
+ * `error` as its only field: 400 for a malformed answer, 404 for one after its
+ * timeout or after the call ended, 409 for a second one, 413 for one above the
+ * size cap (which it turns into a refusal of the request). The route was
+ * reached and the request is settled there, so the run goes on and its report
+ * says what became of it. A proxy's JSON error page carries more fields
+ * (a status, a path, a time), so it is not taken for one.
  */
 function answerRouteRefusal(status: number, text: string): string | undefined {
   if (![400, 404, 409, 413].includes(status)) return undefined;
   try {
-    const body = JSON.parse(text) as { error?: unknown } | null;
-    return typeof body?.error === "string" ? body.error : undefined;
+    const body = JSON.parse(text) as unknown;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
+    const { error, ...rest } = body as { error?: unknown };
+    return typeof error === "string" && Object.keys(rest).length === 0 ? error : undefined;
   } catch {
     return undefined;
   }

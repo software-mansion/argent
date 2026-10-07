@@ -922,6 +922,53 @@ describe("callTool client services", () => {
     );
   });
 
+  it("posts a refusal after a proxy's 413 that carries a JSON error page", async () => {
+    // Some proxies answer in JSON too; only the tool-server's own body, with
+    // `error` as its only field, settles a request on the tool-server.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerReplies = [
+      {
+        status: 413,
+        body: {
+          timestamp: "2026-10-07T12:00:00.000+00:00",
+          status: 413,
+          error: "Payload Too Large",
+          path: "/invocations/inv-1/client-responses",
+        },
+      },
+    ];
+    streamOneRequest({ ...FRAG_REQUEST, args: { ...FRAG_REQUEST.args, anchorDir: flowsDir } }, 2);
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
+
+    expect(result).toEqual({ data: { ran: true }, note: "done" });
+    expect(answerRequests().map((r) => r.body)).toEqual([
+      expect.objectContaining({ id: FRAG_REQUEST.id, ok: true }),
+      {
+        id: FRAG_REQUEST.id,
+        ok: false,
+        error: expect.stringContaining("client_max_body_size 48m"),
+      },
+    ]);
+  });
+
+  it("fails the call at once when a proxy answers the route with a JSON error page", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerReply = { status: 404, body: { status: 404, error: "Not Found", path: "/invocations" } };
+    const stream = streamUntilHangUp();
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+
+    const { err, ms } = await failureOf(
+      callTool("flow-execute", { project_root: projectDir, name: "root" })
+    );
+
+    expect(ms).toBeLessThan(1_000);
+    expect(err).toMatchObject({ errorCode: "FLOW_CLIENT_NOT_ANSWERING", errorKind: "network" });
+    expect((err as Error).message).toContain("client-responses answered 404 Not Found.");
+    await vi.waitFor(() => expect(stream.hungUp()).toBe(true));
+  });
+
   it("fails the call at once when the answer POST loses its connection", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     answerDrops = true;
