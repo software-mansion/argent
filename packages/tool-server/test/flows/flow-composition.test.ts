@@ -1819,6 +1819,54 @@ describe("flow composition (run:)", () => {
       expect(err).toBe(timeout);
     });
 
+    it("asks the client once per fragment of a leading run: chain that three walks read", async () => {
+      // The prerequisite guard, the device scan (no device given) and the run
+      // itself each walk root -> a.yaml -> b.yaml. One answer per file serves
+      // all three, so they also cannot see two versions of a file edited
+      // mid-run.
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({
+          executionPrerequisite: "logged in",
+          steps: [{ kind: "run", flow: "a.yaml" }],
+        }),
+        "utf8"
+      );
+      const { services, calls } = fakeClientServices({
+        "/client/.argent/flows/a.yaml": serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "run", flow: "b.yaml" }],
+        }),
+        "/client/.argent/flows/b.yaml": fragmentYaml("end of the chain"),
+      });
+      const registry = mockRegistry();
+      (registry.invokeTool as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) =>
+        id === "list-devices"
+          ? { devices: [{ platform: "ios", udid: DEVICE, state: "Booted" }] }
+          : { ok: true }
+      );
+
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          {
+            name: "main",
+            project_root: tmpDir,
+            flow_file: uploadedPath,
+            prerequisiteAcknowledged: true,
+          },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: uploadedFlowFile(),
+            clientServices: services,
+          }
+        )
+      );
+
+      expect(result.steps.map((s) => s.message).filter(Boolean)).toEqual(["end of the chain"]);
+      expect(calls.map((c) => c.args.target)).toEqual(["main.yaml", "a.yaml", "b.yaml"]);
+    });
+
     it("runs an uploaded flow_path with no run: step without asking the client anything", async () => {
       // A self-contained upload must not depend on the channel: a proxy that
       // holds the stream would otherwise fail every run before step 1.

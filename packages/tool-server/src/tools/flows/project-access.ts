@@ -100,13 +100,32 @@ function isSpelling(value: unknown): value is OnDiskSpelling {
  * resolution code the host implementation runs. The client decides what it
  * serves (its roots, the file kinds, the size cap); this side only checks that
  * an answer has the shape the op promises.
+ *
+ * One instance serves one call, and it asks once per reference: the
+ * prerequisite guard, the device scan and the run each walk a leading `run:`
+ * chain, and one answer serves all three, so they cannot see two versions of a
+ * file edited mid-run. A rejection is kept as well: a refusal, a timeout or an
+ * abort is the same for every walk, as the broker already makes a timeout.
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;
+  private readonly answers = new Map<string, Promise<ResolvedFlowFile>>();
 
   constructor(private readonly services: ClientServices) {}
 
-  async resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
+  resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
+    // Keyed by the pair as spelled, not by a joined path: the client resolves
+    // `target` against `anchorDir` itself (symlinks, casing).
+    const key = `${anchorDir}\0${target}`;
+    let answer = this.answers.get(key);
+    if (!answer) {
+      answer = this.request(anchorDir, target);
+      this.answers.set(key, answer);
+    }
+    return answer;
+  }
+
+  private async request(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
     const answer = await this.services.request(
       "resolve-file",
       { anchorDir, target, kind: "flow" } satisfies ResolveFileArgs,
