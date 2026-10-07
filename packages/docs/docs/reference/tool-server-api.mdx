@@ -208,7 +208,7 @@ Request `args`:
 | `path`    | Absolute client path of the baseline file, of the form `<dir>/__baselines__/<flow>/<key>.png` |
 | `content` | The new baseline as base64                                                                    |
 
-The content travels in the request line on the NDJSON stream, not in an answer. The client writes only into the `__baselines__/<flow>/` directory of the root flow. The client creates `__baselines__/` and `__baselines__/<flow>/` beside the real file of the root flow when they do not exist. The client creates no other directory. See [Client policy](#client-policy) for the paths that the client writes.
+The content travels in the request line on the NDJSON stream, not in an answer. The client writes only into the `__baselines__/<flow>/` directory of the root flow. The client creates `__baselines__/` and `__baselines__/<flow>/` beside the real file of the root flow when they do not exist. The client creates no other directory. The client writes the new baseline to a temporary file in the same directory, and then renames that file over the baseline. When the client stops during the write, the old baseline stays complete. The new baseline keeps the mode of the file that it replaces. When the baseline is a link to a file under the roots, the client replaces that file and keeps the link. See [Client policy](#client-policy) for the paths that the client writes.
 
 Answer:
 

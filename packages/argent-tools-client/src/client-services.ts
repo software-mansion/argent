@@ -17,6 +17,7 @@
  * machine that has the files.
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -190,6 +191,25 @@ function isBaselinePath(file: string): boolean {
   );
 }
 
+/**
+ * Replace `target` in one step: write a temporary file beside it, give that
+ * file the mode of the one it replaces, and rename it over `target`. A client
+ * killed mid-write leaves the old file whole, and at worst a stray dotfile.
+ * The temporary file is removed when a step fails. Its name does not grow
+ * with the baseline's, so a name near the length limit still gets one.
+ */
+async function replaceFile(target: string, bytes: Buffer, mode: number | undefined): Promise<void> {
+  const temp = path.join(path.dirname(target), `.baseline-${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(temp, bytes, { flag: "wx" });
+    if (mode !== undefined) await fs.chmod(temp, mode & 0o777);
+    await fs.rename(temp, target);
+  } catch (err) {
+    await fs.rm(temp, { force: true });
+    throw err;
+  }
+}
+
 function notBaseline(file: string, verb: "serves" | "writes"): string {
   return (
     `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
@@ -358,7 +378,9 @@ export async function createClientServicesHandler(opts: {
     const existing = await fs.stat(file).catch(() => null);
     if (existing !== null && !existing.isFile()) return refuse(id, `${file} is not a regular file`);
     const replaced = existing !== null;
-    await fs.writeFile(file, bytes);
+    // Renamed over the real file, not over `file`: a rename over a baseline
+    // that is a link would replace the link instead of the file it names.
+    await replaceFile(resolved!, bytes, existing?.mode);
     logRequest("write-file", file);
     const answer: WriteFileAnswer = { written: file, replaced };
     return { id, ok: true, ...answer };

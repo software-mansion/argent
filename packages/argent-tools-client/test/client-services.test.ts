@@ -1129,6 +1129,53 @@ describe("read-file and write-file", () => {
     expect(await fs.readFile(baseline)).toEqual(PNG);
   });
 
+  it("updates a baseline that links to a file in the roots, and keeps the link", async () => {
+    const real = path.join(projectDir, "store", "real.png");
+    await fs.mkdir(path.dirname(real));
+    await fs.writeFile(real, "old");
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(real, baseline);
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
+      id: "req-1",
+      ok: true,
+      written: baseline,
+      replaced: true,
+    });
+    expect(await fs.readlink(baseline)).toBe(real);
+    expect(await fs.readFile(real)).toEqual(PNG);
+    // No temporary file is left beside the real file or the link.
+    expect(await fs.readdir(path.dirname(real))).toEqual(["real.png"]);
+    expect(await fs.readdir(keyDir)).toEqual([path.basename(baseline)]);
+  });
+
+  it("keeps the mode of the baseline it replaces and leaves no temporary file", async () => {
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.writeFile(baseline, "old");
+    await fs.chmod(baseline, 0o640);
+    const fresh = path.join(keyDir, "fresh.png");
+    const reference = path.join(tmpDir, "reference");
+    await fs.writeFile(reference, "");
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(writeLine(baseline, PNG))).toMatchObject({
+      ok: true,
+      replaced: true,
+    });
+    expect(await handler.handle(writeLine(fresh, PNG))).toMatchObject({
+      ok: true,
+      replaced: false,
+    });
+
+    expect((await fs.stat(baseline)).mode & 0o777).toBe(0o640);
+    // A new baseline gets the mode that any new file gets.
+    expect((await fs.stat(fresh)).mode & 0o777).toBe((await fs.stat(reference)).mode & 0o777);
+    expect((await fs.readdir(keyDir)).sort()).toEqual(
+      [path.basename(baseline), "fresh.png"].sort()
+    );
+  });
+
   it("refuses content over 32 MiB and writes content of exactly 32 MiB", async () => {
     const handler = await handlerFor([projectDir]);
 
