@@ -2462,10 +2462,10 @@ async function execRunStep(
   }
 
   // The root flow's load-time gates, applied to the fragment at the only
-  // moment its steps exist. Charged to the run: step, so the fragment is
-  // refused whole rather than part-executed up to the offending step.
-  const retiredArg = findRetiredToolArg(state.registry, fragment.steps);
-  if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
+  // moment its steps exist, in the root's order: a fragment that cannot run
+  // over the link at all says so before any key it would have to fix. Charged
+  // to the run: step, so the fragment is refused whole rather than
+  // part-executed up to the offending step.
   if (state.project.mode === "client") {
     try {
       assertUploadSelfContained(state.registry, fragment, state.ctx?.clientServices?.ops, {
@@ -2476,6 +2476,8 @@ async function execRunStep(
       return fail(errMsg(err));
     }
   }
+  const retiredArg = findRetiredToolArg(state.registry, fragment.steps);
+  if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
 
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory

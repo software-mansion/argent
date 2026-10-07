@@ -1929,6 +1929,93 @@ describe("flow composition (run:)", () => {
       expect(calls.map((c) => c.op)).toEqual(["resolve-file", "resolve-file"]);
     });
 
+    describe("a served fragment's load-time gates, in the root flow's order", () => {
+      // Every tool id reports this schema (see mockRegistry), so a recorded
+      // swipe's `settle` reads as the retired key it is.
+      const retiredSettle = {
+        settle: { not: {}, description: "Retired: renamed to `momentum`." },
+      };
+      const settleSwipe: FlowStep = {
+        kind: "tool",
+        name: "gesture-swipe",
+        args: { fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2, settle: true },
+      };
+      const script: FlowStep = { kind: "script", path: "seed.mjs" };
+
+      function runWithSettleSchema(
+        services: NonNullable<ToolContext["clientServices"]>
+      ): Promise<FlowRunResult | { notice: string }> {
+        return createRunFlowTool(mockRegistry(retiredSettle)).execute(
+          {},
+          { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: uploadedFlowFile(),
+            clientServices: services,
+          }
+        );
+      }
+
+      it.each([
+        ["before", [settleSwipe, script]],
+        ["after", [script, settleSwipe]],
+      ])(
+        "reports a fragment that is not self-contained as such when a retired key sits %s its script step",
+        async (_where, steps) => {
+          // The root is refused as not self-contained before its retired key
+          // is looked at, so a fragment is too: naming the retired key alone
+          // would send the author to fix it, only to learn on the next run
+          // that the fragment cannot run over a link at all.
+          const { services } = fakeClientServices({
+            "/client/.argent/flows/login.yaml": serializeFlow({ executionPrerequisite: "", steps }),
+          });
+
+          const result = asRun(await runWithSettleSchema(services));
+
+          expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+            "echo:pass",
+            "run:error",
+            "echo:skip",
+          ]);
+          const reason = result.steps[1]?.reason ?? "";
+          expect(reason).toContain('The fragment "login.yaml" is not self-contained');
+          expect(reason).toContain("script: { path: seed.mjs }");
+          expect(reason).not.toContain("retired");
+        }
+      );
+
+      it("refuses the same steps as an uploaded root the same way", async () => {
+        await fs.writeFile(
+          uploadedPath,
+          serializeFlow({ executionPrerequisite: "", steps: [settleSwipe, script] }),
+          "utf8"
+        );
+        const { services } = fakeClientServices({});
+
+        const err = await runWithSettleSchema(services).catch((e: unknown) => e as Error);
+
+        expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_script_step");
+        expect((err as Error).message).toContain("This flow is not self-contained");
+        expect((err as Error).message).not.toContain("retired");
+      });
+
+      it("still refuses a self-contained served fragment's retired key", async () => {
+        const { services } = fakeClientServices({
+          "/client/.argent/flows/login.yaml": serializeFlow({
+            executionPrerequisite: "",
+            steps: [settleSwipe],
+          }),
+        });
+
+        const result = asRun(await runWithSettleSchema(services));
+
+        expect(result.steps[1]).toMatchObject({ kind: "run", status: "error" });
+        expect(result.steps[1]?.reason).toContain(
+          'fragment "login.yaml" step 1 as written (echo included) passes gesture-swipe\'s retired `settle` key'
+        );
+      });
+    });
+
     it("anchors run: targets beside the root flow's real file when the root is a symlink on the client", async () => {
       // Co-located runs realpath the root before anchoring; the client's
       // spelling is a symlink here, so the runner asks the client where the
