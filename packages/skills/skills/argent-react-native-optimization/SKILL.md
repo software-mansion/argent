@@ -6,7 +6,7 @@ description: Optimizes a React Native app by profiling first to find real bottle
 ## Rules
 
 - Do not apply shotgun optimizations. Measure first, define what "good enough" looks like (target metric + threshold), fix the top offender, re-measure honestly.
-- **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
+- **Quick scan** — `react-profiler-renders` for a live table of mounted instances and their render cost. Identifies hot components instantly.
 - **Deep measure** — load `argent-react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
 - **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
 - **Verify correctness** - before fixing, recollect information from steps above and make a logical conclusion whether the approach is worth undertaking.

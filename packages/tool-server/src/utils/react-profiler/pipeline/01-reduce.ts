@@ -60,8 +60,11 @@ export function reduce(
     componentFirstMountOnly.delete(commit.componentName);
 
     const reason = deriveReason(cd, commit.hookTypes);
-    const duration = commit.selfDuration;
-    const ts = commit.timestamp;
+    // Durations read back from a session dump can be null or absent — an absent
+    // one makes these reduces NaN, which then poisons mean/totalRenderMs all the
+    // way into the report. Same guard as every other dump-read duration.
+    const duration = commit.selfDuration ?? 0;
+    const ts = commit.timestamp ?? 0;
 
     let acc = components.get(commit.componentName);
     if (acc === undefined) {
