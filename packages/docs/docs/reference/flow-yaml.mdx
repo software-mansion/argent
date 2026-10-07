@@ -448,7 +448,9 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 The tool-server asks the client for each `run:` fragment during the run. The exchange is documented in the [Tool-server API reference](/docs/reference/tool-server-api). The client serves only files under the project root, under its `.argent/flows` directory, under the directory of an explicit flow path, and beside the real file of a flow that is a symlink. The CLI must keep running until the run ends, because the tool-server stops a run when the CLI disconnects. A flow with a `run:` step also needs these conditions:
 
 - The CLI answers each request within 30 s. A paused or sleeping CLI fails the run.
-- Each reverse proxy between the CLI and the tool-server passes the response stream through without buffering.
+- Each reverse proxy between the CLI and the tool-server passes the response stream through without compression or buffering.
+- Each reverse proxy forwards `POST /invocations/<invocation>/client-responses` to the tool-server while the run continues. The CLI sends its answers on this route.
+- Each reverse proxy keeps the `Accept` header of the call.
 
 The other rows of the table still need a run without a link. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs.
 
