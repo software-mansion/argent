@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import {
   HostProjectAccess,
@@ -291,6 +291,22 @@ describe("runSnapshot baselines", () => {
     await fs.mkdir(baselinePath(), { recursive: true });
 
     await expect(runSnapshot(env, opts())).rejects.toThrow(/EISDIR/);
+  });
+
+  it("names the baseline file when it does not decode", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../src/tools/screenshot-diff/screenshot-diff")
+    >("../../src/tools/screenshot-diff/screenshot-diff");
+    vi.mocked(diffPngFiles).mockImplementationOnce(actual.diffPngFiles);
+    await writeRealPng(h.shotPath, 390, 844);
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await fs.writeFile(baselinePath(), "version https://git-lfs.github.com/spec/v1\n");
+
+    const err = await runSnapshot(env, opts()).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(FailureError);
+    const prefix = `Could not read PNG at ${baselinePath()}: `;
+    expect((err as Error).message.slice(0, prefix.length)).toBe(prefix);
   });
 
   it("diffs against an existing baseline", async () => {
@@ -1073,6 +1089,30 @@ describe("runSnapshot with a client project", () => {
     // flowsDir holds os.tmpdir() too, so this also covers the scratch dirs.
     const entries = await fs.readdir(tmpDir, { recursive: true });
     expect(entries.filter((e) => e.split(path.sep).includes("__baselines__"))).toEqual([]);
+  });
+
+  it("names the client's baseline, not its server copy, when it does not decode", async () => {
+    // The real differ: the decode error and its text are what is under test.
+    const actual = await vi.importActual<
+      typeof import("../../src/tools/screenshot-diff/screenshot-diff")
+    >("../../src/tools/screenshot-diff/screenshot-diff");
+    vi.mocked(diffPngFiles).mockImplementationOnce(actual.diffPngFiles);
+    await writeRealPng(h.shotPath, 390, 844);
+    // A Git LFS pointer checked out in place of the image.
+    const project = clientProject(Buffer.from("version https://git-lfs.github.com/spec/v1\n"));
+
+    const err = await runSnapshot(env, clientOpts(project)).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(FailureError);
+    const prefix = `Could not read PNG at ${clientBaseline}: `;
+    expect((err as Error).message.slice(0, prefix.length)).toBe(prefix);
+    expect((err as Error).message).not.toContain("argent-flow-baseline-");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: "screenshot_diff_decode_failed",
+    });
+    // The copy it no longer names is gone.
+    await expect(baselineCopyDirs()).resolves.toEqual([]);
   });
 
   it("propagates a client read failure", async () => {

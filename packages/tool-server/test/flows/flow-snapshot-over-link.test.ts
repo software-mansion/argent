@@ -387,6 +387,38 @@ describe("snapshot: steps over a link", () => {
     }
   );
 
+  it.each([
+    ["empty", () => Buffer.alloc(0)],
+    ["a truncated PNG", () => captureBytes.subarray(0, 64)],
+    [
+      "a Git LFS pointer",
+      () =>
+        Buffer.from(
+          `version https://git-lfs.github.com/spec/v1\noid sha256:${"0".repeat(64)}\nsize 1819922\n`
+        ),
+    ],
+  ])("names the client's baseline when it is %s", async (_what, bytes) => {
+    handle = createHttpApp(httpRegistry(stepRegistry()));
+    const base = await listen(handle.app);
+    const client = fakeClient({});
+    client.disk.set(ROOT_FLOW, Buffer.from(FLOW_TEXT));
+    client.disk.set(BASELINE, bytes());
+
+    const { requests, terminal } = await runOverLink(base, client, {
+      ops: ["resolve-file", "read-file"],
+    });
+
+    expect(requests.map((r) => r.op)).toEqual(["resolve-file", "read-file"]);
+    const data = terminal.data as { ok: boolean; steps: { status: string; reason: string }[] };
+    expect(data.ok).toBe(false);
+    expect(data.steps).toHaveLength(1);
+    expect(data.steps[0]!.status).toBe("error");
+    // The client's file, not the server's scratch copy of it, which is gone.
+    const prefix = `Could not read PNG at ${BASELINE}: `;
+    expect(data.steps[0]!.reason.slice(0, prefix.length)).toBe(prefix);
+    expect(data.steps[0]!.reason).not.toContain("argent-flow-baseline-");
+  });
+
   it("reports the step as an error with the client's text when the client refuses the read", async () => {
     handle = createHttpApp(httpRegistry(stepRegistry()));
     const base = await listen(handle.app);

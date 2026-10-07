@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
+import { FailureError, getFailureSignal } from "@argent/registry";
 import type { DescribeFrame } from "../describe/contract";
 import {
   settleTree,
@@ -119,6 +120,18 @@ async function cleanupDiffDir(dir: string, keep?: string): Promise<void> {
   } catch {
     // best-effort cleanup
   }
+}
+
+/**
+ * The differ names a PNG it cannot decode by its path on this host. For a
+ * client baseline that path is the scratch copy, which is gone once the step
+ * ends, so the error names the client's file instead and keeps the differ's
+ * failure signal. Any other error passes through as it is.
+ */
+function namingClientBaseline(err: unknown, copy: string, clientPath: string): unknown {
+  const signal = getFailureSignal(err);
+  if (!(err instanceof Error) || signal === null || !err.message.includes(copy)) return err;
+  return new FailureError(err.message.split(copy).join(clientPath), signal);
 }
 
 /**
@@ -426,6 +439,12 @@ export async function runSnapshot(
         // Crop dimensions track the element — size drift must hard-fail below
         // instead of being resampled away like a full-screen scale difference.
         ...(cropFrame !== undefined && { normalizeSizes: false }),
+      }).catch((err: unknown) => {
+        // A client baseline that is not a PNG (empty, truncated, a Git LFS
+        // pointer): name the client's file, not the copy the finally deletes.
+        throw opts.clientFlowPath === undefined
+          ? err
+          : namingClientBaseline(err, localBaseline, baselinePath);
       });
 
       // The differ reports a dimension bail as mismatchPercentage 0, which the
