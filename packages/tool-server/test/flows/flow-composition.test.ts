@@ -2143,9 +2143,12 @@ describe("flow composition (run:)", () => {
 
     it("fails before step 1 when the client refuses to resolve the root flow's real location", async () => {
       // Anchoring beside the symlink instead would run a same-named fragment
-      // there, so the refusal is the run's verdict, not a fallback.
+      // there, so the refusal is the run's verdict, not a fallback. The reason
+      // is the one the argent client gives for a root it does serve: a .yaml
+      // name that links to a file that is not YAML.
       const refusal = new FailureError(
-        'the client refused the resolve-file request for "main.yaml": outside every root',
+        'the client refused the resolve-file request for "main.yaml": ' +
+          "main.yaml links to a file that is not a YAML file",
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "client_request_refused",
@@ -2169,12 +2172,36 @@ describe("flow composition (run:)", () => {
 
       const err = await runUploaded(services).catch((e: unknown) => e as Error);
 
-      expect(getFailureSignal(err)?.failure_stage).toBe("client_root_refused");
-      expect((err as Error).message).toContain(
-        'did not resolve the flow file "/client/.argent/flows/main.yaml"'
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "client_root_refused",
+        error_kind: "validation",
+      });
+      // The client's own reason, and no advice about where to keep the file:
+      // this one already sits under the project root.
+      expect((err as Error).message).toBe(
+        'The client did not resolve the flow file "/client/.argent/flows/main.yaml" ' +
+          '(the client refused the resolve-file request for "main.yaml": main.yaml links to ' +
+          "a file that is not a YAML file). The run needs the file's real location before " +
+          "step 1, because its run: targets resolve beside it."
       );
       // Nothing beside the symlink was ever asked for.
       expect(calls.filter((c) => c.args.target === "login.yaml")).toEqual([]);
+    });
+
+    it("fails before step 1 when the client answers the root flow's request with an invalid payload", async () => {
+      const { services } = fakeClientServices({});
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+        canonical: "/client/.argent/flows/main.yaml",
+        exists: true,
+      }));
+
+      const err = await runUploaded(services).catch((e: unknown) => e as Error);
+
+      expect(getFailureSignal(err)?.failure_stage).toBe("client_root_refused");
+      expect((err as Error).message).toMatch(
+        /^The client did not resolve the flow file "\/client\/\.argent\/flows\/main\.yaml" \(the client answered the resolve-file request for "main\.yaml" with an invalid payload\)\. The run needs the file's real location before step 1, because its run: targets resolve beside it\.$/
+      );
     });
 
     it("asks the client nothing when the uploaded flow has no run: step", async () => {

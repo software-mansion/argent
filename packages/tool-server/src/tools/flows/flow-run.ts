@@ -1739,13 +1739,18 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  * may be a symlink, and a `run:` target resolves beside the real file, so the
  * runner asks the client to resolve the root the way it resolves a fragment.
  * Asked only when the flow composes at all: a flow with no `run:` step never
- * reads the anchor. A client that declines (the real file lies outside the
- * roots it serves) fails the run before step 1: anchoring beside the symlink
- * instead would silently run a same-named fragment there, which is exactly
- * what a co-located run never does. A channel that does not answer fails the
- * run as any other request would. A client that hung up cancelled the run, so
- * the spelled path stands in for the anchor nothing will read: the run goes on
- * to report every step as aborted, as after a hang-up at any later request.
+ * reads the anchor.
+ *
+ * A refusal fails the run before step 1, with the client's own reason:
+ * anchoring beside the symlink instead would silently run a same-named
+ * fragment there, which is exactly what a co-located run never does. The
+ * argent client serves the root's own directory and its real one, so what it
+ * refuses is the file itself: a `.yaml` name that links to a file that is not
+ * YAML, which the same flow run co-located does not mind. An answer of the
+ * wrong shape fails the same way. A channel that does not answer fails the run
+ * as any other request would. A client that hung up cancelled the run, so the
+ * spelled path stands in for the anchor nothing will read: the run goes on to
+ * report every step as aborted, as after a hang-up at any later request.
  */
 async function clientRootCanonical(
   project: ProjectAccess,
@@ -1765,8 +1770,8 @@ async function clientRootCanonical(
     if (!isClientRequestRefusal(err)) throw err;
     throw new FailureError(
       `The client did not resolve the flow file "${clientRootPath}" (${errMsg(err)}). ` +
-        `Its run: targets resolve beside the file's real location, so the run cannot ` +
-        `anchor them. Keep the flow file, or a symlink to it, under the project root.`,
+        `The run needs the file's real location before step 1, because its run: targets ` +
+        `resolve beside it.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "client_root_refused",
