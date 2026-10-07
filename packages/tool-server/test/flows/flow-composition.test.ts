@@ -10,6 +10,7 @@ import {
   FLOW_NAME_PATTERN,
   getFailureSignal,
   type ClientServiceOp,
+  type OnDiskSpelling,
   type Registry,
   type ToolContext,
 } from "@argent/registry";
@@ -129,6 +130,8 @@ function fakeClientServices(
     ops?: ClientServiceOp[];
     /** Client paths that are symlinks, mapped to where they really live. */
     realpaths?: Record<string, string>;
+    /** How the client finds a spelled path's basename in its directory, when not as written. */
+    spellings?: Record<string, OnDiskSpelling>;
   } = {}
 ): {
   services: NonNullable<ToolContext["clientServices"]>;
@@ -143,11 +146,12 @@ function fakeClientServices(
       if (op === "resolve-file") {
         const spelled = path.posix.join(String(args.anchorDir), String(args.target));
         const canonical = opts.realpaths?.[spelled] ?? spelled;
+        const spelling = opts.spellings?.[spelled] ?? { state: "listed" };
         const text = files[canonical];
-        if (text === undefined) return { canonical, spelling: { state: "listed" }, exists: false };
+        if (text === undefined) return { canonical, spelling, exists: false };
         return {
           canonical,
-          spelling: { state: "listed" },
+          spelling,
           exists: true,
           size: Buffer.byteLength(text),
           mtimeMs: 1,
@@ -2202,6 +2206,138 @@ describe("flow composition (run:)", () => {
       expect((err as Error).message).toMatch(
         /^The client did not resolve the flow file "\/client\/\.argent\/flows\/main\.yaml" \(the client answered the resolve-file request for "main\.yaml" with an invalid payload\)\. The run needs the file's real location before step 1, because its run: targets resolve beside it\.$/
       );
+    });
+
+    describe("a mis-cased root flow", () => {
+      // The client's listing has root.yaml; the caller spelled it Root. A
+      // co-located run refuses that spelling before it reads the file, since
+      // the name keys the report and __baselines__/. A composing linked run
+      // learns the same from the client's answer for the root, and must
+      // refuse it the same way.
+      const composing = serializeFlow({ executionPrerequisite: "", steps: rootSteps });
+      const caseFolded: OnDiskSpelling = {
+        state: "case_folded",
+        actual: "root.yaml",
+        addressable: true,
+      };
+
+      async function rejection(run: Promise<unknown>): Promise<Error> {
+        const err = await run.then(
+          (result) => {
+            throw new Error(`flow ran instead of being refused: ${JSON.stringify(result)}`);
+          },
+          (e: unknown) => e as Error
+        );
+        expect(err).toBeInstanceOf(FailureError);
+        return err;
+      }
+
+      function linkedClient(rootClientPath: string) {
+        return fakeClientServices(
+          {
+            [rootClientPath]: composing,
+            [path.join(path.dirname(rootClientPath), "login.yaml")]: fragmentYaml("composed"),
+          },
+          { spellings: { [rootClientPath]: caseFolded } }
+        );
+      }
+
+      it("refuses a linked name with the co-located run's error", async () => {
+        const flowsDir = path.join(tmpDir, ".argent", "flows");
+        await writeFlow("root", { executionPrerequisite: "", steps: rootSteps });
+        const colocated = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "Root", project_root: tmpDir, device: DEVICE },
+            { artifacts: new ArtifactStore() }
+          )
+        );
+        await fs.writeFile(uploadedPath, composing, "utf8");
+        const { services } = linkedClient(path.join(flowsDir, "Root.yaml"));
+
+        const linked = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "Root", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: uploadedFlowFile(path.join(flowsDir, "Root.yaml")),
+              clientServices: services,
+            }
+          )
+        );
+
+        expect(getFailureSignal(colocated)?.failure_stage).toBe("flow_name_casing");
+        expect(linked.message).toBe(colocated.message);
+        expect(getFailureSignal(linked)).toEqual(getFailureSignal(colocated));
+      });
+
+      it("refuses a linked flow_path with the co-located run's error", async () => {
+        const rootPath = path.join(tmpDir, "flows", "Root.yaml");
+        await fs.mkdir(path.dirname(rootPath), { recursive: true });
+        await fs.writeFile(path.join(tmpDir, "flows", "root.yaml"), composing, "utf8");
+        const colocated = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { flow_path: rootPath, project_root: tmpDir, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: {
+                flow_path: {
+                  clientPath: rootPath,
+                  presentOnHost: true,
+                  viaUpload: false,
+                  statVerified: true,
+                },
+              },
+            }
+          )
+        );
+        await fs.writeFile(uploadedPath, composing, "utf8");
+        const { services } = linkedClient(rootPath);
+
+        const linked = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { flow_path: uploadedPath, project_root: tmpDir, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: {
+                flow_path: { clientPath: rootPath, presentOnHost: false, viaUpload: true },
+              },
+              clientServices: services,
+            }
+          )
+        );
+
+        expect(getFailureSignal(colocated)?.failure_stage).toBe("flow_path_casing");
+        expect(linked.message).toBe(colocated.message);
+        expect(getFailureSignal(linked)).toEqual(getFailureSignal(colocated));
+      });
+
+      it("runs a linked root whose spelling is the one in the client's listing", async () => {
+        const rootPath = "/client/.argent/flows/root.yaml";
+        await fs.writeFile(uploadedPath, composing, "utf8");
+        const { services } = fakeClientServices({
+          [rootPath]: composing,
+          "/client/.argent/flows/login.yaml": fragmentYaml("composed"),
+        });
+
+        const result = asRun(
+          await createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "root", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: uploadedFlowFile(rootPath),
+              clientServices: services,
+            }
+          )
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.flow).toBe("root");
+      });
     });
 
     it("asks the client nothing when the uploaded flow has no run: step", async () => {
