@@ -207,7 +207,13 @@ export async function createClientServicesHandler(opts: {
   if (ops.length === 0) return null;
 
   const param: ClientServicesParam = { ops, roots };
-  const outsideRoots = `outside every root this client serves (${roots.join(", ")})`;
+  // One text for a path out of the roots and a path whose real location the
+  // fence cannot find: a separate answer for the second would tell the
+  // tool-server about paths out of the roots, such as whether the client can
+  // search a directory there.
+  const outsideRoots =
+    `outside every root this client serves (${roots.join(", ")}), or the client cannot ` +
+    `find its real location (for example, through a directory that it cannot search)`;
 
   async function resolveFile(
     id: string,

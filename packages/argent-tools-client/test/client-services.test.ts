@@ -418,7 +418,8 @@ describe("read-file and write-file", () => {
     fileLine("write-file", { path: file, content: bytes.toString("base64") });
 
   const outsideError = (file: string, roots = [projectDir]) =>
-    `${file} is outside every root this client serves (${roots.join(", ")})`;
+    `${file} is outside every root this client serves (${roots.join(", ")}), or the client ` +
+    `cannot find its real location (for example, through a directory that it cannot search)`;
   const notBaselineError = (file: string, verb = "writes") =>
     `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
     `this client ${verb} baselines only`;
@@ -618,6 +619,34 @@ describe("read-file and write-file", () => {
       ok: false,
       error: expect.stringContaining("outside every root"),
     });
+  });
+
+  it("refuses a path in a directory it cannot search with words that name that cause", async () => {
+    // Root searches a mode-000 directory anyway.
+    if (process.getuid?.() === 0) return;
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.writeFile(baseline, PNG);
+    await fs.mkdir(path.join(flowsDir, "locked"));
+    await fs.writeFile(path.join(flowsDir, "locked", "x.yaml"), "steps: []\n");
+    await fs.chmod(keyDir, 0o000);
+    await fs.chmod(path.join(flowsDir, "locked"), 0o000);
+    const handler = await handlerFor([projectDir]);
+
+    try {
+      expect(await handler.handle(readLine(baseline))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: outsideError(baseline),
+      });
+      expect(await handler.handle(resolveLine(flowsDir, "locked/x.yaml"))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: outsideError("locked/x.yaml"),
+      });
+    } finally {
+      await fs.chmod(keyDir, 0o755);
+      await fs.chmod(path.join(flowsDir, "locked"), 0o755);
+    }
   });
 
   it("answers exists:false for a missing baseline", async () => {
