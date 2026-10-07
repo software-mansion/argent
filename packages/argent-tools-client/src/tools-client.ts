@@ -405,8 +405,11 @@ export function errorBodyMessage(body: {
  * still reach its own fragments, and the directory the root flow file REALLY
  * lives in: a `run:` target resolves beside the real file, as it does on one
  * computer, so a root flow that is a symlink serves the fragments next to its
- * target. Every root is served by its real location; one that does not exist
- * is dropped.
+ * target. A root flow saved under `<P>/.argent/flows/`, by its spelling or by
+ * its real path, also serves the project `<P>` it belongs to: the CLI sends its
+ * working directory as `project_root`, and the flow's fragments in its own
+ * project must not depend on where the shell stands. Every root is served by
+ * its real location; one that does not exist is dropped.
  */
 async function clientServicesHandlerFor(
   advert: ClientServicesAdvert,
@@ -426,7 +429,22 @@ async function clientServicesHandlerFor(
   const roots = [project_root, flowsDir, path.dirname(rootFlow)];
   const real = await realpath(rootFlow).catch(() => null);
   if (real !== null) roots.push(path.dirname(real));
+  for (const file of real === null ? [rootFlow] : [rootFlow, real]) {
+    const project = savedFlowProject(file);
+    if (project !== null) roots.push(project);
+  }
   return createClientServicesHandler({ roots, rootFlow, advertised: advert.ops });
+}
+
+/** `<P>` for a file under `<P>/.argent/flows/`, the innermost such `<P>`. */
+function savedFlowProject(file: string): string | null {
+  const parts = file.split(path.sep);
+  for (let i = parts.length - 3; i >= 0; i--) {
+    if (parts[i] === ".argent" && parts[i + 1] === "flows") {
+      return parts.slice(0, i).join(path.sep) || path.sep;
+    }
+  }
+  return null;
 }
 
 /**

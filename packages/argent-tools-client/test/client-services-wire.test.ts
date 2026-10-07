@@ -387,6 +387,74 @@ describe("callTool client services", () => {
     expect(invokeRequest().body).toMatchObject({ client_services: { ops: ["resolve-file"] } });
   });
 
+  it("serves a fragment of the flow's own project when the CLI runs from a subdirectory", async () => {
+    // The CLI sends its working directory as project_root.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const repo = path.join(projectDir, "repo");
+    const repoFlows = path.join(repo, ".argent", "flows");
+    await fs.mkdir(repoFlows, { recursive: true });
+    await fs.mkdir(path.join(repo, "shared"));
+    await fs.mkdir(path.join(repo, "apps", "mobile"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoFlows, "root.yaml"),
+      "steps:\n  - run: ../../shared/frag.yaml\n"
+    );
+    await fs.writeFile(path.join(repo, "shared", "frag.yaml"), "steps:\n  - echo: hi\n");
+    // As the runner asks: the root where it is spelled, then the fragment
+    // beside the root's canonical path.
+    onInvoke = async (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      for (const [id, anchorDir, target] of [
+        ["req-root", repoFlows, "root.yaml"],
+        ["req-frag", repoFlows, "../../shared/frag.yaml"],
+      ]) {
+        const args = { anchorDir, target, kind: "flow" };
+        res.write(
+          `${JSON.stringify({ event: "client-request", invocation: "inv-1", id, op: "resolve-file", args })}\n`
+        );
+        await nextAnswer;
+        armAnswer();
+      }
+      res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
+    };
+    const { callTool } = createToolsClient();
+
+    await callTool("flow-execute", {
+      project_root: path.join(repo, "apps", "mobile"),
+      flow_path: path.join(repoFlows, "root.yaml"),
+    });
+
+    expect(answerRequests().map((r) => r.body)).toEqual([
+      expect.objectContaining({ id: "req-root", ok: true, exists: true }),
+      expect.objectContaining({
+        id: "req-frag",
+        ok: true,
+        exists: true,
+        canonical: path.join(repo, "shared", "frag.yaml"),
+      }),
+    ]);
+  });
+
+  it("adds the project of a root flow whose real file is saved in another project", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const repo = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "argent-other-repo-")));
+    const repoFlows = path.join(repo, ".argent", "flows");
+    await fs.mkdir(repoFlows, { recursive: true });
+    await fs.writeFile(path.join(repoFlows, "root.yaml"), COMPOSING);
+    await fs.symlink(path.join(repoFlows, "root.yaml"), path.join(projectDir, "linked.yaml"));
+    const { callTool } = createToolsClient();
+
+    await callTool("flow-execute", {
+      project_root: projectDir,
+      flow_path: path.join(projectDir, "linked.yaml"),
+    });
+
+    expect(
+      (invokeRequest().body as { client_services: { roots: string[] } }).client_services.roots
+    ).toEqual([projectDir, repo]);
+    await fs.rm(repo, { recursive: true, force: true });
+  });
+
   it("sends no client_services when the listing has no clientServices", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     listing = [{ name: "flow-execute", description: "", inputSchema: {} }];
