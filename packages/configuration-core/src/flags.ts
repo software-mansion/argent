@@ -24,6 +24,25 @@ export interface FlagDefinition {
   // Opt-OUT flag: on until explicitly disabled, so `argent disable <name>` persists
   // an explicit `false` instead of unsetting. Only `isFeatureEnabled` applies it.
   readonly defaultEnabled?: boolean;
+  // Platforms the underlying feature exists on. Omit when it works everywhere.
+  // Listing them lets `argent enable` and `argent flags` say so, instead of
+  // reporting success for a flag that cannot take effect on this host.
+  //
+  // Reads stay platform-blind on purpose: a flag committed to a project by a
+  // teammate on a supported host must not behave differently here, so this
+  // affects what the CLI *says*, never what `isFlagEnabled` answers.
+  readonly platforms?: readonly NodeJS.Platform[];
+}
+
+/**
+ * Whether a flag's feature exists on a platform. A flag that lists no platforms
+ * works everywhere.
+ */
+export function flagSupportsPlatform(
+  def: FlagDefinition,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  return def.platforms === undefined || def.platforms.includes(platform);
 }
 
 // Adding an entry here is the only change needed for `argent enable <name>` to
@@ -41,6 +60,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "argent-lens",
     description:
       "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
+    // The Lens window and `argent lens` drive Terminal/iTerm and the simulator
+    // stream through macOS-only paths, so the tools are not registered at all
+    // elsewhere. Must stay in step with the platform gate in the tool-server's
+    // setup-registry, which a test pins.
+    platforms: ["darwin"],
   },
   {
     name: "artifacts-list-endpoint",
@@ -60,7 +84,9 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   {
     name: "microinteractions",
     description:
-      "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
+      "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, and never affects whether the underlying action succeeds. Off by default.",
+    // window-shake.ts is inert off-darwin (it drives System Events via AppleScript).
+    platforms: ["darwin"],
   },
   {
     name: "video-watermark",
