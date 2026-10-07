@@ -7,6 +7,7 @@ import {
   FLOW_NAME_PATTERN,
   describeParamIssues,
   type ClientRequestLine,
+  type ClientResponseBody,
   type ClientServicesAdvert,
 } from "@argent/registry";
 
@@ -123,10 +124,64 @@ interface ClientServicesLink {
 }
 
 /**
- * Answer one request line and post the answer. Never rejects: a failed post is
- * one stderr line, and the server times the request out on its side. A line
- * without a string id or invocation names no answer to post, so it is
- * dropped. The post gives up when the server would have stopped waiting.
+ * Post one answer body. Never rejects: a post that fails or gets an error
+ * status is one stderr line. Resolves with the response, or with null when no
+ * response came. The post gives up when the server would have stopped waiting.
+ */
+async function postAnswer(
+  link: ClientServicesLink,
+  invocation: string,
+  body: ClientResponseBody | Promise<ClientResponseBody>,
+  describe: string
+): Promise<Response | null> {
+  try {
+    const res = await fetch(link.answerUrl(invocation), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...link.headers },
+      body: JSON.stringify(await body),
+      signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
+    });
+    // Drain so the connection is released; the body itself is not needed.
+    await res.text().catch(() => undefined);
+    if (!res.ok) {
+      process.stderr.write(`[client-services] ${describe}: ${res.status} ${res.statusText}\n`);
+    }
+    return res;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[client-services] ${describe}: ${message}\n`);
+    return null;
+  }
+}
+
+/**
+ * Why an answer that got `res` did not reach the waiting step. A 413 comes
+ * from a proxy with a request-body limit: an answer to `read-file` carries
+ * the whole baseline, up to the tool-server's own 48 MB body limit.
+ */
+function undeliveredReason(res: Response): string {
+  const status = `${res.status} ${res.statusText}`.trim();
+  const reason = `the answer did not reach the tool-server (${status})`;
+  if (res.status !== 413) return reason;
+  return (
+    `${reason}. A proxy between the client and the tool-server limits the size of a ` +
+    `request body. The proxy must accept a body of up to 48 MB on ` +
+    `POST /invocations/<invocation>/client-responses, for example ` +
+    `client_max_body_size 48m in nginx`
+  );
+}
+
+/**
+ * Answer one request line and post the answer. Never rejects. A line without
+ * a string id or invocation names no answer to post, so it is dropped.
+ *
+ * The tool-server itself answers 404 (no request waits for this id) and 409
+ * (the id already has an answer). Any other error status, for example a
+ * proxy's 413 for a large baseline, means that the answer did not reach the
+ * waiting step. The client then posts a short refusal for the same id, so the
+ * step fails at once and names the cause instead of timing out. When the
+ * refusal fails too, it is one more stderr line; the server times the request
+ * out on its side.
  */
 async function answerClientRequest(
   link: ClientServicesLink,
@@ -137,24 +192,16 @@ async function answerClientRequest(
     process.stderr.write(`[client-services] ignored a request line without a string id\n`);
     return;
   }
-  const describe = `answer to ${typeof op === "string" ? op : "an unknown op"} request ${id} failed`;
-  try {
-    const body = await link.handler.handle(msg);
-    const res = await fetch(link.answerUrl(invocation), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...link.headers },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
-    });
-    // Drain so the connection is released; the body itself is not needed.
-    await res.text().catch(() => undefined);
-    if (!res.ok) {
-      process.stderr.write(`[client-services] ${describe}: ${res.status} ${res.statusText}\n`);
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[client-services] ${describe}: ${message}\n`);
-  }
+  const request = `${typeof op === "string" ? op : "an unknown op"} request ${id}`;
+  const res = await postAnswer(
+    link,
+    invocation,
+    link.handler.handle(msg),
+    `answer to ${request} failed`
+  );
+  if (res === null || res.ok || res.status === 404 || res.status === 409) return;
+  const refusal: ClientResponseBody = { id, ok: false, error: undeliveredReason(res) };
+  await postAnswer(link, invocation, refusal, `refusal of ${request} failed`);
 }
 
 /**

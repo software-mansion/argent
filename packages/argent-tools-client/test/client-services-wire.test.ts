@@ -41,8 +41,8 @@ let projectDir: string;
 let flowsDir: string;
 /** Per test: how POST /tools/flow-execute answers, given the parsed body. */
 let onInvoke: (body: unknown, res: ServerResponse) => void | Promise<void>;
-/** Per test: the status POST /invocations/:id/client-responses answers with. */
-let answerStatus: number;
+/** Per test: the statuses of successive answer POSTs; 200 once the list is used up. */
+let answerStatuses: number[];
 /** Per test: the answer route reads the POST and never answers it. */
 let answerHangs: boolean;
 /** Resolves once per posted answer, so the invoke stub can wait for it. */
@@ -69,7 +69,7 @@ function armAnswer(): void {
 
 beforeEach(async () => {
   requests = [];
-  answerStatus = 200;
+  answerStatuses = [];
   answerHangs = false;
   listing = [
     { name: "flow-execute", description: "", inputSchema: {}, clientServices: ADVERT },
@@ -106,8 +106,9 @@ beforeEach(async () => {
     }
     if (req.method === "POST" && /^\/invocations\/[^/]+\/client-responses$/.test(req.url ?? "")) {
       if (answerHangs) return;
-      res.writeHead(answerStatus, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(answerStatus === 200 ? { accepted: true } : { error: "nope" }));
+      const status = answerStatuses.shift() ?? 200;
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(status === 200 ? { accepted: true } : { error: "nope" }));
       answerPosted();
       return;
     }
@@ -404,7 +405,7 @@ describe("callTool client services", () => {
 
   it("logs a failed answer POST to stderr and still resolves with the result line", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
-    answerStatus = 500;
+    answerStatuses = [500];
     streamOneRequest({
       id: "req-3",
       op: "resolve-file",
@@ -419,6 +420,105 @@ describe("callTool client services", () => {
     const lines = write.mock.calls.map((c) => String(c[0]));
     expect(lines).toEqual([
       "[client-services] answer to resolve-file request req-3 failed: 500 Internal Server Error\n",
+    ]);
+  });
+
+  it("posts a refusal for the same id when a proxy refuses the answer with 413", async () => {
+    // A proxy with a request-body limit refuses an answer that carries a large
+    // baseline. The tool-server never sees that answer, so the client tells it
+    // why, and the waiting step fails at once instead of after 30 s.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerStatuses = [413];
+    streamOneRequest({
+      id: "req-10",
+      op: "resolve-file",
+      args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+    });
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { callTool } = createToolsClient();
+
+    const result = await callTool("flow-execute", { project_root: projectDir });
+
+    expect(result.data).toEqual({ ran: true });
+    const [answer, refusal] = answerRequests();
+    expect(answer!.body).toMatchObject({ id: "req-10", ok: true, exists: true });
+    expect(refusal!.url).toBe("/invocations/inv-1/client-responses");
+    expect(refusal!.body).toEqual({
+      id: "req-10",
+      ok: false,
+      error:
+        "the answer did not reach the tool-server (413 Payload Too Large). A proxy between " +
+        "the client and the tool-server limits the size of a request body. The proxy must " +
+        "accept a body of up to 48 MB on POST /invocations/<invocation>/client-responses, " +
+        "for example client_max_body_size 48m in nginx",
+    });
+    expect(answerRequests()).toHaveLength(2);
+    expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+      "[client-services] answer to resolve-file request req-10 failed: 413 Payload Too Large\n",
+    ]);
+  });
+
+  it("posts a refusal that names any other error status of the answer POST", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerStatuses = [502];
+    streamOneRequest({
+      id: "req-11",
+      op: "resolve-file",
+      args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+    });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { callTool } = createToolsClient();
+
+    await callTool("flow-execute", { project_root: projectDir });
+
+    expect(answerRequests().map((r) => r.body)).toEqual([
+      expect.objectContaining({ id: "req-11", ok: true }),
+      {
+        id: "req-11",
+        ok: false,
+        error: "the answer did not reach the tool-server (502 Bad Gateway)",
+      },
+    ]);
+  });
+
+  it.each([404, 409])("posts no refusal when the tool-server itself answers %i", async (status) => {
+    // 404 (no request waits for the id) and 409 (the id already has an
+    // answer) come from the tool-server: a refusal would change nothing.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerStatuses = [status];
+    streamOneRequest({
+      id: "req-12",
+      op: "resolve-file",
+      args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+    });
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { callTool } = createToolsClient();
+
+    const result = await callTool("flow-execute", { project_root: projectDir });
+
+    expect(result.data).toEqual({ ran: true });
+    expect(answerRequests()).toHaveLength(1);
+    expect(write.mock.calls).toHaveLength(1);
+  });
+
+  it("logs a failed refusal to stderr and posts nothing more", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerStatuses = [503, 500, 500];
+    streamOneRequest({
+      id: "req-13",
+      op: "resolve-file",
+      args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+    });
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { callTool } = createToolsClient();
+
+    const result = await callTool("flow-execute", { project_root: projectDir });
+
+    expect(result.data).toEqual({ ran: true });
+    expect(answerRequests().map((r) => (r.body as { ok: boolean }).ok)).toEqual([true, false]);
+    expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+      "[client-services] answer to resolve-file request req-13 failed: 503 Service Unavailable\n",
+      "[client-services] refusal of resolve-file request req-13 failed: 500 Internal Server Error\n",
     ]);
   });
 

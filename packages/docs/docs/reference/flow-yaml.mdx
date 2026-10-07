@@ -452,6 +452,7 @@ The tool-server asks the client for each `run:` fragment and each snapshot basel
 
 - The CLI answers each request within 30 s. A paused or sleeping CLI fails the run.
 - Each reverse proxy between the CLI and the tool-server passes the response stream through without buffering.
+- Each reverse proxy between the CLI and the tool-server accepts a request body of up to 48 MB. The answer of the CLI to a request for a baseline carries the baseline. When a proxy refuses the answer, the `snapshot:` step reports `error`. The reason names the HTTP status.
 
 The `script:` and `tool:` rows of the table still need a run without a link. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs. The tool-server rejects a `snapshot:` step that the client cannot serve at the same points.
 
