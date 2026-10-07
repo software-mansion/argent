@@ -6,6 +6,21 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { flow } from "../src/flow.js";
 
+// A local read that never settles, as on an unresponsive network mount: only
+// readFile, only a file named hang.yaml.
+const hang = vi.hoisted(() => ({ reads: [] as string[] }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = ((file: unknown, ...rest: unknown[]) => {
+    if (String(file).endsWith("hang.yaml")) {
+      hang.reads.push(String(file));
+      return new Promise(() => {});
+    }
+    return (actual.readFile as (...args: unknown[]) => unknown)(file, ...rest);
+  }) as typeof actual.readFile;
+  return { ...actual, readFile, default: { ...actual, readFile } };
+});
+
 // `argent flow run` over a link with the REAL tools client: a stub tool-server
 // on ARGENT_TOOLS_URL streams client-request lines, and the client answers them
 // from the project on disk.
@@ -44,7 +59,17 @@ function line(payload: unknown): string {
   return `${JSON.stringify(payload)}\n`;
 }
 
+/** Rejects when `promise` is still pending after `ms`. */
+function settlesWithin<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 beforeEach(async () => {
+  hang.reads = [];
   projectDir = await fsp.realpath(await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-services-")));
   flowsDir = path.join(projectDir, ".argent", "flows");
   await fsp.mkdir(flowsDir, { recursive: true });
@@ -149,5 +174,42 @@ describe("argent flow run over a link: client-services diagnostics", () => {
     await expect(flow(["run", "root"], { paths: {} as never })).rejects.toThrow("process.exit:0");
 
     expect(stderr).toEqual(["[client-services] ignored a request line without a string id"]);
+  });
+});
+
+describe("argent flow run over a link: a local read that never finishes", () => {
+  it("exits once the tool-server reports the run, without waiting for the read", async () => {
+    await fsp.writeFile(path.join(flowsDir, "hang.yaml"), "steps:\n  - echo: never\n");
+    onInvoke = async (res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(
+        line({
+          event: "client-request",
+          invocation: "inv-1",
+          id: "req-1",
+          op: "resolve-file",
+          args: { anchorDir: flowsDir, target: "hang.yaml", kind: "flow" },
+        })
+      );
+      while (hang.reads.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+      // The tool-server's own timeout fails the run: step, and the run ends.
+      res.end(
+        line({
+          event: "result",
+          data: {
+            ...REPORT,
+            ok: false,
+            passed: 0,
+            errored: 1,
+            steps: [{ index: 0, kind: "run", status: "error", flow: "hang.yaml" }],
+          },
+        })
+      );
+    };
+
+    await expect(
+      settlesWithin(flow(["run", "root"], { paths: {} as never }), 3_000)
+    ).rejects.toThrow("process.exit:1");
+    expect(hang.reads).toEqual([path.join(flowsDir, "hang.yaml")]);
   });
 });

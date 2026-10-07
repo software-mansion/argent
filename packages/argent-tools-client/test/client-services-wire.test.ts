@@ -7,6 +7,31 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { redirectHomeTo } from "./helpers/home-redirect.js";
 
+// The client's give-up time for a request's local read, short where a test
+// waits it out.
+const timing = vi.hoisted(() => ({ fileOpTimeoutMs: 30_000 }));
+vi.mock("@argent/registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/registry")>()),
+  get CLIENT_FILE_OP_TIMEOUT_MS() {
+    return timing.fileOpTimeoutMs;
+  },
+}));
+
+// A local read that never settles, as on an unresponsive network mount: only
+// readFile, only a file named hang.yaml.
+const hang = vi.hoisted(() => ({ reads: [] as string[] }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = ((file: unknown, ...rest: unknown[]) => {
+    if (String(file).endsWith("hang.yaml")) {
+      hang.reads.push(String(file));
+      return new Promise(() => {});
+    }
+    return (actual.readFile as (...args: unknown[]) => unknown)(file, ...rest);
+  }) as typeof actual.readFile;
+  return { ...actual, readFile, default: { ...actual, readFile } };
+});
+
 // link-config.ts captures ~/.argent/link.json at module load; an isolated HOME
 // keeps a developer's real link out of the "routing is local" case.
 let createToolsClient: typeof import("../src/tools-client.js").createToolsClient;
@@ -69,6 +94,8 @@ function armAnswer(): void {
 
 beforeEach(async () => {
   requests = [];
+  timing.fileOpTimeoutMs = 30_000;
+  hang.reads = [];
   answerStatus = 200;
   answerHangs = false;
   listing = [
@@ -86,6 +113,7 @@ beforeEach(async () => {
   await fs.mkdir(flowsDir, { recursive: true });
   await fs.writeFile(path.join(flowsDir, "root.yaml"), "steps:\n  - run: frag.yaml\n");
   await fs.writeFile(path.join(flowsDir, "frag.yaml"), "steps:\n  - echo: hi\n");
+  await fs.writeFile(path.join(flowsDir, "hang.yaml"), "steps:\n  - echo: never\n");
 
   server = createServer(async (req, res) => {
     const body = await readJson(req);
@@ -134,6 +162,30 @@ function invokeRequest(): Recorded {
 
 function answerRequests(): Recorded[] {
   return requests.filter((r) => r.url.startsWith("/invocations/"));
+}
+
+/** Rejects when `promise` is still pending after `ms`. */
+function settlesWithin<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+async function readHangs(): Promise<void> {
+  while (hang.reads.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+}
+
+/** A request line for hang.yaml, whose read never settles. */
+function hangRequestLine(): string {
+  return `${JSON.stringify({
+    event: "client-request",
+    invocation: "inv-1",
+    id: "req-h",
+    op: "resolve-file",
+    args: { anchorDir: flowsDir, target: "hang.yaml", kind: "flow" },
+  })}\n`;
 }
 
 /** A request line the stub server writes, followed by the result once answered. */
@@ -357,33 +409,84 @@ describe("callTool client services", () => {
     const result = await callTool("flow-execute", { project_root: projectDir });
 
     expect(result).toEqual({ data: { ran: true }, note: "done" });
-    const lines = write.mock.calls.map((c) => String(c[0]));
-    expect(lines).toEqual([
-      "[client-services] answer to resolve-file request req-3 failed: 500 Internal Server Error\n",
-    ]);
+    // The call does not wait for its answers, so the line may follow the result.
+    await vi.waitFor(() =>
+      expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+        "[client-services] answer to resolve-file request req-3 failed: 500 Internal Server Error\n",
+      ])
+    );
   });
 
-  it("awaits a pending answer before surfacing the stream's terminal error", async () => {
+  it("settles with the stream's result while the local read of a request still hangs", async () => {
+    // The tool-server stops waiting for an answer after its timeout and sends
+    // its result; nothing the client could post after that settles anything.
     vi.stubEnv("ARGENT_TOOLS_URL", url);
-    onInvoke = (_body, res) => {
+    onInvoke = async (_body, res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-      res.write(
-        `${JSON.stringify({
-          event: "client-request",
-          invocation: "inv-1",
-          id: "req-4",
-          op: "resolve-file",
-          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
-        })}\n`
-      );
+      res.write(hangRequestLine());
+      await readHangs();
+      res.end(`${JSON.stringify({ event: "result", data: { ran: false } })}\n`);
+    };
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+
+    const result = await settlesWithin(
+      callTool("flow-execute", { project_root: projectDir }),
+      2_000
+    );
+
+    expect(result.data).toEqual({ ran: false });
+    expect(hang.reads).toEqual([path.join(flowsDir, "hang.yaml")]);
+    expect(answerRequests()).toHaveLength(0);
+  });
+
+  it("surfaces the stream's error line while the local read of a request still hangs", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    onInvoke = async (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(hangRequestLine());
+      await readHangs();
       res.end(`${JSON.stringify({ event: "error", error: "kaput" })}\n`);
     };
-    const { callTool } = createToolsClient();
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
 
-    await expect(callTool("flow-execute", { project_root: projectDir })).rejects.toThrow("kaput");
+    await expect(
+      settlesWithin(callTool("flow-execute", { project_root: projectDir }), 2_000)
+    ).rejects.toThrow("kaput");
+    expect(answerRequests()).toHaveLength(0);
+  });
 
-    // The answer was posted before the rejection reached the caller.
-    expect(answerRequests()).toHaveLength(1);
+  it("gives up a request whose local read does not finish in time, and posts nothing", async () => {
+    // A tool-server that keeps the stream open past the give-up time still
+    // gets no answer: it has stopped waiting for one.
+    timing.fileOpTimeoutMs = 1_000;
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const diagnostics: string[] = [];
+    let diagnosed!: () => void;
+    const gaveUp = new Promise<void>((resolve) => (diagnosed = resolve));
+    onInvoke = async (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(hangRequestLine());
+      await gaveUp;
+      res.end(`${JSON.stringify({ event: "result", data: { ran: false } })}\n`);
+    };
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => {
+        diagnostics.push(message);
+        diagnosed();
+      },
+    });
+
+    const result = await settlesWithin(
+      callTool("flow-execute", { project_root: projectDir }),
+      3_000
+    );
+
+    expect(result.data).toEqual({ ran: false });
+    expect(diagnostics).toEqual([
+      '[client-services] the resolve-file request for "hang.yaml" did not finish on this ' +
+        "client within 1 s, the time the tool-server waits for it; no answer was sent",
+    ]);
+    expect(answerRequests()).toHaveLength(0);
   });
 
   it("ignores client-request lines when it offered no services", async () => {
@@ -416,7 +519,7 @@ describe("callTool client services", () => {
 
   it("drops a request line whose id is not a string and answers the next one", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
-    onInvoke = (_body, res) => {
+    onInvoke = async (_body, res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
       for (const line of [
         { id: { toString: 1 }, op: "resolve-file", args: {} },
@@ -424,6 +527,7 @@ describe("callTool client services", () => {
       ]) {
         res.write(`${JSON.stringify({ event: "client-request", invocation: "inv-1", ...line })}\n`);
       }
+      await nextAnswer;
       res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
     };
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -489,9 +593,11 @@ describe("callTool client services", () => {
     giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
 
     expect((await pending).data).toEqual({ ran: true });
-    expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
-      "[client-services] answer to resolve-file request req-8 failed: The operation was aborted due to timeout\n",
-    ]);
+    await vi.waitFor(() =>
+      expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+        "[client-services] answer to resolve-file request req-8 failed: The operation was aborted due to timeout\n",
+      ])
+    );
   });
 
   it("says the tool may already have acted when the stream breaks before the result", async () => {

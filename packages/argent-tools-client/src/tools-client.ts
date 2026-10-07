@@ -6,6 +6,7 @@ import {
   CLIENT_REQUEST_EVENT,
   describeParamIssues,
   type ClientRequestLine,
+  type ClientResponseBody,
   type ClientServicesAdvert,
 } from "@argent/registry";
 
@@ -132,11 +133,45 @@ interface ClientServicesLink {
   diagnose: (message: string) => void;
 }
 
+/** A request line as the tool-server's own messages name it: its op and its target. */
+function describeRequest(msg: ClientRequestLine): string {
+  const { op, args } = msg as { op?: unknown; args?: unknown };
+  const target =
+    typeof args === "object" && args !== null ? (args as { target?: unknown }).target : undefined;
+  return (
+    `the ${typeof op === "string" ? op : "unknown"} request` +
+    (typeof target === "string" ? ` for "${target}"` : "")
+  );
+}
+
+/**
+ * The handler's answer, or undefined once the tool-server has stopped waiting
+ * for it: a local read can hang (a file on an unresponsive network mount), and
+ * an answer after that settles nothing.
+ */
+async function answerInTime(
+  link: ClientServicesLink,
+  msg: ClientRequestLine
+): Promise<ClientResponseBody | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), CLIENT_FILE_OP_TIMEOUT_MS);
+    // The timer alone must not keep the process up after the call ended.
+    timer.unref();
+  });
+  try {
+    return await Promise.race([link.handler.handle(msg), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Answer one request line and post the answer. Never rejects: a failed post is
  * one diagnostic, and the server times the request out on its side. A line
  * without a string id or invocation names no answer to post, so it is
- * dropped. The post gives up when the server would have stopped waiting.
+ * dropped. The handler and the post each give up when the server would have
+ * stopped waiting.
  */
 async function answerClientRequest(
   link: ClientServicesLink,
@@ -149,7 +184,15 @@ async function answerClientRequest(
   }
   const describe = `answer to ${typeof op === "string" ? op : "an unknown op"} request ${id} failed`;
   try {
-    const body = await link.handler.handle(msg);
+    const body = await answerInTime(link, msg);
+    if (body === undefined) {
+      link.diagnose(
+        `[client-services] ${describeRequest(msg)} did not finish on this client within ` +
+          `${Math.round(CLIENT_FILE_OP_TIMEOUT_MS / 1000)} s, the time the tool-server waits ` +
+          `for it; no answer was sent`
+      );
+      return;
+    }
     const res = await fetch(link.answerUrl(invocation), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...link.headers },
@@ -193,9 +236,6 @@ async function consumeToolStream(
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
   let progress = 0;
-  // Answers are posted while the stream keeps flowing; they are awaited once
-  // the read loop ends so none is left dangling, on success or on error.
-  const answers: Promise<void>[] = [];
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
     const msg = JSON.parse(line) as {
@@ -210,8 +250,11 @@ async function consumeToolStream(
       progress++;
       onProgress(msg.data);
     } else if (msg.event === CLIENT_REQUEST_EVENT) {
-      // Without a handler the line is ignored, as any unknown event is.
-      if (services) answers.push(answerClientRequest(services, msg as ClientRequestLine));
+      // Without a handler the line is ignored, as any unknown event is. An
+      // answer is never awaited: the tool-server sends the result or error
+      // line only once every request was answered or timed out, so an answer
+      // still in flight when the stream ends settles nothing.
+      if (services) void answerClientRequest(services, msg as ClientRequestLine);
     } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
     else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -247,10 +290,8 @@ async function consumeToolStream(
   } catch (err) {
     // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
-    await Promise.all(answers);
     throw err;
   }
-  await Promise.all(answers);
 
   if (!final) throw brokenStream(name, "the stream ended without a result", progress);
   // File boundary, inbound: same directive handling as the buffered path.
