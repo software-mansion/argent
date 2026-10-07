@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  CLIENT_CONTENT_CAP_BYTES,
   CLIENT_FILE_OP_TIMEOUT_MS,
   FAILURE_CODES,
   FailureError,
@@ -145,7 +146,7 @@ function isSpelling(value: unknown): value is OnDiskSpelling {
  * same resolution code the host implementation runs. The client decides what
  * it serves and accepts (its roots, the file kinds, the size cap, where a
  * baseline may land); this side only checks that an answer has the shape the
- * op promises.
+ * op promises, and sends no baseline above the size cap.
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;
@@ -182,6 +183,21 @@ export class ClientProjectAccess implements ProjectAccess {
   }
 
   async writeBaseline(filePath: string, bytes: Buffer): Promise<{ replaced: boolean }> {
+    // The client refuses such a file too, but only once all of it has arrived.
+    // On a slow connection the transfer alone can outlast the timeout, and
+    // the step would then report the timeout instead of the cap.
+    if (bytes.length > CLIENT_CONTENT_CAP_BYTES) {
+      throw new FailureError(
+        `the baseline for "${filePath}" is larger than the 32 MiB cap on a file the client ` +
+          `writes, so this tool-server did not send it`,
+        {
+          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+          failure_stage: "client_content_cap",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
     const answer = await this.services.request(
       "write-file",
       { path: filePath, content: bytes.toString("base64") } satisfies WriteFileArgs,

@@ -101,6 +101,9 @@ describe("ClientRequestBroker", () => {
 
     broker.close("inv-1");
 
+    // Only a request that moves a file names a slow connection.
+    expect((err as Error).message).not.toContain("moving the file");
+
     // A file op names its path.
     broker.open("inv-3", () => {});
     const read = rejectionOf(
@@ -121,6 +124,25 @@ describe("ClientRequestBroker", () => {
     );
     broker.close("inv-2");
   });
+
+  it.each(["read-file", "write-file"] as const)(
+    "says that the timeout of a %s request covers moving the file",
+    async (op) => {
+      vi.useFakeTimers();
+      const { broker } = openBroker();
+      const pending = rejectionOf(
+        broker.request("inv-1", op, { path: "/proj/__baselines__/a/x.png", content: "" }, 30_000)
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const message = ((await pending) as Error).message;
+      expect(message).toContain("a reverse proxy that buffers the call's response stream");
+      expect(message).toMatch(
+        / The 30 s include moving the file, so a connection too slow for its size times out too\.$/
+      );
+      broker.close("inv-1");
+    }
+  );
 
   it("fails every later request of the call at once after one timed out, without writing it", async () => {
     vi.useFakeTimers();

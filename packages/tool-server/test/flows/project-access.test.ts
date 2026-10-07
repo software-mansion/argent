@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  CLIENT_CONTENT_CAP_BYTES,
   CLIENT_FILE_OP_TIMEOUT_MS,
   getFailureSignal,
   type ClientServiceOp,
@@ -59,6 +60,31 @@ describe("ClientProjectAccess baselines", () => {
     expect(request.mock.calls).toEqual([
       ["write-file", { path: BASELINE, content: "AQID" }, CLIENT_FILE_OP_TIMEOUT_MS],
     ]);
+  });
+
+  it("refuses a baseline above the cap without sending it", async () => {
+    const { project, request } = channel({ written: BASELINE, replaced: false });
+
+    const err = await project
+      .writeBaseline(BASELINE, Buffer.alloc(CLIENT_CONTENT_CAP_BYTES + 1))
+      .catch((e: unknown) => e);
+
+    // On a slow connection, sending it would report the timeout, not the cap.
+    expect(request).not.toHaveBeenCalled();
+    expect((err as Error).message).toBe(
+      `the baseline for "${BASELINE}" is larger than the 32 MiB cap on a file the client ` +
+        `writes, so this tool-server did not send it`
+    );
+    expect(getFailureSignal(err)?.failure_stage).toBe("client_content_cap");
+  });
+
+  it("sends a baseline at the cap", async () => {
+    const { project, request } = channel({ written: BASELINE, replaced: false });
+
+    await expect(
+      project.writeBaseline(BASELINE, Buffer.alloc(CLIENT_CONTENT_CAP_BYTES))
+    ).resolves.toEqual({ replaced: false });
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it.each([[{}], [{ written: BASELINE }], [{ replaced: false }]])(

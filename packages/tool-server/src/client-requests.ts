@@ -68,19 +68,26 @@ function refusalFailure(message: string): FailureError {
  * The client went quiet: a transport failure, not a fault of the flow, so it is
  * a timeout and not a validation error (a directory run stops on it rather than
  * waiting out the same timeout for every flow). The message names what keeps
- * answers from arriving.
+ * answers from arriving. A request that carries a file, out or back, has to
+ * move it within the same timeout, so its message names a slow connection too.
  */
 function notAnsweringFailure(
   op: ClientServiceOp,
   subject: string,
   timeoutMs: number
 ): FailureError {
+  const seconds = Math.round(timeoutMs / 1000);
+  const transfer =
+    op === "read-file" || op === "write-file"
+      ? ` The ${seconds} s include moving the file, so a connection too slow for its size ` +
+        `times out too.`
+      : "";
   return new FailureError(
     `the client did not answer the ${op} request for "${subject}" within ` +
-      `${Math.round(timeoutMs / 1000)} s. The client has to keep running, and its answers have ` +
+      `${seconds} s. The client has to keep running, and its answers have ` +
       `to reach this tool-server, until the run ends: a paused or sleeping client, a reverse ` +
       `proxy that buffers the call's response stream, or a proxy that does not forward ` +
-      `POST /invocations/<invocation>/client-responses stops them.`,
+      `POST /invocations/<invocation>/client-responses stops them.${transfer}`,
     {
       error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
       failure_stage: "client_request_timeout",
