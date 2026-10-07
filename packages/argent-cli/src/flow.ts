@@ -1139,6 +1139,25 @@ function writeJsonStreamError(err: unknown): void {
 }
 
 /**
+ * The tools client for a run. Under --json stderr carries one JSON object per
+ * line, so the client's diagnostics go there as warning records, not prose.
+ */
+function runToolsClient(
+  args: ReturnType<typeof parseRunArgs>,
+  options: FlowCommandOptions
+): ToolsClient {
+  return createToolsClient({
+    paths: options.paths,
+    ...(args.json
+      ? {
+          onDiagnostic: (message: string) =>
+            console.error(JSON.stringify({ event: "warning", warning: message })),
+        }
+      : {}),
+  });
+}
+
+/**
  * Durable diff output: copy failed-snapshot images out of the tool-server's
  * cache before any renderer prints paths, so every output mode shows the
  * durable location. The only artifact bytes the CLI ever fetches; baseUrl is
@@ -1249,7 +1268,7 @@ async function runFlowDirectory(
     );
   }
 
-  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
+  const { callTool, baseUrl } = runToolsClient(args, options);
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
@@ -1632,7 +1651,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     );
   }
 
-  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
+  const { callTool, baseUrl } = runToolsClient(args, options);
 
   const payload = buildRunPayload(flowPath, projectRoot, args);
 

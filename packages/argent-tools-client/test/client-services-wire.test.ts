@@ -440,6 +440,28 @@ describe("callTool client services", () => {
     ]);
   });
 
+  it("sends its diagnostics to onDiagnostic instead of stderr", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    onInvoke = (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(
+        `${JSON.stringify({ event: "client-request", invocation: "inv-1", id: 7, op: "resolve-file", args: {} })}\n`
+      );
+      res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
+    };
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+
+    const result = await callTool("flow-execute", { project_root: projectDir });
+
+    expect(result.data).toEqual({ ran: true });
+    expect(diagnostics).toEqual(["[client-services] ignored a request line without a string id"]);
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("gives up on an answer POST once the tool-server would have stopped waiting for it", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     answerHangs = true;

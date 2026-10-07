@@ -83,6 +83,13 @@ export interface CreateToolsClientOptions {
     init: RequestInit,
     meta: { longRunning: boolean; carriesUpload: boolean }
   ) => Promise<Response>;
+  /**
+   * Receives each diagnostic line of client services (a request line it had to
+   * drop, an answer the tool-server did not take), without a trailing newline.
+   * Defaults to writing the line to stderr; `argent flow run --json` turns it
+   * into a JSON record, since its stderr carries one JSON object per line.
+   */
+  onDiagnostic?: (message: string) => void;
 }
 
 /**
@@ -114,16 +121,20 @@ function authHeaders(token: string | undefined): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** How a stream's `client-request` lines are answered: the handler and where to post. */
+/**
+ * How a stream's `client-request` lines are answered: the handler, where to
+ * post, and where a diagnostic goes.
+ */
 interface ClientServicesLink {
   handler: ClientServicesHandler;
   answerUrl: (invocation: string) => string;
   headers: Record<string, string>;
+  diagnose: (message: string) => void;
 }
 
 /**
  * Answer one request line and post the answer. Never rejects: a failed post is
- * one stderr line, and the server times the request out on its side. A line
+ * one diagnostic, and the server times the request out on its side. A line
  * without a string id or invocation names no answer to post, so it is
  * dropped. The post gives up when the server would have stopped waiting.
  */
@@ -133,7 +144,7 @@ async function answerClientRequest(
 ): Promise<void> {
   const { id, op, invocation } = msg as { id?: unknown; op?: unknown; invocation?: unknown };
   if (typeof id !== "string" || typeof invocation !== "string") {
-    process.stderr.write(`[client-services] ignored a request line without a string id\n`);
+    link.diagnose("[client-services] ignored a request line without a string id");
     return;
   }
   const describe = `answer to ${typeof op === "string" ? op : "an unknown op"} request ${id} failed`;
@@ -148,11 +159,11 @@ async function answerClientRequest(
     // Drain so the connection is released; the body itself is not needed.
     await res.text().catch(() => undefined);
     if (!res.ok) {
-      process.stderr.write(`[client-services] ${describe}: ${res.status} ${res.statusText}\n`);
+      link.diagnose(`[client-services] ${describe}: ${res.status} ${res.statusText}`);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[client-services] ${describe}: ${message}\n`);
+    link.diagnose(`[client-services] ${describe}: ${message}`);
   }
 }
 
@@ -347,6 +358,8 @@ function carriesUpload(args: unknown): boolean {
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const diagnose =
+    options.onDiagnostic ?? ((message: string) => void process.stderr.write(`${message}\n`));
 
   // The handle and the file-input mode come from one resolution, so a call
   // never sends to one tool-server with the file rules of another.
@@ -423,6 +436,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
             answerUrl: (invocation) =>
               `${url}/invocations/${encodeURIComponent(invocation)}/client-responses`,
             headers: authHeaders(token),
+            diagnose,
           };
         }
       }
