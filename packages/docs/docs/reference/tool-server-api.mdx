@@ -117,10 +117,19 @@ Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-The body has one of two shapes. When the client serves the request, the body carries the answer fields of the op:
+The body has one of two shapes. When the client serves the request, the body carries the answer fields of the op. For `resolve-file`, see [the answer fields](#resolve-file):
 
 ```json
-{ "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13", "ok": true, "canonical": "...", "exists": true }
+{
+  "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13",
+  "ok": true,
+  "canonical": "/work/proj/.argent/flows/frag.yaml",
+  "spelling": { "state": "listed" },
+  "exists": true,
+  "size": 20,
+  "mtimeMs": 1791300000000,
+  "content": "c3RlcHM6CiAgLSBlY2hvOiBoaQo="
+}
 ```
 
 When the client refuses the request, the body carries the reason:
@@ -154,14 +163,16 @@ Request `args`:
 
 Answer:
 
-| Field       | Value                                                                                    |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| `canonical` | The realpath of `anchorDir` + `/` + `target` on the client                               |
-| `spelling`  | How the directory on the client lists the basename of `target`. See the next table       |
-| `exists`    | `true` when the client can stat `canonical` as a file                                    |
-| `size`      | The size of the file in bytes. Present when `exists` is `true`                           |
-| `mtimeMs`   | The modification time of the file in epoch milliseconds. Present when `exists` is `true` |
-| `content`   | The file as base64. Present when `exists` is `true` and `kind` is `flow`                 |
+| Field       | Required                                     | Value                                                                              |
+| ----------- | -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `canonical` | Yes                                          | The realpath of `anchorDir` + `/` + `target` on the client                         |
+| `spelling`  | Yes                                          | How the directory on the client lists the basename of `target`. See the next table |
+| `exists`    | Yes                                          | `true` when the client can stat `canonical` as a file                              |
+| `content`   | When `exists` is `true` and `kind` is `flow` | The file as base64                                                                 |
+| `size`      | No                                           | The size of the file in bytes                                                      |
+| `mtimeMs`   | No                                           | The modification time of the file in epoch milliseconds                            |
+
+The tool-server accepts the answer with 200 before the runner reads it. When a required field is missing, the runner fails the request: the step or the run reports that the client answered with an invalid payload.
 
 `spelling` has one of three shapes:
 
