@@ -877,9 +877,12 @@ describe("callTool client services", () => {
       errorKind: "network",
       message:
         `The answer to the resolve-file request for "frag.yaml" did not reach the tool-server: ` +
-        `POST ${url}/invocations/inv-1/client-responses answered 413 Payload Too Large. The ` +
-        `call was stopped. A reverse proxy between the client and the tool-server must forward ` +
-        `that route while the call's stream is open.`,
+        `POST ${url}/invocations/inv-1/client-responses answered 413 Payload Too Large. A ` +
+        `proxy between the client and the tool-server limits the size of a request body. The ` +
+        `proxy must accept a body of up to 48 MB on POST ` +
+        `/invocations/<invocation>/client-responses, for example client_max_body_size 48m in ` +
+        `nginx. The call was stopped. A reverse proxy between the client and the tool-server ` +
+        `must forward that route while the call's stream is open.`,
     });
     expect(answerRequests().map((r) => r.body)).toEqual([
       expect.objectContaining({ id: "req-3", ok: true }),
@@ -887,6 +890,36 @@ describe("callTool client services", () => {
     ]);
     expect(diagnostics).toEqual([]);
     await vi.waitFor(() => expect(stream.hungUp()).toBe(true));
+  });
+
+  it("keeps the call going when the tool-server's own route answers the refusal that follows a proxy's 413", async () => {
+    // The request expired on the tool-server while the answer was on its way:
+    // the route was reached and the step already has its outcome there.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerReplies = [
+      { status: 413, body: "<html>413 Request Entity Too Large</html>" },
+      { status: 404, body: { error: "unknown or expired request id" } },
+    ];
+    streamOneRequest({ ...FRAG_REQUEST, args: { ...FRAG_REQUEST.args, anchorDir: flowsDir } }, 2);
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
+
+    expect(result).toEqual({ data: { ran: true }, note: "done" });
+    expect(answerRequests().map((r) => r.body)).toEqual([
+      expect.objectContaining({ id: FRAG_REQUEST.id, ok: true }),
+      expect.objectContaining({ id: FRAG_REQUEST.id, ok: false }),
+    ]);
+    await vi.waitFor(() =>
+      expect(diagnostics).toEqual([
+        `[client-services] a proxy refused the answer to the resolve-file request for ` +
+          `"frag.yaml" (413 Payload Too Large), and the tool-server did not take the refusal ` +
+          `either: 404 unknown or expired request id`,
+      ])
+    );
   });
 
   it("fails the call at once when the answer POST loses its connection", async () => {

@@ -208,39 +208,56 @@ function undeliveredAnswer(request: string, url: string, reason: string): ToolIn
   );
 }
 
+/** What a proxy that refuses an answer with 413 must change. */
+const BODY_LIMIT_ADVICE =
+  "A proxy between the client and the tool-server limits the size of a request body. The " +
+  "proxy must accept a body of up to 48 MB on POST /invocations/<invocation>/client-responses, " +
+  "for example client_max_body_size 48m in nginx";
+
 /**
  * Post a short refusal for request `id` in place of an answer that a proxy
  * refused with 413: the proxy limits the size of a request body, and an
  * answer to `read-file` carries the whole baseline. The waiting step then
- * fails at once and names the cause. True when the tool-server took it.
+ * fails at once and names the cause. True when the request is settled on the
+ * tool-server: it took the refusal, or its own route answered for the id (one
+ * it no longer waits for, or one with an answer), as for any other answer.
+ * Each outcome is one diagnostic.
  */
 async function refuseOversizedAnswer(
   link: ClientServicesLink,
   url: string,
+  request: string,
   id: string,
   status: string
 ): Promise<boolean> {
   const refusal: ClientResponseBody = {
     id,
     ok: false,
-    error:
-      `the answer did not reach the tool-server (${status}). A proxy between the client and ` +
-      `the tool-server limits the size of a request body. The proxy must accept a body of up ` +
-      `to 48 MB on POST /invocations/<invocation>/client-responses, for example ` +
-      `client_max_body_size 48m in nginx`,
+    error: `the answer did not reach the tool-server (${status}). ${BODY_LIMIT_ADVICE}`,
   };
+  let res: Response;
   try {
-    const res = await fetch(url, {
+    res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...link.headers },
       body: JSON.stringify(refusal),
       signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
     });
-    await res.text().catch(() => undefined);
-    return res.ok;
   } catch {
     return false;
   }
+  const text = await res.text().catch(() => "");
+  const proxied = `[client-services] a proxy refused the answer to ${request} (${status})`;
+  if (res.ok) {
+    link.diagnose(`${proxied}; the request was refused instead`);
+    return true;
+  }
+  const settled = answerRouteRefusal(res.status, text);
+  if (settled === undefined) return false;
+  link.diagnose(
+    `${proxied}, and the tool-server did not take the refusal either: ${res.status} ${settled}`
+  );
+  return true;
 }
 
 /**
@@ -306,14 +323,9 @@ async function answerClientRequest(
   const refusal = answerRouteRefusal(res.status, text);
   if (refusal === undefined) {
     const status = [res.status, res.statusText].filter(Boolean).join(" ");
-    if (res.status === 413 && (await refuseOversizedAnswer(link, url, id, status))) {
-      link.diagnose(
-        `[client-services] a proxy refused the answer to ${request} (${status}); the ` +
-          `request was refused instead`
-      );
-      return undefined;
-    }
-    return undeliveredAnswer(request, url, `answered ${status}`);
+    if (res.status !== 413) return undeliveredAnswer(request, url, `answered ${status}`);
+    if (await refuseOversizedAnswer(link, url, request, id, status)) return undefined;
+    return undeliveredAnswer(request, url, `answered ${status}. ${BODY_LIMIT_ADVICE}`);
   }
   link.diagnose(
     `[client-services] the tool-server did not take the answer to ${request}: ` +
