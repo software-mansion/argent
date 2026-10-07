@@ -579,6 +579,39 @@ describe("read-file and write-file", () => {
     expect(whenThere).toEqual(whenMissing);
   });
 
+  it("applies a dangling link's `..` after the links before it, as the kernel does", async () => {
+    // `s/../probe.*` enters `s`, a link out of the roots, before `..` applies:
+    // the target lies out there, whether or not it exists.
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(path.join(outside, "sub"), { recursive: true });
+    await fs.mkdir(keyDir, { recursive: true });
+    await fs.symlink(path.join(outside, "sub"), path.join(keyDir, "s"));
+    await fs.symlink("s/../probe.png", baseline);
+    await fs.symlink(path.join(outside, "sub"), path.join(flowsDir, "s"));
+    await fs.symlink("s/../probe.yaml", path.join(flowsDir, "l.yaml"));
+    const handler = await handlerFor([projectDir]);
+    const answers = async () => [
+      await handler.handle(readLine(baseline)),
+      await handler.handle(writeLine(baseline, PNG)),
+      await handler.handle(resolveLine(flowsDir, "l.yaml")),
+    ];
+    const refusals = [
+      { id: "req-1", ok: false, error: outsideError(baseline) },
+      { id: "req-1", ok: false, error: outsideError(baseline) },
+      { id: "req-1", ok: false, error: outsideError("l.yaml") },
+    ];
+
+    const whenMissing = await answers();
+    expect(await fs.readdir(outside)).toEqual(["sub"]);
+    await fs.writeFile(path.join(outside, "probe.png"), "outside");
+    await fs.writeFile(path.join(outside, "probe.yaml"), "steps: []\n");
+    const whenThere = await answers();
+
+    expect(whenMissing).toEqual(refusals);
+    expect(whenThere).toEqual(refusals);
+    expect(await fs.readFile(path.join(outside, "probe.png"), "utf8")).toBe("outside");
+  });
+
   it("refuses a link through an outside file or an unsearchable outside directory alike", async () => {
     const outside = path.join(tmpDir, "outside");
     await fs.mkdir(path.join(outside, "locked"), { recursive: true });

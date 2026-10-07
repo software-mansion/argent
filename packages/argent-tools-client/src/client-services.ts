@@ -59,19 +59,29 @@ function logRequest(op: string, servedPath: string): void {
   process.stderr.write(`[client-services] ${op} ${servedPath}\n`);
 }
 
-/** Links a dangling chain may take before the fence gives up, as the kernel does. */
+/**
+ * Links the fence follows in one chain before it refuses the path: a backstop
+ * that counts only the links the fence follows itself, after realpath failed
+ * on a missing target. The kernel stops a longer chain on its own with ELOOP
+ * (past 32 links on macOS, 40 on Linux), which the fence passes on instead of
+ * following.
+ */
 const MAX_LINK_HOPS = 40;
 
 /**
  * The kernel's view of a candidate path for the root fence: the realpath of
  * its deepest existing ancestor with the missing rest re-appended. A missing
  * component cannot be a symlink, so this is where the path really points,
- * whether or not it exists. A link that realpath cannot pass but the kernel
- * can (dangling, or through a regular file) is not missing: the fence
- * follows its target from the link's real directory, so a link out of the
- * roots is refused alike whatever lies at its far end. A link loop stops the
- * kernel as it stops realpath, so it is passed on for the read to name. Null
- * for any other failure: past PATH_MAX (ENAMETOOLONG) the kernel still
+ * whether or not it exists. A link that realpath cannot pass (its target is
+ * missing, or runs through a regular file) is not missing: a write through a
+ * dangling link creates its target. The fence follows the target from the
+ * link's real directory, so a link out of the roots is refused alike
+ * whatever lies at its far end. The target is joined as written, with its
+ * `..` left for realpath: the kernel follows each link in the target before
+ * it applies a `..` after it. Only a `..` after a missing component folds as
+ * text, and the kernel cannot pass that component either. A link loop stops
+ * the kernel as it stops realpath, so it is passed on for the read to name.
+ * Null for any other failure: past PATH_MAX (ENAMETOOLONG) the kernel still
  * follows a chain of short relative links, and on macOS it follows a link
  * whose own mode keeps realpath out (EACCES), so where the path leads is
  * unknown.
@@ -93,7 +103,10 @@ async function resolveForFence(candidate: string, hops = 0): Promise<string | nu
           if (hops >= MAX_LINK_HOPS) return null;
           const realParent = await fs.realpath(path.dirname(dir)).catch(() => null);
           if (realParent === null) return null;
-          return resolveForFence(path.join(path.resolve(realParent, target), ...missing), hops + 1);
+          // Joined as text, not with path.join or path.resolve: those fold
+          // `s/..` away before `s` is followed.
+          const followed = path.isAbsolute(target) ? target : realParent + path.sep + target;
+          return resolveForFence([followed, ...missing].join(path.sep), hops + 1);
         }
       }
       const parent = path.dirname(dir);
