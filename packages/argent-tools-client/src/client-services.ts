@@ -5,28 +5,36 @@
  * NDJSON stream is answered through {@link ClientServicesHandler.handle}, and
  * the tools client posts the answer to `/invocations/:invocation/client-responses`.
  *
- * The handler decides what leaves and enters this machine: it reads and writes
- * nothing outside the roots the client itself sent (checked on real paths
- * before any listing, read or write), serves `.yaml` names of YAML files and
- * `.png` names of PNG files only, reads and writes snapshot baselines only in
- * the run's own `__baselines__/<flow>/` directory beside the root flow's real
- * file, refuses a file above the 32 MiB cap, and refuses an op it did not
- * offer. A refusal does not say where an outside path leads or whether it
- * exists. The resolution itself is the registry's `canonicalFlowPath` +
- * `classifyOnDiskSpelling`, so a `run:` target keeps its kernel meaning on the
- * machine that has the files.
+ * The handler decides what leaves and enters this machine. It serves the
+ * files the user's own flows compose and nothing else: the call's root flow,
+ * each `run:` target named by a file it has already served, resolved beside
+ * that file as the runner resolves it, and the snapshot baselines in the run's
+ * own `__baselines__/<flow>/` directory beside the root flow's real file,
+ * which is also the only place it writes. A request for any other file is
+ * refused before it is read, the same way whether or not the file exists. It
+ * reads and writes nothing outside the roots the client itself sent, serves
+ * `.yaml` names of YAML files and `.png` names of PNG files only, refuses a
+ * file above the 32 MiB cap, and refuses an op it did not offer. A requested
+ * path is resolved here as the kernel resolves it,
+ * one component at a time ({@link walk}), and each place the walk would look
+ * at is checked against the roots before anything there is looked at, so an
+ * outside path gets one refusal whatever exists there. The casing verdict is
+ * the registry's `classifyOnDiskSpelling`, so a `run:` target keeps its kernel
+ * meaning on the machine that has the files.
  */
 
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { parse as parseYaml } from "yaml";
+
 import {
   CLIENT_CONTENT_CAP_BYTES,
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
-  canonicalFlowPath,
   classifyOnDiskSpelling,
+  completeRunExtension,
   type ClientRequestLine,
   type ClientResponseBody,
   type ClientServiceOp,
@@ -50,84 +58,205 @@ const IMPLEMENTED_OPS: readonly ClientServiceOp[] = ["resolve-file", "read-file"
 
 const LOG_ENV = "ARGENT_CLIENT_SERVICES_LOG";
 
+/** Linux's MAXSYMLINKS: the walk reports ELOOP past this many links. */
+const MAX_SYMLINKS = 40;
+
+/** Deeper than any block nesting the runner parses; ends a cyclic alias too. */
+const MAX_STEP_DEPTH = 64;
+
 function refuse(id: string, error: string): ClientResponseBody {
   return { id, ok: false, error };
 }
 
-function logRequest(op: string, servedPath: string): void {
-  if (process.env[LOG_ENV] !== "1") return;
-  // The op and the path only, never the content.
-  process.stderr.write(`[client-services] ${op} ${servedPath}\n`);
+/** Escapes control characters, so a target the server chose cannot forge a log line. */
+function printable(text: string): string {
+  return [...text]
+    .map((c) =>
+      c < " " || c === "\x7f" ? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}` : c
+    )
+    .join("");
 }
 
-/**
- * Links the fence follows in one chain before it refuses the path: a backstop
- * that counts only the links the fence follows itself, after realpath failed
- * on a missing target. The kernel stops a longer chain on its own with ELOOP
- * (past 32 links on macOS, 40 on Linux), which the fence passes on instead of
- * following.
- */
-const MAX_LINK_HOPS = 40;
-
-/**
- * The kernel's view of a candidate path for the root fence: the realpath of
- * its deepest existing ancestor with the missing rest re-appended. A missing
- * component cannot be a symlink, so this is where the path really points,
- * whether or not it exists. A link that realpath cannot pass (its target is
- * missing, or runs through a regular file) is not missing: a write through a
- * dangling link creates its target. The fence follows the target from the
- * link's real directory, so a link out of the roots is refused alike
- * whatever lies at its far end. The target is joined as written, with its
- * `..` left for realpath: the kernel follows each link in the target before
- * it applies a `..` after it. Only a `..` after a missing component folds as
- * text, and the kernel cannot pass that component either. A link loop stops
- * the kernel as it stops realpath, so it is passed on for the read to name.
- * Null for any other failure: past PATH_MAX (ENAMETOOLONG) the kernel still
- * follows a chain of short relative links, and on macOS it follows a link
- * whose own mode keeps realpath out (EACCES), so where the path leads is
- * unknown.
- */
-async function resolveForFence(candidate: string, hops = 0): Promise<string | null> {
-  const missing: string[] = [];
-  // The kernel reads `a//b` as `a/b` and `a/` as `a`; the climb must too, or a
-  // doubled slash hides a link from it.
-  let dir = candidate.replace(/\/{2,}/g, "/").replace(/(.)\/$/, "$1");
-  for (;;) {
-    try {
-      return path.join(await fs.realpath(dir), ...missing);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "ELOOP") return null;
-      if (code !== "ELOOP") {
-        const target = await fs.readlink(dir).catch(() => null);
-        if (target !== null) {
-          if (hops >= MAX_LINK_HOPS) return null;
-          const realParent = await fs.realpath(path.dirname(dir)).catch(() => null);
-          if (realParent === null) return null;
-          // Joined as text, not with path.join or path.resolve: those fold
-          // `s/..` away before `s` is followed.
-          const followed = path.isAbsolute(target) ? target : realParent + path.sep + target;
-          return resolveForFence([followed, ...missing].join(path.sep), hops + 1);
-        }
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) return null;
-      missing.unshift(path.basename(dir));
-      dir = parent;
-    }
-  }
+/** `inner` is `outer` or lies under it; both absolute and normalized. */
+function isWithin(inner: string, outer: string): boolean {
+  return inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : outer + path.sep);
 }
 
-function isInsideRoots(resolved: string | null, roots: readonly string[]): boolean {
-  if (resolved === null) return false;
-  return roots.some(
-    (root) =>
-      resolved === root || resolved.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
-  );
+function isInsideRoots(position: string, roots: readonly string[]): boolean {
+  return roots.some((root) => isWithin(position, root));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Where the walk may look. `roots` are real paths. `spelled` are the roots as
+ * the client wrote them: the root flow's own directory is one, and the server
+ * anchors its first request there, so the walk crosses whatever symlink lies
+ * above the real root on that spelling (`/tmp`, `/var` on macOS).
+ */
+interface Fence {
+  roots: readonly string[];
+  spelled: readonly string[];
+}
+
+/** Inside a root, or on the way to one: the only places the walk looks at. */
+function mayVisit(fence: Fence, position: string): boolean {
+  return (
+    fence.roots.some((root) => isWithin(position, root) || isWithin(root, position)) ||
+    fence.spelled.some((root) => isWithin(root, position))
+  );
+}
+
+/**
+ * What a flow file makes the runner ask this client for. `runTargets`: the
+ * `run:` targets it names, spelled as the runner requests them: every string
+ * `run` in its `steps`, and in the `steps` of a block directive (`when`), with
+ * the runner's extension completion. A value the runner refuses (a backslash,
+ * an absolute or drive-prefixed path) names nothing. `snapshots`: whether one
+ * of those steps is a `snapshot`, which reads or writes a baseline. A file
+ * that does not parse names nothing.
+ */
+function flowRequests(content: string): { runTargets: string[]; snapshots: boolean } {
+  let doc: unknown;
+  try {
+    // The runner's parse; its warnings belong to the run, not to this terminal.
+    doc = parseYaml(content.trim(), { logLevel: "error" });
+  } catch {
+    return { runTargets: [], snapshots: false };
+  }
+  const targets: string[] = [];
+  let snapshots = false;
+  const seen = new Set<unknown>();
+  const visit = (steps: unknown, depth: number): void => {
+    if (!Array.isArray(steps) || depth > MAX_STEP_DEPTH || seen.has(steps)) return;
+    seen.add(steps);
+    for (const step of steps) {
+      if (!isRecord(step)) continue;
+      if ("snapshot" in step) snapshots = true;
+      const run = step.run;
+      if (
+        typeof run === "string" &&
+        !run.includes("\\") &&
+        !path.posix.isAbsolute(run) &&
+        !/^[A-Za-z]:/.test(run)
+      ) {
+        targets.push(completeRunExtension(run));
+      }
+      visit(step.steps, depth + 1);
+    }
+  };
+  if (isRecord(doc)) visit(doc.steps, 0);
+  return { runTargets: targets, snapshots };
+}
+
+function components(p: string): string[] {
+  const rest = p.slice(path.parse(p).root.length);
+  return rest.split(path.sep === "\\" ? /[\\/]/ : "/").filter((c) => c !== "" && c !== ".");
+}
+
+/**
+ * What a spelled path resolves to. `found`: an existing entry, at its real
+ * path. `missing`: a component does not exist; `canonical` continues the
+ * spelling lexically from there. `failed`: the kernel would report `error`,
+ * whose code is `code` (a link loop, a file used as a directory, an lstat
+ * error); `canonical` continues the same way. `outside`: the walk would have looked outside the
+ * roots, or ends there.
+ */
+type Walked =
+  | { kind: "outside" }
+  | { kind: "found" | "missing"; canonical: string }
+  | { kind: "failed"; canonical: string; error: string; code: string | undefined };
+
+/**
+ * A symlink the user made may spell its target through an alias that lies
+ * above the roots, as `/tmp` and `/var` do on macOS, and {@link mayVisit} does
+ * not admit the alias itself. Such a position is followed when it is a
+ * symlink that resolves inside a root or on the way to one. Only a name taken
+ * from a link's target is judged this way, never one the server spelled, so
+ * all a server can learn is that a link of the user's leads back toward the
+ * roots.
+ */
+async function isAliasIntoFence(fence: Fence, position: string): Promise<boolean> {
+  const st = await fs.lstat(position).catch(() => null);
+  if (!st?.isSymbolicLink()) return false;
+  const real = await fs.realpath(position).catch(() => null);
+  return real !== null && mayVisit(fence, real);
+}
+
+/**
+ * Resolve an absolute spelled path as the kernel does, `..` included: a name
+ * is looked up in the current real directory, a symlink's target is spliced
+ * in (an absolute one restarts at the filesystem root), and `..` is the parent
+ * of the current REAL position. Every position is checked with
+ * {@link mayVisit} before the disk is touched there, so whatever lies outside
+ * the roots is never looked at: the walk refuses before it would, and the same
+ * way whether that place exists or not ({@link isAliasIntoFence} is the one
+ * exception, for the user's own links). A realpath at each directory folds a
+ * case-insensitive spelling to the on-disk one, so for an existing file the
+ * result is what `fs.realpath` returns. Once a component cannot be resolved
+ * the walk goes on lexically and touches nothing more.
+ */
+async function walk(spelled: string, fence: Fence): Promise<Walked> {
+  const pending = components(spelled).map((name) => ({ name, linked: false }));
+  let position = path.parse(spelled).root;
+  let links = 0;
+  let stopped:
+    | { kind: "missing" }
+    | { kind: "failed"; error: string; code: string | undefined }
+    | null = null;
+  while (pending.length > 0) {
+    const { name, linked } = pending.shift()!;
+    const next = name === ".." ? path.dirname(position) : path.join(position, name);
+    if (
+      !mayVisit(fence, next) &&
+      !(linked && name !== ".." && stopped === null && (await isAliasIntoFence(fence, next)))
+    ) {
+      return { kind: "outside" };
+    }
+    if (name === ".." || stopped !== null) {
+      position = next;
+      continue;
+    }
+    try {
+      const st = await fs.lstat(next);
+      if (st.isSymbolicLink()) {
+        if (++links > MAX_SYMLINKS) {
+          stopped = {
+            kind: "failed",
+            error: `ELOOP: too many symbolic links encountered, open '${spelled}'`,
+            code: "ELOOP",
+          };
+          position = next;
+          continue;
+        }
+        const target = await fs.readlink(next);
+        if (path.isAbsolute(target)) position = path.parse(target).root;
+        pending.unshift(...components(target).map((name) => ({ name, linked: true })));
+        continue;
+      }
+      position = await fs.realpath(next);
+      if (!st.isDirectory() && pending.length > 0) {
+        stopped = {
+          kind: "failed",
+          error: `ENOTDIR: not a directory, open '${spelled}'`,
+          code: "ENOTDIR",
+        };
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      stopped =
+        code === "ENOENT"
+          ? { kind: "missing" }
+          : { kind: "failed", error: err instanceof Error ? err.message : String(err), code };
+      position = next;
+    }
+  }
+  if (!isInsideRoots(position, fence.roots)) return { kind: "outside" };
+  return stopped === null
+    ? { kind: "found", canonical: position }
+    : { ...stopped, canonical: position };
 }
 
 function tooLarge(file: string): string {
@@ -135,27 +264,21 @@ function tooLarge(file: string): string {
 }
 
 /**
- * Read a file the fence already admitted, as the wire answer: the file when
- * it is there, `exists: false` when nothing is, or a refusal that names what
- * a host read would name (EISDIR, EACCES, the size cap). With
- * `notDirIsMissing`, a path through a regular file (ENOTDIR) is also nothing
- * there, as the host answers a baseline; the host names ENOTDIR for a `run:`
- * target, so resolve-file keeps it.
+ * Read a file the walk already admitted, as the wire answer: the file when it
+ * is there, `exists: false` when nothing is, or a refusal that names what a
+ * host read would name (EISDIR, EACCES, the size cap).
  */
 async function readAdmitted(
-  file: string,
-  opts: { notDirIsMissing?: boolean } = {}
+  file: string
 ): Promise<{ refusal: string } | { answer: ReadFileAnswer }> {
   const read = await readFileInputWire(file, { includeContent: true });
   if (read === null) {
     // The wire read answers null for a directory and for any stat error;
     // only a missing file is the "no such file" answer. Anything else is
     // named as a host read would name it.
-    const missing = (code: string | undefined) =>
-      code === "ENOENT" || (opts.notDirIsMissing === true && code === "ENOTDIR");
     const reason = await fs.stat(file).then(
       (st) => (st.isDirectory() ? "EISDIR: illegal operation on a directory, read" : null),
-      (err: NodeJS.ErrnoException) => (missing(err.code) ? null : err.message)
+      (err: NodeJS.ErrnoException) => (err.code === "ENOENT" ? null : err.message)
     );
     return reason === null ? { answer: { exists: false } } : { refusal: reason };
   }
@@ -219,44 +342,84 @@ function notBaseline(file: string, verb: "serves" | "writes"): string {
 
 /**
  * Build the handler for one call, or null when there is nothing to serve:
- * no root exists on this machine, or the server advertised no op this client
- * implements. `ops` keeps the implemented order; `roots` are realpaths.
- * `baselineDir` is the one directory read-file and write-file may reach: the
- * run's `<real dir of the root flow>/__baselines__/<key>`, where the
- * tool-server keys the run's baselines. Null when the run has no such
- * directory on this client; both ops then refuse every path.
+ * no root exists on this machine, the server advertised no op this client
+ * implements, or the root flow asks for nothing (or cannot be read or parsed
+ * here): it names no `run:` target, and has no `snapshot` step or the server
+ * advertised no baseline op. The runner asks for files only to resolve `run:`
+ * targets and to read and write baselines, so any other flow goes out without
+ * client services, as it did before they existed, and keeps running through a
+ * proxy that rewrites `Accept`. `ops` keeps the implemented order; `roots` are
+ * realpaths. `rootFlow` is the call's root flow file as the client sent it;
+ * the server asks for it in the directory it is spelled in. `baselineDir` is
+ * the one directory read-file and write-file may reach: the run's
+ * `<real dir of the root flow>/__baselines__/<key>`, where the tool-server
+ * keys the run's baselines. Null when the run has no such directory on this
+ * client; both ops then refuse every path.
+ *
+ * Under `ARGENT_CLIENT_SERVICES_LOG=1` each request gets one line once its
+ * answer is decided, `[client-services] <op> <path>: served`, `: missing`,
+ * `: written` or `: refused (<the error sent>)`, written to `log` (stderr by
+ * default). The path is the canonical one once the request is known to be a
+ * file this call serves, and the target or path as received before that, so a
+ * refused probe is logged as the server spelled it. Never the content.
  */
 export async function createClientServicesHandler(opts: {
   roots: string[];
+  rootFlow: string;
   advertised: ClientServiceOp[];
   baselineDir: string | null;
+  log?: (line: string) => void;
 }): Promise<ClientServicesHandler | null> {
   const resolvedRoots: string[] = [];
+  const spelledRoots: string[] = [];
   for (const root of opts.roots) {
     const real = await fs.realpath(root).catch(() => null);
-    if (real !== null && !resolvedRoots.includes(real)) resolvedRoots.push(real);
+    if (real === null) continue;
+    if (!resolvedRoots.includes(real)) resolvedRoots.push(real);
+    spelledRoots.push(path.resolve(root));
   }
   // A root inside another root adds no reach; keep the wire to the outermost
   // ones (the project's own `.argent/flows` is sent only when it lies elsewhere).
   const roots = resolvedRoots.filter(
-    (root) => !resolvedRoots.some((other) => other !== root && isInsideRoots(root, [other]))
+    (root) => !resolvedRoots.some((other) => other !== root && isWithin(root, other))
   );
   if (roots.length === 0) return null;
   const ops = IMPLEMENTED_OPS.filter((op) => opts.advertised.includes(op));
   if (ops.length === 0) return null;
 
   const param: ClientServicesParam = { ops, roots };
-  // One text for a path out of the roots and a path whose real location the
-  // fence cannot find: a separate answer for the second would tell the
-  // tool-server about paths out of the roots, such as whether the client can
-  // search a directory there.
-  const outsideRoots =
-    `outside every root this client serves (${roots.join(", ")}), or the client cannot ` +
-    `find its real location (for example, through a directory that it cannot search)`;
+  const fence: Fence = { roots, spelled: spelledRoots };
+  const outsideRoots = (target: string) =>
+    `${target} is outside every root this client serves (${roots.join(", ")})`;
 
+  // The real paths this call may serve: the root flow, and the run: targets
+  // of each file served, resolved beside that file as the runner anchors them.
+  const servable = new Set<string>();
+  async function addRunTargets(canonical: string, targets: string[]): Promise<void> {
+    for (const target of targets) {
+      const walked = await walk(path.dirname(canonical) + path.sep + target, fence);
+      if (walked.kind !== "outside") servable.add(walked.canonical);
+    }
+  }
+  const root = await walk(opts.rootFlow, fence);
+  if (root.kind !== "found") return null;
+  const rootText = await fs.readFile(root.canonical, "utf8").catch(() => null);
+  if (rootText === null) return null;
+  const rootRequests = flowRequests(rootText);
+  const servesBaselines = ops.includes("read-file") || ops.includes("write-file");
+  if (rootRequests.runTargets.length === 0 && !(rootRequests.snapshots && servesBaselines)) {
+    return null;
+  }
+  servable.add(root.canonical);
+  await addRunTargets(root.canonical, rootRequests.runTargets);
+
+  const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
+
+  /** `named.path` is set to the canonical path once the request is one this call serves. */
   async function resolveFile(
     id: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    named: { path?: string }
   ): Promise<ClientResponseBody> {
     const { anchorDir, target, kind } = args;
     if (typeof anchorDir !== "string" || typeof target !== "string" || typeof kind !== "string") {
@@ -265,42 +428,51 @@ export async function createClientServicesHandler(opts: {
     if (kind !== "flow") {
       return refuse(id, `kind "${kind}" is not known to this client; it serves "flow" only`);
     }
+    if (!path.isAbsolute(anchorDir)) {
+      return refuse(id, "resolve-file needs an absolute anchorDir");
+    }
     const base = path.posix.basename(target);
     if (!base.endsWith(".yaml")) {
       return refuse(id, `${target} is not a .yaml file; this client serves flow files only`);
     }
-    if (!isInsideRoots(await resolveForFence(anchorDir), roots)) {
-      return refuse(id, `anchor directory ${anchorDir} is ${outsideRoots}`);
-    }
 
-    // Same join and same classifier as the tool-server's own resolution, so
-    // `..` and casing mean here what they mean in a co-located run. Both
-    // places the resolution reads are fenced before anything there is read:
-    // the file the target really points to, and the directory the casing
-    // check lists. The refusal is the same whether or not the path exists.
+    // Same join as the tool-server's own resolution, so `..` and casing mean
+    // here what they mean in a co-located run. Both places the resolution
+    // reads are walked under the fence before anything there is read: the
+    // file the target points to, and the directory the casing check lists.
     const spelled = anchorDir + path.sep + target;
-    const canonical = await canonicalFlowPath(spelled);
-    const [resolved, listedDir] = await Promise.all([
-      resolveForFence(canonical),
-      resolveForFence(path.dirname(spelled)),
-    ]);
-    if (!isInsideRoots(resolved, roots) || !isInsideRoots(listedDir, roots)) {
-      return refuse(id, `${target} is ${outsideRoots}`);
+    const file = await walk(spelled, fence);
+    if (file.kind === "outside") return refuse(id, outsideRoots(target));
+    if (!servable.has(file.canonical)) {
+      return refuse(id, `${target} is not a run: target of a flow this client served`);
     }
-    // A `.yaml` name that links to a file that is not YAML (a `.env`) would
-    // send that file; a link to a `.yml` flow is an ordinary layout.
-    if (!/\.ya?ml$/i.test(path.basename(resolved!))) {
-      return refuse(id, `${target} links to a file that is not a YAML file`);
+    named.path = file.canonical;
+    if ((await walk(path.dirname(spelled), fence)).kind === "outside") {
+      return refuse(id, outsideRoots(target));
     }
+    if (file.kind === "failed") return refuse(id, file.error);
+    const canonical = file.canonical;
     const spelling = await classifyOnDiskSpelling(
       path.dirname(spelled),
       base,
       FLOW_FILE_NAME_PATTERN
     );
-    logRequest("resolve-file", canonical);
+    if (file.kind === "missing") {
+      const answer: ResolveFileAnswer = { canonical, spelling, exists: false };
+      return { id, ok: true, ...answer };
+    }
+    // A `.yaml` name that links to a file that is not YAML (a `.env`) would
+    // send that file; a link to a `.yml` flow is an ordinary layout.
+    if (!/\.ya?ml$/i.test(path.basename(canonical))) {
+      return refuse(id, `${target} links to a file that is not a YAML file`);
+    }
 
     const read = await readAdmitted(canonical);
     if ("refusal" in read) return refuse(id, read.refusal);
+    if (read.answer.content !== undefined) {
+      const text = Buffer.from(read.answer.content, "base64").toString("utf8");
+      await addRunTargets(canonical, flowRequests(text).runTargets);
+    }
     const answer: ResolveFileAnswer = { canonical, spelling, ...read.answer };
     return { id, ok: true, ...answer };
   }
@@ -314,32 +486,54 @@ export async function createClientServicesHandler(opts: {
       : `${file} is not a baseline of this run (${opts.baselineDir}/<name>.png)`;
   }
 
-  // A snapshot baseline of this run, read as the server names it: the path
-  // lies in the run's baseline directory, so there is nothing to resolve.
-  async function readFile(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
+  /**
+   * A snapshot baseline of this run, read as the server names it: the path
+   * lies in the run's baseline directory, so there is nothing to resolve.
+   * `named.path` is set to it once it is known to be one.
+   */
+  async function readFile(
+    id: string,
+    args: Record<string, unknown>,
+    named: { path?: string }
+  ): Promise<ClientResponseBody> {
     const file = args.path;
     if (typeof file !== "string") return refuse(id, "read-file needs a string path");
     if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "serves"));
     const otherRun = notOfThisRun(file);
     if (otherRun !== null) return refuse(id, otherRun);
-    const resolved = await resolveForFence(file);
-    if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
+    named.path = file;
+    const walked = await walk(file, fence);
+    if (walked.kind === "outside") return refuse(id, outsideRoots(file));
+    if (walked.kind === "failed") {
+      // A baseline behind a regular file is not there, as the host answers it.
+      if (walked.code !== "ENOTDIR") return refuse(id, walked.error);
+      const answer: ReadFileAnswer = { exists: false };
+      return { id, ok: true, ...answer };
+    }
     // A `.png` name that links to another kind of file (a `.env`) would send it.
-    if (!resolved!.endsWith(".png")) {
+    if (!walked.canonical.endsWith(".png")) {
       return refuse(id, `${file} links to a file that is not a PNG file`);
     }
-    const read = await readAdmitted(file, { notDirIsMissing: true });
+    const read: { refusal: string } | { answer: ReadFileAnswer } =
+      walked.kind === "missing"
+        ? { answer: { exists: false } }
+        : await readAdmitted(walked.canonical);
     if ("refusal" in read) return refuse(id, read.refusal);
-    logRequest("read-file", file);
     return { id, ok: true, ...read.answer };
   }
 
-  // A new snapshot baseline of this run. The only file the tool-server may
-  // write here, and only into the run's baseline directory: the place a run
-  // with no link writes it, beside the root flow's real file. That file's
-  // directory exists, so mkdir makes at most `__baselines__` and the key
-  // directory.
-  async function writeFile(id: string, args: Record<string, unknown>): Promise<ClientResponseBody> {
+  /**
+   * A new snapshot baseline of this run. The only file the tool-server may
+   * write here, and only into the run's baseline directory: the place a run
+   * with no link writes it, beside the root flow's real file. That file's
+   * directory exists, so mkdir makes at most `__baselines__` and the key
+   * directory. `named.path` is set to the path once it is known to be one.
+   */
+  async function writeFile(
+    id: string,
+    args: Record<string, unknown>,
+    named: { path?: string }
+  ): Promise<ClientResponseBody> {
     const { path: file, content } = args;
     if (typeof file !== "string" || typeof content !== "string") {
       return refuse(id, "write-file needs string path and content");
@@ -347,21 +541,23 @@ export async function createClientServicesHandler(opts: {
     if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "writes"));
     const otherRun = notOfThisRun(file);
     if (otherRun !== null) return refuse(id, otherRun);
+    named.path = file;
     const keyDir = path.dirname(file);
-    // Fenced before the directory is created, so a symlinked `__baselines__`
+    // Walked before the directory is created, so a symlinked `__baselines__`
     // that leads out of the roots gets no directory made there either.
-    if (!isInsideRoots(await resolveForFence(keyDir), roots)) {
-      return refuse(id, `${file} is ${outsideRoots}`);
-    }
+    const dir = await walk(keyDir, fence);
+    if (dir.kind === "outside") return refuse(id, outsideRoots(file));
+    if (dir.kind === "failed") return refuse(id, dir.error);
     const bytes = Buffer.from(content, "base64");
     if (bytes.length > CLIENT_CONTENT_CAP_BYTES) {
       return refuse(id, `${file}: the baseline is larger than the 32 MiB cap on a file it writes`);
     }
     await fs.mkdir(keyDir, { recursive: true });
     // Again on the file itself: a baseline that is a symlink writes through.
-    const resolved = await resolveForFence(file);
-    if (!isInsideRoots(resolved, roots)) return refuse(id, `${file} is ${outsideRoots}`);
-    if (!resolved!.endsWith(".png")) {
+    const walked = await walk(file, fence);
+    if (walked.kind === "outside") return refuse(id, outsideRoots(file));
+    if (walked.kind === "failed") return refuse(id, walked.error);
+    if (!walked.canonical.endsWith(".png")) {
       return refuse(id, `${file} links to a file that is not a PNG file`);
     }
     // A dangling link inside the roots would create a file the user never
@@ -370,36 +566,62 @@ export async function createClientServicesHandler(opts: {
       (st) => st.isSymbolicLink(),
       () => false
     );
-    if (isLink && (await fs.realpath(file).catch(() => null)) === null) {
+    if (walked.kind === "missing" && isLink) {
       return refuse(id, `${file} is a symbolic link to a missing file`);
     }
     // Only a regular file is a baseline to replace: a write to a FIFO blocks
     // until a reader opens it, so the call would never end.
-    const existing = await fs.stat(file).catch(() => null);
+    const existing =
+      walked.kind === "found" ? await fs.stat(walked.canonical).catch(() => null) : null;
     if (existing !== null && !existing.isFile()) return refuse(id, `${file} is not a regular file`);
     const replaced = existing !== null;
     // Renamed over the real file, not over `file`: a rename over a baseline
     // that is a link would replace the link instead of the file it names.
-    await replaceFile(resolved!, bytes, existing?.mode);
-    logRequest("write-file", file);
+    await replaceFile(walked.canonical, bytes, existing?.mode);
     const answer: WriteFileAnswer = { written: file, replaced };
     return { id, ok: true, ...answer };
   }
 
-  async function handle(line: ClientRequestLine): Promise<ClientResponseBody> {
+  async function decide(
+    line: ClientRequestLine,
+    named: { path?: string }
+  ): Promise<ClientResponseBody> {
     // A broken server may send any JSON here; none of it may make this throw.
     const id = typeof line.id === "string" ? line.id : "";
     const op = typeof line.op === "string" ? line.op : "(not a string)";
     try {
       if (!ops.includes(line.op)) return refuse(id, `op ${op} is not served by this client`);
       if (!isRecord(line.args)) return refuse(id, `${op} request carries no args object`);
-      if (line.op === "read-file") return await readFile(id, line.args);
-      if (line.op === "write-file") return await writeFile(id, line.args);
-      return await resolveFile(id, line.args);
+      if (line.op === "read-file") return await readFile(id, line.args, named);
+      if (line.op === "write-file") return await writeFile(id, line.args, named);
+      return await resolveFile(id, line.args, named);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return refuse(id, `${op} failed on this client: ${message}`);
     }
+  }
+
+  async function handle(line: ClientRequestLine): Promise<ClientResponseBody> {
+    const named: { path?: string } = {};
+    const body = await decide(line, named);
+    if (process.env[LOG_ENV] === "1") {
+      const op = typeof line.op === "string" ? line.op : "(not a string)";
+      const target = isRecord(line.args) ? (line.args.target ?? line.args.path) : undefined;
+      const subject = named.path ?? (typeof target === "string" ? target : "(no target)");
+      const outcome = !body.ok
+        ? `refused (${body.error})`
+        : line.op === "write-file"
+          ? "written"
+          : body.exists
+            ? "served"
+            : "missing";
+      try {
+        log(printable(`[client-services] ${op} ${subject}: ${outcome}`));
+      } catch {
+        // A failing log sink must not cost the server its answer.
+      }
+    }
+    return body;
   }
 
   return { param, handle };

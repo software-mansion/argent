@@ -8,8 +8,9 @@
  * {@link ClientRequestBroker.answer}. The broker keeps no queue: it holds one
  * promise per request id, settles it on the answer or the timeout, and rejects
  * every pending promise when the call's response closes. A client that let one
- * request time out is not answering: every later request of the call fails at
- * once instead of waiting out a timeout of its own.
+ * request time out is not answering: every later request of the same call fails
+ * at once instead of waiting out a timeout of its own. The next call starts
+ * afresh.
  */
 
 import { randomUUID } from "node:crypto";
@@ -66,10 +67,14 @@ function refusalFailure(message: string): FailureError {
 
 /**
  * The client went quiet: a transport failure, not a fault of the flow, so it is
- * a timeout and not a validation error (a directory run stops on it rather than
- * waiting out the same timeout for every flow). The message names what keeps
- * answers from arriving. A request that carries a file, out or back, has to
- * move it within the same timeout, so its message names a slow connection too.
+ * a timeout and not a validation error. Before step 1 (the request for the root
+ * flow, or the scan of a leading `run:` chain) it ends the call, and a
+ * directory run stops on it. At a `run:` or `snapshot` step it fails only that
+ * step, in an ordinary report, so a directory run goes on, to stop only if the
+ * next flow's own first request times out too: the fail-fast below is per
+ * call. The message names what keeps answers from arriving. A request that
+ * carries a file, out or back, has to move it within the same timeout, so its
+ * message names a slow connection too.
  */
 function notAnsweringFailure(
   op: ClientServiceOp,

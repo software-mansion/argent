@@ -13,14 +13,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 let tmpDir: string;
+let rootFlow: string;
 let keyDir: string;
 let baseline: string;
 
 beforeEach(async () => {
   tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "client-services-write-")));
-  keyDir = path.join(tmpDir, ".argent", "flows", "__baselines__", "login");
+  // The run's root flow takes a snapshot, so the handler serves its baselines.
+  rootFlow = path.join(tmpDir, ".argent", "flows", "login.yaml");
+  keyDir = path.join(path.dirname(rootFlow), "__baselines__", "login");
   baseline = path.join(keyDir, "home__ios-390x844.png");
   await fs.mkdir(keyDir, { recursive: true });
+  await fs.writeFile(rootFlow, "steps:\n  - snapshot: home\n");
 });
 
 afterEach(async () => {
@@ -43,9 +47,11 @@ describe("write-file that does not finish", () => {
     await fs.writeFile(baseline, "old");
     const handler = await createClientServicesHandler({
       roots: [tmpDir],
+      rootFlow,
       advertised: ["write-file"],
       baselineDir: keyDir,
     });
+    expect(handler).not.toBeNull();
     vi.mocked(fs.rename).mockRejectedValueOnce(
       Object.assign(new Error("EIO: i/o error, rename"), { code: "EIO" })
     );

@@ -10,6 +10,7 @@ import {
   FLOW_NAME_PATTERN,
   getFailureSignal,
   type ClientServiceOp,
+  type OnDiskSpelling,
   type Registry,
   type ToolContext,
 } from "@argent/registry";
@@ -129,6 +130,8 @@ function fakeClientServices(
     ops?: ClientServiceOp[];
     /** Client paths that are symlinks, mapped to where they really live. */
     realpaths?: Record<string, string>;
+    /** How the client finds a spelled path's basename in its directory, when not as written. */
+    spellings?: Record<string, OnDiskSpelling>;
   } = {}
 ): {
   services: NonNullable<ToolContext["clientServices"]>;
@@ -143,11 +146,12 @@ function fakeClientServices(
       if (op === "resolve-file") {
         const spelled = path.posix.join(String(args.anchorDir), String(args.target));
         const canonical = opts.realpaths?.[spelled] ?? spelled;
+        const spelling = opts.spellings?.[spelled] ?? { state: "listed" };
         const text = files[canonical];
-        if (text === undefined) return { canonical, spelling: { state: "listed" }, exists: false };
+        if (text === undefined) return { canonical, spelling, exists: false };
         return {
           canonical,
-          spelling: { state: "listed" },
+          spelling,
           exists: true,
           size: Buffer.byteLength(text),
           mtimeMs: 1,
@@ -1834,6 +1838,54 @@ describe("flow composition (run:)", () => {
       expect(err).toBe(timeout);
     });
 
+    it("asks the client once per fragment of a leading run: chain that three walks read", async () => {
+      // The prerequisite guard, the device scan (no device given) and the run
+      // itself each walk root -> a.yaml -> b.yaml. One answer per file serves
+      // all three, so they also cannot see two versions of a file edited
+      // mid-run.
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({
+          executionPrerequisite: "logged in",
+          steps: [{ kind: "run", flow: "a.yaml" }],
+        }),
+        "utf8"
+      );
+      const { services, calls } = fakeClientServices({
+        "/client/.argent/flows/a.yaml": serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "run", flow: "b.yaml" }],
+        }),
+        "/client/.argent/flows/b.yaml": fragmentYaml("end of the chain"),
+      });
+      const registry = mockRegistry();
+      (registry.invokeTool as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) =>
+        id === "list-devices"
+          ? { devices: [{ platform: "ios", udid: DEVICE, state: "Booted" }] }
+          : { ok: true }
+      );
+
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          {
+            name: "main",
+            project_root: tmpDir,
+            flow_file: uploadedPath,
+            prerequisiteAcknowledged: true,
+          },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: uploadedFlowFile(),
+            clientServices: services,
+          }
+        )
+      );
+
+      expect(result.steps.map((s) => s.message).filter(Boolean)).toEqual(["end of the chain"]);
+      expect(calls.map((c) => c.args.target)).toEqual(["main.yaml", "a.yaml", "b.yaml"]);
+    });
+
     it("runs an uploaded flow_path with no run: or snapshot: step without asking the client anything", async () => {
       // A self-contained upload must not depend on the channel: a proxy that
       // holds the stream would otherwise fail every run before step 1.
@@ -1964,6 +2016,238 @@ describe("flow composition (run:)", () => {
       );
     });
 
+    describe("a served fragment's load-time gates, in the root flow's order", () => {
+      // Every tool id reports this schema (see mockRegistry), so a recorded
+      // swipe's `settle` reads as the retired key it is.
+      const retiredSettle = {
+        settle: { not: {}, description: "Retired: renamed to `momentum`." },
+      };
+      const settleSwipe: FlowStep = {
+        kind: "tool",
+        name: "gesture-swipe",
+        args: { fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2, settle: true },
+      };
+      const script: FlowStep = { kind: "script", path: "seed.mjs" };
+
+      function runWithSettleSchema(
+        services: NonNullable<ToolContext["clientServices"]>
+      ): Promise<FlowRunResult | { notice: string }> {
+        return createRunFlowTool(mockRegistry(retiredSettle)).execute(
+          {},
+          { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: uploadedFlowFile(),
+            clientServices: services,
+          }
+        );
+      }
+
+      it.each([
+        ["before", [settleSwipe, script]],
+        ["after", [script, settleSwipe]],
+      ])(
+        "reports a fragment that is not self-contained as such when a retired key sits %s its script step",
+        async (_where, steps) => {
+          // The root is refused as not self-contained before its retired key
+          // is looked at, so a fragment is too: naming the retired key alone
+          // would send the author to fix it, only to learn on the next run
+          // that the fragment cannot run over a link at all.
+          const { services } = fakeClientServices({
+            "/client/.argent/flows/login.yaml": serializeFlow({ executionPrerequisite: "", steps }),
+          });
+
+          const result = asRun(await runWithSettleSchema(services));
+
+          expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+            "echo:pass",
+            "run:error",
+            "echo:skip",
+          ]);
+          const reason = result.steps[1]?.reason ?? "";
+          expect(reason).toContain('The fragment "login.yaml" is not self-contained');
+          expect(reason).toContain("script: { path: seed.mjs }");
+          expect(reason).not.toContain("retired");
+        }
+      );
+
+      it("refuses the same steps as an uploaded root the same way", async () => {
+        await fs.writeFile(
+          uploadedPath,
+          serializeFlow({ executionPrerequisite: "", steps: [settleSwipe, script] }),
+          "utf8"
+        );
+        const { services } = fakeClientServices({});
+
+        const err = await runWithSettleSchema(services).catch((e: unknown) => e as Error);
+
+        expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_script_step");
+        expect((err as Error).message).toContain("This flow is not self-contained");
+        expect((err as Error).message).not.toContain("retired");
+      });
+
+      it("still refuses a self-contained served fragment's retired key", async () => {
+        const { services } = fakeClientServices({
+          "/client/.argent/flows/login.yaml": serializeFlow({
+            executionPrerequisite: "",
+            steps: [settleSwipe],
+          }),
+        });
+
+        const result = asRun(await runWithSettleSchema(services));
+
+        expect(result.steps[1]).toMatchObject({ kind: "run", status: "error" });
+        expect(result.steps[1]?.reason).toContain(
+          'fragment "login.yaml" step 1 as written (echo included) passes gesture-swipe\'s retired `settle` key'
+        );
+      });
+    });
+
+    describe("the pre-run scan of a served leading fragment", () => {
+      // The chromium hoist boots the leading launch before step 1, so it must
+      // not follow a launch into a fragment the run: step then refuses.
+      const notSelfContained = serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "launch", app: { chromium: "/abs/e2e-app" } },
+          { kind: "snapshot", name: "home" },
+        ],
+      });
+
+      async function runUnpinned(
+        opts: { ops?: ClientServiceOp[]; updateBaselines?: boolean; prerequisite?: string } = {}
+      ): Promise<FlowRunResult | { notice: string }> {
+        await fs.writeFile(
+          uploadedPath,
+          serializeFlow({
+            executionPrerequisite: opts.prerequisite ?? "",
+            steps: [{ kind: "run", flow: "e2e.yaml" }],
+          }),
+          "utf8"
+        );
+        const registry = mockRegistry();
+        // One instance to attach to, so the run reaches its run: step.
+        vi.mocked(registry.invokeTool).mockImplementation(async (id: string) =>
+          id === "list-devices"
+            ? { devices: [{ platform: "chromium", id: "chromium-cdp-9999" }] }
+            : { ok: true }
+        );
+        const { services } = fakeClientServices(
+          { "/client/.argent/flows/e2e.yaml": notSelfContained },
+          { ops: opts.ops }
+        );
+        return createRunFlowTool(registry).execute(
+          {},
+          {
+            name: "main",
+            project_root: tmpDir,
+            flow_file: uploadedPath,
+            updateBaselines: opts.updateBaselines === true,
+          },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: uploadedFlowFile(),
+            clientServices: services,
+          }
+        );
+      }
+
+      function expectRefusedAtRunStep(result: FlowRunResult): void {
+        expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+        expect(result.steps[0]?.reason).toContain('The fragment "e2e.yaml" is not self-contained');
+        expect(result.steps[0]?.reason).toContain("step 2: snapshot: home");
+      }
+
+      it("boots nothing for a fragment the run: step refuses, and reports that refusal", async () => {
+        bootElectronApp.mockClear();
+
+        const result = asRun(await runUnpinned());
+
+        expect(bootElectronApp).not.toHaveBeenCalled();
+        expectRefusedAtRunStep(result);
+      });
+
+      it("reports the refusal, not a boot error, when that fragment's app path does not exist", async () => {
+        bootElectronApp.mockImplementation(async () => {
+          throw new FailureError("Electron boot: path does not exist: /abs/e2e-app", {
+            error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+            failure_stage: "electron_app_path_missing",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
+        });
+        try {
+          expectRefusedAtRunStep(asRun(await runUnpinned()));
+        } finally {
+          bootElectronApp.mockReset();
+        }
+      });
+
+      // The scan gates a fragment's snapshot as its run: step does: by the op
+      // that carries the baseline for this run, read-file to compare and
+      // write-file to update.
+      const servedForTheRun: [string, ClientServiceOp[], boolean][] = [
+        ["compares", ["resolve-file", "read-file"], false],
+        ["updates", ["resolve-file", "write-file"], true],
+      ];
+      const servedForTheOtherMode: [string, ClientServiceOp[], boolean][] = [
+        ["compares", ["resolve-file", "write-file"], false],
+        ["updates", ["resolve-file", "read-file"], true],
+      ];
+
+      it.each(servedForTheRun)(
+        "boots the launch of a fragment whose snapshot the client serves for a run that %s baselines",
+        async (_mode, ops, updateBaselines) => {
+          const bootFailure = new Error("Electron boot reached");
+          bootElectronApp.mockClear().mockImplementation(async () => {
+            throw bootFailure;
+          });
+          try {
+            const err = await runUnpinned({ ops, updateBaselines }).catch((e: unknown) => e);
+
+            expect(err).toBe(bootFailure);
+            expect(bootElectronApp).toHaveBeenCalledTimes(1);
+          } finally {
+            bootElectronApp.mockReset();
+          }
+        }
+      );
+
+      it.each(servedForTheOtherMode)(
+        "boots nothing for a fragment whose snapshot the client serves only for the other mode, in a run that %s baselines",
+        async (_mode, ops, updateBaselines) => {
+          bootElectronApp.mockClear();
+
+          const result = asRun(await runUnpinned({ ops, updateBaselines }));
+
+          expect(bootElectronApp).not.toHaveBeenCalled();
+          expectRefusedAtRunStep(result);
+        }
+      );
+
+      it.each(servedForTheRun)(
+        "refuses the prerequisite through a fragment whose snapshot the client serves for a run that %s baselines",
+        async (_mode, ops, updateBaselines) => {
+          const err = await runUnpinned({ ops, updateBaselines, prerequisite: "logged in" }).catch(
+            (e: unknown) => e
+          );
+
+          expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE);
+        }
+      );
+
+      it.each(servedForTheOtherMode)(
+        "asks for the prerequisite past a fragment whose snapshot the client serves only for the other mode, in a run that %s baselines",
+        async (_mode, ops, updateBaselines) => {
+          // The run: step refuses that fragment, so its launch never runs and
+          // the prerequisite state survives: the caller is asked for it.
+          const result = await runUnpinned({ ops, updateBaselines, prerequisite: "logged in" });
+
+          expect(result).toHaveProperty("notice");
+        }
+      );
+    });
+
     it("anchors run: targets beside the root flow's real file when the root is a symlink on the client", async () => {
       // Co-located runs realpath the root before anchoring; the client's
       // spelling is a symlink here, so the runner asks the client where the
@@ -2021,9 +2305,12 @@ describe("flow composition (run:)", () => {
 
     it("fails before step 1 when the client refuses to resolve the root flow's real location", async () => {
       // Anchoring beside the symlink instead would run a same-named fragment
-      // there, so the refusal is the run's verdict, not a fallback.
+      // there, so the refusal is the run's verdict, not a fallback. The reason
+      // is the one the argent client gives for a root it does serve: a .yaml
+      // name that links to a file that is not YAML.
       const refusal = new FailureError(
-        'the client refused the resolve-file request for "main.yaml": outside every root',
+        'the client refused the resolve-file request for "main.yaml": ' +
+          "main.yaml links to a file that is not a YAML file",
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "client_request_refused",
@@ -2047,12 +2334,212 @@ describe("flow composition (run:)", () => {
 
       const err = await runUploaded(services).catch((e: unknown) => e as Error);
 
-      expect(getFailureSignal(err)?.failure_stage).toBe("client_root_refused");
-      expect((err as Error).message).toContain(
-        'did not resolve the flow file "/client/.argent/flows/main.yaml"'
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "client_root_refused",
+        error_kind: "validation",
+      });
+      // The client's own reason, and no advice about where to keep the file:
+      // this one already sits under the project root.
+      expect((err as Error).message).toBe(
+        'The client did not resolve the flow file "/client/.argent/flows/main.yaml" ' +
+          '(the client refused the resolve-file request for "main.yaml": main.yaml links to ' +
+          "a file that is not a YAML file). The run needs the file's real location before " +
+          "step 1, because its run: targets and snapshot baselines resolve beside it."
       );
       // Nothing beside the symlink was ever asked for.
       expect(calls.filter((c) => c.args.target === "login.yaml")).toEqual([]);
+    });
+
+    it("fails before step 1 when the client answers the root flow's request with an invalid payload", async () => {
+      const { services } = fakeClientServices({});
+      (services.request as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+        canonical: "/client/.argent/flows/main.yaml",
+        exists: true,
+      }));
+
+      const err = await runUploaded(services).catch((e: unknown) => e as Error);
+
+      expect(getFailureSignal(err)?.failure_stage).toBe("client_root_refused");
+      expect((err as Error).message).toMatch(
+        /^The client did not resolve the flow file "\/client\/\.argent\/flows\/main\.yaml" \(the client answered the resolve-file request for "main\.yaml" with an invalid payload\)\. The run needs the file's real location before step 1, because its run: targets and snapshot baselines resolve beside it\.$/
+      );
+    });
+
+    describe("a mis-cased root flow", () => {
+      // The client's listing has root.yaml; the caller spelled it Root. A
+      // co-located run refuses that spelling before it reads the file, since
+      // the name keys the report and __baselines__/. A composing linked run
+      // learns the same from the client's answer for the root, and must
+      // refuse it the same way.
+      const composing = serializeFlow({ executionPrerequisite: "", steps: rootSteps });
+      const caseFolded: OnDiskSpelling = {
+        state: "case_folded",
+        actual: "root.yaml",
+        addressable: true,
+      };
+
+      async function rejection(run: Promise<unknown>): Promise<Error> {
+        const err = await run.then(
+          (result) => {
+            throw new Error(`flow ran instead of being refused: ${JSON.stringify(result)}`);
+          },
+          (e: unknown) => e as Error
+        );
+        expect(err).toBeInstanceOf(FailureError);
+        return err;
+      }
+
+      function linkedClient(rootClientPath: string) {
+        return fakeClientServices(
+          {
+            [rootClientPath]: composing,
+            [path.join(path.dirname(rootClientPath), "login.yaml")]: fragmentYaml("composed"),
+          },
+          { spellings: { [rootClientPath]: caseFolded } }
+        );
+      }
+
+      it("refuses a linked name with the co-located run's error", async () => {
+        const flowsDir = path.join(tmpDir, ".argent", "flows");
+        await writeFlow("root", { executionPrerequisite: "", steps: rootSteps });
+        const colocated = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "Root", project_root: tmpDir, device: DEVICE },
+            { artifacts: new ArtifactStore() }
+          )
+        );
+        await fs.writeFile(uploadedPath, composing, "utf8");
+        const { services } = linkedClient(path.join(flowsDir, "Root.yaml"));
+
+        const linked = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "Root", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: uploadedFlowFile(path.join(flowsDir, "Root.yaml")),
+              clientServices: services,
+            }
+          )
+        );
+
+        expect(getFailureSignal(colocated)?.failure_stage).toBe("flow_name_casing");
+        expect(linked.message).toBe(colocated.message);
+        expect(getFailureSignal(linked)).toEqual(getFailureSignal(colocated));
+      });
+
+      it("refuses a linked snapshot flow's name the same way, before its snapshot runs", async () => {
+        // A snapshot alone asks the client for the root, and the spelling in
+        // that answer is the one __baselines__/ would be keyed by.
+        const flowsDir = path.join(tmpDir, ".argent", "flows");
+        const snapshotting = serializeFlow({
+          executionPrerequisite: "",
+          steps: [{ kind: "snapshot", name: "home", maxMismatch: 0.5 }],
+        });
+        await fs.mkdir(flowsDir, { recursive: true });
+        await fs.writeFile(path.join(flowsDir, "root.yaml"), snapshotting, "utf8");
+        const colocated = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "Root", project_root: tmpDir, device: DEVICE },
+            { artifacts: new ArtifactStore() }
+          )
+        );
+        await fs.writeFile(uploadedPath, snapshotting, "utf8");
+        const rootClientPath = path.join(flowsDir, "Root.yaml");
+        const { services, calls } = fakeClientServices(
+          { [rootClientPath]: snapshotting },
+          { ops: BASELINE_OPS, spellings: { [rootClientPath]: caseFolded } }
+        );
+        vi.mocked(runSnapshot).mockClear();
+
+        const linked = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "Root", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: uploadedFlowFile(rootClientPath),
+              clientServices: services,
+            }
+          )
+        );
+
+        expect(getFailureSignal(colocated)?.failure_stage).toBe("flow_name_casing");
+        expect(linked.message).toBe(colocated.message);
+        expect(getFailureSignal(linked)).toEqual(getFailureSignal(colocated));
+        expect(calls.map((c) => c.op)).toEqual(["resolve-file"]);
+        expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+      });
+
+      it("refuses a linked flow_path with the co-located run's error", async () => {
+        const rootPath = path.join(tmpDir, "flows", "Root.yaml");
+        await fs.mkdir(path.dirname(rootPath), { recursive: true });
+        await fs.writeFile(path.join(tmpDir, "flows", "root.yaml"), composing, "utf8");
+        const colocated = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { flow_path: rootPath, project_root: tmpDir, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: {
+                flow_path: {
+                  clientPath: rootPath,
+                  presentOnHost: true,
+                  viaUpload: false,
+                  statVerified: true,
+                },
+              },
+            }
+          )
+        );
+        await fs.writeFile(uploadedPath, composing, "utf8");
+        const { services } = linkedClient(rootPath);
+
+        const linked = await rejection(
+          createRunFlowTool(mockRegistry()).execute(
+            {},
+            { flow_path: uploadedPath, project_root: tmpDir, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: {
+                flow_path: { clientPath: rootPath, presentOnHost: false, viaUpload: true },
+              },
+              clientServices: services,
+            }
+          )
+        );
+
+        expect(getFailureSignal(colocated)?.failure_stage).toBe("flow_path_casing");
+        expect(linked.message).toBe(colocated.message);
+        expect(getFailureSignal(linked)).toEqual(getFailureSignal(colocated));
+      });
+
+      it("runs a linked root whose spelling is the one in the client's listing", async () => {
+        const rootPath = "/client/.argent/flows/root.yaml";
+        await fs.writeFile(uploadedPath, composing, "utf8");
+        const { services } = fakeClientServices({
+          [rootPath]: composing,
+          "/client/.argent/flows/login.yaml": fragmentYaml("composed"),
+        });
+
+        const result = asRun(
+          await createRunFlowTool(mockRegistry()).execute(
+            {},
+            { name: "root", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+            {
+              artifacts: new ArtifactStore(),
+              fileInputs: uploadedFlowFile(rootPath),
+              clientServices: services,
+            }
+          )
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.flow).toBe("root");
+      });
     });
 
     it("asks the client nothing when the uploaded flow has no run: or snapshot: step", async () => {
@@ -2321,7 +2808,8 @@ describe("flow composition (run:)", () => {
         failure_stage: "client_root_refused",
       });
       expect((err as Error).message).toContain(
-        "Its run: targets and snapshot baselines resolve beside the file's real location"
+        "The run needs the file's real location before step 1, because its run: targets and " +
+          "snapshot baselines resolve beside it."
       );
       expect(calls.map((c) => c.args.target)).toEqual(["main.yaml"]);
       // No step ran: neither the tap nor the snapshot reached anything.

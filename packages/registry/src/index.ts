@@ -46,6 +46,7 @@ export type {
 export {
   canonicalFlowPath,
   classifyOnDiskSpelling,
+  completeRunExtension,
   resolveFlowRelativeFile,
 } from "./flow-file-refs";
 export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";

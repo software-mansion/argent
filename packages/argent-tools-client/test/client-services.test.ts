@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -15,7 +15,8 @@ import {
 import { createClientServicesHandler } from "../src/client-services.js";
 
 // The registry's resolution code reads through this module object, so a spy on
-// it sees every directory the handler lists.
+// it sees every directory the handler lists; the handler's own named imports
+// see the spy once syncBuiltinESMExports() has run.
 const fsCjs = createRequire(import.meta.url)("node:fs/promises") as typeof fs;
 
 let tmpDir: string;
@@ -36,30 +37,49 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 const ALL: ClientServiceOp[] = ["resolve-file", "read-file", "write-file"];
 
 /**
- * A handler as the tools client builds it. By default the run's baselines live
- * in `.argent/flows/__baselines__/login`, beside the real file of a root flow
- * `login.yaml`; a test of the root fence names another directory.
+ * A handler as the tools client builds it. By default the root flow is
+ * `root.yaml`, and the run's baselines live in `.argent/flows/__baselines__/login`,
+ * beside the real file of `login.yaml`, the root flow of the read-file and
+ * write-file tests; a test of the root fence names another directory.
  */
 async function handlerFor(
   roots: string[],
-  opts: { advertised?: ClientServiceOp[]; baselineDir?: string | null } = {}
+  {
+    rootFlow = path.join(flowsDir, "root.yaml"),
+    advertised = ALL,
+    baselineDir = path.join(flowsDir, "__baselines__", "login"),
+    log,
+  } = {} as {
+    rootFlow?: string;
+    advertised?: ClientServiceOp[];
+    baselineDir?: string | null;
+    log?: (line: string) => void;
+  }
 ) {
   const handler = await createClientServicesHandler({
     roots,
-    advertised: opts.advertised ?? ALL,
-    baselineDir:
-      opts.baselineDir === undefined
-        ? path.join(flowsDir, "__baselines__", "login")
-        : opts.baselineDir,
+    rootFlow,
+    advertised,
+    baselineDir,
+    log,
   });
   if (!handler) throw new Error("expected a handler");
   return handler;
+}
+
+/** Make the root flow compose exactly these run: targets. */
+async function composes(...targets: string[]): Promise<void> {
+  await fs.writeFile(
+    path.join(flowsDir, "root.yaml"),
+    `steps:\n${targets.map((t) => `  - run: ${JSON.stringify(t)}\n`).join("")}`
+  );
 }
 
 function resolveLine(
@@ -93,7 +113,7 @@ describe("createClientServicesHandler", () => {
   });
 
   it("returns null with no existing root and with no shared op", async () => {
-    const none = { baselineDir: null };
+    const none = { rootFlow: path.join(flowsDir, "root.yaml"), baselineDir: null };
     expect(
       await createClientServicesHandler({
         roots: [path.join(tmpDir, "nope")],
@@ -101,6 +121,7 @@ describe("createClientServicesHandler", () => {
         ...none,
       })
     ).toBeNull();
+    // run-script is not one of this client's ops.
     expect(
       await createClientServicesHandler({
         roots: [projectDir],
@@ -138,11 +159,13 @@ describe("resolve-file", () => {
     const sharedDir = path.join(projectDir, "shared");
     await fs.mkdir(sharedDir);
     await fs.writeFile(path.join(sharedDir, "login.yaml"), "steps: []\n");
-    const handler = await handlerFor([projectDir]);
-    // The anchor the server sends is the client path as the caller spelled it,
-    // which may go through a symlink the roots do not.
+    // The server anchors its first request at the root flow's directory as
+    // the caller spelled it: a root the client sent, through a symlink its
+    // real path does not cross.
     const linkedFlows = path.join(tmpDir, "flows-link");
     await fs.symlink(flowsDir, linkedFlows);
+    await composes("../../shared/login.yaml");
+    const handler = await handlerFor([projectDir, linkedFlows]);
 
     const answer = await handler.handle(resolveLine(linkedFlows, "../../shared/login.yaml"));
 
@@ -155,6 +178,7 @@ describe("resolve-file", () => {
   });
 
   it("answers exists: false for a missing fragment", async () => {
+    await composes("missing.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "missing.yaml"));
@@ -201,7 +225,141 @@ describe("resolve-file", () => {
 
     const answer = await handler.handle(resolveLine(elsewhere, "frag.yaml"));
 
-    expect(answer).toMatchObject({ ok: false, error: expect.stringContaining("anchor directory") });
+    expect(answer).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `frag.yaml is outside every root this client serves (${projectDir})`,
+    });
+  });
+
+  it("refuses an in-root link to an outside file with the same text whether or not that file exists", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    await fs.symlink(path.join(outside, "y.yaml"), path.join(flowsDir, "x.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    await fs.writeFile(path.join(outside, "y.yaml"), "secret: 1\n");
+    const exists = await handler.handle(resolveLine(flowsDir, "x.yaml"));
+    await fs.rm(path.join(outside, "y.yaml"));
+    const missing = await handler.handle(resolveLine(flowsDir, "x.yaml"));
+
+    expect(exists).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `x.yaml is outside every root this client serves (${projectDir})`,
+    });
+    expect(missing).toEqual(exists);
+  });
+
+  it("answers a dangling in-root link to an in-root file as that missing file", async () => {
+    await fs.symlink(path.join(flowsDir, "gone.yaml"), path.join(flowsDir, "dangling.yaml"));
+    await composes("dangling.yaml");
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "dangling.yaml"))).toEqual({
+      id: "req-1",
+      ok: true,
+      canonical: path.join(flowsDir, "gone.yaml"),
+      spelling: { state: "listed" },
+      exists: false,
+    });
+  });
+
+  it("refuses a target that leaves the roots and comes back with .. the same way whatever is out there", async () => {
+    // An honest kernel walk leaves the root at `outside` whether or not it
+    // exists; collapsing the `..` lexically would come back in and serve
+    // frag.yaml only when `outside` is missing, or only when it exists.
+    const outside = path.join(tmpDir, "outside");
+    const target = "../../../outside/../proj/.argent/flows/frag.yaml";
+    const handler = await handlerFor([projectDir]);
+
+    await fs.mkdir(outside);
+    const asDirectory = await handler.handle(resolveLine(flowsDir, target));
+    await fs.rmdir(outside);
+    await fs.writeFile(outside, "x");
+    const asFile = await handler.handle(resolveLine(flowsDir, target));
+    await fs.rm(outside);
+    const absent = await handler.handle(resolveLine(flowsDir, target));
+
+    expect(asDirectory).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `${target} is outside every root this client serves (${projectDir})`,
+    });
+    expect(asFile).toEqual(asDirectory);
+    expect(absent).toEqual(asDirectory);
+  });
+
+  it("touches nothing outside the roots while it refuses a path that leaves them", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    const handler = await handlerFor([projectDir]);
+    const spies = (
+      ["lstat", "stat", "realpath", "readlink", "readdir", "readFile", "open"] as const
+    ).map((name) => vi.spyOn(fsCjs, name));
+    syncBuiltinESMExports();
+
+    const answer = await handler.handle(
+      resolveLine(flowsDir, "../../../outside/../proj/.argent/flows/frag.yaml")
+    );
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+
+    const touched = spies.flatMap((spy) => spy.mock.calls.map((call) => String(call[0])));
+    // The spies are live: the walk looked at the anchor on its way.
+    expect(touched).toContain(flowsDir);
+    // A spelling that names `outside` as a component makes the kernel look there.
+    expect(touched.filter((p) => p.split(path.sep).includes("outside"))).toEqual([]);
+    expect(answer).toMatchObject({ ok: false });
+  });
+
+  it("answers the realpath of every existing file, as a co-located run resolves it", async () => {
+    const sharedDir = path.join(projectDir, "shared");
+    await fs.mkdir(sharedDir);
+    await fs.writeFile(path.join(sharedDir, "login.yaml"), "steps: []\n");
+    await fs.writeFile(path.join(projectDir, "beside.yaml"), "steps: []\n");
+    // A lexical collapse of `linked/../beside.yaml` would name this one.
+    await fs.writeFile(path.join(flowsDir, "beside.yaml"), "steps: []\n");
+    await fs.symlink(sharedDir, path.join(flowsDir, "linked"));
+    await fs.symlink("../../shared/login.yaml", path.join(flowsDir, "alias.yaml"));
+    const targets = ["frag.yaml", "linked/login.yaml", "linked/../beside.yaml", "alias.yaml"];
+    // On a case-insensitive filesystem a mis-cased name opens too.
+    const folds = await fs.stat(path.join(flowsDir, "FRAG.yaml")).then(
+      () => true,
+      () => false
+    );
+    if (folds) targets.push("FRAG.yaml");
+    await composes(...targets);
+    const handler = await handlerFor([projectDir]);
+    for (const target of targets) {
+      const spelled = flowsDir + path.sep + target;
+      expect(await handler.handle(resolveLine(flowsDir, target))).toMatchObject({
+        ok: true,
+        exists: true,
+        canonical: await fs.realpath(spelled),
+      });
+    }
+    expect(await fs.realpath(flowsDir + path.sep + "linked/../beside.yaml")).toBe(
+      path.join(projectDir, "beside.yaml")
+    );
+  });
+
+  it("resolves a root spelled through a symlink that lies above its real path", async () => {
+    // As /var is a link to /private/var on macOS: the spelling crosses a link
+    // that is neither inside a real root nor on the way to one.
+    await fs.mkdir(path.join(tmpDir, "real"));
+    await fs.rename(projectDir, path.join(tmpDir, "real", "proj"));
+    await fs.symlink(path.join(tmpDir, "real"), path.join(tmpDir, "alias"));
+    const spelledFlows = path.join(tmpDir, "alias", "proj", ".argent", "flows");
+    const handler = await handlerFor([path.join(tmpDir, "alias", "proj"), spelledFlows], {
+      rootFlow: path.join(spelledFlows, "root.yaml"),
+    });
+
+    expect(await handler.handle(resolveLine(spelledFlows, "root.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(tmpDir, "real", "proj", ".argent", "flows", "root.yaml"),
+    });
   });
 
   it("refuses a symlink whose target lies outside every root", async () => {
@@ -250,7 +408,43 @@ describe("resolve-file", () => {
     expect(readdir.mock.calls.map((call) => path.resolve(String(call[0])))).not.toContain(outside);
   });
 
+  it("follows a link of the user's that is spelled through an alias above the roots", async () => {
+    // As a link to $TMPDIR/... on macOS goes through /var, a link to /var/... .
+    const vault = path.join(tmpDir, "real", "vault");
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(path.join(vault, "x.yaml"), "steps:\n  - run: frag.yaml\n");
+    await fs.symlink(path.join(tmpDir, "real"), path.join(tmpDir, "alias"));
+    await fs.symlink(path.join(tmpDir, "alias", "vault", "x.yaml"), path.join(flowsDir, "x.yaml"));
+    const handler = await handlerFor([projectDir, vault], {
+      rootFlow: path.join(flowsDir, "x.yaml"),
+    });
+
+    expect(await handler.handle(resolveLine(flowsDir, "x.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(vault, "x.yaml"),
+    });
+    // The same alias spelled by the server is outside the roots.
+    expect(await handler.handle(resolveLine(flowsDir, "../../../alias/vault/x.yaml"))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `../../../alias/vault/x.yaml is outside every root this client serves (${projectDir}, ${vault})`,
+    });
+  });
+
+  it("names a file used as a directory as a host read would", async () => {
+    // A host read of a run: target names ENOTDIR; only read-file answers it as missing.
+    await composes("frag.yaml/x.yaml");
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml/x.yaml"))).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^ENOTDIR: /),
+    });
+  });
+
   it("answers a target whose directory does not exist as a missing file", async () => {
+    await composes("gone/frag.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "gone/frag.yaml"));
@@ -261,6 +455,7 @@ describe("resolve-file", () => {
   it("refuses a .yaml name that links to a file of another kind", async () => {
     await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
     await fs.symlink(path.join(projectDir, ".env"), path.join(flowsDir, "x.yaml"));
+    await composes("x.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "x.yaml"));
@@ -275,6 +470,7 @@ describe("resolve-file", () => {
   it("serves a .yaml name that links to a .yml flow", async () => {
     await fs.writeFile(path.join(flowsDir, "real.yml"), "steps: []\n");
     await fs.symlink(path.join(flowsDir, "real.yml"), path.join(flowsDir, "alias.yaml"));
+    await composes("alias.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "alias.yaml"))).toMatchObject({
@@ -286,6 +482,7 @@ describe("resolve-file", () => {
 
   it("names a link loop as a host read would, not as a missing file", async () => {
     await fs.symlink("loop.yaml", path.join(flowsDir, "loop.yaml"));
+    await composes("loop.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "loop.yaml"))).toMatchObject({
@@ -294,18 +491,9 @@ describe("resolve-file", () => {
     });
   });
 
-  it("names a target through a regular file as a host read would", async () => {
-    // A host read of a run: target names ENOTDIR; only read-file answers it as missing.
-    const handler = await handlerFor([projectDir]);
-
-    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml/x.yaml"))).toMatchObject({
-      ok: false,
-      error: expect.stringMatching(/^ENOTDIR: /),
-    });
-  });
-
   it("names a directory and an unreadable file as a host read would", async () => {
     await fs.mkdir(path.join(flowsDir, "dir.yaml"));
+    await composes("dir.yaml", "locked.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "dir.yaml"))).toMatchObject({
@@ -343,6 +531,7 @@ describe("resolve-file", () => {
     const fh = await fs.open(hugePath, "w");
     await fh.truncate(CLIENT_CONTENT_CAP_BYTES + 1);
     await fh.close();
+    await composes("huge.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "huge.yaml"));
@@ -416,7 +605,7 @@ describe("resolve-file", () => {
     await handler.handle(resolveLine(flowsDir, "frag.yaml"));
 
     expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
-      `[client-services] resolve-file ${path.join(flowsDir, "frag.yaml")}\n`,
+      `[client-services] resolve-file ${path.join(flowsDir, "frag.yaml")}: served\n`,
     ]);
   });
 });
@@ -427,10 +616,15 @@ describe("read-file and write-file", () => {
   let baseline: string;
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     keyDir = path.join(flowsDir, "__baselines__", "login");
     baseline = path.join(keyDir, "home__ios-390x844.png");
+    await fs.writeFile(path.join(flowsDir, "login.yaml"), "steps:\n  - snapshot: home\n");
   });
+
+  /** A handler for a run of `login.yaml`, a root flow that takes a snapshot and composes nothing. */
+  const snapshotHandlerFor = (roots: string[], opts: Parameters<typeof handlerFor>[1] = {}) =>
+    handlerFor(roots, { rootFlow: path.join(flowsDir, "login.yaml"), ...opts });
 
   function fileLine(
     op: "read-file" | "write-file",
@@ -443,8 +637,7 @@ describe("read-file and write-file", () => {
     fileLine("write-file", { path: file, content: bytes.toString("base64") });
 
   const outsideError = (file: string, roots = [projectDir]) =>
-    `${file} is outside every root this client serves (${roots.join(", ")}), or the client ` +
-    `cannot find its real location (for example, through a directory that it cannot search)`;
+    `${file} is outside every root this client serves (${roots.join(", ")})`;
   const notBaselineError = (file: string, verb = "writes") =>
     `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
     `this client ${verb} baselines only`;
@@ -498,13 +691,17 @@ describe("read-file and write-file", () => {
       await fs.symlink(secret, file);
       await expect(fs.realpath(file)).rejects.toMatchObject({ code: "ENAMETOOLONG" });
       await expect(fs.readFile(file, "utf8")).resolves.toBe("PRIVATE KEY");
-      const handler = await handlerFor([projectDir], { baselineDir: deepKey });
+      const handler = await snapshotHandlerFor([projectDir], { baselineDir: deepKey });
 
-      expect(await handler.handle(readLine(file))).toEqual({
+      // The walk meets the length limit on its way down the real path, before
+      // the link out, and refuses with the kernel's error.
+      const answer = await handler.handle(readLine(file));
+      expect(answer).toEqual({
         id: "req-1",
         ok: false,
-        error: outsideError(file),
+        error: expect.stringMatching(/^ENAMETOOLONG: name too long, lstat '/),
       });
+      expect((answer as { error: string }).error).not.toContain(path.dirname(secret));
     } finally {
       await cleanup();
     }
@@ -518,13 +715,15 @@ describe("read-file and write-file", () => {
       const file = path.join(deepKey, "home.png");
       await fs.symlink(path.join(outside, "victim.png"), file);
       await fs.writeFile(path.join(outside, "victim.png"), "untouched");
-      const handler = await handlerFor([projectDir], { baselineDir: deepKey });
+      const handler = await snapshotHandlerFor([projectDir], { baselineDir: deepKey });
 
-      expect(await handler.handle(writeLine(file, PNG))).toEqual({
+      const answer = await handler.handle(writeLine(file, PNG));
+      expect(answer).toEqual({
         id: "req-1",
         ok: false,
-        error: outsideError(file),
+        error: expect.stringMatching(/^ENAMETOOLONG: name too long, lstat '/),
       });
+      expect((answer as { error: string }).error).not.toContain(outside);
       expect(await fs.readFile(path.join(outside, "victim.png"), "utf8")).toBe("untouched");
     } finally {
       await cleanup();
@@ -540,7 +739,7 @@ describe("read-file and write-file", () => {
     await fs.mkdir(baselines, { recursive: true });
     await fs.symlink(made, path.join(baselines, "login"));
     await fs.symlink(made, path.join(projectDir, "dl"));
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     for (const file of [
       `${baselines}/login//x.png`,
@@ -569,7 +768,7 @@ describe("read-file and write-file", () => {
     await fs.symlink("../outside/gone.png", path.join(projectDir, "x.png"));
     await fs.mkdir(path.join(tmpDir, "outside"));
     const file = path.join(keyDir, "x.png");
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     const whenMissing = await handler.handle(readLine(file));
     await fs.writeFile(path.join(tmpDir, "outside", "gone.png"), PNG);
@@ -589,7 +788,7 @@ describe("read-file and write-file", () => {
     await fs.symlink("s/../probe.png", baseline);
     await fs.symlink(path.join(outside, "sub"), path.join(flowsDir, "s"));
     await fs.symlink("s/../probe.yaml", path.join(flowsDir, "l.yaml"));
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
     const answers = async () => [
       await handler.handle(readLine(baseline)),
       await handler.handle(writeLine(baseline, PNG)),
@@ -626,7 +825,7 @@ describe("read-file and write-file", () => {
       await fs.symlink(target, path.join(keyDir, `${name}.png`));
     }
     if (process.getuid?.() !== 0) await fs.chmod(path.join(outside, "locked"), 0o000);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     try {
       for (const name of Object.keys(links)) {
@@ -659,24 +858,29 @@ describe("read-file and write-file", () => {
     unreadable(linkedKey);
     await fs.symlink(path.join(outside, "id_rsa"), path.join(flowsDir, "leak.yaml"));
     unreadable(path.join(flowsDir, "leak.yaml"));
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
+    // The walk reads each link itself, so the link's mode refuses it here too.
     expect(await handler.handle(readLine(baseline))).toEqual({
       id: "req-1",
       ok: false,
-      error: outsideError(baseline),
+      error: `EACCES: permission denied, readlink '${baseline}'`,
     });
     const written = path.join(linkedKey, "home.png");
-    const otherRun = await handlerFor([projectDir], { baselineDir: linkedKey });
+    const otherRun = await snapshotHandlerFor([projectDir], { baselineDir: linkedKey });
     expect(await otherRun.handle(writeLine(written, PNG))).toEqual({
       id: "req-1",
       ok: false,
-      error: outsideError(written),
+      error: `EACCES: permission denied, readlink '${linkedKey}'`,
     });
     expect(await fs.readdir(elsewhere)).toEqual([]);
-    expect(await handler.handle(resolveLine(flowsDir, "leak.yaml"))).toMatchObject({
+    // Composed, so the refusal comes from the walk, not from the served-set gate.
+    await composes("leak.yaml");
+    const composing = await handlerFor([projectDir]);
+    expect(await composing.handle(resolveLine(flowsDir, "leak.yaml"))).toEqual({
+      id: "req-1",
       ok: false,
-      error: expect.stringContaining("outside every root"),
+      error: `EACCES: permission denied, readlink '${path.join(flowsDir, "leak.yaml")}'`,
     });
   });
 
@@ -689,18 +893,20 @@ describe("read-file and write-file", () => {
     await fs.writeFile(path.join(flowsDir, "locked", "x.yaml"), "steps: []\n");
     await fs.chmod(keyDir, 0o000);
     await fs.chmod(path.join(flowsDir, "locked"), 0o000);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
+    await composes("locked/x.yaml");
+    const composing = await handlerFor([projectDir]);
 
     try {
       expect(await handler.handle(readLine(baseline))).toEqual({
         id: "req-1",
         ok: false,
-        error: outsideError(baseline),
+        error: `EACCES: permission denied, lstat '${baseline}'`,
       });
-      expect(await handler.handle(resolveLine(flowsDir, "locked/x.yaml"))).toEqual({
+      expect(await composing.handle(resolveLine(flowsDir, "locked/x.yaml"))).toEqual({
         id: "req-1",
         ok: false,
-        error: outsideError("locked/x.yaml"),
+        error: `EACCES: permission denied, lstat '${path.join(flowsDir, "locked", "x.yaml")}'`,
       });
     } finally {
       await fs.chmod(keyDir, 0o755);
@@ -709,7 +915,7 @@ describe("read-file and write-file", () => {
   });
 
   it("answers exists:false for a missing baseline", async () => {
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(readLine(baseline))).toEqual({
       id: "req-1",
@@ -720,7 +926,7 @@ describe("read-file and write-file", () => {
 
   it("answers exists:false for a baseline behind a file where a directory should be", async () => {
     // As a host read of a baseline: ENOTDIR is nothing there, not an error.
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
     await fs.mkdir(path.dirname(keyDir), { recursive: true });
     await fs.writeFile(keyDir, "not a directory");
 
@@ -743,7 +949,7 @@ describe("read-file and write-file", () => {
     await fs.mkdir(keyDir, { recursive: true });
     await fs.writeFile(baseline, PNG);
     const st = await fs.stat(baseline);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(readLine(baseline))).toEqual({
       id: "req-1",
@@ -759,7 +965,7 @@ describe("read-file and write-file", () => {
     const outside = path.join(tmpDir, "outside", "__baselines__", "login", "home.png");
     await fs.mkdir(path.dirname(outside), { recursive: true });
     await fs.writeFile(outside, PNG);
-    const handler = await handlerFor([projectDir], { baselineDir: path.dirname(outside) });
+    const handler = await snapshotHandlerFor([projectDir], { baselineDir: path.dirname(outside) });
 
     expect(await handler.handle(readLine(outside))).toEqual({
       id: "req-1",
@@ -782,7 +988,7 @@ describe("read-file and write-file", () => {
     const throughDir = path.join(otherFlows, "__baselines__", "login", "real.png");
 
     for (const file of [baseline, throughDir]) {
-      const handler = await handlerFor([projectDir], { baselineDir: path.dirname(file) });
+      const handler = await snapshotHandlerFor([projectDir], { baselineDir: path.dirname(file) });
       const answer = await handler.handle(readLine(file));
       expect(answer).toEqual({ id: "req-1", ok: false, error: outsideError(file) });
       // Where it points is the client's business: the server only learns "outside".
@@ -794,7 +1000,7 @@ describe("read-file and write-file", () => {
     await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
     await fs.mkdir(keyDir, { recursive: true });
     await fs.symlink(path.join(projectDir, ".env"), baseline);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(readLine(baseline))).toEqual({
       id: "req-1",
@@ -808,7 +1014,7 @@ describe("read-file and write-file", () => {
     const screenshot = path.join(projectDir, "docs", "Screenshot 2026-10-06.png");
     await fs.mkdir(path.dirname(screenshot));
     await fs.writeFile(screenshot, PNG);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     // All exist inside the root: read-file serves baselines only.
     for (const file of [
@@ -829,7 +1035,7 @@ describe("read-file and write-file", () => {
   it("refuses a read with a .. segment, a relative path and a non-string path", async () => {
     await fs.mkdir(keyDir, { recursive: true });
     await fs.writeFile(baseline, PNG);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     // The `..` path names the existing baseline inside the root: it is the
     // form that is refused. (path.join would fold the `..` away.)
@@ -851,7 +1057,7 @@ describe("read-file and write-file", () => {
 
   it("names a directory as a host read would", async () => {
     await fs.mkdir(path.join(keyDir, "dir.png"), { recursive: true });
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(readLine(path.join(keyDir, "dir.png")))).toEqual({
       id: "req-1",
@@ -866,7 +1072,7 @@ describe("read-file and write-file", () => {
     const fh = await fs.open(baseline, "w");
     await fh.truncate(CLIENT_CONTENT_CAP_BYTES + 1);
     await fh.close();
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(readLine(baseline))).toEqual({
       id: "req-1",
@@ -876,7 +1082,7 @@ describe("read-file and write-file", () => {
   });
 
   it("refuses a write outside __baselines__", async () => {
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     for (const file of [
       path.join(projectDir, ".argent", "flows", "x.yaml"),
@@ -897,7 +1103,7 @@ describe("read-file and write-file", () => {
   });
 
   it("refuses a write whose key is not a flow name", async () => {
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     for (const key of ["a b", "a.b"]) {
       const file = path.join(flowsDir, "__baselines__", key, "x.png");
@@ -911,7 +1117,7 @@ describe("read-file and write-file", () => {
   });
 
   it("refuses a write with a .. segment, a relative path and non-string args", async () => {
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     // The `..` path lands on a valid baseline inside the root: it is the form
     // that is refused.
@@ -939,7 +1145,7 @@ describe("read-file and write-file", () => {
     const outside = path.join(tmpDir, "outside");
     await fs.mkdir(outside);
     await fs.symlink(outside, path.join(flowsDir, "__baselines__"));
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     const answer = await handler.handle(writeLine(baseline, PNG));
 
@@ -955,7 +1161,7 @@ describe("read-file and write-file", () => {
     await fs.writeFile(path.join(outside, "real.png"), "old");
     await fs.mkdir(keyDir, { recursive: true });
     await fs.symlink(path.join(outside, "real.png"), baseline);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     const answer = await handler.handle(writeLine(baseline, PNG));
 
@@ -969,7 +1175,7 @@ describe("read-file and write-file", () => {
     await fs.mkdir(outside);
     await fs.mkdir(keyDir, { recursive: true });
     await fs.symlink(path.join(outside, "planted.sh"), baseline);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     const answer = await handler.handle(writeLine(baseline, PNG));
 
@@ -982,7 +1188,7 @@ describe("read-file and write-file", () => {
   it("refuses a write through a dangling baseline symlink inside the roots", async () => {
     await fs.mkdir(keyDir, { recursive: true });
     await fs.symlink(path.join(projectDir, "missing.png"), baseline);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
       id: "req-1",
@@ -1002,7 +1208,7 @@ describe("read-file and write-file", () => {
     const gone = path.join(keyDir, "gone.png");
     await fs.symlink(path.join(outside, "there.png"), there);
     await fs.symlink(path.join(outside, "gone.png"), gone);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     for (const file of [there, gone]) {
       for (const line of [readLine(file), writeLine(file, PNG)]) {
@@ -1020,7 +1226,7 @@ describe("read-file and write-file", () => {
     await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
     await fs.mkdir(keyDir, { recursive: true });
     await fs.symlink(path.join(projectDir, ".env"), baseline);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
       id: "req-1",
@@ -1045,7 +1251,7 @@ describe("read-file and write-file", () => {
     } catch {
       // No mkfifo on this system: the directory case still runs.
     }
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     for (const file of targets) {
       expect(await handler.handle(writeLine(file, PNG))).toEqual({
@@ -1064,17 +1270,18 @@ describe("read-file and write-file", () => {
     // beside the root flow's REAL file.
     const sharedFlows = path.join(tmpDir, "shared-flows");
     await fs.mkdir(sharedFlows);
-    await fs.writeFile(path.join(sharedFlows, "login.yaml"), "steps: []\n");
+    await fs.writeFile(path.join(sharedFlows, "login.yaml"), "steps:\n  - snapshot: home\n");
     const linkedProject = path.join(tmpDir, "linked-proj");
-    await fs.mkdir(path.join(linkedProject, ".argent"), { recursive: true });
-    await fs.symlink(sharedFlows, path.join(linkedProject, ".argent", "flows"));
+    const linkedFlows = path.join(linkedProject, ".argent", "flows");
+    await fs.mkdir(path.dirname(linkedFlows), { recursive: true });
+    await fs.symlink(sharedFlows, linkedFlows);
     const file = path.join(sharedFlows, "__baselines__", "login", "home.png");
 
     const baselineDir = path.dirname(file);
-    const handler = await handlerFor(
-      [linkedProject, path.join(linkedProject, ".argent", "flows")],
-      { baselineDir }
-    );
+    const handler = await handlerFor([linkedProject, linkedFlows], {
+      rootFlow: path.join(linkedFlows, "login.yaml"),
+      baselineDir,
+    });
     expect(handler.param.roots).toEqual([linkedProject, sharedFlows]);
 
     expect(await handler.handle(writeLine(file, PNG))).toEqual({
@@ -1085,9 +1292,23 @@ describe("read-file and write-file", () => {
     });
     expect(await fs.readFile(file)).toEqual(PNG);
 
-    // The flows root is what admits it: the project alone does not reach there.
+    // The flows root is what admits it: the project alone does not reach
+    // there, not even the root flow, so no handler serves that run.
     await fs.rm(path.join(sharedFlows, "__baselines__"), { recursive: true });
-    const projectOnly = await handlerFor([linkedProject], { baselineDir });
+    expect(
+      await createClientServicesHandler({
+        roots: [linkedProject],
+        rootFlow: path.join(linkedFlows, "login.yaml"),
+        advertised: ALL,
+        baselineDir,
+      })
+    ).toBeNull();
+    // A handler for a root flow inside the project refuses that baseline too.
+    await fs.writeFile(path.join(linkedProject, "main.yaml"), "steps:\n  - snapshot: home\n");
+    const projectOnly = await handlerFor([linkedProject], {
+      rootFlow: path.join(linkedProject, "main.yaml"),
+      baselineDir,
+    });
     expect(await projectOnly.handle(writeLine(file, PNG))).toEqual({
       id: "req-1",
       ok: false,
@@ -1097,7 +1318,7 @@ describe("read-file and write-file", () => {
   });
 
   it("writes a baseline and creates the key directory", async () => {
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
       id: "req-1",
@@ -1117,7 +1338,7 @@ describe("read-file and write-file", () => {
   it("overwrites an existing baseline", async () => {
     await fs.mkdir(keyDir, { recursive: true });
     await fs.writeFile(baseline, Buffer.alloc(64, 7));
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     // Shorter than the old file, so a write that did not truncate would show.
     expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
@@ -1135,7 +1356,7 @@ describe("read-file and write-file", () => {
     await fs.writeFile(real, "old");
     await fs.mkdir(keyDir, { recursive: true });
     await fs.symlink(real, baseline);
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(writeLine(baseline, PNG))).toEqual({
       id: "req-1",
@@ -1157,7 +1378,7 @@ describe("read-file and write-file", () => {
     const fresh = path.join(keyDir, "fresh.png");
     const reference = path.join(tmpDir, "reference");
     await fs.writeFile(reference, "");
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(writeLine(baseline, PNG))).toMatchObject({
       ok: true,
@@ -1177,7 +1398,7 @@ describe("read-file and write-file", () => {
   });
 
   it("refuses content over 32 MiB and writes content of exactly 32 MiB", async () => {
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(
       await handler.handle(writeLine(baseline, Buffer.alloc(CLIENT_CONTENT_CAP_BYTES + 1)))
@@ -1195,8 +1416,8 @@ describe("read-file and write-file", () => {
     expect((await fs.stat(baseline)).size).toBe(CLIENT_CONTENT_CAP_BYTES);
   });
 
-  it("logs the op and the path, never the content, under ARGENT_CLIENT_SERVICES_LOG=1", async () => {
-    const handler = await handlerFor([projectDir]);
+  it("logs the op, the path and the outcome, never the content, under ARGENT_CLIENT_SERVICES_LOG=1", async () => {
+    const handler = await snapshotHandlerFor([projectDir]);
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     await handler.handle(writeLine(baseline, PNG));
@@ -1204,31 +1425,43 @@ describe("read-file and write-file", () => {
     expect(write).not.toHaveBeenCalled();
 
     vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "1");
+    const gone = path.join(keyDir, "gone.png");
     await handler.handle(writeLine(baseline, PNG));
     await handler.handle(readLine(baseline));
+    await handler.handle(readLine(gone));
 
     expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
-      `[client-services] write-file ${baseline}\n`,
-      `[client-services] read-file ${baseline}\n`,
+      `[client-services] write-file ${baseline}: written\n`,
+      `[client-services] read-file ${baseline}: served\n`,
+      `[client-services] read-file ${gone}: missing\n`,
     ]);
 
-    // A refused request names no file: nothing was read or written, also
-    // when the refusal comes from the read or the write itself (EISDIR).
+    // A refused request is logged with the refusal: by the path as received
+    // until it is known to be a baseline of this run, also when the refusal
+    // comes from the read or the write itself (EISDIR, a directory).
     write.mockClear();
     const dirBaseline = path.join(keyDir, "dir.png");
     await fs.mkdir(dirBaseline);
-    await handler.handle(writeLine(path.join(projectDir, "notes.png"), PNG));
-    await handler.handle(readLine(path.join(tmpDir, "x", "__baselines__", "k", "home.png")));
+    const notes = path.join(projectDir, "notes.png");
+    const foreign = path.join(tmpDir, "x", "__baselines__", "k", "home.png");
+    await handler.handle(writeLine(notes, PNG));
+    await handler.handle(readLine(foreign));
     expect(await handler.handle(readLine(dirBaseline))).toMatchObject({ ok: false });
     expect(await handler.handle(writeLine(dirBaseline, PNG))).toMatchObject({ ok: false });
-    expect(write).not.toHaveBeenCalled();
+    expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+      `[client-services] write-file ${notes}: refused (${notBaselineError(notes)})\n`,
+      `[client-services] read-file ${foreign}: refused (${foreign} is not a baseline of this run (${keyDir}/<name>.png))\n`,
+      `[client-services] read-file ${dirBaseline}: refused (EISDIR: illegal operation on a directory, read)\n`,
+      `[client-services] write-file ${dirBaseline}: refused (${dirBaseline} is not a regular file)\n`,
+    ]);
+    expect(write.mock.calls.join("\n")).not.toContain(PNG.toString("base64"));
   });
 
   it("refuses a baseline of another flow or in another directory, and makes nothing there", async () => {
     const otherFlow = path.join(flowsDir, "__baselines__", "other", "home.png");
     await fs.mkdir(path.dirname(otherFlow), { recursive: true });
     await fs.writeFile(otherFlow, "theirs");
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     for (const file of [
       otherFlow,
@@ -1254,7 +1487,7 @@ describe("read-file and write-file", () => {
 
   it("makes no directory but the run's own key directory", async () => {
     const before = await fs.readdir(projectDir, { recursive: true });
-    const handler = await handlerFor([projectDir]);
+    const handler = await snapshotHandlerFor([projectDir]);
 
     expect(await handler.handle(writeLine(baseline, PNG))).toMatchObject({ ok: true });
 
@@ -1267,7 +1500,7 @@ describe("read-file and write-file", () => {
   it("refuses every baseline when the run has no baseline directory on this client", async () => {
     await fs.mkdir(keyDir, { recursive: true });
     await fs.writeFile(baseline, PNG);
-    const handler = await handlerFor([projectDir], { baselineDir: null });
+    const handler = await snapshotHandlerFor([projectDir], { baselineDir: null });
     const refusal = {
       id: "req-1",
       ok: false,
@@ -1282,6 +1515,8 @@ describe("read-file and write-file", () => {
   it("refuses read-file and write-file when the server did not advertise them", async () => {
     await fs.mkdir(keyDir, { recursive: true });
     await fs.writeFile(baseline, PNG);
+    // root.yaml composes frag.yaml, so resolve-file alone still builds a
+    // handler; login.yaml, which only takes a snapshot, would build none.
     const handler = await handlerFor([projectDir], { advertised: ["resolve-file"] });
     expect(handler.param.ops).toEqual(["resolve-file"]);
 
@@ -1300,11 +1535,290 @@ describe("read-file and write-file", () => {
   });
 });
 
+describe("the request log", () => {
+  let lines: string[];
+  let handler: Awaited<ReturnType<typeof handlerFor>>;
+  beforeEach(async () => {
+    vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "1");
+    await fs.mkdir(path.join(flowsDir, "dir.yaml"));
+    const fh = await fs.open(path.join(flowsDir, "huge.yaml"), "w");
+    await fh.truncate(CLIENT_CONTENT_CAP_BYTES + 1);
+    await fh.close();
+    await fs.symlink("loop.yaml", path.join(flowsDir, "loop.yaml"));
+    await fs.writeFile(path.join(tmpDir, "outside.yaml"), "steps: []\n");
+    await fs.writeFile(path.join(projectDir, "secrets.yaml"), "x: 1\n");
+    await composes("frag.yaml", "missing.yaml", "dir.yaml", "huge.yaml", "loop.yaml");
+    lines = [];
+    handler = await handlerFor([projectDir], { log: (line) => lines.push(line) });
+  });
+
+  async function logged(line: ClientRequestLine): Promise<string[]> {
+    lines.length = 0;
+    await handler.handle(line);
+    return lines;
+  }
+
+  it("writes one line per request, after the answer, naming the outcome", async () => {
+    const at = (name: string) => path.join(flowsDir, name);
+    expect(await logged(resolveLine(flowsDir, "frag.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("frag.yaml")}: served`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "missing.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("missing.yaml")}: missing`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "dir.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("dir.yaml")}: refused (EISDIR: illegal operation on a directory, read)`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "huge.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("huge.yaml")}: refused (${at("huge.yaml")} is larger than the 32 MiB cap on a file sent to the tool-server)`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "loop.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("loop.yaml")}: refused (ELOOP: too many symbolic links encountered, open '${at("loop.yaml")}')`,
+    ]);
+  });
+
+  it("names a refused probe by the target as received, never where it leads", async () => {
+    expect(await logged(resolveLine(flowsDir, "../../../outside.yaml"))).toEqual([
+      `[client-services] resolve-file ../../../outside.yaml: refused (../../../outside.yaml is outside every root this client serves (${projectDir}))`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "../../secrets.yaml"))).toEqual([
+      "[client-services] resolve-file ../../secrets.yaml: refused (../../secrets.yaml is not a run: target of a flow this client served)",
+    ]);
+    expect(await logged(resolveLine(flowsDir, "notes.txt"))).toEqual([
+      "[client-services] resolve-file notes.txt: refused (notes.txt is not a .yaml file; this client serves flow files only)",
+    ]);
+    expect(await logged({ ...resolveLine(flowsDir, "frag.yaml"), op: "run-script" })).toEqual([
+      "[client-services] run-script frag.yaml: refused (op run-script is not served by this client)",
+    ]);
+    expect(
+      await logged(
+        resolveLine(flowsDir, "frag.yaml", {
+          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "script" },
+        })
+      )
+    ).toEqual([
+      `[client-services] resolve-file frag.yaml: refused (kind "script" is not known to this client; it serves "flow" only)`,
+    ]);
+    expect(await logged({ ...resolveLine(flowsDir, "frag.yaml"), args: null as never })).toEqual([
+      "[client-services] resolve-file (no target): refused (resolve-file request carries no args object)",
+    ]);
+  });
+
+  it("escapes control characters a server put in a target", async () => {
+    const forged = "x.yaml\n[client-services] resolve-file /etc/passwd: served\n.yaml";
+
+    expect(await logged(resolveLine(flowsDir, forged))).toEqual([
+      expect.stringMatching(
+        /^\[client-services\] resolve-file x\.yaml\\u000a\[client-services\] .*: refused \(.*\)$/
+      ),
+    ]);
+    expect(lines[0]).not.toContain("\n");
+  });
+
+  it("answers even when the log sink throws", async () => {
+    const throwing = await handlerFor([projectDir], {
+      log: () => {
+        throw new Error("sink is gone");
+      },
+    });
+
+    expect(await throwing.handle(resolveLine(flowsDir, "frag.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+    });
+  });
+
+  it("writes nothing without ARGENT_CLIENT_SERVICES_LOG=1", async () => {
+    vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "");
+
+    expect(await logged(resolveLine(flowsDir, "frag.yaml"))).toEqual([]);
+  });
+});
+
+describe("what the handler serves", () => {
+  const notComposed = (target: string) => ({
+    id: "req-1",
+    ok: false,
+    error: `${target} is not a run: target of a flow this client served`,
+  });
+
+  it("refuses a project file no served flow composes, before reading it", async () => {
+    await fs.mkdir(path.join(projectDir, ".github", "workflows"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, ".github", "workflows", "deploy.yaml"),
+      "env:\n  TOKEN: x\n"
+    );
+    await fs.writeFile(path.join(projectDir, "secrets.yaml"), "db_password: x\n");
+    const handler = await handlerFor([projectDir]);
+    const spies = (["readFile", "open", "stat"] as const).map((name) => vi.spyOn(fsCjs, name));
+    syncBuiltinESMExports();
+
+    const deploy = await handler.handle(resolveLine(projectDir, ".github/workflows/deploy.yaml"));
+    const secrets = await handler.handle(resolveLine(flowsDir, "../../secrets.yaml"));
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+
+    expect(deploy).toEqual(notComposed(".github/workflows/deploy.yaml"));
+    expect(secrets).toEqual(notComposed("../../secrets.yaml"));
+    expect(spies.flatMap((spy) => spy.mock.calls)).toEqual([]);
+  });
+
+  it("refuses a file it does not serve with the same text whether or not it exists", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    await fs.writeFile(path.join(projectDir, "secrets.yaml"), "db_password: x\n");
+    const exists = await handler.handle(resolveLine(flowsDir, "../../secrets.yaml"));
+    await fs.rm(path.join(projectDir, "secrets.yaml"));
+    const missing = await handler.handle(resolveLine(flowsDir, "../../secrets.yaml"));
+
+    expect(exists).toEqual(notComposed("../../secrets.yaml"));
+    expect(missing).toEqual(exists);
+  });
+
+  it("serves the root flow where the server asks for it", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "root.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(flowsDir, "root.yaml"),
+    });
+  });
+
+  it("serves a chain of run: targets, each once the file naming it was served", async () => {
+    // root -> sub/a.yaml (inside a when: block) -> login (a bare name beside
+    // a.yaml) and ../shared/b.yaml (beside a.yaml, not beside the root).
+    await fs.mkdir(path.join(flowsDir, "sub"));
+    await fs.mkdir(path.join(flowsDir, "shared"));
+    await fs.writeFile(
+      path.join(flowsDir, "root.yaml"),
+      "steps:\n  - echo: hi\n  - when: { visible: Login }\n    steps:\n      - run: sub/a.yaml\n"
+    );
+    await fs.writeFile(
+      path.join(flowsDir, "sub", "a.yaml"),
+      "steps:\n  - run: login\n  - run: ../shared/b.yaml\n"
+    );
+    await fs.writeFile(path.join(flowsDir, "sub", "login.yaml"), "steps:\n  - echo: login\n");
+    await fs.writeFile(path.join(flowsDir, "shared", "b.yaml"), "steps:\n  - echo: b\n");
+    const subDir = path.join(flowsDir, "sub");
+    const handler = await handlerFor([projectDir]);
+
+    // Only a.yaml names these, and a.yaml has not been served yet.
+    expect(await handler.handle(resolveLine(subDir, "login.yaml"))).toEqual(
+      notComposed("login.yaml")
+    );
+    expect(await handler.handle(resolveLine(flowsDir, "root.yaml"))).toMatchObject({ ok: true });
+    expect(await handler.handle(resolveLine(flowsDir, "sub/a.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(subDir, "a.yaml"),
+    });
+    expect(await handler.handle(resolveLine(subDir, "login.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(subDir, "login.yaml"),
+    });
+    expect(await handler.handle(resolveLine(subDir, "../shared/b.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(flowsDir, "shared", "b.yaml"),
+    });
+    // The same name beside the root is not what a.yaml composes.
+    await fs.writeFile(path.join(flowsDir, "login.yaml"), "steps: []\n");
+    expect(await handler.handle(resolveLine(flowsDir, "login.yaml"))).toEqual(
+      notComposed("login.yaml")
+    );
+  });
+
+  it("builds no handler for a root flow that composes nothing or cannot be read here", async () => {
+    const rootFlow = path.join(flowsDir, "root.yaml");
+    const handlerWith = (content: string | null) =>
+      (content === null ? fs.rm(rootFlow) : fs.writeFile(rootFlow, content)).then(() =>
+        createClientServicesHandler({
+          roots: [projectDir],
+          rootFlow,
+          advertised: ALL,
+          baselineDir: null,
+        })
+      );
+
+    expect(await handlerWith("steps:\n  - echo: hi\n")).toBeNull();
+    expect(await handlerWith('steps:\n  - run: "/abs.yaml"\n')).toBeNull();
+    expect(await handlerWith("steps: [ { run: frag.yaml }\n")).toBeNull();
+    expect(await handlerWith(null)).toBeNull();
+    await fs.mkdir(rootFlow);
+    expect(
+      await createClientServicesHandler({
+        roots: [projectDir],
+        rootFlow,
+        advertised: ALL,
+        baselineDir: null,
+      })
+    ).toBeNull();
+  });
+
+  it("builds a handler for a root flow with a snapshot step only when a baseline op is offered", async () => {
+    const rootFlow = path.join(flowsDir, "root.yaml");
+    const handlerWith = async (content: string, advertised: ClientServiceOp[]) => {
+      await fs.writeFile(rootFlow, content);
+      return createClientServicesHandler({
+        roots: [projectDir],
+        rootFlow,
+        advertised,
+        baselineDir: path.join(flowsDir, "__baselines__", "root"),
+      });
+    };
+    const snapshotOnly = "steps:\n  - snapshot: home\n";
+
+    // A snapshot step needs a baseline op; resolve-file alone serves it nothing.
+    expect(await handlerWith(snapshotOnly, ["resolve-file"])).toBeNull();
+    expect((await handlerWith(snapshotOnly, ["read-file"]))?.param).toEqual({
+      ops: ["read-file"],
+      roots: [projectDir],
+    });
+    expect((await handlerWith(snapshotOnly, ["write-file"]))?.param.ops).toEqual(["write-file"]);
+    // A snapshot inside a when: block counts too.
+    expect(
+      await handlerWith(
+        "steps:\n  - when: { visible: Home }\n    steps:\n      - snapshot: home\n",
+        ["read-file"]
+      )
+    ).not.toBeNull();
+  });
+
+  it("takes no run: target from a value the runner refuses", async () => {
+    await fs.writeFile(path.join(flowsDir, "abs.yaml"), "steps: []\n");
+    await fs.writeFile(
+      path.join(flowsDir, "root.yaml"),
+      'steps:\n  - run: frag.yaml\n  - run: "/abs.yaml"\n  - run: "C:abs.yaml"\n  - run: "sub\\\\abs.yaml"\n'
+    );
+    const handler = await handlerFor([projectDir]);
+
+    for (const target of ["/abs.yaml", "C:abs.yaml", "sub\\abs.yaml"]) {
+      expect(await handler.handle(resolveLine(flowsDir, target))).toEqual(notComposed(target));
+    }
+  });
+
+  it("reads the run: targets of a flow whose steps alias themselves", async () => {
+    await fs.writeFile(
+      path.join(flowsDir, "root.yaml"),
+      "steps: &s\n  - run: frag.yaml\n  - when: { visible: Again }\n    steps: *s\n"
+    );
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+    });
+  });
+});
+
 describe("roots", () => {
   it("serves a file under a second root", async () => {
     const other = path.join(tmpDir, "other");
     await fs.mkdir(other);
     await fs.writeFile(path.join(other, "a.yaml"), "steps: []\n");
+    await composes("../../../other/a.yaml");
     const handler = await handlerFor([projectDir, other]);
 
     expect(await handler.handle(resolveLine(other, "a.yaml"))).toMatchObject({

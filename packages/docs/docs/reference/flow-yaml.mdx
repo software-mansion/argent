@@ -430,7 +430,7 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 - a flow in a directory run that failed without a report
 - a usage error, such as an unknown flag
 
-A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
+A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text. Over a link, the CLI also writes a warning object on stderr for a message about a file request of the tool-server: `{ "event": "warning", "warning": <text> }`.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
@@ -448,11 +448,22 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 | A `tool:` step that records a flow, for example `flow-add-step`                                                        | The tool-server rejects the flow before the first step                                                                                                                                                             |
 | A relative `launch: { chromium: <path> }`                                                                              | The launch fails. Use an absolute path on the tool-server                                                                                                                                                          |
 
-The tool-server asks the client for each `run:` fragment and each snapshot baseline during the run. With `--update-baselines`, the tool-server gives each new baseline to the client. The exchange is documented in the [Tool-server API reference](/docs/reference/tool-server-api). The client serves only files under the project root, under its `.argent/flows` directory, under the directory of an explicit flow path, and beside the real file of a flow that is a symlink. The client reads and writes snapshot baselines only in the `__baselines__/<flow>/` directory of the root flow. The client writes them only for a run with `--update-baselines`. A `snapshot:` step in a fragment that the client serves also runs. The step uses the baselines of the root flow, as in a run without a link. The CLI must keep running until the run ends, because the tool-server stops a run when the CLI disconnects. A flow with a `run:` or `snapshot:` step also needs these conditions:
+The tool-server asks the client for each `run:` fragment and each snapshot baseline during the run. With `--update-baselines`, the tool-server gives each new baseline to the client. The exchange is documented in the [Tool-server API reference](/docs/reference/tool-server-api). The client serves only the flow file, the fragments that its `run:` steps name at any depth, and the snapshot baselines of the flow file. Each fragment must be under one of these directories:
+
+- the project root, which is the working directory of the CLI
+- the project of a flow saved under `<project>/.argent/flows/`
+- the `.argent/flows` directory of the project root
+- the directory of the flow file, and the directory of its real file when the flow file is a symlink
+
+The client reads and writes snapshot baselines only in the `__baselines__/<flow>/` directory beside the real file of the flow file. The client writes them only for a run with `--update-baselines`. A `snapshot:` step in a fragment that the client serves also runs. The step uses the baselines of the flow file, as in a run without a link.
+
+The CLI must keep running until the run ends, because the tool-server stops a run when the CLI disconnects. A flow with a `run:` or `snapshot:` step also needs these conditions:
 
 - The CLI answers each request within 30 s. A paused or sleeping CLI fails the run.
-- Each reverse proxy between the CLI and the tool-server passes the response stream through without buffering.
-- Each reverse proxy between the CLI and the tool-server accepts a request body of up to 48 MB. The answer of the CLI to a request for a baseline carries the baseline. When a proxy refuses the answer, the `snapshot:` step reports `error`. The reason names the HTTP status.
+- Each reverse proxy between the CLI and the tool-server passes the response stream through without compression or buffering.
+- Each reverse proxy forwards `POST /invocations/<invocation>/client-responses` to the tool-server while the run continues. The CLI sends its answers on this route.
+- Each reverse proxy accepts a request body of up to 48 MB on this route. The answer of the CLI to a request for a baseline carries the baseline.
+- Each reverse proxy keeps the `Accept` header of the call.
 
 The `script:` and `tool:` rows of the table still need a run without a link. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs. The tool-server rejects a `snapshot:` step that the client cannot serve at the same points.
 
@@ -472,12 +483,19 @@ The reason names the usual causes:
 - a paused or sleeping CLI
 - a proxy that buffers the stream
 - a proxy that does not forward the answer
+- for a baseline, a connection that is too slow to move the file in 30 s
+
+When an answer of the CLI does not reach the tool-server, the CLI stops the flow at once. For example, a proxy answers 502 for the answer route, or the connection fails. The JSON object holds `"error_code": "FLOW_CLIENT_NOT_ANSWERING"` and `"error_kind": "network"`. A directory run stops at that flow and marks the flows after it as skipped.
+
+When a proxy refuses an answer with the status 413, the CLI does not stop the flow. The CLI sends a short refusal in place of the answer. The `run:` or `snapshot:` step that waits for the answer reports `error`. A refusal of the request for the root flow fails the run before the first step. The reason names the status and the request body size that the proxy must accept. The flow fails, and a directory run continues with the next flow. When the tool-server does not accept the refusal either, the CLI stops the flow at once.
+
+When a proxy changes the `Accept` header of the call, the tool-server rejects a flow with a `run:` or `snapshot:` step. The JSON object holds `"error_code": "HTTP_ZOD_VALIDATION_FAILED"` and `"error_kind": "validation"`. A directory run continues with the next flow. A flow without `run:` and `snapshot:` steps is not affected.
 
 When the CLI cannot connect to the tool-server that a link names, the flow does not run. The CLI prints the address of that tool-server, the setting that names it and the reason, for example `connection refused`. The exit code is 2. The JSON object holds `"error_code": "TOOL_SERVER_UNREACHABLE"` and `"error_kind": "network"`. A directory run stops at that flow and marks the flows after it as skipped.
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks the whole flow before it runs the first step. The tool-server asks the client for each `run:` fragment and each snapshot baseline during the run, through the exchange that the [Tool-server API reference](/docs/reference/tool-server-api) documents. The client serves the snapshot baselines of the root flow, and writes each new baseline when the call sets `updateBaselines`. The client reads and writes no other baseline. The client serves only files under `project_root`, under its `.argent/flows` directory, under the directory of an explicit `flow_path`, and beside the real file of a flow that is a symlink. At any depth, Argent rejects a `script:` step, and a `tool:` step that takes a file or records a flow. Argent also rejects a `snapshot:` step when the client cannot serve its baselines. The error lists each such step. In a fragment that the client serves, the `run:` step reports the same error when it loads the fragment. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks that file before it runs the first step, and each fragment when its `run:` step loads the fragment. The tool-server asks the client for each `run:` fragment and each snapshot baseline during the run, through the exchange that the [Tool-server API reference](/docs/reference/tool-server-api) documents. The client serves only the flow file, the fragments that its `run:` steps name, and the snapshot baselines of the flow file. Each fragment must be under `project_root`, under the project of a flow saved under `<project>/.argent/flows/`, under the `.argent/flows` directory of `project_root`, or beside the flow file or its real file. The client writes each new baseline when the call sets `updateBaselines`. The client reads and writes no other baseline. At any depth, Argent rejects a `script:` step, and a `tool:` step that takes a file or records a flow. Argent also rejects a `snapshot:` step when the client cannot serve its baselines. The error lists each such step. In a fragment that the client serves, the `run:` step reports the same error when it loads the fragment. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 

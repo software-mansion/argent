@@ -38,11 +38,13 @@ An entry without the field belongs to a tool that does not use client services, 
 
 ## Opt-in: the `client_services` parameter
 
-The client adds a `client_services` parameter to the arguments of a call when all three conditions hold:
+The client adds a `client_services` parameter to the arguments of a call when all these conditions hold:
 
 1. A link routes the call to a tool-server (`argent link` or `ARGENT_TOOLS_URL`). A link to a tool-server on the same computer counts.
-2. The `GET /tools` entry of the tool carries `clientServices`.
-3. The arguments carry a string `project_root`.
+2. The `GET /tools` entry of the tool carries `clientServices`, and its `ops` hold an op that the client serves.
+3. `project_root` is an absolute path without a `..` segment.
+4. The arguments carry exactly one flow source: a `name` that is a valid flow name, or a `flow_path` that is an absolute path without a `..` segment to a valid flow file name.
+5. The root flow file is on the client, under the roots, and has at least one `run:` step. A `snapshot:` step also counts when `ops` hold `read-file` or `write-file`.
 
 ```json
 {
@@ -56,12 +58,12 @@ The client adds a `client_services` parameter to the arguments of a call when al
 }
 ```
 
-| Field   | Value                                                                                                                                                                                                                                                                                                                                             |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements. The client offers `write-file` only when the arguments set `updateBaselines: true`                                                                                                                                                             |
-| `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of `flow_path` when the arguments carry one, and the directory of the real file behind the root flow when that file is a YAML file. A root inside another root is not sent. A `name` that is not a valid flow name adds no root |
+| Field   | Value                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements. The client offers `write-file` only when the arguments set `updateBaselines: true`                                                                                                                                                                                                                      |
+| `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of the root flow file, and the directory of the real file behind the root flow when that real file is a YAML file (`.yaml` or `.yml`). When the root flow file or that real file is under `<P>/.argent/flows/`, the project `<P>` is also a root. A root inside another root is not sent |
 
-The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 with `HTTP_ZOD_VALIDATION_FAILED` to a call that carries `client_services` without that header, or with a malformed `client_services`. A proxy that rewrites `Accept` therefore gets this 400. The tool-server takes `client_services` off the arguments before it validates them, so the input schema of `flow-execute` does not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
+The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 with `HTTP_ZOD_VALIDATION_FAILED` and the error kind `validation` to a call that carries `client_services` without that header, or with a malformed `client_services`. A proxy that rewrites `Accept` therefore gets this 400 for a flow with a `run:` or `snapshot:` step. A directory run of `argent flow run` reports that flow as rejected and continues with the next flow. The tool-server takes `client_services` off the arguments before it validates them, so the input schema of `flow-execute` does not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
 
 Each request line must reach the client at once, because the run waits for the answer. For this reason, the client sends `Accept-Encoding: identity` with the call, and the tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. Each reverse proxy between the client and the tool-server must:
 
@@ -69,11 +71,11 @@ Each request line must reach the client at once, because the run waits for the a
 - forward `POST /invocations/<invocation>/client-responses` while the stream of the call is open
 - accept a request body of up to 48 MB on `POST /invocations/<invocation>/client-responses`, because an answer to `read-file` carries the baseline
 
-`X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. nginx does not forward the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream keeps the request line from the client. The tool-server then reports a timeout after 30 s. A flow without `run:` and `snapshot:` steps sends no request, so such a proxy does not stop it.
+`X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. nginx does not forward the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream keeps the request line from the client. The tool-server then reports a timeout after 30 s. A flow without `run:` and `snapshot:` steps carries no `client_services` and sends no request, so such a proxy does not stop it.
 
-nginx accepts a request body of up to 1 MB by default. A full-screen baseline is often larger. Set `client_max_body_size 48m` in each nginx. When a proxy refuses an answer with an error status, the client sends a refusal for the same request. The step then reports `error` at once. See [Timeouts and failures](#timeouts-and-failures).
+nginx accepts a request body of up to 1 MB by default. A full-screen baseline is often larger. Set `client_max_body_size 48m` in each nginx. When a proxy refuses an answer with the status 413, the client sends a refusal for the same request. The step that waits for the answer then reports `error` at once. A refusal of the request for the root flow fails the run before the first step. See [Timeouts and failures](#timeouts-and-failures).
 
-When one condition does not hold, the client sends no `client_services`. The client also sends no `client_services` when no root exists on the client, or when the advertised `ops` hold no op that the client serves. The tool-server then keeps the behavior of a call without client services.
+When one condition does not hold, the client sends no `client_services`, and the call is not a stream for client services. The tool-server then keeps the behavior of a call without client services.
 
 ## Request: the `client-request` line
 
@@ -97,7 +99,7 @@ The tool-server writes one line on the NDJSON stream of the call for each reques
 | `op`         | One of the ops the client listed                      |
 | `args`       | The arguments of the op. See [Ops](#ops)              |
 
-The line sits between the step progress lines. When the flow has a `run:` or `snapshot:` step, the first request comes before the first step and asks for the root flow itself. For a flow with an `echo` step and a `run:` step, the lines come in this order:
+The line sits between the step progress lines. When the flow has a `run:` or `snapshot:` step, the first request comes before the first step and asks for the root flow itself. For a flow with an `echo` step and then a `run: frag.yaml` step, called with a `device`, the lines come in this order:
 
 ```text
 {"event":"client-request","invocation":"...","id":"...","op":"resolve-file","args":{"target":"withrun.yaml",...}}
@@ -106,6 +108,8 @@ The line sits between the step progress lines. When the flow has a `run:` or `sn
 {"event":"progress","data":{"kind":"run","status":"pass",...}}
 {"event":"result","data":{...}}
 ```
+
+The tool-server asks once for each `run:` target in a call, and every later read of that target in the call uses the same answer. Without a `device`, the tool-server reads a leading `run:` chain before the first step to find its launch. Then the request for `frag.yaml` comes before the first progress line.
 
 A client that sent no `client_services` never receives the line.
 
@@ -120,10 +124,19 @@ Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-The body has one of two shapes. When the client serves the request, the body carries the answer fields of the op:
+The body has one of two shapes. When the client serves the request, the body carries the answer fields of the op. For `resolve-file`, see [the answer fields](#resolve-file):
 
 ```json
-{ "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13", "ok": true, "canonical": "...", "exists": true }
+{
+  "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13",
+  "ok": true,
+  "canonical": "/work/proj/.argent/flows/frag.yaml",
+  "spelling": { "state": "listed" },
+  "exists": true,
+  "size": 20,
+  "mtimeMs": 1791300000000,
+  "content": "c3RlcHM6CiAgLSBlY2hvOiBoaQo="
+}
 ```
 
 When the client refuses the request, the body carries the reason:
@@ -145,7 +158,7 @@ The endpoint sits behind the same bearer-token check and Host check as `/tools/<
 
 ### `resolve-file`
 
-The tool-server sends `resolve-file` for each `run:` step. The client resolves the target on its own disk and returns the file. When the flow has a `run:` or `snapshot:` step, the tool-server also sends `resolve-file` for the root flow itself before the first step, to learn the real location of the file. The `run:` targets of the root flow and the snapshot baselines resolve beside that location, as they do on one computer. A refusal of that request fails the run before the first step.
+The tool-server sends `resolve-file` once for each `run:` target of a call. The client resolves the target on its own disk and returns the file. When the flow has a `run:` or `snapshot:` step, the tool-server also sends `resolve-file` for the root flow itself before the first step, to learn the real location of the file. The `run:` targets of the root flow and the snapshot baselines resolve beside that location, as they do on one computer. A refusal of that request fails the run before the first step.
 
 Request `args`:
 
@@ -157,14 +170,16 @@ Request `args`:
 
 Answer:
 
-| Field       | Value                                                                                    |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| `canonical` | The realpath of `anchorDir` + `/` + `target` on the client                               |
-| `spelling`  | How the directory on the client lists the basename of `target`. See the next table       |
-| `exists`    | `true` when the client can stat `canonical` as a file                                    |
-| `size`      | The size of the file in bytes. Present when `exists` is `true`                           |
-| `mtimeMs`   | The modification time of the file in epoch milliseconds. Present when `exists` is `true` |
-| `content`   | The file as base64. Present when `exists` is `true` and `kind` is `flow`                 |
+| Field       | Required                                     | Value                                                                              |
+| ----------- | -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `canonical` | Yes                                          | The realpath of `anchorDir` + `/` + `target` on the client                         |
+| `spelling`  | Yes                                          | How the directory on the client lists the basename of `target`. See the next table |
+| `exists`    | Yes                                          | `true` when the client can stat `canonical` as a file                              |
+| `content`   | When `exists` is `true` and `kind` is `flow` | The file as base64                                                                 |
+| `size`      | No                                           | The size of the file in bytes                                                      |
+| `mtimeMs`   | No                                           | The modification time of the file in epoch milliseconds                            |
+
+The tool-server accepts the answer with 200 before the runner reads it. When a required field is missing, the runner fails the request: the step or the run reports that the client answered with an invalid payload.
 
 `spelling` has one of three shapes:
 
@@ -225,13 +240,15 @@ The protocol also defines the op name `run-script`. No client serves it. The cli
 
 The tool-server waits 30 s for each answer. For `read-file` and `write-file`, the 30 s include the time to move the file. The file travels as base64. A file at the 32 MiB cap therefore needs about 12 Mbit/s: from the client to the tool-server for `read-file`, and from the tool-server to the client for `write-file`.
 
-| Event                                    | Effect on the run                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No answer within 30 s                    | Before the first step, the call fails with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `timeout`. At a `run:` or `snapshot:` step, the step reports `error` and the later steps report `skip`. Every later request of the same call then fails at once. A `write-file` that the client already received still completes on the client                                  |
-| An answer with `ok: false`               | The step reports `error`. At a `run:` step, the reason starts with `could not load fragment "<target>":` and quotes the `error` text of the client. At a `snapshot:` step, the reason names the op and the path, and quotes the `error` text of the client. The later steps report `skip`. A refusal of the request for the root flow fails the run before the first step |
-| An answer gets an error status           | Unless the status is 404 or 409, the client sends a refusal for the same request. The `error` text names the status. For a 413, the text also says that a proxy limits the size of a request body. The step reports `error`, as for an answer with `ok: false`. When the refusal also fails, the tool-server reports a timeout after 30 s                                 |
-| The HTTP response of the call closes     | The tool-server rejects every pending request and aborts the run. A `run:` or `snapshot:` step that waits for an answer reports `skip` with the reason `run aborted`. A `write-file` that the client already received still completes on the client                                                                                                                       |
-| The client closes before the call starts | The tool-server does not run the call                                                                                                                                                                                                                                                                                                                                     |
+| Event                                              | Effect on the run                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No answer within 30 s                              | Before the first step, the call fails with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `timeout`. At a `run:` or `snapshot:` step, the step reports `error` and the later steps report `skip`. Every later request of the same call then fails at once. The client can still complete a `write-file` that it already received. `argent flow run` exits at the end of the call and stops such a write. The old baseline then stays complete |
+| An answer with `ok: false`                         | The step reports `error`. At a `run:` step, the reason starts with `could not load fragment "<target>":` and quotes the `error` text of the client. At a `snapshot:` step, the reason names the op and the path, and quotes the `error` text of the client. The later steps report `skip`. A refusal of the request for the root flow fails the run before the first step                                                                     |
+| A proxy refuses an answer with the status 413      | The client sends a refusal for the same request instead. The `error` text names the status. It also says that the proxy must accept a request body of up to 48 MB on the answer route. The effect is the same as for an answer with `ok: false`. When the tool-server does not accept the refusal either, the effect is the same as for an answer that does not reach the tool-server                                                         |
+| The HTTP response of the call closes               | The tool-server rejects every pending request and aborts the run. A `run:` or `snapshot:` step that waits for an answer reports `skip` with the reason `run aborted`. Each step that did not run also reports `skip` with the reason `run aborted`. The client can still complete a `write-file` that it already received. `argent flow run` exits at the end of the call and stops such a write. The old baseline then stays complete        |
+| The client closes before the call starts           | The tool-server does not run the call                                                                                                                                                                                                                                                                                                                                                                                                         |
+| The answer does not reach the tool-server          | The client stops the call at once with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `network`, and closes the response. The tool-server then aborts the run                                                                                                                                                                                                                                                                                 |
+| The client cannot read or write a file within 30 s | The client sends no answer, and the tool-server reports the timeout                                                                                                                                                                                                                                                                                                                                                                           |
 
 The reason of a timeout names the op, and the target or the path of the request. It also names the usual causes:
 
@@ -240,12 +257,14 @@ The reason of a timeout names the op, and the target or the path of the request.
 - a proxy that does not forward the answer
 - for `read-file` and `write-file`, a connection that is too slow to move the file in 30 s
 
+The answer does not reach the tool-server when the answer request fails, when it gets no reply within 30 s, or when its reply is not one that the tool-server sends. An example is a 502 from a proxy. The replies of the tool-server in the status table above do not stop the call. A 413 from a proxy also does not stop the call, because the client sends a refusal in place of the answer.
+
 ## Client policy
 
 The client enforces these rules. The tool-server checks only the shape of each answer and the 32 MiB cap. The tool-server already holds the bearer token, so the rules protect the files of the project, not the token.
 
-1. The client reads and writes nothing outside the roots it sent. Before it reads a file, writes a file or lists a directory, it checks the real location against the roots. It refuses a symlink that points outside a root. It refuses a target that ends outside a root, for example through `..`.
-2. The client refuses a path when it cannot find the real location of the path. For example, the real location can be longer than the path limit of the system, a link on the path can be unreadable, or the client cannot search a directory on the path. This refusal has the same text as the refusal of a path outside the roots. The text names both causes.
+1. The client serves only the files that the flows of the call compose: the root flow, each `run:` target that a served file names, resolved beside that file, and the snapshot baselines of the run. The client refuses any other request before it reads the file. The refusal is the same whether the file exists or not.
+2. The client reads and writes nothing outside the roots it sent. It resolves a requested path one segment at a time, as the operating system does. Before it looks at a place on the disk, it checks that the place is in a root or on the way to a root. It refuses a symlink that points outside a root. It refuses a target that passes through a place outside the roots, also when the target ends in a root.
 3. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
 4. `resolve-file` serves `.yaml` names only. The client refuses a `.yaml` name that links to a file that is not a YAML file (`.yaml` or `.yml`).
 5. `read-file` and `write-file` take only an absolute path of the form `<dir>/__baselines__/<flow>/<key>.png`, in normal form: no `..`, no `.` and no double `/`. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path. The path must also be in the baseline directory of the run: `__baselines__/<flow>/` beside the real file of the root flow, with the `<flow>` that the tool-server uses. The client refuses a baseline of another flow and a `__baselines__` directory in another place. When the root flow is not a YAML file on the client, the client refuses every path.
@@ -254,8 +273,10 @@ The client enforces these rules. The tool-server checks only the shape of each a
 8. Before `write-file` creates `__baselines__/<flow>/`, the client checks the real location of that directory against the roots. Before it writes the file, the client checks the real location of the file again. The client follows a link to a file that does not exist to check where it leads, and then refuses it.
 9. The client refuses a file above 32 MiB, for a read and for a write. The error names the cap.
 10. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
-11. For a read, the client answers a directory with the `EISDIR` error and an unreadable file with the error of the read, for example `EACCES`. It answers a target or a path in a directory that does not exist as a missing file. `read-file` also answers a path as a missing file when a file stands where a directory of the path should be. `resolve-file` answers such a target with the `ENOTDIR` error, as a run without a link does. `write-file` refuses a path where something other than a regular file is, for example a directory or a FIFO.
-12. By default, the client prints nothing for a request it serves. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line per served request to stderr. The line holds the op and the path, for example `[client-services] write-file <path>`. The client never prints the content. For `read-file` and `write-file`, the client prints the line only after the read or the write succeeds.
+11. For a read, the client answers a directory with the `EISDIR` error, and an unreadable file with the error of the read, for example `EACCES`. It answers a target or a path in a directory that does not exist as a missing file.
+12. The client answers a loop of symlinks with `ELOOP`. When the client cannot look at a place on the path, it answers with the error of the system, for example `EACCES` for a directory that it cannot search. It answers a file that a path uses as a directory with `ENOTDIR`. `read-file` answers such a path as a missing file instead, as a run without a link does. `write-file` answers a file at `__baselines__/<flow>` with the `EEXIST` error of the directory creation.
+13. `write-file` refuses a path where something other than a regular file is, for example a directory or a FIFO.
+14. By default, the client prints a line only when it cannot answer a request, or when the tool-server or a proxy does not take the answer. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line for each request after it decides the answer: `[client-services] <op> <path>: served`, `: missing`, `: written` or `: refused (<reason>)`. For `resolve-file`, the path is the real path of the file after the client finds that the flows of the call compose the file. Before that point, the path is the target that the tool-server sent. For `read-file` and `write-file`, the path is the path that the tool-server sent. The client never prints the content. Under `argent flow run --json`, each line is a warning object on stderr.
 
 ## A client or tool-server without client services
 
