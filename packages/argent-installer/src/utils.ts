@@ -126,6 +126,26 @@ export function listArgentSkillsInLock(lockPath: string): string[] {
   }
 }
 
+/**
+ * The newest argent version any argent-owned skill in this lock was installed
+ * from, or null when the lock records none (a local source, an older lock shape,
+ * no argent skills, or an unreadable file).
+ */
+export function lockedArgentSkillVersion(lockPath: string): string | null {
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+      skills?: Record<string, { ref?: unknown }>;
+    };
+    const versions = Object.entries(lock.skills ?? {})
+      .filter(([name]) => name.startsWith(ARGENT_SKILL_PREFIX))
+      .map(([, entry]) => (typeof entry?.ref === "string" ? entry.ref.replace(/^v/, "") : null))
+      .filter((v): v is string => v !== null && semver.valid(v) !== null);
+    return versions.length > 0 ? semver.rsort(versions)[0]! : null;
+  } catch {
+    return null;
+  }
+}
+
 const PROJECT_ROOT_MARKERS = [
   ".mcp.json",
   ".claude",
