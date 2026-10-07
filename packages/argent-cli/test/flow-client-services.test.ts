@@ -54,6 +54,8 @@ let stdout: string[];
 let stderr: string[];
 /** Per test: how POST /tools/flow-execute answers. */
 let onInvoke: (res: ServerResponse) => void | Promise<void>;
+/** Per test: how POST /invocations/:id/client-responses answers. */
+let onAnswer: (res: ServerResponse) => void;
 
 function line(payload: unknown): string {
   return `${JSON.stringify(payload)}\n`;
@@ -70,6 +72,10 @@ function settlesWithin<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 beforeEach(async () => {
   hang.reads = [];
+  onAnswer = (res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ accepted: true }));
+  };
   projectDir = await fsp.realpath(await fsp.mkdtemp(path.join(tmpdir(), "argent-cli-services-")));
   flowsDir = path.join(projectDir, ".argent", "flows");
   await fsp.mkdir(flowsDir, { recursive: true });
@@ -89,8 +95,7 @@ beforeEach(async () => {
         return;
       }
       if (req.method === "POST" && req.url?.endsWith("/client-responses")) {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ accepted: true }));
+        onAnswer(res);
         return;
       }
       res.writeHead(404);
@@ -211,5 +216,75 @@ describe("argent flow run over a link: a local read that never finishes", () => 
       settlesWithin(flow(["run", "root"], { paths: {} as never }), 3_000)
     ).rejects.toThrow("process.exit:1");
     expect(hang.reads).toEqual([path.join(flowsDir, "hang.yaml")]);
+  });
+});
+
+describe("argent flow run over a link: an answer that does not reach the tool-server", () => {
+  it("stops a directory run at its first flow at once, as a network error", async () => {
+    // A reverse proxy that does not forward the answer route answers for it.
+    onAnswer = (res) => {
+      res.writeHead(502, { "Content-Type": "text/html" });
+      res.end("<html>Bad Gateway</html>");
+    };
+    let calls = 0;
+    let hungUp = false;
+    onInvoke = async (res) => {
+      calls++;
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.write(
+        line({
+          event: "client-request",
+          invocation: "inv-1",
+          id: "req-1",
+          op: "resolve-file",
+          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+        })
+      );
+      // The tool-server keeps the stream open while the request waits, until
+      // the client hangs up or (standing in for its timeout) 2 s pass.
+      await new Promise<void>((resolve) => {
+        res.once("close", () => {
+          hungUp = !res.writableFinished;
+          resolve();
+        });
+        setTimeout(resolve, 2_000).unref();
+      });
+      if (!res.writableEnded) {
+        res.end(
+          line({
+            event: "error",
+            error: "the client did not answer the resolve-file request",
+            error_code: "FLOW_CLIENT_NOT_ANSWERING",
+            error_kind: "timeout",
+          })
+        );
+      }
+    };
+
+    const started = Date.now();
+    await expect(flow(["run", flowsDir, "--json"], { paths: {} as never })).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(calls).toBe(1);
+    // The tool-server learns of it from the hang-up and stops the run.
+    await vi.waitFor(() => expect(hungUp).toBe(true));
+    const failed = {
+      error: expect.stringContaining("client-responses answered 502 Bad Gateway."),
+      error_code: "FLOW_CLIENT_NOT_ANSWERING",
+      error_kind: "network",
+    };
+    expect(JSON.parse(stdout.join("\n"))).toMatchObject({
+      ok: false,
+      total: 2,
+      failed: 1,
+      skipped: 1,
+      flows: [
+        { path: "frag.yaml", status: "fail", ...failed },
+        { path: "root.yaml", status: "skip" },
+      ],
+    });
+    expect(stderr.map((text) => JSON.parse(text))).toEqual([{ event: "error", ...failed }]);
   });
 });

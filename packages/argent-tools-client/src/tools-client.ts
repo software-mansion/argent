@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
   CLIENT_FILE_OP_TIMEOUT_MS,
   CLIENT_REQUEST_EVENT,
+  FAILURE_CODES,
   describeParamIssues,
   type ClientRequestLine,
   type ClientResponseBody,
@@ -86,7 +87,8 @@ export interface CreateToolsClientOptions {
   ) => Promise<Response>;
   /**
    * Receives each diagnostic line of client services (a request line it had to
-   * drop, an answer the tool-server did not take), without a trailing newline.
+   * drop, a request it gave up, an answer the tool-server did not take),
+   * without a trailing newline.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
    */
@@ -166,48 +168,106 @@ async function answerInTime(
   }
 }
 
+/** An error's message, with its cause's: fetch says only "fetch failed" itself. */
+function errorText(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  return err.cause instanceof Error ? `${err.message} (${err.cause.message})` : err.message;
+}
+
 /**
- * Answer one request line and post the answer. Never rejects: a failed post is
- * one diagnostic, and the server times the request out on its side. A line
- * without a string id or invocation names no answer to post, so it is
- * dropped. The handler and the post each give up when the server would have
- * stopped waiting.
+ * The `error` of the tool-server's own refusal of an answer, or undefined when
+ * the reply is not one. Its answer route sends, each with a JSON `error`: 400
+ * for a malformed answer, 404 for one after its timeout or after the call
+ * ended, 409 for a second one, 413 for one above the size cap (which it turns
+ * into a refusal of the request). The route was reached and the request is
+ * settled there, so the run goes on and its report says what became of it.
+ */
+function answerRouteRefusal(status: number, text: string): string | undefined {
+  if (![400, 404, 409, 413].includes(status)) return undefined;
+  try {
+    const body = JSON.parse(text) as { error?: unknown } | null;
+    return typeof body?.error === "string" ? body.error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The failure of a call whose answer to `request` did not reach the tool-server. */
+function undeliveredAnswer(request: string, url: string, reason: string): ToolInvocationError {
+  return new ToolInvocationError(
+    `The answer to ${request} did not reach the tool-server: POST ${url} ${reason}. The call ` +
+      `was stopped. A reverse proxy between the client and the tool-server must forward that ` +
+      `route while the call's stream is open.`,
+    { errorCode: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING, errorKind: "network" }
+  );
+}
+
+/**
+ * Answer one request line and post the answer. Never rejects. Resolves to the
+ * failure of the call when the answer cannot reach the tool-server: the post
+ * failed, or got a reply the tool-server's answer route does not send, which
+ * comes from a proxy in between. Anything else is at most one diagnostic, and
+ * the server settles the request on its side: a line without a string id or
+ * invocation names no answer to post, so it is dropped. The handler and the
+ * post each give up when the server would have stopped waiting.
  */
 async function answerClientRequest(
   link: ClientServicesLink,
   msg: ClientRequestLine
-): Promise<void> {
-  const { id, op, invocation } = msg as { id?: unknown; op?: unknown; invocation?: unknown };
+): Promise<ToolInvocationError | undefined> {
+  const { id, invocation } = msg as { id?: unknown; invocation?: unknown };
   if (typeof id !== "string" || typeof invocation !== "string") {
     link.diagnose("[client-services] ignored a request line without a string id");
-    return;
+    return undefined;
   }
-  const describe = `answer to ${typeof op === "string" ? op : "an unknown op"} request ${id} failed`;
+  const request = describeRequest(msg);
+  const seconds = Math.round(CLIENT_FILE_OP_TIMEOUT_MS / 1000);
+  let body: ClientResponseBody | undefined;
   try {
-    const body = await answerInTime(link, msg);
-    if (body === undefined) {
-      link.diagnose(
-        `[client-services] ${describeRequest(msg)} did not finish on this client within ` +
-          `${Math.round(CLIENT_FILE_OP_TIMEOUT_MS / 1000)} s, the time the tool-server waits ` +
-          `for it; no answer was sent`
-      );
-      return;
-    }
-    const res = await fetch(link.answerUrl(invocation), {
+    body = await answerInTime(link, msg);
+  } catch (err) {
+    // The handler is built never to throw; should it, the request goes
+    // unanswered like one it gave up.
+    link.diagnose(`[client-services] ${request} failed on this client: ${errorText(err)}`);
+    return undefined;
+  }
+  if (body === undefined) {
+    link.diagnose(
+      `[client-services] ${request} did not finish on this client within ${seconds} s, the ` +
+        `time the tool-server waits for it; no answer was sent`
+    );
+    return undefined;
+  }
+  const url = link.answerUrl(invocation);
+  let res: Response;
+  try {
+    res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...link.headers },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
     });
-    // Drain so the connection is released; the body itself is not needed.
-    await res.text().catch(() => undefined);
-    if (!res.ok) {
-      link.diagnose(`[client-services] ${describe}: ${res.status} ${res.statusText}`);
-    }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    link.diagnose(`[client-services] ${describe}: ${message}`);
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
+    return undeliveredAnswer(
+      request,
+      url,
+      timedOut ? `got no reply within ${seconds} s` : `failed: ${errorText(err)}`
+    );
   }
+  // Read whole, which also releases the connection: a refusal names its reason.
+  const text = await res.text().catch(() => "");
+  if (res.ok) return undefined;
+  const refusal = answerRouteRefusal(res.status, text);
+  if (refusal === undefined) {
+    const status = [res.status, res.statusText].filter(Boolean).join(" ");
+    return undeliveredAnswer(request, url, `answered ${status}`);
+  }
+  link.diagnose(
+    `[client-services] the tool-server did not take the answer to ${request}: ` +
+      `${res.status} ${refusal}`
+  );
+  return undefined;
 }
 
 /**
@@ -236,6 +296,10 @@ async function consumeToolStream(
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
   let progress = 0;
+  // The first answer that could not reach the tool-server. It fails the call
+  // unless the stream delivered its result first.
+  let undelivered: ToolInvocationError | undefined;
+  const reader = body.getReader();
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
     const msg = JSON.parse(line) as {
@@ -254,7 +318,15 @@ async function consumeToolStream(
       // answer is never awaited: the tool-server sends the result or error
       // line only once every request was answered or timed out, so an answer
       // still in flight when the stream ends settles nothing.
-      if (services) void answerClientRequest(services, msg as ClientRequestLine);
+      if (!services) return;
+      void answerClientRequest(services, msg as ClientRequestLine).then((failure) => {
+        if (failure === undefined || undelivered) return;
+        // Rather than wait out the server's timeout for an answer that will
+        // not come, hang up: the server then stops the call, and the read
+        // loop ends with this failure.
+        undelivered = failure;
+        void reader.cancel().catch(() => {});
+      });
     } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
     else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -264,7 +336,6 @@ async function consumeToolStream(
     }
   };
 
-  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
   try {
@@ -273,7 +344,10 @@ async function consumeToolStream(
       try {
         chunk = await reader.read();
       } catch (err) {
-        throw brokenStream(name, err instanceof Error ? err.message : String(err), progress, err);
+        throw (
+          undelivered ??
+          brokenStream(name, err instanceof Error ? err.message : String(err), progress, err)
+        );
       }
       const { done, value } = chunk;
       if (done) break;
@@ -285,15 +359,20 @@ async function consumeToolStream(
         handleLine(line);
       }
     }
-    buffered += decoder.decode();
-    if (buffered.trim()) handleLine(buffered);
+    // A hang-up leaves at most a cut line behind.
+    if (!undelivered) {
+      buffered += decoder.decode();
+      if (buffered.trim()) handleLine(buffered);
+    }
   } catch (err) {
     // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
     throw err;
   }
 
-  if (!final) throw brokenStream(name, "the stream ended without a result", progress);
+  if (!final) {
+    throw undelivered ?? brokenStream(name, "the stream ended without a result", progress);
+  }
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
   return { data, note: final.note };

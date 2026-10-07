@@ -35,6 +35,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 // link-config.ts captures ~/.argent/link.json at module load; an isolated HOME
 // keeps a developer's real link out of the "routing is local" case.
 let createToolsClient: typeof import("../src/tools-client.js").createToolsClient;
+let ToolInvocationError: typeof import("../src/tools-client.js").ToolInvocationError;
 let TEST_HOME: string;
 let restoreHome: () => void;
 
@@ -42,7 +43,7 @@ beforeAll(async () => {
   TEST_HOME = mkdtempSync(path.join(tmpdir(), "argent-client-services-wire-"));
   restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
-  ({ createToolsClient } = await import("../src/tools-client.js"));
+  ({ createToolsClient, ToolInvocationError } = await import("../src/tools-client.js"));
 });
 
 afterAll(() => {
@@ -66,10 +67,15 @@ let projectDir: string;
 let flowsDir: string;
 /** Per test: how POST /tools/flow-execute answers, given the parsed body. */
 let onInvoke: (body: unknown, res: ServerResponse) => void | Promise<void>;
-/** Per test: the status POST /invocations/:id/client-responses answers with. */
-let answerStatus: number;
+/**
+ * Per test: how POST /invocations/:id/client-responses answers. A string body
+ * goes out as HTML, as a proxy's own error page would.
+ */
+let answerReply: { status: number; body: unknown };
 /** Per test: the answer route reads the POST and never answers it. */
 let answerHangs: boolean;
+/** Per test: the answer route drops the connection without a reply. */
+let answerDrops: boolean;
 /** Resolves once per posted answer, so the invoke stub can wait for it. */
 let answerPosted: () => void;
 let nextAnswer: Promise<void>;
@@ -96,8 +102,9 @@ beforeEach(async () => {
   requests = [];
   timing.fileOpTimeoutMs = 30_000;
   hang.reads = [];
-  answerStatus = 200;
+  answerReply = { status: 200, body: { accepted: true } };
   answerHangs = false;
+  answerDrops = false;
   listing = [
     { name: "flow-execute", description: "", inputSchema: {}, clientServices: ADVERT },
     { name: "plain", description: "", inputSchema: {} },
@@ -134,8 +141,15 @@ beforeEach(async () => {
     }
     if (req.method === "POST" && /^\/invocations\/[^/]+\/client-responses$/.test(req.url ?? "")) {
       if (answerHangs) return;
-      res.writeHead(answerStatus, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(answerStatus === 200 ? { accepted: true } : { error: "nope" }));
+      if (answerDrops) {
+        req.socket.destroy();
+        return;
+      }
+      const html = typeof answerReply.body === "string";
+      res.writeHead(answerReply.status, {
+        "Content-Type": html ? "text/html" : "application/json",
+      });
+      res.end(html ? (answerReply.body as string) : JSON.stringify(answerReply.body));
       answerPosted();
       return;
     }
@@ -186,6 +200,60 @@ function hangRequestLine(): string {
     op: "resolve-file",
     args: { anchorDir: flowsDir, target: "hang.yaml", kind: "flow" },
   })}\n`;
+}
+
+const FRAG_REQUEST = {
+  id: "req-3",
+  op: "resolve-file",
+  args: { kind: "flow", target: "frag.yaml" },
+};
+
+/**
+ * A request line, then the stream stays open as the tool-server keeps it while
+ * the request waits: until the client hangs up, or until the stub's stand-in
+ * for the server's timeout ends it with FLOW_CLIENT_NOT_ANSWERING.
+ */
+function streamUntilHangUp(): { hungUp: () => boolean } {
+  let hungUp = false;
+  onInvoke = async (_body, res) => {
+    res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+    res.write(
+      `${JSON.stringify({
+        event: "client-request",
+        invocation: "inv-1",
+        ...FRAG_REQUEST,
+        args: { ...FRAG_REQUEST.args, anchorDir: flowsDir },
+      })}\n`
+    );
+    await new Promise<void>((resolve) => {
+      res.once("close", () => {
+        hungUp = !res.writableFinished;
+        resolve();
+      });
+      setTimeout(resolve, 2_000).unref();
+    });
+    if (!res.writableEnded) {
+      res.end(
+        `${JSON.stringify({
+          event: "error",
+          error: "the client did not answer the resolve-file request",
+          error_code: "FLOW_CLIENT_NOT_ANSWERING",
+          error_kind: "timeout",
+        })}\n`
+      );
+    }
+  };
+  return { hungUp: () => hungUp };
+}
+
+/** What a call fails with, and how long it took to fail. */
+async function failureOf(call: Promise<unknown>): Promise<{ err: unknown; ms: number }> {
+  const started = Date.now();
+  const err = await call.then(
+    () => undefined,
+    (thrown: unknown) => thrown
+  );
+  return { err, ms: Date.now() - started };
 }
 
 /** A request line the stub server writes, followed by the result once answered. */
@@ -395,24 +463,81 @@ describe("callTool client services", () => {
     expect(answerRequests()[0]!.body).toMatchObject({ id: "req-2", ok: true, exists: true });
   });
 
-  it("logs a failed answer POST to stderr and still resolves with the result line", async () => {
+  it("fails the call at once and hangs up when a proxy answers for the tool-server", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
-    answerStatus = 500;
-    streamOneRequest({
-      id: "req-3",
-      op: "resolve-file",
-      args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+    answerReply = { status: 502, body: "<html>Bad Gateway</html>" };
+    const stream = streamUntilHangUp();
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+
+    const { err, ms } = await failureOf(callTool("flow-execute", { project_root: projectDir }));
+
+    expect(ms).toBeLessThan(1_000);
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect(err).toMatchObject({
+      errorCode: "FLOW_CLIENT_NOT_ANSWERING",
+      errorKind: "network",
+      message:
+        `The answer to the resolve-file request for "frag.yaml" did not reach the tool-server: ` +
+        `POST ${url}/invocations/inv-1/client-responses answered 502 Bad Gateway. The call was ` +
+        `stopped. A reverse proxy between the client and the tool-server must forward that ` +
+        `route while the call's stream is open.`,
     });
-    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { callTool } = createToolsClient();
+    // The server learns of it from the hang-up and stops the run.
+    await vi.waitFor(() => expect(stream.hungUp()).toBe(true));
+  });
+
+  it("fails the call at once when the answer POST loses its connection", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerDrops = true;
+    const stream = streamUntilHangUp();
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+
+    const { err, ms } = await failureOf(callTool("flow-execute", { project_root: projectDir }));
+
+    expect(ms).toBeLessThan(1_000);
+    expect(err).toMatchObject({ errorCode: "FLOW_CLIENT_NOT_ANSWERING", errorKind: "network" });
+    expect((err as Error).message).toMatch(
+      /^The answer to the resolve-file request for "frag\.yaml" did not reach the tool-server: POST http:\/\/127\.0\.0\.1:\d+\/invocations\/inv-1\/client-responses failed: fetch failed \(.+\)\. The call was stopped\./
+    );
+    await vi.waitFor(() => expect(stream.hungUp()).toBe(true));
+  });
+
+  it("fails the call at once when a proxy answers 404 for the answer route", async () => {
+    // A 404 from the tool-server itself carries a JSON error; a proxy's does not.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerReply = { status: 404, body: "not forwarded" };
+    streamUntilHangUp();
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+
+    const { err, ms } = await failureOf(callTool("flow-execute", { project_root: projectDir }));
+
+    expect(ms).toBeLessThan(1_000);
+    expect((err as Error).message).toContain("client-responses answered 404 Not Found.");
+  });
+
+  it.each([
+    [400, "the body must carry a boolean ok"],
+    [404, "unknown or expired request id"],
+    [409, "the request already has an answer"],
+    [413, "the answer's content decodes to more than 32 MiB"],
+  ])("keeps the call going when the tool-server's own route answers %i", async (status, error) => {
+    // The route was reached and the server settles the request on its side;
+    // the report that follows says what became of it.
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerReply = { status, body: { error } };
+    streamOneRequest({ ...FRAG_REQUEST, args: { ...FRAG_REQUEST.args, anchorDir: flowsDir } });
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
 
     const result = await callTool("flow-execute", { project_root: projectDir });
 
     expect(result).toEqual({ data: { ran: true }, note: "done" });
-    // The call does not wait for its answers, so the line may follow the result.
     await vi.waitFor(() =>
-      expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
-        "[client-services] answer to resolve-file request req-3 failed: 500 Internal Server Error\n",
+      expect(diagnostics).toEqual([
+        `[client-services] the tool-server did not take the answer to the resolve-file ` +
+          `request for "frag.yaml": ${status} ${error}`,
       ])
     );
   });
@@ -566,38 +691,55 @@ describe("callTool client services", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("gives up on an answer POST once the tool-server would have stopped waiting for it", async () => {
+  it("fails the call once its answer POST gets no reply in the time the tool-server waits", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     answerHangs = true;
     const giveUp = new AbortController();
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(giveUp.signal);
+    streamUntilHangUp();
+    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+
+    const failed = failureOf(callTool("flow-execute", { project_root: projectDir }));
+    await vi.waitFor(() => expect(answerRequests()).toHaveLength(1));
+    expect(timeout).toHaveBeenCalledWith(30_000);
+    giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    const { err } = await failed;
+
+    expect(err).toMatchObject({ errorCode: "FLOW_CLIENT_NOT_ANSWERING", errorKind: "network" });
+    expect((err as Error).message).toContain(
+      `POST ${url}/invocations/inv-1/client-responses got no reply within 30 s.`
+    );
+  });
+
+  it("keeps the result of a call whose answer fails after the stream delivered it", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerHangs = true;
+    const giveUp = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(giveUp.signal);
     onInvoke = (_body, res) => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
       res.write(
         `${JSON.stringify({
           event: "client-request",
           invocation: "inv-1",
-          id: "req-8",
-          op: "resolve-file",
-          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "flow" },
+          ...FRAG_REQUEST,
+          args: { ...FRAG_REQUEST.args, anchorDir: flowsDir },
         })}\n`
       );
       res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
     };
-    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const { callTool } = createToolsClient();
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
 
     const pending = callTool("flow-execute", { project_root: projectDir });
     await vi.waitFor(() => expect(answerRequests()).toHaveLength(1));
-    expect(timeout).toHaveBeenCalledWith(30_000);
-    giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
-
     expect((await pending).data).toEqual({ ran: true });
-    await vi.waitFor(() =>
-      expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
-        "[client-services] answer to resolve-file request req-8 failed: The operation was aborted due to timeout\n",
-      ])
-    );
+    giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(diagnostics).toEqual([]);
   });
 
   it("says the tool may already have acted when the stream breaks before the result", async () => {
