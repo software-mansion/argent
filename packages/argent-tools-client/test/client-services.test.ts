@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -14,7 +14,8 @@ import {
 import { createClientServicesHandler } from "../src/client-services.js";
 
 // The registry's resolution code reads through this module object, so a spy on
-// it sees every directory the handler lists.
+// it sees every directory the handler lists; the handler's own named imports
+// see the spy once syncBuiltinESMExports() has run.
 const fsCjs = createRequire(import.meta.url)("node:fs/promises") as typeof fs;
 
 let tmpDir: string;
@@ -35,6 +36,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -110,11 +112,12 @@ describe("resolve-file", () => {
     const sharedDir = path.join(projectDir, "shared");
     await fs.mkdir(sharedDir);
     await fs.writeFile(path.join(sharedDir, "login.yaml"), "steps: []\n");
-    const handler = await handlerFor([projectDir]);
-    // The anchor the server sends is the client path as the caller spelled it,
-    // which may go through a symlink the roots do not.
+    // The server anchors its first request at the root flow's directory as
+    // the caller spelled it: a root the client sent, through a symlink its
+    // real path does not cross.
     const linkedFlows = path.join(tmpDir, "flows-link");
     await fs.symlink(flowsDir, linkedFlows);
+    const handler = await handlerFor([projectDir, linkedFlows]);
 
     const answer = await handler.handle(resolveLine(linkedFlows, "../../shared/login.yaml"));
 
@@ -173,7 +176,138 @@ describe("resolve-file", () => {
 
     const answer = await handler.handle(resolveLine(elsewhere, "frag.yaml"));
 
-    expect(answer).toMatchObject({ ok: false, error: expect.stringContaining("anchor directory") });
+    expect(answer).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `frag.yaml is outside every root this client serves (${projectDir})`,
+    });
+  });
+
+  it("refuses an in-root link to an outside file with the same text whether or not that file exists", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    await fs.symlink(path.join(outside, "y.yaml"), path.join(flowsDir, "x.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    await fs.writeFile(path.join(outside, "y.yaml"), "secret: 1\n");
+    const exists = await handler.handle(resolveLine(flowsDir, "x.yaml"));
+    await fs.rm(path.join(outside, "y.yaml"));
+    const missing = await handler.handle(resolveLine(flowsDir, "x.yaml"));
+
+    expect(exists).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `x.yaml is outside every root this client serves (${projectDir})`,
+    });
+    expect(missing).toEqual(exists);
+  });
+
+  it("answers a dangling in-root link to an in-root file as that missing file", async () => {
+    await fs.symlink(path.join(flowsDir, "gone.yaml"), path.join(flowsDir, "dangling.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "dangling.yaml"))).toEqual({
+      id: "req-1",
+      ok: true,
+      canonical: path.join(flowsDir, "gone.yaml"),
+      spelling: { state: "listed" },
+      exists: false,
+    });
+  });
+
+  it("refuses a target that leaves the roots and comes back with .. the same way whatever is out there", async () => {
+    // An honest kernel walk leaves the root at `outside` whether or not it
+    // exists; collapsing the `..` lexically would come back in and serve
+    // frag.yaml only when `outside` is missing, or only when it exists.
+    const outside = path.join(tmpDir, "outside");
+    const target = "../../../outside/../proj/.argent/flows/frag.yaml";
+    const handler = await handlerFor([projectDir]);
+
+    await fs.mkdir(outside);
+    const asDirectory = await handler.handle(resolveLine(flowsDir, target));
+    await fs.rmdir(outside);
+    await fs.writeFile(outside, "x");
+    const asFile = await handler.handle(resolveLine(flowsDir, target));
+    await fs.rm(outside);
+    const absent = await handler.handle(resolveLine(flowsDir, target));
+
+    expect(asDirectory).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `${target} is outside every root this client serves (${projectDir})`,
+    });
+    expect(asFile).toEqual(asDirectory);
+    expect(absent).toEqual(asDirectory);
+  });
+
+  it("touches nothing outside the roots while it refuses a path that leaves them", async () => {
+    const outside = path.join(tmpDir, "outside");
+    await fs.mkdir(outside);
+    const handler = await handlerFor([projectDir]);
+    const spies = (
+      ["lstat", "stat", "realpath", "readlink", "readdir", "readFile", "open"] as const
+    ).map((name) => vi.spyOn(fsCjs, name));
+    syncBuiltinESMExports();
+
+    const answer = await handler.handle(
+      resolveLine(flowsDir, "../../../outside/../proj/.argent/flows/frag.yaml")
+    );
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+
+    const touched = spies.flatMap((spy) => spy.mock.calls.map((call) => String(call[0])));
+    // The spies are live: the walk looked at the anchor on its way.
+    expect(touched).toContain(flowsDir);
+    // A spelling that names `outside` as a component makes the kernel look there.
+    expect(touched.filter((p) => p.split(path.sep).includes("outside"))).toEqual([]);
+    expect(answer).toMatchObject({ ok: false });
+  });
+
+  it("answers the realpath of every existing file, as a co-located run resolves it", async () => {
+    const sharedDir = path.join(projectDir, "shared");
+    await fs.mkdir(sharedDir);
+    await fs.writeFile(path.join(sharedDir, "login.yaml"), "steps: []\n");
+    await fs.writeFile(path.join(projectDir, "beside.yaml"), "steps: []\n");
+    // A lexical collapse of `linked/../beside.yaml` would name this one.
+    await fs.writeFile(path.join(flowsDir, "beside.yaml"), "steps: []\n");
+    await fs.symlink(sharedDir, path.join(flowsDir, "linked"));
+    await fs.symlink("../../shared/login.yaml", path.join(flowsDir, "alias.yaml"));
+    const handler = await handlerFor([projectDir]);
+
+    const targets = ["frag.yaml", "linked/login.yaml", "linked/../beside.yaml", "alias.yaml"];
+    // On a case-insensitive filesystem a mis-cased name opens too.
+    const folds = await fs.stat(path.join(flowsDir, "FRAG.yaml")).then(
+      () => true,
+      () => false
+    );
+    if (folds) targets.push("FRAG.yaml");
+    for (const target of targets) {
+      const spelled = flowsDir + path.sep + target;
+      expect(await handler.handle(resolveLine(flowsDir, target))).toMatchObject({
+        ok: true,
+        exists: true,
+        canonical: await fs.realpath(spelled),
+      });
+    }
+    expect(await fs.realpath(flowsDir + path.sep + "linked/../beside.yaml")).toBe(
+      path.join(projectDir, "beside.yaml")
+    );
+  });
+
+  it("resolves a root spelled through a symlink that lies above its real path", async () => {
+    // As /var is a link to /private/var on macOS: the spelling crosses a link
+    // that is neither inside a real root nor on the way to one.
+    await fs.mkdir(path.join(tmpDir, "real"));
+    await fs.rename(projectDir, path.join(tmpDir, "real", "proj"));
+    await fs.symlink(path.join(tmpDir, "real"), path.join(tmpDir, "alias"));
+    const spelledFlows = path.join(tmpDir, "alias", "proj", ".argent", "flows");
+    const handler = await handlerFor([path.join(tmpDir, "alias", "proj"), spelledFlows]);
+
+    expect(await handler.handle(resolveLine(spelledFlows, "root.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(tmpDir, "real", "proj", ".argent", "flows", "root.yaml"),
+    });
   });
 
   it("refuses a symlink whose target lies outside every root", async () => {
@@ -220,6 +354,37 @@ describe("resolve-file", () => {
       error: expect.stringContaining("outside every root"),
     });
     expect(readdir.mock.calls.map((call) => path.resolve(String(call[0])))).not.toContain(outside);
+  });
+
+  it("follows a link of the user's that is spelled through an alias above the roots", async () => {
+    // As a link to $TMPDIR/... on macOS goes through /var, a link to /var/... .
+    const vault = path.join(tmpDir, "real", "vault");
+    await fs.mkdir(vault, { recursive: true });
+    await fs.writeFile(path.join(vault, "x.yaml"), "steps:\n  - run: frag.yaml\n");
+    await fs.symlink(path.join(tmpDir, "real"), path.join(tmpDir, "alias"));
+    await fs.symlink(path.join(tmpDir, "alias", "vault", "x.yaml"), path.join(flowsDir, "x.yaml"));
+    const handler = await handlerFor([projectDir, vault]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "x.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(vault, "x.yaml"),
+    });
+    // The same alias spelled by the server is outside the roots.
+    expect(await handler.handle(resolveLine(flowsDir, "../../../alias/vault/x.yaml"))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `../../../alias/vault/x.yaml is outside every root this client serves (${projectDir}, ${vault})`,
+    });
+  });
+
+  it("names a file used as a directory as a host read would", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml/x.yaml"))).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^ENOTDIR: /),
+    });
   });
 
   it("answers a target whose directory does not exist as a missing file", async () => {
