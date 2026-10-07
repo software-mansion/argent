@@ -283,13 +283,16 @@ describe("snapshot: steps over a link", () => {
       steps: { kind: string; status: string; reason: string }[];
     };
     expect(data.ok).toBe(true);
+    // The reason names the file the client wrote; no artifact names a server
+    // file as the baseline.
     expect(data.steps).toEqual([
       expect.objectContaining({
         kind: "snapshot",
         status: "pass",
-        reason: "baseline written (title__ios-30x60.png)",
+        reason: `baseline written (${BASELINE})`,
       }),
     ]);
+    expect(data.steps[0]).not.toHaveProperty("artifacts");
     expect(vi.mocked(steps.invokeTool)).toHaveBeenCalledWith(
       "screenshot",
       expect.objectContaining({ udid: DEVICE }),
@@ -348,7 +351,11 @@ describe("snapshot: steps over a link", () => {
       ["write-file", realBaseline],
     ]);
     // The report keeps the name the caller used.
-    expect(terminal.data).toMatchObject({ flow: "alias", ok: true });
+    expect(terminal.data).toMatchObject({
+      flow: "alias",
+      ok: true,
+      steps: [expect.objectContaining({ reason: `baseline written (${realBaseline})` })],
+    });
   });
 
   it.each([[["resolve-file"]], [["resolve-file", "read-file"]]])(

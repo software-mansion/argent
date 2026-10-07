@@ -199,7 +199,7 @@ An answer with `exists: false` is not a refusal. The step then fails with the re
 
 ### `write-file`
 
-The tool-server sends `write-file` at each `snapshot:` step when the call sets `updateBaselines`. The request carries the new baseline. The tool-server sends no `read-file` for this step. The answer tells whether a baseline was at the path, so the step reason says `baseline written` or `baseline updated`.
+The tool-server sends `write-file` at each `snapshot:` step when the call sets `updateBaselines`. The request carries the new baseline. The tool-server sends no `read-file` for this step. The answer tells whether a baseline was at the path, so the step reason says `baseline written` or `baseline updated`. The step reason also gives the client path of the baseline. The step returns no artifact, because the baseline is on the client. A run without a link gives the file name of the baseline in the step reason, and returns the baseline as an artifact.
 
 Request `args`:
 

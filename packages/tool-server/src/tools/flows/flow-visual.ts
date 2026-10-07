@@ -355,25 +355,33 @@ export async function runSnapshot(
         baselinePath,
         await fs.readFile(currentPath)
       );
-      // A client's new baseline is the capture this host already holds, so
-      // that file is its artifact, under the baseline's name.
-      if (opts.clientFlowPath !== undefined && cropDir !== undefined) keepCropped = true;
-      const baseline = await store.register({
-        hostPath: opts.clientFlowPath === undefined ? baselinePath : currentPath,
-        kind: "screenshot",
-        mimeType: "image/png",
-        filename: key,
-      });
       // The folded key makes this the file a local run compares against, so a
       // remote capture replacing it says so. Otherwise a cloud refresh of a
       // committed baseline reads exactly like a local one.
       const source = env.device.platform === "ios-remote" ? " from a remote simulator" : "";
+      const written = replaced ? `baseline updated${source}` : `baseline written${source}`;
+      // A client's new baseline is on the client, and no file on this host is
+      // it: a host path in the report would name the wrong machine. The reason
+      // names the client path instead, and a crop file is swept like any
+      // other scratch file.
+      if (opts.clientFlowPath !== undefined) {
+        return {
+          ...captureWarned,
+          status: "pass",
+          reason: `${written} (${baselinePath})`,
+          snapshotKey,
+        };
+      }
+      const baseline = await store.register({
+        hostPath: baselinePath,
+        kind: "screenshot",
+        mimeType: "image/png",
+        filename: key,
+      });
       return {
         ...captureWarned,
         status: "pass",
-        reason: replaced
-          ? `baseline updated${source} (${key})`
-          : `baseline written${source} (${key})`,
+        reason: `${written} (${key})`,
         snapshotKey,
         artifacts: { baseline },
       };

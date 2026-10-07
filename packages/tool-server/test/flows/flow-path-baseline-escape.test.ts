@@ -236,6 +236,7 @@ describe("the stem a valid flow_path derives", () => {
       )
     );
 
+    const baseline = "/work/proj/.argent/flows/__baselines__/withsnap/shot__ios-390x844.png";
     expect(result.ok).toBe(true);
     expect(result.flow).toBe("withsnap");
     expect(result.steps).toEqual([
@@ -243,10 +244,9 @@ describe("the stem a valid flow_path derives", () => {
         kind: "snapshot",
         status: "pass",
         flow: "withsnap",
-        reason: "baseline written (shot__ios-390x844.png)",
+        reason: `baseline written (${baseline})`,
       }),
     ]);
-    const baseline = "/work/proj/.argent/flows/__baselines__/withsnap/shot__ios-390x844.png";
     expect(calls).toEqual([
       {
         op: "resolve-file",
@@ -257,14 +257,10 @@ describe("the stem a valid flow_path derives", () => {
         args: { path: baseline, content: (await fs.readFile(capture)).toString("base64") },
       },
     ]);
+    // Nothing lands beside the upload, and no artifact names a file on this
+    // host as the baseline: the reason names the client file.
     expect(await fs.readdir(flowDir, { recursive: true })).toEqual(["materialized-upload.yaml"]);
-
-    // What the caller downloads is the capture on this host, under the
-    // baseline's name: no copy is made, and nothing lands beside the upload.
-    expect(result.steps[0]?.artifacts?.baseline).toMatchObject({
-      hostPath: capture,
-      filename: "shot__ios-390x844.png",
-    });
+    expect(result.steps[0]?.artifacts).toBeUndefined();
   });
 
   it("seeds run: cycle detection, so a sibling cycling back to the top flow is caught", async () => {

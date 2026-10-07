@@ -529,6 +529,9 @@ describe("runSnapshot cropOn", () => {
     // selector hash (crop identity). Content: the crop.
     expect(r.snapshotKey).toBe(cropKey);
     await expect(pngSize(cropBaselinePath())).resolves.toEqual({ w: 50, h: 50 });
+    // The artifact is the baseline file itself, so the crop scratch dir goes.
+    expect(r.artifacts?.baseline).toMatchObject({ hostPath: cropBaselinePath() });
+    await expect(fs.readdir(osTmpdir)).resolves.toEqual([]);
   });
 
   it("compares the cropped image and sweeps the crop scratch dir on a pass", async () => {
@@ -929,21 +932,14 @@ describe("runSnapshot with a client project", () => {
     const r = await runSnapshot(env, clientOpts(project, { updateBaselines: true }));
 
     expect(r.status).toBe("pass");
-    expect(r.reason).toBe("baseline written (home__ios-390x844.png)");
+    // The reason names where the client wrote the baseline.
+    expect(r.reason).toBe(`baseline written (${clientBaseline})`);
     expect(project.writeBaseline.mock.calls).toEqual([[clientBaseline, capture]]);
     // The write itself says whether a baseline was there: nothing is read.
     expect(project.readFile).not.toHaveBeenCalled();
-    // The handle points at the capture on this host, which a client can
-    // download, named like the host-mode baseline file; no second copy is made.
-    const baseline = r.artifacts?.baseline as { hostPath: string };
-    expect(baseline).toMatchObject({
-      __argentArtifact: true,
-      kind: "screenshot",
-      mimeType: "image/png",
-      filename: "home__ios-390x844.png",
-      hostPath: h.shotPath,
-    });
-    await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(capture);
+    // No artifact: every file on this host is scratch, and its path would name
+    // the wrong machine as the baseline.
+    expect(r.artifacts).toBeUndefined();
     await expect(baselineCopyDirs()).resolves.toEqual([]);
   });
 
@@ -953,10 +949,21 @@ describe("runSnapshot with a client project", () => {
     const r = await runSnapshot(env, clientOpts(project, { updateBaselines: true }));
 
     expect(r.status).toBe("pass");
-    expect(r.reason).toBe("baseline updated (home__ios-390x844.png)");
+    expect(r.reason).toBe(`baseline updated (${clientBaseline})`);
+    expect(r.artifacts).toBeUndefined();
     expect(project.writeBaseline.mock.calls).toEqual([
       [clientBaseline, await fs.readFile(h.shotPath)],
     ]);
+  });
+
+  it("names a remote simulator as the source of a client baseline it wrote", async () => {
+    const project = clientProject(Buffer.from("old pixels"));
+
+    const r = await runSnapshot(remoteEnv, clientOpts(project, { updateBaselines: true }));
+
+    expect(r.status).toBe("pass");
+    expect(r.reason).toBe(`baseline updated from a remote simulator (${clientBaseline})`);
+    expect(r.artifacts).toBeUndefined();
   });
 
   it("returns the context diff as an artifact on a client mismatch", async () => {
@@ -1005,11 +1012,10 @@ describe("runSnapshot with a client project", () => {
     expect([...png.data.subarray(0, 3)]).toEqual([25, 50, 75]);
     const last = (49 * 50 + 49) * 4;
     expect([...png.data.subarray(last, last + 3)]).toEqual([74, 99, 173]);
-    // The registered crop outlives the call; nothing else is left behind.
-    const baseline = r.artifacts?.baseline as { hostPath: string; filename: string };
-    expect(baseline.filename).toBe(`${r.snapshotKey}.png`);
-    await expect(fs.readFile(baseline.hostPath)).resolves.toEqual(bytes);
-    await expect(baselineCopyDirs()).resolves.toEqual([]);
+    expect(r.reason).toBe(`baseline written (${written})`);
+    // The crop is not registered, so the call leaves no scratch file behind.
+    expect(r.artifacts).toBeUndefined();
+    await expect(fs.readdir(osTmpdir)).resolves.toEqual([]);
   });
 
   it("keeps the baseline copy it returns on a client dimension mismatch", async () => {
