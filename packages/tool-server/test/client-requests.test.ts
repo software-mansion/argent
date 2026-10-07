@@ -87,7 +87,8 @@ describe("ClientRequestBroker", () => {
     expect((err as Error).message).toContain(
       "a reverse proxy that buffers the call's response stream"
     );
-    // A transport failure, not a fault of the flow: a directory run stops on it.
+    // A transport failure, not a fault of the flow: before step 1 it ends the
+    // call as a timeout, which a directory run stops on.
     expect(getFailureSignal(err)).toEqual({
       error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
       failure_stage: "client_request_timeout",
