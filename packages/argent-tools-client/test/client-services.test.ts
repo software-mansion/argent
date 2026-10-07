@@ -44,12 +44,13 @@ const ALL: ClientServiceOp[] = ["resolve-file"];
 
 async function handlerFor(
   roots: string[],
-  { rootFlow = path.join(flowsDir, "root.yaml"), advertised = ALL } = {} as {
+  { rootFlow = path.join(flowsDir, "root.yaml"), advertised = ALL, log } = {} as {
     rootFlow?: string;
     advertised?: ClientServiceOp[];
+    log?: (line: string) => void;
   }
 ) {
-  const handler = await createClientServicesHandler({ roots, rootFlow, advertised });
+  const handler = await createClientServicesHandler({ roots, rootFlow, advertised, log });
   if (!handler) throw new Error("expected a handler");
   return handler;
 }
@@ -581,8 +582,108 @@ describe("resolve-file", () => {
     await handler.handle(resolveLine(flowsDir, "frag.yaml"));
 
     expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
-      `[client-services] resolve-file ${path.join(flowsDir, "frag.yaml")}\n`,
+      `[client-services] resolve-file ${path.join(flowsDir, "frag.yaml")}: served\n`,
     ]);
+  });
+});
+
+describe("the request log", () => {
+  let lines: string[];
+  let handler: Awaited<ReturnType<typeof handlerFor>>;
+  beforeEach(async () => {
+    vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "1");
+    await fs.mkdir(path.join(flowsDir, "dir.yaml"));
+    const fh = await fs.open(path.join(flowsDir, "huge.yaml"), "w");
+    await fh.truncate(CLIENT_CONTENT_CAP_BYTES + 1);
+    await fh.close();
+    await fs.symlink("loop.yaml", path.join(flowsDir, "loop.yaml"));
+    await fs.writeFile(path.join(tmpDir, "outside.yaml"), "steps: []\n");
+    await fs.writeFile(path.join(projectDir, "secrets.yaml"), "x: 1\n");
+    await composes("frag.yaml", "missing.yaml", "dir.yaml", "huge.yaml", "loop.yaml");
+    lines = [];
+    handler = await handlerFor([projectDir], { log: (line) => lines.push(line) });
+  });
+
+  async function logged(line: ClientRequestLine): Promise<string[]> {
+    lines.length = 0;
+    await handler.handle(line);
+    return lines;
+  }
+
+  it("writes one line per request, after the answer, naming the outcome", async () => {
+    const at = (name: string) => path.join(flowsDir, name);
+    expect(await logged(resolveLine(flowsDir, "frag.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("frag.yaml")}: served`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "missing.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("missing.yaml")}: missing`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "dir.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("dir.yaml")}: refused (EISDIR: illegal operation on a directory, read)`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "huge.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("huge.yaml")}: refused (${at("huge.yaml")} is larger than the 32 MiB cap on a file sent to the tool-server)`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "loop.yaml"))).toEqual([
+      `[client-services] resolve-file ${at("loop.yaml")}: refused (ELOOP: too many symbolic links encountered, open '${at("loop.yaml")}')`,
+    ]);
+  });
+
+  it("names a refused probe by the target as received, never where it leads", async () => {
+    expect(await logged(resolveLine(flowsDir, "../../../outside.yaml"))).toEqual([
+      `[client-services] resolve-file ../../../outside.yaml: refused (../../../outside.yaml is outside every root this client serves (${projectDir}))`,
+    ]);
+    expect(await logged(resolveLine(flowsDir, "../../secrets.yaml"))).toEqual([
+      "[client-services] resolve-file ../../secrets.yaml: refused (../../secrets.yaml is not a run: target of a flow this client served)",
+    ]);
+    expect(await logged(resolveLine(flowsDir, "notes.txt"))).toEqual([
+      "[client-services] resolve-file notes.txt: refused (notes.txt is not a .yaml file; this client serves flow files only)",
+    ]);
+    expect(await logged({ ...resolveLine(flowsDir, "frag.yaml"), op: "read-file" })).toEqual([
+      "[client-services] read-file frag.yaml: refused (op read-file is not served by this client)",
+    ]);
+    expect(
+      await logged(
+        resolveLine(flowsDir, "frag.yaml", {
+          args: { anchorDir: flowsDir, target: "frag.yaml", kind: "script" },
+        })
+      )
+    ).toEqual([
+      `[client-services] resolve-file frag.yaml: refused (kind "script" is not known to this client; it serves "flow" only)`,
+    ]);
+    expect(await logged({ ...resolveLine(flowsDir, "frag.yaml"), args: null as never })).toEqual([
+      "[client-services] resolve-file (no target): refused (resolve-file request carries no args object)",
+    ]);
+  });
+
+  it("escapes control characters a server put in a target", async () => {
+    const forged = "x.yaml\n[client-services] resolve-file /etc/passwd: served\n.yaml";
+
+    expect(await logged(resolveLine(flowsDir, forged))).toEqual([
+      expect.stringMatching(
+        /^\[client-services\] resolve-file x\.yaml\\u000a\[client-services\] .*: refused \(.*\)$/
+      ),
+    ]);
+    expect(lines[0]).not.toContain("\n");
+  });
+
+  it("answers even when the log sink throws", async () => {
+    const throwing = await handlerFor([projectDir], {
+      log: () => {
+        throw new Error("sink is gone");
+      },
+    });
+
+    expect(await throwing.handle(resolveLine(flowsDir, "frag.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+    });
+  });
+
+  it("writes nothing without ARGENT_CLIENT_SERVICES_LOG=1", async () => {
+    vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "");
+
+    expect(await logged(resolveLine(flowsDir, "frag.yaml"))).toEqual([]);
   });
 });
 

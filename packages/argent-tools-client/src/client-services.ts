@@ -60,10 +60,13 @@ function refuse(id: string, error: string): ClientResponseBody {
   return { id, ok: false, error };
 }
 
-function logRequest(op: string, servedPath: string): void {
-  if (process.env[LOG_ENV] !== "1") return;
-  // The op and the path only, never the content.
-  process.stderr.write(`[client-services] ${op} ${servedPath}\n`);
+/** Escapes control characters, so a target the server chose cannot forge a log line. */
+function printable(text: string): string {
+  return [...text]
+    .map((c) =>
+      c < " " || c === "\x7f" ? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}` : c
+    )
+    .join("");
 }
 
 /** `inner` is `outer` or lies under it; both absolute and normalized. */
@@ -245,11 +248,19 @@ async function walk(spelled: string, fence: Fence): Promise<Walked> {
  * `Accept`. `ops` keeps the implemented order; `roots` are realpaths.
  * `rootFlow` is the call's root flow file as the client sent it; the server
  * asks for it in the directory it is spelled in.
+ *
+ * Under `ARGENT_CLIENT_SERVICES_LOG=1` each request gets one line once its
+ * answer is decided, `[client-services] <op> <path>: served`, `: missing` or
+ * `: refused (<the error sent>)`, written to `log` (stderr by default). The
+ * path is the canonical one once the request is known to be a file this call
+ * serves, and the target as received before that, so a refused probe is
+ * logged as the server spelled it. Never the content.
  */
 export async function createClientServicesHandler(opts: {
   roots: string[];
   rootFlow: string;
   advertised: ClientServiceOp[];
+  log?: (line: string) => void;
 }): Promise<ClientServicesHandler | null> {
   const resolvedRoots: string[] = [];
   const spelledRoots: string[] = [];
@@ -290,9 +301,13 @@ export async function createClientServicesHandler(opts: {
   servable.add(root.canonical);
   await addRunTargets(root.canonical, rootTargets);
 
+  const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
+
+  /** `named.path` is set to the canonical path once the request is one this call serves. */
   async function resolveFile(
     id: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    named: { path?: string }
   ): Promise<ClientResponseBody> {
     const { anchorDir, target, kind } = args;
     if (typeof anchorDir !== "string" || typeof target !== "string" || typeof kind !== "string") {
@@ -319,6 +334,7 @@ export async function createClientServicesHandler(opts: {
     if (!servable.has(file.canonical)) {
       return refuse(id, `${target} is not a run: target of a flow this client served`);
     }
+    named.path = file.canonical;
     if ((await walk(path.dirname(spelled), fence)).kind === "outside") {
       return refuse(id, outsideRoots(target));
     }
@@ -338,7 +354,6 @@ export async function createClientServicesHandler(opts: {
     if (!/\.ya?ml$/i.test(path.basename(canonical))) {
       return refuse(id, `${target} links to a file that is not a YAML file`);
     }
-    logRequest("resolve-file", canonical);
 
     const read = await readFileInputWire(canonical, { includeContent: true });
     if (read === null) {
@@ -383,18 +398,38 @@ export async function createClientServicesHandler(opts: {
     return { id, ok: true, ...answer };
   }
 
-  async function handle(line: ClientRequestLine): Promise<ClientResponseBody> {
+  async function decide(
+    line: ClientRequestLine,
+    named: { path?: string }
+  ): Promise<ClientResponseBody> {
     // A broken server may send any JSON here; none of it may make this throw.
     const id = typeof line.id === "string" ? line.id : "";
     const op = typeof line.op === "string" ? line.op : "(not a string)";
     try {
       if (!ops.includes(line.op)) return refuse(id, `op ${op} is not served by this client`);
       if (!isRecord(line.args)) return refuse(id, `${op} request carries no args object`);
-      return await resolveFile(id, line.args);
+      return await resolveFile(id, line.args, named);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return refuse(id, `${op} failed on this client: ${message}`);
     }
+  }
+
+  async function handle(line: ClientRequestLine): Promise<ClientResponseBody> {
+    const named: { path?: string } = {};
+    const body = await decide(line, named);
+    if (process.env[LOG_ENV] === "1") {
+      const op = typeof line.op === "string" ? line.op : "(not a string)";
+      const target = isRecord(line.args) ? line.args.target : undefined;
+      const subject = named.path ?? (typeof target === "string" ? target : "(no target)");
+      const outcome = !body.ok ? `refused (${body.error})` : body.exists ? "served" : "missing";
+      try {
+        log(printable(`[client-services] ${op} ${subject}: ${outcome}`));
+      } catch {
+        // A failing log sink must not cost the server its answer.
+      }
+    }
+    return body;
   }
 
   return { param, handle };
