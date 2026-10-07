@@ -830,6 +830,24 @@ describe("callTool client services", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("sends the request log to onDiagnostic instead of stderr", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "1");
+    streamOneRequest({ ...FRAG_REQUEST, args: { ...FRAG_REQUEST.args, anchorDir: flowsDir } });
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+
+    await callTool("flow-execute", { project_root: projectDir, name: "root" });
+
+    expect(diagnostics).toEqual([
+      `[client-services] resolve-file ${path.join(flowsDir, "frag.yaml")}: served`,
+    ]);
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("fails the call once its answer POST gets no reply in the time the tool-server waits", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     answerHangs = true;

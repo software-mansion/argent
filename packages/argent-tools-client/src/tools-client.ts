@@ -89,8 +89,9 @@ export interface CreateToolsClientOptions {
   ) => Promise<Response>;
   /**
    * Receives each diagnostic line of client services (a request line it had to
-   * drop, a request it gave up, an answer the tool-server did not take),
-   * without a trailing newline.
+   * drop, a request it gave up, an answer the tool-server did not take, and
+   * the request log that `ARGENT_CLIENT_SERVICES_LOG=1` turns on), without a
+   * trailing newline.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
    */
@@ -420,7 +421,8 @@ export function errorBodyMessage(body: {
  */
 async function clientServicesHandlerFor(
   advert: ClientServicesAdvert,
-  args: unknown
+  args: unknown,
+  log: (line: string) => void
 ): Promise<ClientServicesHandler | null> {
   if (typeof args !== "object" || args === null) return null;
   const { project_root, flow_path, name } = args as Record<string, unknown>;
@@ -444,7 +446,7 @@ async function clientServicesHandlerFor(
     const project = savedFlowProject(file);
     if (project !== null) roots.push(project);
   }
-  return createClientServicesHandler({ roots, rootFlow, advertised: advert.ops });
+  return createClientServicesHandler({ roots, rootFlow, advertised: advert.ops, log });
 }
 
 /** An absolute path with no `..` segment, as the tool-server requires. */
@@ -586,7 +588,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         });
       }
       if (remote && meta.clientServices) {
-        const handler = await clientServicesHandlerFor(meta.clientServices, args);
+        const handler = await clientServicesHandlerFor(meta.clientServices, args, diagnose);
         if (handler) {
           finalArgs = { ...(finalArgs as Record<string, unknown>), client_services: handler.param };
           services = {
