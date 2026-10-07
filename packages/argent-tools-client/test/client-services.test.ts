@@ -269,6 +269,16 @@ describe("resolve-file", () => {
     });
   });
 
+  it("names a target through a regular file as a host read would", async () => {
+    // A host read of a run: target names ENOTDIR; only read-file answers it as missing.
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml/x.yaml"))).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^ENOTDIR: /),
+    });
+  });
+
   it("names a directory and an unreadable file as a host read would", async () => {
     await fs.mkdir(path.join(flowsDir, "dir.yaml"));
     const handler = await handlerFor([projectDir]);
@@ -613,6 +623,27 @@ describe("read-file and write-file", () => {
   it("answers exists:false for a missing baseline", async () => {
     const handler = await handlerFor([projectDir]);
 
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: true,
+      exists: false,
+    });
+  });
+
+  it("answers exists:false for a baseline behind a file where a directory should be", async () => {
+    // As a host read of a baseline: ENOTDIR is nothing there, not an error.
+    const handler = await handlerFor([projectDir]);
+    await fs.mkdir(path.dirname(keyDir), { recursive: true });
+    await fs.writeFile(keyDir, "not a directory");
+
+    expect(await handler.handle(readLine(baseline))).toEqual({
+      id: "req-1",
+      ok: true,
+      exists: false,
+    });
+
+    await fs.rm(path.dirname(keyDir), { recursive: true });
+    await fs.writeFile(path.dirname(keyDir), "not a directory");
     expect(await handler.handle(readLine(baseline))).toEqual({
       id: "req-1",
       ok: true,

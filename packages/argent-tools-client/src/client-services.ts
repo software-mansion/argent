@@ -122,19 +122,25 @@ function tooLarge(file: string): string {
 /**
  * Read a file the fence already admitted, as the wire answer: the file when
  * it is there, `exists: false` when nothing is, or a refusal that names what
- * a host read would name (EISDIR, EACCES, the size cap).
+ * a host read would name (EISDIR, EACCES, the size cap). With
+ * `notDirIsMissing`, a path through a regular file (ENOTDIR) is also nothing
+ * there, as the host answers a baseline; the host names ENOTDIR for a `run:`
+ * target, so resolve-file keeps it.
  */
 async function readAdmitted(
-  file: string
+  file: string,
+  opts: { notDirIsMissing?: boolean } = {}
 ): Promise<{ refusal: string } | { answer: ReadFileAnswer }> {
   const read = await readFileInputWire(file, { includeContent: true });
   if (read === null) {
     // The wire read answers null for a directory and for any stat error;
     // only a missing file is the "no such file" answer. Anything else is
     // named as a host read would name it.
+    const missing = (code: string | undefined) =>
+      code === "ENOENT" || (opts.notDirIsMissing === true && code === "ENOTDIR");
     const reason = await fs.stat(file).then(
       (st) => (st.isDirectory() ? "EISDIR: illegal operation on a directory, read" : null),
-      (err: NodeJS.ErrnoException) => (err.code === "ENOENT" ? null : err.message)
+      (err: NodeJS.ErrnoException) => (missing(err.code) ? null : err.message)
     );
     return reason === null ? { answer: { exists: false } } : { refusal: reason };
   }
@@ -266,7 +272,7 @@ export async function createClientServicesHandler(opts: {
     if (!resolved!.endsWith(".png")) {
       return refuse(id, `${file} links to a file that is not a PNG file`);
     }
-    const read = await readAdmitted(file);
+    const read = await readAdmitted(file, { notDirIsMissing: true });
     if ("refusal" in read) return refuse(id, read.refusal);
     logRequest("read-file", file);
     return { id, ok: true, ...read.answer };
