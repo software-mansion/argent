@@ -42,10 +42,24 @@ afterEach(async () => {
 
 const ALL: ClientServiceOp[] = ["resolve-file"];
 
-async function handlerFor(roots: string[], advertised: ClientServiceOp[] = ALL) {
-  const handler = await createClientServicesHandler({ roots, advertised });
+async function handlerFor(
+  roots: string[],
+  { rootFlow = path.join(flowsDir, "root.yaml"), advertised = ALL } = {} as {
+    rootFlow?: string;
+    advertised?: ClientServiceOp[];
+  }
+) {
+  const handler = await createClientServicesHandler({ roots, rootFlow, advertised });
   if (!handler) throw new Error("expected a handler");
   return handler;
+}
+
+/** Make the root flow compose exactly these run: targets. */
+async function composes(...targets: string[]): Promise<void> {
+  await fs.writeFile(
+    path.join(flowsDir, "root.yaml"),
+    `steps:\n${targets.map((t) => `  - run: ${JSON.stringify(t)}\n`).join("")}`
+  );
 }
 
 function resolveLine(
@@ -67,10 +81,9 @@ describe("createClientServicesHandler", () => {
   it("realpaths the roots, drops a missing one and offers the implemented ops in order", async () => {
     const linkToProject = path.join(tmpDir, "proj-link");
     await fs.symlink(projectDir, linkToProject);
-    const handler = await handlerFor(
-      [linkToProject, path.join(tmpDir, "nope")],
-      ["read-file", "resolve-file"]
-    );
+    const handler = await handlerFor([linkToProject, path.join(tmpDir, "nope")], {
+      advertised: ["read-file", "resolve-file"],
+    });
     expect(handler.param).toEqual({
       ops: ["resolve-file"],
       roots: [projectDir],
@@ -78,13 +91,24 @@ describe("createClientServicesHandler", () => {
   });
 
   it("returns null with no existing root and with no shared op", async () => {
+    const rootFlow = path.join(flowsDir, "root.yaml");
     expect(
-      await createClientServicesHandler({ roots: [path.join(tmpDir, "nope")], advertised: ALL })
+      await createClientServicesHandler({
+        roots: [path.join(tmpDir, "nope")],
+        rootFlow,
+        advertised: ALL,
+      })
     ).toBeNull();
     expect(
-      await createClientServicesHandler({ roots: [projectDir], advertised: ["read-file"] })
+      await createClientServicesHandler({
+        roots: [projectDir],
+        rootFlow,
+        advertised: ["read-file"],
+      })
     ).toBeNull();
-    expect(await createClientServicesHandler({ roots: [projectDir], advertised: [] })).toBeNull();
+    expect(
+      await createClientServicesHandler({ roots: [projectDir], rootFlow, advertised: [] })
+    ).toBeNull();
   });
 });
 
@@ -117,6 +141,7 @@ describe("resolve-file", () => {
     // real path does not cross.
     const linkedFlows = path.join(tmpDir, "flows-link");
     await fs.symlink(flowsDir, linkedFlows);
+    await composes("../../shared/login.yaml");
     const handler = await handlerFor([projectDir, linkedFlows]);
 
     const answer = await handler.handle(resolveLine(linkedFlows, "../../shared/login.yaml"));
@@ -130,6 +155,7 @@ describe("resolve-file", () => {
   });
 
   it("answers exists: false for a missing fragment", async () => {
+    await composes("missing.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "missing.yaml"));
@@ -204,6 +230,7 @@ describe("resolve-file", () => {
 
   it("answers a dangling in-root link to an in-root file as that missing file", async () => {
     await fs.symlink(path.join(flowsDir, "gone.yaml"), path.join(flowsDir, "dangling.yaml"));
+    await composes("dangling.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "dangling.yaml"))).toEqual({
@@ -272,8 +299,6 @@ describe("resolve-file", () => {
     await fs.writeFile(path.join(flowsDir, "beside.yaml"), "steps: []\n");
     await fs.symlink(sharedDir, path.join(flowsDir, "linked"));
     await fs.symlink("../../shared/login.yaml", path.join(flowsDir, "alias.yaml"));
-    const handler = await handlerFor([projectDir]);
-
     const targets = ["frag.yaml", "linked/login.yaml", "linked/../beside.yaml", "alias.yaml"];
     // On a case-insensitive filesystem a mis-cased name opens too.
     const folds = await fs.stat(path.join(flowsDir, "FRAG.yaml")).then(
@@ -281,6 +306,8 @@ describe("resolve-file", () => {
       () => false
     );
     if (folds) targets.push("FRAG.yaml");
+    await composes(...targets);
+    const handler = await handlerFor([projectDir]);
     for (const target of targets) {
       const spelled = flowsDir + path.sep + target;
       expect(await handler.handle(resolveLine(flowsDir, target))).toMatchObject({
@@ -301,7 +328,9 @@ describe("resolve-file", () => {
     await fs.rename(projectDir, path.join(tmpDir, "real", "proj"));
     await fs.symlink(path.join(tmpDir, "real"), path.join(tmpDir, "alias"));
     const spelledFlows = path.join(tmpDir, "alias", "proj", ".argent", "flows");
-    const handler = await handlerFor([path.join(tmpDir, "alias", "proj"), spelledFlows]);
+    const handler = await handlerFor([path.join(tmpDir, "alias", "proj"), spelledFlows], {
+      rootFlow: path.join(spelledFlows, "root.yaml"),
+    });
 
     expect(await handler.handle(resolveLine(spelledFlows, "root.yaml"))).toMatchObject({
       ok: true,
@@ -363,7 +392,9 @@ describe("resolve-file", () => {
     await fs.writeFile(path.join(vault, "x.yaml"), "steps:\n  - run: frag.yaml\n");
     await fs.symlink(path.join(tmpDir, "real"), path.join(tmpDir, "alias"));
     await fs.symlink(path.join(tmpDir, "alias", "vault", "x.yaml"), path.join(flowsDir, "x.yaml"));
-    const handler = await handlerFor([projectDir, vault]);
+    const handler = await handlerFor([projectDir, vault], {
+      rootFlow: path.join(flowsDir, "x.yaml"),
+    });
 
     expect(await handler.handle(resolveLine(flowsDir, "x.yaml"))).toMatchObject({
       ok: true,
@@ -379,6 +410,7 @@ describe("resolve-file", () => {
   });
 
   it("names a file used as a directory as a host read would", async () => {
+    await composes("frag.yaml/x.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "frag.yaml/x.yaml"))).toMatchObject({
@@ -388,6 +420,7 @@ describe("resolve-file", () => {
   });
 
   it("answers a target whose directory does not exist as a missing file", async () => {
+    await composes("gone/frag.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "gone/frag.yaml"));
@@ -398,6 +431,7 @@ describe("resolve-file", () => {
   it("refuses a .yaml name that links to a file of another kind", async () => {
     await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
     await fs.symlink(path.join(projectDir, ".env"), path.join(flowsDir, "x.yaml"));
+    await composes("x.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "x.yaml"));
@@ -412,6 +446,7 @@ describe("resolve-file", () => {
   it("serves a .yaml name that links to a .yml flow", async () => {
     await fs.writeFile(path.join(flowsDir, "real.yml"), "steps: []\n");
     await fs.symlink(path.join(flowsDir, "real.yml"), path.join(flowsDir, "alias.yaml"));
+    await composes("alias.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "alias.yaml"))).toMatchObject({
@@ -423,6 +458,7 @@ describe("resolve-file", () => {
 
   it("names a link loop as a host read would, not as a missing file", async () => {
     await fs.symlink("loop.yaml", path.join(flowsDir, "loop.yaml"));
+    await composes("loop.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "loop.yaml"))).toMatchObject({
@@ -433,6 +469,7 @@ describe("resolve-file", () => {
 
   it("names a directory and an unreadable file as a host read would", async () => {
     await fs.mkdir(path.join(flowsDir, "dir.yaml"));
+    await composes("dir.yaml", "locked.yaml");
     const handler = await handlerFor([projectDir]);
 
     expect(await handler.handle(resolveLine(flowsDir, "dir.yaml"))).toMatchObject({
@@ -470,6 +507,7 @@ describe("resolve-file", () => {
     const fh = await fs.open(hugePath, "w");
     await fh.truncate(CLIENT_CONTENT_CAP_BYTES + 1);
     await fh.close();
+    await composes("huge.yaml");
     const handler = await handlerFor([projectDir]);
 
     const answer = await handler.handle(resolveLine(flowsDir, "huge.yaml"));
@@ -478,7 +516,7 @@ describe("resolve-file", () => {
   });
 
   it("refuses an op it did not offer and a kind it does not know", async () => {
-    const handler = await handlerFor([projectDir], ["resolve-file"]);
+    const handler = await handlerFor([projectDir], { advertised: ["resolve-file"] });
     expect(handler.param.ops).toEqual(["resolve-file"]);
 
     expect(
@@ -548,11 +586,149 @@ describe("resolve-file", () => {
   });
 });
 
+describe("what the handler serves", () => {
+  const notComposed = (target: string) => ({
+    id: "req-1",
+    ok: false,
+    error: `${target} is not a run: target of a flow this client served`,
+  });
+
+  it("refuses a project file no served flow composes, before reading it", async () => {
+    await fs.mkdir(path.join(projectDir, ".github", "workflows"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, ".github", "workflows", "deploy.yaml"),
+      "env:\n  TOKEN: x\n"
+    );
+    await fs.writeFile(path.join(projectDir, "secrets.yaml"), "db_password: x\n");
+    const handler = await handlerFor([projectDir]);
+    const spies = (["readFile", "open", "stat"] as const).map((name) => vi.spyOn(fsCjs, name));
+    syncBuiltinESMExports();
+
+    const deploy = await handler.handle(resolveLine(projectDir, ".github/workflows/deploy.yaml"));
+    const secrets = await handler.handle(resolveLine(flowsDir, "../../secrets.yaml"));
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+
+    expect(deploy).toEqual(notComposed(".github/workflows/deploy.yaml"));
+    expect(secrets).toEqual(notComposed("../../secrets.yaml"));
+    expect(spies.flatMap((spy) => spy.mock.calls)).toEqual([]);
+  });
+
+  it("refuses a file it does not serve with the same text whether or not it exists", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    await fs.writeFile(path.join(projectDir, "secrets.yaml"), "db_password: x\n");
+    const exists = await handler.handle(resolveLine(flowsDir, "../../secrets.yaml"));
+    await fs.rm(path.join(projectDir, "secrets.yaml"));
+    const missing = await handler.handle(resolveLine(flowsDir, "../../secrets.yaml"));
+
+    expect(exists).toEqual(notComposed("../../secrets.yaml"));
+    expect(missing).toEqual(exists);
+  });
+
+  it("serves the root flow where the server asks for it", async () => {
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "root.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(flowsDir, "root.yaml"),
+    });
+  });
+
+  it("serves a chain of run: targets, each once the file naming it was served", async () => {
+    // root -> sub/a.yaml (inside a when: block) -> login (a bare name beside
+    // a.yaml) and ../shared/b.yaml (beside a.yaml, not beside the root).
+    await fs.mkdir(path.join(flowsDir, "sub"));
+    await fs.mkdir(path.join(flowsDir, "shared"));
+    await fs.writeFile(
+      path.join(flowsDir, "root.yaml"),
+      "steps:\n  - echo: hi\n  - when: { visible: Login }\n    steps:\n      - run: sub/a.yaml\n"
+    );
+    await fs.writeFile(
+      path.join(flowsDir, "sub", "a.yaml"),
+      "steps:\n  - run: login\n  - run: ../shared/b.yaml\n"
+    );
+    await fs.writeFile(path.join(flowsDir, "sub", "login.yaml"), "steps:\n  - echo: login\n");
+    await fs.writeFile(path.join(flowsDir, "shared", "b.yaml"), "steps:\n  - echo: b\n");
+    const subDir = path.join(flowsDir, "sub");
+    const handler = await handlerFor([projectDir]);
+
+    // Only a.yaml names these, and a.yaml has not been served yet.
+    expect(await handler.handle(resolveLine(subDir, "login.yaml"))).toEqual(
+      notComposed("login.yaml")
+    );
+    expect(await handler.handle(resolveLine(flowsDir, "root.yaml"))).toMatchObject({ ok: true });
+    expect(await handler.handle(resolveLine(flowsDir, "sub/a.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(subDir, "a.yaml"),
+    });
+    expect(await handler.handle(resolveLine(subDir, "login.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(subDir, "login.yaml"),
+    });
+    expect(await handler.handle(resolveLine(subDir, "../shared/b.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(flowsDir, "shared", "b.yaml"),
+    });
+    // The same name beside the root is not what a.yaml composes.
+    await fs.writeFile(path.join(flowsDir, "login.yaml"), "steps: []\n");
+    expect(await handler.handle(resolveLine(flowsDir, "login.yaml"))).toEqual(
+      notComposed("login.yaml")
+    );
+  });
+
+  it("serves no fragment for a root flow that composes nothing", async () => {
+    await fs.writeFile(path.join(flowsDir, "root.yaml"), "steps:\n  - echo: hi\n");
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml"))).toEqual(
+      notComposed("frag.yaml")
+    );
+  });
+
+  it("takes no run: target from a value the runner refuses or from YAML that does not parse", async () => {
+    await fs.writeFile(path.join(flowsDir, "abs.yaml"), "steps: []\n");
+    await fs.writeFile(
+      path.join(flowsDir, "root.yaml"),
+      'steps:\n  - run: "/abs.yaml"\n  - run: "C:abs.yaml"\n  - run: "sub\\\\abs.yaml"\n'
+    );
+    const handler = await handlerFor([projectDir]);
+
+    for (const target of ["/abs.yaml", "C:abs.yaml", "sub\\abs.yaml"]) {
+      expect(await handler.handle(resolveLine(flowsDir, target))).toEqual(notComposed(target));
+    }
+
+    await fs.writeFile(path.join(flowsDir, "root.yaml"), "steps: [ { run: frag.yaml }\n");
+    const unparsed = await handlerFor([projectDir]);
+    expect(await unparsed.handle(resolveLine(flowsDir, "frag.yaml"))).toEqual(
+      notComposed("frag.yaml")
+    );
+  });
+
+  it("reads the run: targets of a flow whose steps alias themselves", async () => {
+    await fs.writeFile(
+      path.join(flowsDir, "root.yaml"),
+      "steps: &s\n  - run: frag.yaml\n  - when: { visible: Again }\n    steps: *s\n"
+    );
+    const handler = await handlerFor([projectDir]);
+
+    expect(await handler.handle(resolveLine(flowsDir, "frag.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+    });
+  });
+});
+
 describe("roots", () => {
   it("serves a file under a second root", async () => {
     const other = path.join(tmpDir, "other");
     await fs.mkdir(other);
     await fs.writeFile(path.join(other, "a.yaml"), "steps: []\n");
+    await composes("../../../other/a.yaml");
     const handler = await handlerFor([projectDir, other]);
 
     expect(await handler.handle(resolveLine(other, "a.yaml"))).toMatchObject({

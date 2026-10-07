@@ -9,6 +9,7 @@ import {
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
   SCRIPT_FILE_NAME_PATTERN,
+  completeRunExtension,
   type ClientFileDirective,
 } from "@argent/registry";
 import {
@@ -2885,34 +2886,6 @@ function parseRunTarget(raw: unknown, value: unknown): string {
     );
   }
   return target;
-}
-
-/**
- * Complete a `run:` target's optional `.yaml` extension: `run: login` means
- * `login.yaml` beside the containing flow file, exactly as the spelled-out form
- * does. This is the compatibility path for flows written when a `run:` target
- * was a saved-flow NAME looked up in `.argent/flows` — a bare name resolves to
- * the same file it always did, since those flows sit in that one directory.
- *
- * Completed HERE rather than at resolution time so exactly one spelling reaches
- * everything downstream: canonicalFlowPath's read, the fragment's on-disk casing
- * check, the report's `target`, and runDisplayName — which slices a fixed
- * `".yaml".length` off the target and would truncate a real path segment given a
- * bare one (see flow-run.ts). Re-serializing a parsed flow therefore writes the
- * completed spelling back, which is the intended one-way migration.
- *
- * The test is the CANDIDATE's basename, not the supplied value's: basename()
- * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
- * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate cannot
- * name — a wrong extension (`login.yml`), a mis-cased one (`Login.YAML`), an
- * empty target — leaves the value untouched for the caller's extension
- * diagnostics, which name the real problem better than a silent completion to
- * `login.yml.yaml` could.
- */
-function completeRunExtension(value: string): string {
-  if (value.endsWith(".yaml")) return value;
-  const candidate = `${value}.yaml`;
-  return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
 function parseScriptStep(raw: unknown, body: unknown): FlowStep {

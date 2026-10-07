@@ -5,23 +5,30 @@
  * NDJSON stream is answered through {@link ClientServicesHandler.handle}, and
  * the tools client posts the answer to `/invocations/:invocation/client-responses`.
  *
- * The handler decides what leaves this machine: it reads nothing outside the
- * roots the client itself sent, serves `.yaml` names of YAML files only,
- * refuses a file above the 32 MiB cap, and refuses an op it did not offer. A
- * requested path is resolved here as the kernel resolves it, one component at
- * a time ({@link walk}), and each place the walk would look at is checked
- * against the roots before anything there is looked at, so an outside path
- * gets one refusal whatever exists there. The casing verdict is the registry's
- * `classifyOnDiskSpelling`, so a `run:` target keeps its kernel meaning on the
- * machine that has the files.
+ * The handler decides what leaves this machine. It serves the files the
+ * user's own flows compose and nothing else: the call's root flow, and each
+ * `run:` target named by a file it has already served, resolved beside that
+ * file as the runner resolves it. A request for any other file is refused
+ * before it is read, the same way whether or not the file exists. It reads
+ * nothing outside the roots the client itself sent, serves `.yaml` names of
+ * YAML files only, refuses a file above the 32 MiB cap, and refuses an op it
+ * did not offer. A requested path is resolved here as the kernel resolves it,
+ * one component at a time ({@link walk}), and each place the walk would look
+ * at is checked against the roots before anything there is looked at, so an
+ * outside path gets one refusal whatever exists there. The casing verdict is
+ * the registry's `classifyOnDiskSpelling`, so a `run:` target keeps its kernel
+ * meaning on the machine that has the files.
  */
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { parse as parseYaml } from "yaml";
+
 import {
   FLOW_FILE_NAME_PATTERN,
   classifyOnDiskSpelling,
+  completeRunExtension,
   type ClientRequestLine,
   type ClientResponseBody,
   type ClientServiceOp,
@@ -45,6 +52,9 @@ const LOG_ENV = "ARGENT_CLIENT_SERVICES_LOG";
 
 /** Linux's MAXSYMLINKS: the walk reports ELOOP past this many links. */
 const MAX_SYMLINKS = 40;
+
+/** Deeper than any block nesting the runner parses; ends a cyclic alias too. */
+const MAX_STEP_DEPTH = 64;
 
 function refuse(id: string, error: string): ClientResponseBody {
   return { id, ok: false, error };
@@ -86,6 +96,44 @@ function mayVisit(fence: Fence, position: string): boolean {
     fence.roots.some((root) => isWithin(position, root) || isWithin(root, position)) ||
     fence.spelled.some((root) => isWithin(root, position))
   );
+}
+
+/**
+ * The `run:` targets a flow file names, spelled as the runner requests them:
+ * every string `run` in its `steps`, and in the `steps` of a block directive
+ * (`when`), with the runner's extension completion. A value the runner
+ * refuses (a backslash, an absolute or drive-prefixed path) names nothing, and
+ * so does a file that does not parse.
+ */
+function runTargets(content: string): string[] {
+  let doc: unknown;
+  try {
+    // The runner's parse; its warnings belong to the run, not to this terminal.
+    doc = parseYaml(content.trim(), { logLevel: "error" });
+  } catch {
+    return [];
+  }
+  const targets: string[] = [];
+  const seen = new Set<unknown>();
+  const visit = (steps: unknown, depth: number): void => {
+    if (!Array.isArray(steps) || depth > MAX_STEP_DEPTH || seen.has(steps)) return;
+    seen.add(steps);
+    for (const step of steps) {
+      if (!isRecord(step)) continue;
+      const run = step.run;
+      if (
+        typeof run === "string" &&
+        !run.includes("\\") &&
+        !path.posix.isAbsolute(run) &&
+        !/^[A-Za-z]:/.test(run)
+      ) {
+        targets.push(completeRunExtension(run));
+      }
+      visit(step.steps, depth + 1);
+    }
+  };
+  if (isRecord(doc)) visit(doc.steps, 0);
+  return targets;
 }
 
 function components(p: string): string[] {
@@ -191,9 +239,12 @@ async function walk(spelled: string, fence: Fence): Promise<Walked> {
  * Build the handler for one call, or null when there is nothing to serve:
  * no root exists on this machine, or the server advertised no op this client
  * implements. `ops` keeps the implemented order; `roots` are realpaths.
+ * `rootFlow` is the call's root flow file as the client sent it; the server
+ * asks for it in the directory it is spelled in.
  */
 export async function createClientServicesHandler(opts: {
   roots: string[];
+  rootFlow: string;
   advertised: ClientServiceOp[];
 }): Promise<ClientServicesHandler | null> {
   const resolvedRoots: string[] = [];
@@ -217,6 +268,23 @@ export async function createClientServicesHandler(opts: {
   const fence: Fence = { roots, spelled: spelledRoots };
   const outsideRoots = (target: string) =>
     `${target} is outside every root this client serves (${roots.join(", ")})`;
+
+  // The real paths this call may serve: the root flow, and the run: targets
+  // of each file served, resolved beside that file as the runner anchors them.
+  const servable = new Set<string>();
+  async function addRunTargets(canonical: string, content: string): Promise<void> {
+    for (const target of runTargets(content)) {
+      const walked = await walk(path.dirname(canonical) + path.sep + target, fence);
+      if (walked.kind !== "outside") servable.add(walked.canonical);
+    }
+  }
+  const root = await walk(opts.rootFlow, fence);
+  if (root.kind !== "outside") {
+    servable.add(root.canonical);
+    const content =
+      root.kind === "found" ? await fs.readFile(root.canonical, "utf8").catch(() => null) : null;
+    if (content !== null) await addRunTargets(root.canonical, content);
+  }
 
   async function resolveFile(
     id: string,
@@ -243,8 +311,11 @@ export async function createClientServicesHandler(opts: {
     // file the target points to, and the directory the casing check lists.
     const spelled = anchorDir + path.sep + target;
     const file = await walk(spelled, fence);
-    const listedDir = await walk(path.dirname(spelled), fence);
-    if (file.kind === "outside" || listedDir.kind === "outside") {
+    if (file.kind === "outside") return refuse(id, outsideRoots(target));
+    if (!servable.has(file.canonical)) {
+      return refuse(id, `${target} is not a run: target of a flow this client served`);
+    }
+    if ((await walk(path.dirname(spelled), fence)).kind === "outside") {
       return refuse(id, outsideRoots(target));
     }
     if (file.kind === "failed") return refuse(id, file.error);
@@ -293,6 +364,7 @@ export async function createClientServicesHandler(opts: {
       );
       return refuse(id, reason);
     }
+    await addRunTargets(canonical, Buffer.from(read.content, "base64").toString("utf8"));
     const answer: ResolveFileAnswer = {
       canonical,
       spelling,

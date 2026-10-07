@@ -39,6 +39,37 @@ export async function canonicalFlowPath(p: string): Promise<string> {
 }
 
 /**
+ * Complete a `run:` target's optional `.yaml` extension: `run: login` means
+ * `login.yaml` beside the containing flow file, exactly as the spelled-out form
+ * does. This is the compatibility path for flows written when a `run:` target
+ * was a saved-flow NAME looked up in `.argent/flows` — a bare name resolves to
+ * the same file it always did, since those flows sit in that one directory.
+ *
+ * Completed when the tool-server parses a flow, rather than at resolution
+ * time, so exactly one spelling reaches everything downstream:
+ * canonicalFlowPath's read, the fragment's on-disk casing check, the report's
+ * `target`, and runDisplayName — which slices a fixed `".yaml".length` off the
+ * target and would truncate a real path segment given a bare one (see
+ * flow-run.ts). Re-serializing a parsed flow therefore writes the completed
+ * spelling back, which is the intended one-way migration. The argent client
+ * completes a target the same way to know which file a flow it served will
+ * ask for.
+ *
+ * The test is the CANDIDATE's basename, not the supplied value's: basename()
+ * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
+ * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate cannot
+ * name — a wrong extension (`login.yml`), a mis-cased one (`Login.YAML`), an
+ * empty target — leaves the value untouched for the caller's extension
+ * diagnostics, which name the real problem better than a silent completion to
+ * `login.yml.yaml` could.
+ */
+export function completeRunExtension(value: string): string {
+  if (value.endsWith(".yaml")) return value;
+  const candidate = `${value}.yaml`;
+  return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
+}
+
+/**
  * How the flow file a caller addressed is spelled in its own directory.
  * `listed`: the directory carries that basename byte-for-byte — or its listing
  * could not be read at all (an execute-only parent lets stat through while

@@ -118,7 +118,10 @@ beforeEach(async () => {
   projectDir = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), "client-services-wire-")));
   flowsDir = path.join(projectDir, ".argent", "flows");
   await fs.mkdir(flowsDir, { recursive: true });
-  await fs.writeFile(path.join(flowsDir, "root.yaml"), "steps:\n  - run: frag.yaml\n");
+  await fs.writeFile(
+    path.join(flowsDir, "root.yaml"),
+    "steps:\n  - run: frag.yaml\n  - run: hang.yaml\n"
+  );
   await fs.writeFile(path.join(flowsDir, "frag.yaml"), "steps:\n  - echo: hi\n");
   await fs.writeFile(path.join(flowsDir, "hang.yaml"), "steps:\n  - echo: never\n");
 
@@ -356,7 +359,7 @@ describe("callTool client services", () => {
     };
     const { callTool } = createToolsClient();
 
-    const result = await callTool("flow-execute", { project_root: projectDir });
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     const invoke = invokeRequest();
     expect(invoke.body).toEqual({ project_root: projectDir });
@@ -373,7 +376,7 @@ describe("callTool client services", () => {
       baseUrl: async () => ({ url, token: "", remote: false }),
     });
 
-    await callTool("flow-execute", { project_root: projectDir });
+    await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     const invoke = invokeRequest();
     expect(invoke.body).toEqual({ project_root: projectDir });
@@ -437,7 +440,7 @@ describe("callTool client services", () => {
     });
     const { callTool } = createToolsClient();
 
-    const result = await callTool("flow-execute", { project_root: projectDir });
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     expect(result.data).toEqual({ ran: true });
     expect(answerRequests()[0]!.body).toMatchObject({
@@ -469,7 +472,9 @@ describe("callTool client services", () => {
     const stream = streamUntilHangUp();
     const { callTool } = createToolsClient({ onDiagnostic: () => {} });
 
-    const { err, ms } = await failureOf(callTool("flow-execute", { project_root: projectDir }));
+    const { err, ms } = await failureOf(
+      callTool("flow-execute", { project_root: projectDir, name: "root" })
+    );
 
     expect(ms).toBeLessThan(1_000);
     expect(err).toBeInstanceOf(ToolInvocationError);
@@ -492,7 +497,9 @@ describe("callTool client services", () => {
     const stream = streamUntilHangUp();
     const { callTool } = createToolsClient({ onDiagnostic: () => {} });
 
-    const { err, ms } = await failureOf(callTool("flow-execute", { project_root: projectDir }));
+    const { err, ms } = await failureOf(
+      callTool("flow-execute", { project_root: projectDir, name: "root" })
+    );
 
     expect(ms).toBeLessThan(1_000);
     expect(err).toMatchObject({ errorCode: "FLOW_CLIENT_NOT_ANSWERING", errorKind: "network" });
@@ -509,7 +516,9 @@ describe("callTool client services", () => {
     streamUntilHangUp();
     const { callTool } = createToolsClient({ onDiagnostic: () => {} });
 
-    const { err, ms } = await failureOf(callTool("flow-execute", { project_root: projectDir }));
+    const { err, ms } = await failureOf(
+      callTool("flow-execute", { project_root: projectDir, name: "root" })
+    );
 
     expect(ms).toBeLessThan(1_000);
     expect((err as Error).message).toContain("client-responses answered 404 Not Found.");
@@ -531,7 +540,7 @@ describe("callTool client services", () => {
       onDiagnostic: (message) => diagnostics.push(message),
     });
 
-    const result = await callTool("flow-execute", { project_root: projectDir });
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     expect(result).toEqual({ data: { ran: true }, note: "done" });
     await vi.waitFor(() =>
@@ -555,7 +564,7 @@ describe("callTool client services", () => {
     const { callTool } = createToolsClient({ onDiagnostic: () => {} });
 
     const result = await settlesWithin(
-      callTool("flow-execute", { project_root: projectDir }),
+      callTool("flow-execute", { project_root: projectDir, name: "root" }),
       2_000
     );
 
@@ -575,7 +584,7 @@ describe("callTool client services", () => {
     const { callTool } = createToolsClient({ onDiagnostic: () => {} });
 
     await expect(
-      settlesWithin(callTool("flow-execute", { project_root: projectDir }), 2_000)
+      settlesWithin(callTool("flow-execute", { project_root: projectDir, name: "root" }), 2_000)
     ).rejects.toThrow("kaput");
     expect(answerRequests()).toHaveLength(0);
   });
@@ -602,7 +611,7 @@ describe("callTool client services", () => {
     });
 
     const result = await settlesWithin(
-      callTool("flow-execute", { project_root: projectDir }),
+      callTool("flow-execute", { project_root: projectDir, name: "root" }),
       3_000
     );
 
@@ -658,7 +667,7 @@ describe("callTool client services", () => {
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const { callTool } = createToolsClient();
 
-    const result = await callTool("flow-execute", { project_root: projectDir });
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     expect(result.data).toEqual({ ran: true });
     expect(write.mock.calls.map((c) => String(c[0]))).toContain(
@@ -684,7 +693,7 @@ describe("callTool client services", () => {
       onDiagnostic: (message) => diagnostics.push(message),
     });
 
-    const result = await callTool("flow-execute", { project_root: projectDir });
+    const result = await callTool("flow-execute", { project_root: projectDir, name: "root" });
 
     expect(result.data).toEqual({ ran: true });
     expect(diagnostics).toEqual(["[client-services] ignored a request line without a string id"]);
@@ -699,7 +708,7 @@ describe("callTool client services", () => {
     streamUntilHangUp();
     const { callTool } = createToolsClient({ onDiagnostic: () => {} });
 
-    const failed = failureOf(callTool("flow-execute", { project_root: projectDir }));
+    const failed = failureOf(callTool("flow-execute", { project_root: projectDir, name: "root" }));
     await vi.waitFor(() => expect(answerRequests()).toHaveLength(1));
     expect(timeout).toHaveBeenCalledWith(30_000);
     giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
@@ -733,7 +742,7 @@ describe("callTool client services", () => {
       onDiagnostic: (message) => diagnostics.push(message),
     });
 
-    const pending = callTool("flow-execute", { project_root: projectDir });
+    const pending = callTool("flow-execute", { project_root: projectDir, name: "root" });
     await vi.waitFor(() => expect(answerRequests()).toHaveLength(1));
     expect((await pending).data).toEqual({ ran: true });
     giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
@@ -752,7 +761,7 @@ describe("callTool client services", () => {
     const { callTool } = createToolsClient();
 
     await expect(
-      callTool("flow-execute", { project_root: projectDir }, { onProgress: () => {} })
+      callTool("flow-execute", { project_root: projectDir, name: "root" }, { onProgress: () => {} })
     ).rejects.toThrow(
       /^The connection to the tool-server closed before flow-execute finished \(.+\)\. 1 progress update had arrived, so the tool ran at least in part; check its effect before you run it again\.$/
     );
@@ -761,7 +770,9 @@ describe("callTool client services", () => {
       res.writeHead(200, { "Content-Type": "application/x-ndjson" });
       res.end();
     };
-    await expect(callTool("flow-execute", { project_root: projectDir })).rejects.toThrow(
+    await expect(
+      callTool("flow-execute", { project_root: projectDir, name: "root" })
+    ).rejects.toThrow(
       "The connection to the tool-server closed before flow-execute finished (the stream ended without a result). The tool may have run; check its effect before you run it again."
     );
   });
