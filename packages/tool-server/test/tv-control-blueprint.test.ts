@@ -66,13 +66,20 @@ vi.mock("node:child_process", async () => {
     execFile: (cmd: string, args: string[], cb?: (err: Error | null) => void) => {
       h.execFileCalls.push({ cmd, args });
       if (cmd === "pkill") {
+        // Lands after the call returns, like the real pkill, so a caller that
+        // doesn't await it would kill the reader it spawns next on that path.
         const pattern = new RegExp(args[args.length - 1]!);
-        for (const r of h.readers) {
-          if (r.alive && pattern.test(`/fake/tvos-ax-service --socket ${r.sock} --timeout 3600`)) {
-            r.alive = false;
+        setImmediate(() => {
+          for (const r of h.readers) {
+            if (
+              r.alive &&
+              pattern.test(`/fake/tvos-ax-service --socket ${r.sock} --timeout 3600`)
+            ) {
+              r.alive = false;
+            }
           }
-        }
-        setImmediate(() => cb?.(null));
+          cb?.(null);
+        });
         return new FakeProc();
       }
       const proc = new FakeProc();
@@ -285,11 +292,15 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     const res = await instance.api.describe();
     expect(res.bundleId).toBe("com.example.tvapp");
     expect(h.readers.filter((r) => r.alive)).toEqual([h.readers[h.readers.length - 1]]);
+    // SIGKILL: on SIGTERM the reader runs its own unlink of the path.
+    const pkills = h.execFileCalls.filter((c) => c.cmd === "pkill");
+    expect(pkills.length).toBeGreaterThan(0);
+    expect(pkills.every((c) => c.args[0] === "-KILL")).toBe(true);
     await instance.dispose();
     expect(h.readers.filter((r) => r.alive)).toHaveLength(0);
   });
 
-  it("leaves another tool-server's reader for the same Apple TV alive and reachable", async () => {
+  it("leaves another tool-server's daemons for the same Apple TV alive and reachable", async () => {
     const realPid = process.pid;
     const setPid = (value: number) => Object.defineProperty(process, "pid", { value });
     try {
@@ -305,6 +316,7 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
         "/tmp/argent-tv-ax-DDDDDDDD-1002.sock",
       ]);
       expect((await b.api.describe()).bundleId).toBe("com.example.tvapp");
+      await expect(b.api.navigate("down")).resolves.toBeUndefined();
       await b.dispose();
     } finally {
       setPid(realPid);

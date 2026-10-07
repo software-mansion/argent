@@ -171,6 +171,8 @@ describe("describe (Android TV) — reads through the android-devtools helper", 
     expect(describeFn).not.toHaveBeenCalled();
     expect(recycleAx).not.toHaveBeenCalled();
     expect(describeAndroidMock).toHaveBeenCalledTimes(1);
+    // The helper is up, so the fallback must read through it: a dump would die.
+    expect(describeAndroidMock.mock.calls[0]![0]).toBeDefined();
     expect(res.hint).toMatch(/Android TV focus engine/i);
   });
 
@@ -248,6 +250,7 @@ describe("describe (Android TV) — helper hierarchy captured on a device", () =
     `<node index="3" text="Dismiss" resource-id="com.google.android.tvlauncher:id/tray_dismiss" class="android.widget.Button" package="com.google.android.tvlauncher" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[1606,257][1080,313]" />` +
     `<node index="0" text="" resource-id="com.google.android.tvlauncher:id/favorite_add_app_banner" class="android.widget.LinearLayout" package="com.google.android.tvlauncher" content-desc="Add app to favorites" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="true" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[109,447][357,608]" />` +
     `<node index="0" text="Home" resource-id="" class="android.widget.TextView" package="com.google.android.tvlauncher" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[296,46][438,87]" />` +
+    `<node index="1" text="Shop" resource-id="" class="android.widget.TextView" package="com.google.android.tvlauncher" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[430,1940][572,1920]" />` +
     `</node>` +
     `</hierarchy>`;
 
@@ -282,6 +285,23 @@ describe("describe (Android TV) — helper hierarchy captured on a device", () =
         "  proxy.example.com [textfield]",
       ].join("\n")
     );
+  });
+
+  it("keeps the helper's focus view when the keyboard-package read fails", async () => {
+    adbShellMock.mockRejectedValueOnce(new Error("adb: device offline"));
+    const describeFn = vi.fn().mockResolvedValue(populated);
+    const registry = {
+      resolveService: vi.fn(async (urn: string) =>
+        urn.startsWith("AndroidDevtools:")
+          ? { getHierarchy: async () => ({ xml: OFFSCREEN_XML }) }
+          : makeApi(describeFn)
+      ),
+    } as never;
+
+    const res = await describeTv(registry, ANDROID_TV_DEVICE);
+
+    expect(describeFn).not.toHaveBeenCalled();
+    expect(res.description).toContain("Focused: Add app to favorites");
   });
 
   it("leaves out focusable views the helper reports outside the display", async () => {

@@ -40,14 +40,14 @@ export function tvControlRef(device: DeviceInfo): {
   };
 }
 
-// Per tool-server process, so `reapAxReaders` never touches another server's
-// reader and a reader left by an earlier process can't unlink ours.
+// Per tool-server process, so neither a reap nor a dispose touches another
+// server's daemon, and a daemon left by an earlier process can't unlink ours.
 function axSocketPath(udid: string): string {
   return `/tmp/argent-tv-ax-${udid.slice(0, 8)}-${process.pid}.sock`;
 }
 
 function hidSocketPath(udid: string): string {
-  return `/tmp/argent-tv-hid-${udid.slice(0, 8)}.sock`;
+  return `/tmp/argent-tv-hid-${udid.slice(0, 8)}-${process.pid}.sock`;
 }
 
 /**

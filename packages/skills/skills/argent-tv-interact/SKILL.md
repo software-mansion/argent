@@ -13,7 +13,7 @@ description: Control and inspect TV apps via argent — Apple TV (tvOS), Android
 
 ## The navigation loop
 
-1. `describe` — find the cursor and your target (returns the focused element + all focusable ones, not a tap tree).
+1. `describe` — find the cursor and your target (see `describe` under Tools for what it returns on each platform).
 2. `tv-remote` — move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; on Vega, count rows/columns from the frames to build the path. The Apple TV / Android TV focus view is a flat list with no positions, so read the grid's shape from the screenshot.
 3. Read where focus landed from the focus view returned under `--- Elements after action (describe) ---`; call `describe` only when that section is missing. On a miss, repeat.
 
