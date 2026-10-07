@@ -455,6 +455,31 @@ describe("callTool client services", () => {
     await fs.rm(repo, { recursive: true, force: true });
   });
 
+  it("sends no client_services for arguments the tool-server refuses before it asks anything", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    await fs.writeFile(path.join(flowsDir, "root.yml"), COMPOSING);
+    onInvoke = (_body, res) => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "refused" }));
+    };
+    const { callTool } = createToolsClient();
+    const rootFlow = path.join(flowsDir, "root.yaml");
+
+    for (const args of [
+      { project_root: ".", flow_path: rootFlow },
+      { project_root: `${projectDir}/x/..`, name: "root" },
+      { project_root: projectDir, name: "../../.argent/flows/root" },
+      { project_root: projectDir, flow_path: "root.yaml" },
+      { project_root: projectDir, flow_path: `${flowsDir}/../flows/root.yaml` },
+      { project_root: projectDir, flow_path: path.join(flowsDir, "root.yml") },
+      { project_root: projectDir, flow_path: rootFlow, name: "root" },
+    ]) {
+      requests.length = 0;
+      await expect(callTool("flow-execute", args)).rejects.toThrow("refused");
+      expect(invokeRequest().body).not.toHaveProperty("client_services");
+    }
+  });
+
   it("sends no client_services when the listing has no clientServices", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     listing = [{ name: "flow-execute", description: "", inputSchema: {} }];

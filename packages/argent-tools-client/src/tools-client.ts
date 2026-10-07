@@ -5,6 +5,8 @@ import {
   CLIENT_FILE_OP_TIMEOUT_MS,
   CLIENT_REQUEST_EVENT,
   FAILURE_CODES,
+  FLOW_FILE_NAME_PATTERN,
+  FLOW_NAME_PATTERN,
   describeParamIssues,
   type ClientRequestLine,
   type ClientResponseBody,
@@ -393,23 +395,28 @@ export function errorBodyMessage(body: {
 }
 
 /**
- * The handler for one call, or null when the arguments carry no string
- * `project_root` (nothing to serve under), name no root flow (`flow_path` or
- * `name`), or the root flow composes nothing ({@link
- * createClientServicesHandler}); the call then carries no `client_services`
- * and is not made a stream for them. The handler serves the root flow and
- * what it composes, inside these roots: the project, its `.argent/flows`
- * directory (a project may keep that one as a symlink to a tree outside the
- * project, and the flows there are still the project's own), the directory
- * of `flow_path` when given, so a flow addressed outside the project can
- * still reach its own fragments, and the directory the root flow file REALLY
- * lives in: a `run:` target resolves beside the real file, as it does on one
- * computer, so a root flow that is a symlink serves the fragments next to its
- * target. A root flow saved under `<P>/.argent/flows/`, by its spelling or by
- * its real path, also serves the project `<P>` it belongs to: the CLI sends its
- * working directory as `project_root`, and the flow's fragments in its own
- * project must not depend on where the shell stands. Every root is served by
- * its real location; one that does not exist is dropped.
+ * The handler for one call, or null; then the call carries no
+ * `client_services` and is not made a stream for them. Null when the root
+ * flow composes nothing ({@link createClientServicesHandler}), and for
+ * arguments the tool-server refuses before it asks for anything: a
+ * `project_root` or `flow_path` that is not absolute or has a `..` segment, a
+ * `flow_path` not named `<flow-name>.yaml`, a `name` outside the flow-name
+ * pattern, or not exactly one of `flow_path` and `name`. Roots taken from
+ * those would reach a server that does not refuse them.
+ *
+ * The handler serves the root flow and what it composes, inside these roots:
+ * the project, its `.argent/flows` directory (a project may keep that one as
+ * a symlink to a tree outside the project, and the flows there are still the
+ * project's own), the directory of `flow_path` when given, so a flow
+ * addressed outside the project can still reach its own fragments, and the
+ * directory the root flow file REALLY lives in: a `run:` target resolves
+ * beside the real file, as it does on one computer, so a root flow that is a
+ * symlink serves the fragments next to its target. A root flow saved under
+ * `<P>/.argent/flows/`, by its spelling or by its real path, also serves the
+ * project `<P>` it belongs to: the CLI sends its working directory as
+ * `project_root`, and the flow's fragments in its own project must not depend
+ * on where the shell stands. Every root is served by its real location; one
+ * that does not exist is dropped.
  */
 async function clientServicesHandlerFor(
   advert: ClientServicesAdvert,
@@ -417,15 +424,19 @@ async function clientServicesHandlerFor(
 ): Promise<ClientServicesHandler | null> {
   if (typeof args !== "object" || args === null) return null;
   const { project_root, flow_path, name } = args as Record<string, unknown>;
-  if (typeof project_root !== "string") return null;
+  if (!isResolvedAbsolute(project_root)) return null;
   const flowsDir = path.join(project_root, ".argent", "flows");
-  const rootFlow =
-    typeof flow_path === "string"
-      ? flow_path
-      : typeof name === "string"
-        ? path.join(flowsDir, `${name}.yaml`)
-        : undefined;
-  if (rootFlow === undefined) return null;
+  let rootFlow: string;
+  if (flow_path !== undefined && name === undefined) {
+    if (!isResolvedAbsolute(flow_path)) return null;
+    if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flow_path))) return null;
+    rootFlow = flow_path;
+  } else if (name !== undefined && flow_path === undefined) {
+    if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return null;
+    rootFlow = path.join(flowsDir, `${name}.yaml`);
+  } else {
+    return null;
+  }
   const roots = [project_root, flowsDir, path.dirname(rootFlow)];
   const real = await realpath(rootFlow).catch(() => null);
   if (real !== null) roots.push(path.dirname(real));
@@ -434,6 +445,13 @@ async function clientServicesHandlerFor(
     if (project !== null) roots.push(project);
   }
   return createClientServicesHandler({ roots, rootFlow, advertised: advert.ops });
+}
+
+/** An absolute path with no `..` segment, as the tool-server requires. */
+function isResolvedAbsolute(value: unknown): value is string {
+  return (
+    typeof value === "string" && path.isAbsolute(value) && !value.split(/[\\/]+/).includes("..")
+  );
 }
 
 /** `<P>` for a file under `<P>/.argent/flows/`, the innermost such `<P>`. */
