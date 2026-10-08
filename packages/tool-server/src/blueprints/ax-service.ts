@@ -69,6 +69,13 @@ export interface AXTreeNode extends AXDescribeElement {
   parentIndex?: number;
   roleDescription?: string;
   covered?: boolean;
+  /** An XCUIElementType value. */
+  elementType?: number;
+  placeholder?: string;
+  /** The input shows its placeholder: it holds no text, and `value` is the placeholder. */
+  hintShowing?: boolean;
+  /** Roots only. */
+  bundleId?: string;
 }
 
 export interface AXTreeResponse {
@@ -76,13 +83,16 @@ export interface AXTreeResponse {
   screenFrame?: { width: number; height: number };
   nodes: AXTreeNode[];
   truncated: boolean;
+  foregroundApp?: string;
+  /** 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId. */
+  treeVersion?: number;
 }
 
 export interface AXServiceApi {
   /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
-  /** The front app's full hierarchy, plus the system app as a second root while an alert shows. */
+  /** The front app's full hierarchy; while a system alert shows, the system app first and the app under it second. */
   tree(): Promise<AXTreeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
@@ -491,6 +501,8 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           screenFrame: result.screenFrame,
           nodes: result.nodes ?? [],
           truncated: result.truncated === true,
+          foregroundApp: result.foregroundApp,
+          treeVersion: result.treeVersion,
         };
       },
 

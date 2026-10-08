@@ -50,19 +50,24 @@ export interface UiTreeNode {
   selected?: boolean;
   /** Normalized to `screen` like gesture-tap, but not clamped: it can fall outside 0..1. */
   frame?: { x: number; y: number; width: number; height: number };
-  /** Android: the view class. */
+  /** Android: the view class. iOS: the XCUIElementType name, e.g. `TextField`. */
   type?: string;
   /** iOS: the accessibility trait names. */
   traits?: string[];
   roleDescription?: string;
   /** Android: the raw content-desc. */
   contentDescription?: string;
-  /** Android window roots: the package. */
+  /** Roots: the app's bundle id (iOS) or package (Android). */
   bundleId?: string;
   editable?: boolean;
   heading?: boolean;
-  /** iOS: on screen, but behind an in-app presentation. */
+  /** iOS: on screen, but behind an in-app presentation or a system alert. */
   covered?: boolean;
+  placeholder?: string;
+  /** The input shows its placeholder: it holds no text, and `value` is unset. */
+  hintShowing?: boolean;
+  /** No part of the frame is on screen inside its ancestors: scrolled out or clipped. */
+  hidden?: boolean;
   children: UiTreeNode[];
 }
 
@@ -71,10 +76,13 @@ export interface UiTree {
   source: "ax-service" | "android-devtools";
   /** Native units: iOS points, Android pixels. */
   screen?: { width: number; height: number };
+  /** While an iOS system alert shows, the system app first and the app it covers second. */
   roots: UiTreeNode[];
   truncated: boolean;
   alertVisible?: boolean;
   keyboardVisible?: boolean;
+  /** The bundle id of the app in front, under any system alert. */
+  foregroundApp?: string;
   /** Fields this source cannot report. */
   unsupportedFields: string[];
 }
