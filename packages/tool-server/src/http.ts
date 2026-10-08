@@ -7,15 +7,9 @@ import { join } from "node:path";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
-  CLIENT_CONTENT_CAP_BYTES,
   FAILURE_CODES,
-  clientServicesParamSchema,
   describeParamIssues,
   getFailureSignal,
-  type ClientResponseBody,
-  type ClientServiceOp,
-  type ClientServicesAdvert,
-  type ClientServicesParam,
   type FailureSignal,
   type FileInputSpec,
   type Registry,
@@ -41,7 +35,6 @@ import { consumePendingSigningDetectionNote } from "./utils/ios-device/team-dete
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
-import { ClientRequestBroker } from "./client-requests";
 import {
   assertSupported,
   InvalidToolInputError,
@@ -412,9 +405,6 @@ const UPLOAD_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 // Bounds the total of unconsumed uploads, so many small ones can't do the same.
 const MAX_PENDING_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
-// Base64 grows every 3 bytes to 4 characters, so a `content` longer than this
-// decodes to more than the client-content cap.
-const CLIENT_CONTENT_BASE64_CAP = Math.ceil(CLIENT_CONTENT_CAP_BYTES / 3) * 4;
 
 /**
  * Pull a tool's per-call note off its result so it can ride the response
@@ -444,9 +434,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Consumed by the first tool call that references them; the TTL sweeper clears
   // orphans from aborted or failed calls.
   const uploads = new Map<string, UploadEntry & { expireAt: number; bytes: number }>();
-  // Pending client-service requests of streamed tool calls, keyed by invocation
-  // (see client-requests.ts); answered through /invocations/:invocation/client-responses.
-  const clientRequests = new ClientRequestBroker();
   // Settled bytes plus bytes of streams still in flight, so the cap holds against
   // a burst of parallel uploads instead of only settled ones.
   let inFlightUploadBytes = 0;
@@ -672,60 +659,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     ws.on("error", (err: Error) => abort(500, err.message));
   });
 
-  // The client's answer to a `client-request` line. The request rides the
-  // NDJSON stream of the call; the answer arrives here on its own HTTP request,
-  // keyed by the call's invocation id, and the broker settles the pending step.
-  app.post("/invocations/:invocation/client-responses", (req: Request, res: Response) => {
-    idleTimer.touch();
-    const invocation = req.params.invocation as string;
-    const body: unknown = req.body;
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      res.status(400).json({ error: "the body must be a JSON object" });
-      return;
-    }
-    const { id, ok, error, content } = body as Record<string, unknown>;
-    if (typeof id !== "string" || id.length === 0) {
-      res.status(400).json({ error: "the body must carry a non-empty string id" });
-      return;
-    }
-    if (typeof ok !== "boolean") {
-      res.status(400).json({ error: "the body must carry a boolean ok" });
-      return;
-    }
-    if (ok === false && typeof error !== "string") {
-      res.status(400).json({ error: "a refusal (ok: false) must carry a string error" });
-      return;
-    }
-    if (typeof content === "string" && content.length > CLIENT_CONTENT_BASE64_CAP) {
-      // Besides the 413, hand the broker a refusal for the id: the pending step
-      // then fails at once with the cap in its reason instead of waiting out its
-      // timeout for an answer the client cannot shrink. The verdict is ignored
-      // because the 413 is the answer to this request whatever the id's state.
-      clientRequests.answer(invocation, {
-        id,
-        ok: false,
-        error: "the answer's content exceeds the 32 MiB cap",
-      });
-      res.status(413).json({ error: "the answer's content decodes to more than 32 MiB" });
-      return;
-    }
-    const verdict = clientRequests.answer(invocation, body as ClientResponseBody);
-    switch (verdict) {
-      case "accepted":
-        res.json({ accepted: true });
-        return;
-      case "unknown_invocation":
-        res.status(404).json({ error: "unknown invocation" });
-        return;
-      case "unknown_request":
-        res.status(404).json({ error: "unknown or expired request id" });
-        return;
-      case "duplicate":
-        res.status(409).json({ error: "the request already has an answer" });
-        return;
-    }
-  });
-
   app.get("/tools", (_req: Request, res: Response) => {
     idleTimer.touch();
     const snapshot = registry.getSnapshot();
@@ -742,7 +675,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           alwaysLoad?: boolean;
           searchHint?: string;
           longRunning?: boolean;
-          clientServices?: ClientServicesAdvert;
         } = {
           name: def.id,
           description: def.description ?? "",
@@ -753,7 +685,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (def.alwaysLoad) entry.alwaysLoad = true;
         if (def.searchHint) entry.searchHint = def.searchHint;
         if (def.longRunning) entry.longRunning = true;
-        if (def.clientServices) entry.clientServices = def.clientServices;
         return entry;
       });
     res.json({ tools });
@@ -847,20 +778,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         throw err;
       }
 
-      // Client services ride beside the tool's own arguments: the client adds
-      // `client_services` only for a tool whose listing advertises the
-      // capability, and it comes off here, so the tool's schema neither sees
-      // nor declares it (an agent reading that schema never meets it).
-      let rawClientServices: unknown;
-      if (
-        def.clientServices &&
-        typeof bodyArgs === "object" &&
-        bodyArgs !== null &&
-        "client_services" in bodyArgs
-      ) {
-        ({ client_services: rawClientServices, ...bodyArgs } = bodyArgs);
-      }
-
       let parsedData = bodyArgs;
       if (def.zodSchema) {
         const parseResult = def.zodSchema.safeParse(bodyArgs);
@@ -888,62 +805,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           return;
         }
         parsedData = parseResult.data;
-      }
-
-      // Streaming is opted into per request; the value is read here because the
-      // client-services opt-in below needs it, and the stream itself is committed
-      // to only once every gate has passed.
-      const wantsStream = Boolean(req.headers.accept?.includes("application/x-ndjson"));
-
-      // Client services: the caller offers to serve its own project files during
-      // the call (see client-requests.ts). Validated after the tool's own schema
-      // and accepted only on an NDJSON request, since the request line rides
-      // the progress stream. The argent clients always stream when they offer,
-      // so a plain JSON call that offers names a custom caller or a proxy that
-      // rewrote Accept; it gets a 400 that says so rather than a run that
-      // silently cannot reach the client. Both 400s are marked `validation`, a
-      // rejection of this one call: a directory run fails this flow and goes on
-      // to the next, which may make no offer and so run through the same proxy.
-      let clientServicesParam: ClientServicesParam | undefined;
-      if (rawClientServices !== undefined) {
-        const parsed = clientServicesParamSchema.safeParse(rawClientServices);
-        if (!parsed.success) {
-          emitHttpFailure(
-            {
-              error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
-              failure_stage: "http_zod_validation",
-              failure_area: "http",
-              error_kind: "validation",
-            },
-            parsedData
-          );
-          res.status(400).json({
-            error: `client_services: ${parsed.error.issues[0]?.message ?? "invalid value"}`,
-            error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
-            error_kind: "validation",
-          });
-          return;
-        }
-        if (!wantsStream) {
-          emitHttpFailure(
-            {
-              error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
-              failure_stage: "http_client_services_stream",
-              failure_area: "http",
-              error_kind: "validation",
-            },
-            parsedData
-          );
-          res.status(400).json({
-            error:
-              "client_services requires an NDJSON request (Accept: application/x-ndjson): its " +
-              "requests travel on the response stream. A proxy that rewrites Accept removes it.",
-            error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
-            error_kind: "validation",
-          });
-          return;
-        }
-        clientServicesParam = parsed.data;
       }
 
       // Capability gate fires BEFORE the global requires preflight: an android
@@ -1059,8 +920,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
-      // Nobody is left to read the result, and a client-services request
-      // would wait out its timeout for an answer that cannot come.
+      // Nobody is left to read the result.
       if (callerGone) return;
 
       const controller = new AbortController();
@@ -1104,20 +964,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // gets each `ctx.emitProgress` event as its own line, then a terminal
       // `result` (or in-band `error`) line. The gates above still answer with
       // plain-JSON status codes — streaming is committed to only once they pass.
+      const wantsStream = Boolean(req.headers.accept?.includes("application/x-ndjson"));
       const writeLine = (payload: unknown): void => {
         res.write(`${JSON.stringify(payload)}\n`);
       };
-      if (clientServicesParam) {
-        // Request lines share the stream with progress lines. A closed response
-        // can never be answered, so its pending requests are rejected right away.
-        clientRequests.open(toolInvocationId, writeLine);
-        res.once("close", () => clientRequests.close(toolInvocationId));
-      }
       if (wantsStream) {
-        // Every line must reach the client as soon as it is written: a request
-        // line waits for its answer. `no-transform` asks intermediaries not to
-        // compress the stream, and `X-Accel-Buffering: no` makes nginx pass each
-        // chunk through instead of holding it in its buffers.
+        // Every line must reach the client as soon as it is written.
+        // `no-transform` asks intermediaries not to compress the stream, and
+        // `X-Accel-Buffering: no` makes nginx pass each chunk through instead
+        // of holding it in its buffers.
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
           "Cache-Control": "no-cache, no-transform",
@@ -1133,19 +988,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream
             ? { emitProgress: (event: unknown) => writeLine({ event: "progress", data: event }) }
-            : {}),
-          ...(clientServicesParam
-            ? {
-                clientServices: {
-                  ops: clientServicesParam.ops,
-                  roots: clientServicesParam.roots,
-                  request: (
-                    op: ClientServiceOp,
-                    args: Record<string, unknown>,
-                    timeoutMs: number
-                  ) => clientRequests.request(toolInvocationId, op, args, timeoutMs),
-                },
-              }
             : {}),
         });
         // Gate on `updateInstallable`, not `updateAvailable`, and advertise the
@@ -1284,8 +1126,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       } finally {
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();
-        // Idempotent; the close handler above may have run already.
-        clientRequests.close(toolInvocationId);
       }
     }
   );

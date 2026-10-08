@@ -40,32 +40,21 @@ export type {
   FileInputWire,
   FileInputKind,
   FileInputSpec,
+  FileInputMember,
   ResolvedFileInput,
+  ResolvedMember,
   ClientFileDirective,
 } from "./file-inputs";
 export {
   canonicalFlowPath,
   classifyOnDiskSpelling,
+  collectFlowRequests,
   completeRunExtension,
+  flowMemberKey,
+  MAX_RUN_DEPTH,
   resolveFlowRelativeFile,
 } from "./flow-file-refs";
 export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
-export {
-  CLIENT_SERVICE_OPS,
-  CLIENT_REQUEST_EVENT,
-  CLIENT_FILE_OP_TIMEOUT_MS,
-  CLIENT_CONTENT_CAP_BYTES,
-  clientServicesParamSchema,
-} from "./client-services";
-export type {
-  ClientServiceOp,
-  ClientServicesAdvert,
-  ClientServicesParam,
-  ClientRequestLine,
-  ClientResponseBody,
-  ResolveFileArgs,
-  ResolveFileAnswer,
-} from "./client-services";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

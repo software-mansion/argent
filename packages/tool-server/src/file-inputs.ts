@@ -16,20 +16,27 @@
  * - `kind: "directory"` is used in place, and fails with remote-mode guidance
  *   when absent here (a tree can't ride in a tool call).
  * - `kind: "probe"` passes through and only reports presence.
+ * - A `collect` spec's `members` (a flow's `run:` closure, sent with the flow
+ *   by a linked client) are decoded with the same checks, each into its own
+ *   state: a member that cannot be used fails only where it is used, never the
+ *   call as a whole.
  *
  * Plain string args (older clients, direct invocations) pass through untouched.
  */
 
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import bytesUtil from "bytes";
 import { safeExtractTarGz } from "@argent/archive";
 import {
   isFileInputWire,
+  type FileInputMember,
   type FileInputSpec,
   type FileInputWire,
+  type OnDiskSpelling,
   type ResolvedFileInput,
+  type ResolvedMember,
   type ToolDefinition,
 } from "@argent/registry";
 
@@ -126,8 +133,8 @@ function sanitizeFilename(name: string): string {
   return cleaned.length > 0 && cleaned !== "." && cleaned !== ".." ? cleaned : "upload";
 }
 
-/** Write uploaded content into a fresh OS temp dir; returns the file path and the dir to remove on cleanup. */
-async function materializeUpload(wire: FileInputWire): Promise<{ filePath: string; dir: string }> {
+/** Decode inlined content, refusing what exceeds the limit or disagrees with the client's size. */
+function decodeContent(wire: Pick<FileInputWire, "path" | "size" | "content">): Buffer {
   const data = Buffer.from(wire.content!, "base64");
   if (data.length > MAX_UPLOAD_BYTES) {
     throw new FileInputError(
@@ -144,6 +151,12 @@ async function materializeUpload(wire: FileInputWire): Promise<{ filePath: strin
         `recorded ${wire.size} — refusing a truncated or corrupted upload.`
     );
   }
+  return data;
+}
+
+/** Write uploaded content into a fresh OS temp dir; returns the file path and the dir to remove on cleanup. */
+async function materializeUpload(wire: FileInputWire): Promise<{ filePath: string; dir: string }> {
+  const data = decodeContent(wire);
   const dir = await mkdtemp(join(tmpdir(), "argent-file-input-"));
   const filePath = join(dir, sanitizeFilename(basename(wire.path)));
   await writeFile(filePath, data);
@@ -196,6 +209,94 @@ async function extractTarUpload(
   }
 }
 
+function isSpelling(value: unknown): value is OnDiskSpelling {
+  if (typeof value !== "object" || value === null) return false;
+  const { state, actual, addressable } = value as Record<string, unknown>;
+  if (state === "listed" || state === "absent") return true;
+  return state === "case_folded" && typeof actual === "string" && typeof addressable === "boolean";
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** One member's bytes, read the way a declared file input's are. */
+async function memberText(
+  member: FileInputMember,
+  tempDirs: string[],
+  lookupUpload: UploadLookup | undefined
+): Promise<string> {
+  if (typeof member.content === "string") return decodeContent(member).toString("utf8");
+  if (typeof member.uploadId !== "string") {
+    throw new FileInputError(`the client sent no content for "${member.path}"`);
+  }
+  const unused: ResolvedFileInput = {
+    clientPath: member.path,
+    presentOnHost: false,
+    viaUpload: true,
+  };
+  const wire = member as unknown as FileInputWire;
+  const { value } = await extractTarUpload(wire, member.uploadId, unused, tempDirs, lookupUpload);
+  return readFile(value, "utf8");
+}
+
+/**
+ * Resolve a wire's members by key. An entry this server cannot use is never
+ * an error of the call: a malformed one becomes `refused`, and so does one
+ * whose bytes fail the checks of a declared input, so the step that needs it
+ * fails, and nothing else. An entry of a role this server does not know is
+ * left out, as is a repeated key after its first entry.
+ */
+async function resolveMembers(
+  members: unknown[],
+  tempDirs: string[],
+  lookupUpload: UploadLookup | undefined
+): Promise<Record<string, ResolvedMember>> {
+  const out: Record<string, ResolvedMember> = {};
+  for (const raw of members) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const member = raw as FileInputMember;
+    if (
+      member.role !== "flow" ||
+      typeof member.key !== "string" ||
+      Object.hasOwn(out, member.key)
+    ) {
+      continue;
+    }
+    if (typeof member.canonical !== "string" || !isSpelling(member.spelling)) {
+      out[member.key] = {
+        role: member.role,
+        state: "refused",
+        canonical: String(member.path),
+        spelling: { state: "listed" },
+        error: "the client sent an invalid entry for it",
+      };
+      continue;
+    }
+    const base = { role: member.role, canonical: member.canonical, spelling: member.spelling };
+    if (member.state === "missing") {
+      out[member.key] = { ...base, state: "missing" };
+    } else if (member.state === "refused") {
+      out[member.key] = {
+        ...base,
+        state: "refused",
+        error: typeof member.error === "string" ? member.error : "the client did not send it",
+      };
+    } else {
+      try {
+        out[member.key] = {
+          ...base,
+          state: "present",
+          text: await memberText(member, tempDirs, lookupUpload),
+        };
+      } catch (err) {
+        out[member.key] = { ...base, state: "refused", error: errorText(err) };
+      }
+    }
+  }
+  return out;
+}
+
 async function resolveOne(
   spec: FileInputSpec,
   wire: FileInputWire,
@@ -234,10 +335,22 @@ async function resolveOne(
   if (spec.kind === "file" && typeof wire.content === "string") {
     const { filePath, dir } = await materializeUpload(wire);
     tempDirs.push(dir);
-    return {
-      value: filePath,
-      meta: { clientPath: wire.path, presentOnHost: probe.present, viaUpload: true },
+    const uploaded: ResolvedFileInput = {
+      clientPath: wire.path,
+      presentOnHost: probe.present,
+      viaUpload: true,
     };
+    if (
+      spec.collect === "flow" &&
+      Array.isArray(wire.members) &&
+      typeof wire.canonical === "string" &&
+      isSpelling(wire.spelling)
+    ) {
+      uploaded.canonical = wire.canonical;
+      uploaded.spelling = wire.spelling;
+      uploaded.members = await resolveMembers(wire.members, tempDirs, lookupUpload);
+    }
+    return { value: filePath, meta: uploaded };
   }
 
   if (meta.presentOnHost) {

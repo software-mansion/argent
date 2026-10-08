@@ -1,18 +1,4 @@
-import { realpath } from "node:fs/promises";
-import * as path from "node:path";
-
-import {
-  CLIENT_FILE_OP_TIMEOUT_MS,
-  CLIENT_REQUEST_EVENT,
-  FAILURE_CODES,
-  FLOW_FILE_NAME_PATTERN,
-  FLOW_NAME_PATTERN,
-  describeParamIssues,
-  type ClientRequestLine,
-  type ClientResponseBody,
-  type ClientServicesAdvert,
-} from "@argent/registry";
-
+import { describeParamIssues } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
@@ -22,7 +8,6 @@ import {
   type FileInputSpec,
   type FileInputWire,
 } from "./file-inputs.js";
-import { createClientServicesHandler, type ClientServicesHandler } from "./client-services.js";
 
 export interface ToolMeta {
   name: string;
@@ -31,8 +16,6 @@ export interface ToolMeta {
   outputHint?: string;
   /** Args that name files on the CALLER's machine — see file-inputs.ts. */
   fileInputs?: FileInputSpec[];
-  /** Set when the tool can ask the caller for project files — see client-services.ts. */
-  clientServices?: ClientServicesAdvert;
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
@@ -79,8 +62,7 @@ export interface CreateToolsClientOptions {
    * /tools), so the caller can disable its timeout. `meta.carriesUpload` is true
    * when the body names an upload: the tool-server consumes an upload on the
    * first request that reaches it, so the caller must not abort or resend that
-   * request. POST /upload and the client-services answer POSTs keep the global
-   * fetch.
+   * request. POST /upload keeps the global fetch.
    */
   fetchImpl?: (
     url: string,
@@ -88,10 +70,8 @@ export interface CreateToolsClientOptions {
     meta: { longRunning: boolean; carriesUpload: boolean }
   ) => Promise<Response>;
   /**
-   * Receives each diagnostic line of client services (a request line it had to
-   * drop, a request it gave up, an answer the tool-server did not take, and
-   * the request log that `ARGENT_CLIENT_SERVICES_LOG=1` turns on), without a
-   * trailing newline.
+   * Receives each diagnostic line of the client, without a trailing newline:
+   * today the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
    */
@@ -128,152 +108,6 @@ function authHeaders(token: string | undefined): Record<string, string> {
 }
 
 /**
- * How a stream's `client-request` lines are answered: the handler, where to
- * post, and where a diagnostic goes.
- */
-interface ClientServicesLink {
-  handler: ClientServicesHandler;
-  answerUrl: (invocation: string) => string;
-  headers: Record<string, string>;
-  diagnose: (message: string) => void;
-}
-
-/** A request line as the tool-server's own messages name it: its op and its target. */
-function describeRequest(msg: ClientRequestLine): string {
-  const { op, args } = msg as { op?: unknown; args?: unknown };
-  const target =
-    typeof args === "object" && args !== null ? (args as { target?: unknown }).target : undefined;
-  return (
-    `the ${typeof op === "string" ? op : "unknown"} request` +
-    (typeof target === "string" ? ` for "${target}"` : "")
-  );
-}
-
-/**
- * The handler's answer, or undefined once the tool-server has stopped waiting
- * for it: a local read can hang (a file on an unresponsive network mount), and
- * an answer after that settles nothing.
- */
-async function answerInTime(
-  link: ClientServicesLink,
-  msg: ClientRequestLine
-): Promise<ClientResponseBody | undefined> {
-  let timer: NodeJS.Timeout | undefined;
-  const expired = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), CLIENT_FILE_OP_TIMEOUT_MS);
-    // The timer alone must not keep the process up after the call ended.
-    timer.unref();
-  });
-  try {
-    return await Promise.race([link.handler.handle(msg), expired]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** An error's message, with its cause's: fetch says only "fetch failed" itself. */
-function errorText(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  return err.cause instanceof Error ? `${err.message} (${err.cause.message})` : err.message;
-}
-
-/**
- * The `error` of the tool-server's own refusal of an answer, or undefined when
- * the reply is not one. Its answer route sends, each with a JSON `error`: 400
- * for a malformed answer, 404 for one after its timeout or after the call
- * ended, 409 for a second one, 413 for one above the size cap (which it turns
- * into a refusal of the request). The route was reached and the request is
- * settled there, so the run goes on and its report says what became of it.
- */
-function answerRouteRefusal(status: number, text: string): string | undefined {
-  if (![400, 404, 409, 413].includes(status)) return undefined;
-  try {
-    const body = JSON.parse(text) as { error?: unknown } | null;
-    return typeof body?.error === "string" ? body.error : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The failure of a call whose answer to `request` did not reach the tool-server. */
-function undeliveredAnswer(request: string, url: string, reason: string): ToolInvocationError {
-  return new ToolInvocationError(
-    `The answer to ${request} did not reach the tool-server: POST ${url} ${reason}. The call ` +
-      `was stopped. A reverse proxy between the client and the tool-server must forward that ` +
-      `route while the call's stream is open.`,
-    { errorCode: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING, errorKind: "network" }
-  );
-}
-
-/**
- * Answer one request line and post the answer. Never rejects. Resolves to the
- * failure of the call when the answer cannot reach the tool-server: the post
- * failed, or got a reply the tool-server's answer route does not send, which
- * comes from a proxy in between. Anything else is at most one diagnostic, and
- * the server settles the request on its side: a line without a string id or
- * invocation names no answer to post, so it is dropped. The handler and the
- * post each give up when the server would have stopped waiting.
- */
-async function answerClientRequest(
-  link: ClientServicesLink,
-  msg: ClientRequestLine
-): Promise<ToolInvocationError | undefined> {
-  const { id, invocation } = msg as { id?: unknown; invocation?: unknown };
-  if (typeof id !== "string" || typeof invocation !== "string") {
-    link.diagnose("[client-services] ignored a request line without a string id");
-    return undefined;
-  }
-  const request = describeRequest(msg);
-  const seconds = Math.round(CLIENT_FILE_OP_TIMEOUT_MS / 1000);
-  let body: ClientResponseBody | undefined;
-  try {
-    body = await answerInTime(link, msg);
-  } catch (err) {
-    // The handler is built never to throw; should it, the request goes
-    // unanswered like one it gave up.
-    link.diagnose(`[client-services] ${request} failed on this client: ${errorText(err)}`);
-    return undefined;
-  }
-  if (body === undefined) {
-    link.diagnose(
-      `[client-services] ${request} did not finish on this client within ${seconds} s, the ` +
-        `time the tool-server waits for it; no answer was sent`
-    );
-    return undefined;
-  }
-  const url = link.answerUrl(invocation);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...link.headers },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const timedOut = err instanceof Error && err.name === "TimeoutError";
-    return undeliveredAnswer(
-      request,
-      url,
-      timedOut ? `got no reply within ${seconds} s` : `failed: ${errorText(err)}`
-    );
-  }
-  // Read whole, which also releases the connection: a refusal names its reason.
-  const text = await res.text().catch(() => "");
-  if (res.ok) return undefined;
-  const refusal = answerRouteRefusal(res.status, text);
-  if (refusal === undefined) {
-    const status = [res.status, res.statusText].filter(Boolean).join(" ");
-    return undeliveredAnswer(request, url, `answered ${status}`);
-  }
-  link.diagnose(
-    `[client-services] the tool-server did not take the answer to ${request}: ` +
-      `${res.status} ${refusal}`
-  );
-  return undefined;
-}
-
-/**
  * The stream of a call ended before its result line: the tool may have acted
  * already, which a caller must know before it runs the tool again.
  */
@@ -294,14 +128,10 @@ function brokenStream(name: string, reason: string, progress: number, cause?: un
 async function consumeToolStream(
   name: string,
   body: ReadableStream<Uint8Array>,
-  onProgress: (event: unknown) => void,
-  services?: ClientServicesLink
+  onProgress: (event: unknown) => void
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
   let progress = 0;
-  // The first answer that could not reach the tool-server. It fails the call
-  // unless the stream delivered its result first.
-  let undelivered: ToolInvocationError | undefined;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
@@ -316,20 +146,6 @@ async function consumeToolStream(
     if (msg.event === "progress") {
       progress++;
       onProgress(msg.data);
-    } else if (msg.event === CLIENT_REQUEST_EVENT) {
-      // Without a handler the line is ignored, as any unknown event is. An
-      // answer is never awaited: the tool-server sends the result or error
-      // line only once every request was answered or timed out, so an answer
-      // still in flight when the stream ends settles nothing.
-      if (!services) return;
-      void answerClientRequest(services, msg as ClientRequestLine).then((failure) => {
-        if (failure === undefined || undelivered) return;
-        // Rather than wait out the server's timeout for an answer that will
-        // not come, hang up: the server then stops the call, and the read
-        // loop ends with this failure.
-        undelivered = failure;
-        void reader.cancel().catch(() => {});
-      });
     } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
     else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -347,10 +163,7 @@ async function consumeToolStream(
       try {
         chunk = await reader.read();
       } catch (err) {
-        throw (
-          undelivered ??
-          brokenStream(name, err instanceof Error ? err.message : String(err), progress, err)
-        );
+        throw brokenStream(name, err instanceof Error ? err.message : String(err), progress, err);
       }
       const { done, value } = chunk;
       if (done) break;
@@ -362,11 +175,8 @@ async function consumeToolStream(
         handleLine(line);
       }
     }
-    // A hang-up leaves at most a cut line behind.
-    if (!undelivered) {
-      buffered += decoder.decode();
-      if (buffered.trim()) handleLine(buffered);
-    }
+    buffered += decoder.decode();
+    if (buffered.trim()) handleLine(buffered);
   } catch (err) {
     // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
@@ -374,7 +184,7 @@ async function consumeToolStream(
   }
 
   if (!final) {
-    throw undelivered ?? brokenStream(name, "the stream ended without a result", progress);
+    throw brokenStream(name, "the stream ended without a result", progress);
   }
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
@@ -393,78 +203,6 @@ export function errorBodyMessage(body: {
 }): string | undefined {
   if (Array.isArray(body.issues) && typeof body.message === "string") return body.message;
   return body.error ?? body.message;
-}
-
-/**
- * The handler for one call, or null; then the call carries no
- * `client_services` and is not made a stream for them. Null when the root
- * flow composes nothing ({@link createClientServicesHandler}), and for
- * arguments the tool-server refuses before it asks for anything: a
- * `project_root` or `flow_path` that is not absolute or has a `..` segment, a
- * `flow_path` not named `<flow-name>.yaml`, a `name` outside the flow-name
- * pattern, or not exactly one of `flow_path` and `name`. Roots taken from
- * those would reach a server that does not refuse them.
- *
- * The handler serves the root flow and what it composes, inside these roots:
- * the project, its `.argent/flows` directory (a project may keep that one as
- * a symlink to a tree outside the project, and the flows there are still the
- * project's own), the directory of `flow_path` when given, so a flow
- * addressed outside the project can still reach its own fragments, and the
- * directory the root flow file REALLY lives in: a `run:` target resolves
- * beside the real file, as it does on one computer, so a root flow that is a
- * symlink serves the fragments next to its target. A root flow saved under
- * `<P>/.argent/flows/`, by its spelling or by its real path, also serves the
- * project `<P>` it belongs to: the CLI sends its working directory as
- * `project_root`, and the flow's fragments in its own project must not depend
- * on where the shell stands. Every root is served by its real location; one
- * that does not exist is dropped.
- */
-async function clientServicesHandlerFor(
-  advert: ClientServicesAdvert,
-  args: unknown,
-  log: (line: string) => void
-): Promise<ClientServicesHandler | null> {
-  if (typeof args !== "object" || args === null) return null;
-  const { project_root, flow_path, name } = args as Record<string, unknown>;
-  if (!isResolvedAbsolute(project_root)) return null;
-  const flowsDir = path.join(project_root, ".argent", "flows");
-  let rootFlow: string;
-  if (flow_path !== undefined && name === undefined) {
-    if (!isResolvedAbsolute(flow_path)) return null;
-    if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flow_path))) return null;
-    rootFlow = flow_path;
-  } else if (name !== undefined && flow_path === undefined) {
-    if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return null;
-    rootFlow = path.join(flowsDir, `${name}.yaml`);
-  } else {
-    return null;
-  }
-  const roots = [project_root, flowsDir, path.dirname(rootFlow)];
-  const real = await realpath(rootFlow).catch(() => null);
-  if (real !== null) roots.push(path.dirname(real));
-  for (const file of real === null ? [rootFlow] : [rootFlow, real]) {
-    const project = savedFlowProject(file);
-    if (project !== null) roots.push(project);
-  }
-  return createClientServicesHandler({ roots, rootFlow, advertised: advert.ops, log });
-}
-
-/** An absolute path with no `..` segment, as the tool-server requires. */
-function isResolvedAbsolute(value: unknown): value is string {
-  return (
-    typeof value === "string" && path.isAbsolute(value) && !value.split(/[\\/]+/).includes("..")
-  );
-}
-
-/** `<P>` for a file under `<P>/.argent/flows/`, the innermost such `<P>`. */
-function savedFlowProject(file: string): string | null {
-  const parts = file.split(path.sep);
-  for (let i = parts.length - 3; i >= 0; i--) {
-    if (parts[i] === ".argent" && parts[i + 1] === "flows") {
-      return parts.slice(0, i).join(path.sep) || path.sep;
-    }
-  }
-  return null;
 }
 
 /**
@@ -506,13 +244,26 @@ function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   );
 }
 
-/** True when a prepared argument names an upload that the tool-server will consume. */
+function wiresOf(args: unknown): Partial<FileInputWire>[] {
+  if (typeof args !== "object" || args === null) return [];
+  return Object.values(args).filter(
+    (value): value is Partial<FileInputWire> =>
+      (value as Partial<FileInputWire> | null)?.[FILE_INPUT_MARKER] === true
+  );
+}
+
+/** True when a prepared argument carries members (see file-inputs.ts `collect`). */
+function carriesMembers(args: unknown): boolean {
+  return wiresOf(args).some((wire) => (wire.members?.length ?? 0) > 0);
+}
+
+/**
+ * True when a prepared argument names an upload that the tool-server will
+ * consume, or carries members: a call that sends a flow's closure is never
+ * sent twice, so a run's steps never act on the device twice.
+ */
 function carriesUpload(args: unknown): boolean {
-  if (typeof args !== "object" || args === null) return false;
-  return Object.values(args).some((value) => {
-    const wire = value as Partial<FileInputWire> | null;
-    return wire?.[FILE_INPUT_MARKER] === true && typeof wire.uploadId === "string";
-  });
+  return carriesMembers(args) || wiresOf(args).some((wire) => typeof wire.uploadId === "string");
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -574,36 +325,20 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
-    // Client services, outbound: offer to serve project files during the call
-    // when the tool can ask for them and the call is routed.
     let finalArgs = args;
-    let services: ClientServicesLink | undefined;
     const meta = await fetchTool(name);
-    if (meta?.fileInputs?.length || meta?.clientServices) {
-      if (meta.fileInputs?.length) {
-        if (remote) assertRequiredPresent(meta, args);
-        finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
-          includeContent: remote,
-          uploadEndpoint: remote ? { url, token } : undefined,
-        });
-      }
-      if (remote && meta.clientServices) {
-        const handler = await clientServicesHandlerFor(meta.clientServices, args, diagnose);
-        if (handler) {
-          finalArgs = { ...(finalArgs as Record<string, unknown>), client_services: handler.param };
-          services = {
-            handler,
-            answerUrl: (invocation) =>
-              `${url}/invocations/${encodeURIComponent(invocation)}/client-responses`,
-            headers: authHeaders(token),
-            diagnose,
-          };
-        }
-      }
+    if (meta?.fileInputs?.length) {
+      if (remote) assertRequiredPresent(meta, args);
+      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
+        includeContent: remote,
+        uploadEndpoint: remote ? { url, token } : undefined,
+        log: diagnose,
+      });
     }
 
-    // A handler needs the stream: its requests travel on it.
-    const stream = opts?.onProgress !== undefined || services !== undefined;
+    // A call that sends a flow's closure runs that flow over a link, and its
+    // progress lines keep the connection busy through a proxy's idle timeout.
+    const stream = opts?.onProgress !== undefined || carriesMembers(finalArgs);
     const res = await doFetch(
       `${url}/tools/${encodeURIComponent(name)}`,
       {
@@ -611,8 +346,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         headers: {
           "Content-Type": "application/json",
           // A proxy that compresses the stream holds each line until its buffer
-          // fills, so a request line never gets its answer. `identity` keeps the
-          // stream uncompressed end to end.
+          // fills. `identity` keeps the stream uncompressed end to end.
           ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
           ...authHeaders(token),
         },
@@ -625,12 +359,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
     if (stream && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      const streamed = await consumeToolStream(
-        name,
-        res.body,
-        opts?.onProgress ?? (() => {}),
-        services
-      );
+      const streamed = await consumeToolStream(name, res.body, opts?.onProgress ?? (() => {}));
       return { ...streamed, outputHint: meta?.outputHint };
     }
     let json: {

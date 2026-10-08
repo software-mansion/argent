@@ -133,12 +133,10 @@ counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
-either, the CLI uploads the flow file, and the tool-server reads each run:
-fragment from the CLI during the run, so the CLI must keep running until the
-run ends. The tool-server rejects a flow with script: or snapshot: steps, or
-with tool: steps that take a file or record a flow: in the flow file before
-the first step, in a fragment at the run: step that loads it. With neither,
-all step kinds run.
+either, the CLI uploads the flow file and the run: fragments it reaches, and
+the tool-server rejects a flow before the first step when the flow or one of
+those fragments has script: or snapshot: steps, or tool: steps that take a
+file or record a flow. With neither, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or

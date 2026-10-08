@@ -1,9 +1,9 @@
 /**
  * How a flow file reference — a `run:` target, a `script:` path, or the flow a
  * caller named — is turned into the file it denotes on disk. Shared by the
- * tool-server (co-located runs) and the argent client (client services over a
- * link), so both sides resolve a reference with one implementation and the
- * kernel semantics of the machine that has the files.
+ * tool-server (co-located runs) and the argent client (which collects a flow's
+ * files for a call over a link), so both sides resolve a reference with one
+ * implementation and the kernel semantics of the machine that has the files.
  */
 
 import * as fs from "node:fs/promises";
@@ -52,8 +52,8 @@ export async function canonicalFlowPath(p: string): Promise<string> {
  * target and would truncate a real path segment given a bare one (see
  * flow-run.ts). Re-serializing a parsed flow therefore writes the completed
  * spelling back, which is the intended one-way migration. The argent client
- * completes a target the same way to know which file a flow it served will
- * ask for.
+ * completes a target the same way ({@link collectFlowRequests}) to know which
+ * files to send with a flow.
  *
  * The test is the CANDIDATE's basename, not the supplied value's: basename()
  * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
@@ -67,6 +67,58 @@ export function completeRunExtension(value: string): string {
   if (value.endsWith(".yaml")) return value;
   const candidate = `${value}.yaml`;
   return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
+}
+
+/**
+ * Longest `run:` chain a flow may nest: the runner refuses the `run:` step
+ * that would push the chain past it. The client sends the files of a flow's
+ * `run:` closure to this depth, the deepest one the runner resolves.
+ */
+export const MAX_RUN_DEPTH = 20;
+
+/** Deeper than any block nesting the runner parses; also ends a cyclic YAML alias. */
+const MAX_BLOCK_NESTING = 64;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The project files a parsed flow document makes the runner read: today the
+ * `run:` targets of its steps and of the steps of its block directives
+ * (`when:`), taken or not, spelled as the runner keeps them (extension
+ * completed). A value the runner's parse refuses names nothing. Pure: it walks
+ * a document the caller parsed, so the client and the tool-server's parity
+ * test share it without a YAML or file-system dependency.
+ */
+export function collectFlowRequests(doc: unknown): { runTargets: string[] } {
+  const runTargets = new Set<string>();
+  const seen = new Set<unknown>();
+  const visit = (steps: unknown, depth: number): void => {
+    if (!Array.isArray(steps) || depth > MAX_BLOCK_NESTING || seen.has(steps)) return;
+    seen.add(steps);
+    for (const step of steps) {
+      if (!isRecord(step)) continue;
+      const run = step.run;
+      if (
+        typeof run === "string" &&
+        !run.includes("\\") &&
+        !path.posix.isAbsolute(run) &&
+        !/^[A-Za-z]:/.test(run)
+      ) {
+        const target = completeRunExtension(run);
+        if (FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) runTargets.add(target);
+      }
+      visit(step.steps, depth + 1);
+    }
+  };
+  if (isRecord(doc)) visit(doc.steps, 0);
+  return { runTargets: [...runTargets] };
+}
+
+/** The key of a `run:` resolution: the directory the target resolves against, and the target as written. */
+export function flowMemberKey(anchorDir: string, target: string): string {
+  return `${anchorDir}\0${target}`;
 }
 
 /**
@@ -149,10 +201,9 @@ export interface ResolvedFlowRelativeFile {
  * the front door already grants: an operator can point `flow_path` at any YAML
  * on the host. The one route that carries untrusted content, an uploaded flow,
  * never resolves a target of its own on the host: the runner either refuses
- * the step kind before any step runs, or — over a link whose client offers
- * client services — sends the reference back to the client, which runs this
- * same function on its OWN files and fences the result to the roots it chose
- * to serve. A nested `tool: flow-execute` naming a flow already on the host is
+ * the step kind before any step runs, or looks the reference up in the files
+ * the client sent with the call, which the client resolved with this same
+ * function on its OWN files and fenced to the roots it chose to send. A nested `tool: flow-execute` naming a flow already on the host is
  * an ordinary `name` run and resolves here as one, with the reach a direct
  * `flow-execute` call for that same `name` already has.
  */

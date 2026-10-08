@@ -1,13 +1,12 @@
 import * as fs from "node:fs/promises";
 import {
-  CLIENT_FILE_OP_TIMEOUT_MS,
   FAILURE_CODES,
   FailureError,
   FLOW_FILE_NAME_PATTERN,
+  flowMemberKey,
   resolveFlowRelativeFile,
   type OnDiskSpelling,
-  type ResolveFileArgs,
-  type ToolContext,
+  type ResolvedMember,
 } from "@argent/registry";
 
 /**
@@ -17,7 +16,7 @@ import {
  * — null when nothing is at `canonical`, which the caller reports as the
  * missing fragment it is. The read is deferred so the runner's guards (cycle,
  * depth, casing) decide before any file is opened, as they do today on the
- * host; over the channel the text arrived with the answer, so `read` is free.
+ * host; a client's member already carries its text, so `read` is free.
  */
 export interface ResolvedFlowFile {
   canonical: string;
@@ -29,9 +28,9 @@ export interface ResolvedFlowFile {
  * The one seam every project read in the flow runner goes through. The runner
  * stays on the tool-server; the project is wherever the caller's files are.
  * {@link HostProjectAccess} reads this host's disk — a co-located caller, or a
- * flow the tool-server found in place. {@link ClientProjectAccess} sends each
- * read to the caller over the client-services channel, for a flow that
- * arrived as an upload from a client that offered to serve its files.
+ * flow the tool-server found in place. {@link ClientProjectAccess} looks each
+ * read up in the files the client sent with an uploaded flow (the members of
+ * its file input).
  *
  * In client mode `canonical` is a CLIENT path: the runner uses it as a key (the
  * `run:` cycle guard) and for display, and never opens it.
@@ -73,71 +72,36 @@ export class HostProjectAccess implements ProjectAccess {
   }
 }
 
-type ClientServices = NonNullable<ToolContext["clientServices"]>;
-
-function invalidAnswer(op: string, subject: string): FailureError {
-  return new FailureError(
-    `the client answered the ${op} request for "${subject}" with an invalid payload`,
-    {
-      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-      failure_stage: "client_request_refused",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    }
-  );
-}
-
-function isSpelling(value: unknown): value is OnDiskSpelling {
-  if (typeof value !== "object" || value === null) return false;
-  const { state, actual, addressable } = value as Record<string, unknown>;
-  if (state === "listed" || state === "absent") return true;
-  return state === "case_folded" && typeof actual === "string" && typeof addressable === "boolean";
-}
-
 /**
- * The client-services implementation: each read is one request line on the
- * call's stream, answered by the client from its own disk through the same
- * resolution code the host implementation runs. The client decides what it
- * serves (its roots, the file kinds, the size cap); this side only checks that
- * an answer has the shape the op promises.
- *
- * One instance serves one call, and it asks once per reference: the
- * prerequisite guard, the device scan and the run each walk a leading `run:`
- * chain, and one answer serves all three, so they cannot see two versions of a
- * file edited mid-run. A rejection is kept as well: a refusal, a timeout or an
- * abort is the same for every walk, as the broker already makes a timeout.
+ * The client's files, looked up by the pair the runner resolves: the client
+ * resolved each `run:` target of its flow before the call, with the same
+ * resolution code the host implementation runs, and sent what it found. A
+ * pair the client did not send, or refused to send, is refused here with the
+ * client's reason.
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;
-  private readonly answers = new Map<string, Promise<ResolvedFlowFile>>();
 
-  constructor(private readonly services: ClientServices) {}
+  constructor(private readonly members: Readonly<Record<string, ResolvedMember>>) {}
 
-  resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
-    // Keyed by the pair as spelled, not by a joined path: the client resolves
-    // `target` against `anchorDir` itself (symlinks, casing).
-    const key = `${anchorDir}\0${target}`;
-    let answer = this.answers.get(key);
-    if (!answer) {
-      answer = this.request(anchorDir, target);
-      this.answers.set(key, answer);
-    }
-    return answer;
+  /** The member the runner reaches for this pair, or undefined when the client did not send one. */
+  member(anchorDir: string, target: string): ResolvedMember | undefined {
+    const key = flowMemberKey(anchorDir, target);
+    return Object.hasOwn(this.members, key) ? this.members[key] : undefined;
   }
 
-  private async request(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
-    const answer = await this.services.request(
-      "resolve-file",
-      { anchorDir, target, kind: "flow" } satisfies ResolveFileArgs,
-      CLIENT_FILE_OP_TIMEOUT_MS
-    );
-    const { canonical, spelling, exists, content } = answer;
-    if (typeof canonical !== "string" || !isSpelling(spelling) || typeof exists !== "boolean") {
-      throw invalidAnswer("resolve-file", target);
+  async resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
+    const member = this.member(anchorDir, target);
+    if (member?.role !== "flow" || member.state === "refused") {
+      const reason = member?.error ?? `${target} is not a run: target of a flow this client sent`;
+      throw new FailureError(`the client refused to send "${target}": ${reason}`, {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "client_member_refused",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
-    if (!exists) return { canonical, spelling, read: async () => null };
-    if (typeof content !== "string") throw invalidAnswer("resolve-file", target);
-    const text = Buffer.from(content, "base64").toString("utf8");
-    return { canonical, spelling, read: async () => text };
+    const text = member.state === "present" ? (member.text ?? "") : null;
+    return { canonical: member.canonical, spelling: member.spelling, read: async () => text };
   }
 }
