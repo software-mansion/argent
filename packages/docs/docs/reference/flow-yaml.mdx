@@ -149,7 +149,7 @@ Use the map form for a flow that runs on more than one platform:
 - launch: { ios: { app: com.acme.app, args: [-FeatureFlag, YES] }, android: com.acme.app }
 ```
 
-`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. `ios` accepts a bundle id, or `{ app, args }`. On an iOS simulator, Argent passes `args` to the app process at launch. Each arg must be a string, so quote a number or boolean: `"5"`, not `5`. A physical iPhone ignores `args`. A launch that has no id for the platform of the run is an error.
+`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. `ios` accepts a bundle id, or `{ app, args }`. On an iOS simulator or a physical iPhone, Argent passes `args` to the app process at launch. Each arg must be a string, so quote a number or boolean: `"5"`, not `5`. A launch that has no id for the platform of the run is an error.
 
 A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry, the run uses the `native` entry.
 

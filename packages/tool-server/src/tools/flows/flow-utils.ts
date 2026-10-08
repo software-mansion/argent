@@ -561,8 +561,8 @@ export type ChromiumLaunch = string | { path: string; args?: string[] };
 
 /**
  * An ios `launch` target: a bundle id (bare string) or a bundle id plus the
- * arguments passed to the app process at launch. Only a simulator applies the
- * args; a physical iPhone ignores them, as `restart-app` does.
+ * arguments passed to the app process at launch, on a simulator or a physical
+ * iPhone.
  */
 export type IosLaunch = string | { app: string; args?: string[] };
 

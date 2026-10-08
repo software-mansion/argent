@@ -30,7 +30,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons              |
 | `stop-metro`                 | Stop the Metro bundler listening on a given port                                              |
 
-`launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works only on Apple simulators. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments.
+`launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
 
 Argent drives a foldable iOS simulator, for example the iPhone Duo. `list-devices` marks it with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
