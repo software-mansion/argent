@@ -242,6 +242,23 @@ describe("callTool writes back the baselines the result returns", () => {
     }
   );
 
+  it("streams an update of a flow with no member yet, and marks it an upload", async () => {
+    // A first update sends nothing, but the run still writes baselines back.
+    await startServer();
+    await writeFile(path.join(flows, "snap.yaml"), "steps:\n  - snapshot: home\n");
+    const { tools, callMeta } = client(true);
+
+    await tools.callTool("flow-execute", {
+      name: "snap",
+      project_root: proj,
+      updateBaselines: true,
+    });
+
+    expect(wireOf(seen[0]!).members).toEqual([]);
+    expect(seen[0]!.headers.accept).toContain("application/x-ndjson");
+    expect(callMeta()).toMatchObject({ carriesUpload: true });
+  });
+
   it("writes no baseline for a compare run, which allows no directory", async () => {
     await writeFile(path.join(flows, "snap.yaml"), "steps:\n  - snapshot: home\n");
     const inside = path.join(flows, "__baselines__", "snap", "home__ios-1x1.png");

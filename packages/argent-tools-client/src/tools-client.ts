@@ -363,9 +363,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       return applied.result;
     };
 
-    // A call that sends a flow's closure runs that flow over a link, and its
-    // progress lines keep the connection busy through a proxy's idle timeout.
-    const stream = opts?.onProgress !== undefined || carriesMembers(finalArgs);
+    // A call that sends a flow's closure, or that updates its baselines, runs
+    // that flow over a link, and its progress lines keep the connection busy
+    // through a proxy's idle timeout. Neither is ever sent twice: the run's
+    // steps would act on the device again.
+    const runsOverLink = carriesMembers(finalArgs) || baselineDirs.length > 0;
+    const stream = opts?.onProgress !== undefined || runsOverLink;
     const res = await doFetch(
       `${url}/tools/${encodeURIComponent(name)}`,
       {
@@ -379,7 +382,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         },
         body: JSON.stringify(finalArgs ?? {}),
       },
-      { longRunning: meta?.longRunning === true, carriesUpload: carriesUpload(finalArgs) }
+      {
+        longRunning: meta?.longRunning === true,
+        carriesUpload: runsOverLink || carriesUpload(finalArgs),
+      }
     );
     // The server commits to streaming only after every pre-invoke gate passes —
     // validation errors stay plain JSON with their status codes — so Content-Type

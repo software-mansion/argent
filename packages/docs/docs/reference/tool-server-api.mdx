@@ -145,9 +145,9 @@ The client sends nothing for a directory outside the directories of the client p
 
 ## The call
 
-A call with at least one member is a stream. The client sends `Accept: application/x-ndjson` and `Accept-Encoding: identity` also when no progress consumer waits for the lines. The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines. The result does not change.
+A call with at least one member, or a call with `updateBaselines` for a flow with a `snapshot:` step, is a stream. The client sends `Accept: application/x-ndjson` and `Accept-Encoding: identity` also when no progress consumer waits for the lines. The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines. The result does not change.
 
-The MCP adapter does not send a call with members a second time, and it sets no timeout for that call.
+The MCP adapter does not send such a call a second time, and it sets no timeout for that call.
 
 ## What the tool-server does with the members
 
