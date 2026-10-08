@@ -232,6 +232,8 @@ The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ 
 
 A `run:` target is a YAML path resolved against the directory of the flow file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
 
+`run:` steps and `tool: flow-execute` steps make one chain of flows. A step that closes a cycle in that chain, such as a flow that runs itself through `tool: flow-execute`, fails with `cyclic flow reference: ...`. A chain longer than 20 flows fails with `max run depth exceeded`.
+
 - iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
@@ -250,7 +252,7 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 - **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
-If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
+Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `flow-add-script` is refused, and a replay refuses a `script:` step. Record and replay a flow with a script only without a link.
 
 If a script fails, check its changes before you retry.
 
@@ -262,7 +264,7 @@ A screenshot is human evidence. A `snapshot:` is executable visual verification.
 
 Do not use a snapshot as the only proof of navigation, persistence, data, accessibility state, logs, or network behavior. Avoid unstable timestamps, live data, ads, animation, and device drift. First establish deterministic state, identity, and readiness.
 
-Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
+Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A flow that a `tool: flow-execute` step runs keeps its own baselines, and `--update-baselines` updates them too unless the step sets `updateBaselines` itself. Over a link, a step that sets `updateBaselines: true` updates them only in a run with `--update-baselines`. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
 Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<flow>/` for CI artifact upload.
 

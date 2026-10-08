@@ -134,14 +134,17 @@ counts the remaining flows skipped.
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
 either, the CLI uploads the flow file, and the tool-server reads each run:
-fragment from the CLI during the run. The CLI also serves the snapshot
-baselines, stores each new baseline, and serves the .png and .yaml files
-that tool: steps name by an absolute path, so the CLI must keep running until
-the run ends. The tool-server rejects a flow with script: steps, or with
-tool: steps that name another file or a relative path, build a file path from
-several arguments, take a directory, an app or an output directory, run a
-flow or record a flow: in the flow file before the first step, in a fragment
-at the run: step that loads it. With neither, all step kinds run.
+fragment, and each flow that a tool: flow-execute step names with name, from
+the CLI during the run. The CLI also serves the snapshot baselines, stores
+each new baseline, and serves the .png and .yaml files that tool: steps name
+by an absolute path, so the CLI must keep running until the run ends. The
+tool-server rejects a flow with script: steps, or with tool: steps that name
+another file or a relative path, build a file path from several arguments,
+take a directory, an app or an output directory, run a flow other than by
+name with an absolute project_root, or record a flow: in the flow file before
+the first step, in a fragment at the run: step that loads it, and in a flow
+that a tool: flow-execute step runs, at that step. With neither, all step
+kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
@@ -153,7 +156,9 @@ Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
   --platform <p>         ios | android | chromium | vega | ios-remote — narrow
                          auto-detection (ios never picks a remote simulator)
-  --update-baselines     Write/refresh screenshot baselines instead of diffing
+  --update-baselines     Write/refresh screenshot baselines instead of diffing,
+                         also those of flows that tool: flow-execute steps run,
+                         unless such a step sets updateBaselines
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          under <dir>/<flow>/ — a stable path for CI artifact
                          upload; a directory run keys nested flows as

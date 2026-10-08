@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: plug
 ---
 
-This page documents client services: the exchange between the argent client and the tool-server. Through this exchange, the tool-server asks the client for project files during a flow run. The tool-server also gives the client each new snapshot baseline. The argent CLI and the MCP adapter are clients. The runner stays on the tool-server. The project stays on the client. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
+This page documents client services: the exchange between the argent client and the tool-server. Through this exchange, the tool-server asks the client for project files during a flow run, and while it records a step. The tool-server also gives the client each new snapshot baseline. The argent CLI and the MCP adapter are clients. The runner stays on the tool-server. The project stays on the client. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
 
 The exchange has four messages:
 
@@ -17,7 +17,7 @@ The exchange has four messages:
 | Request       | Tool-server to client | A `client-request` line on the NDJSON stream       |
 | Answer        | Client to tool-server | `POST /invocations/<invocation>/client-responses`  |
 
-Only the `flow-execute` tool advertises client services. Each side uses an op only when the other side lists the op.
+The `flow-execute` and `flow-add-step` tools advertise client services, with the same ops. Each side uses an op only when the other side lists the op.
 
 ## Advertisement: `clientServices` in `GET /tools`
 
@@ -43,8 +43,18 @@ The client adds a `client_services` parameter to the arguments of a call when al
 1. A link routes the call to a tool-server (`argent link` or `ARGENT_TOOLS_URL`). A link to a tool-server on the same computer counts.
 2. The `GET /tools` entry of the tool carries `clientServices`, and its `ops` hold an op that the client serves.
 3. `project_root` is an absolute path without a `..` segment.
-4. The arguments carry exactly one flow source: a `name` that is a valid flow name, or a `flow_path` that is an absolute path without a `..` segment to a valid flow file name.
-5. The root flow file is on the client, under the roots, and has at least one `run:` step. A `snapshot:` step also counts when `ops` hold `read-file` or `write-file`. A `tool:` step argument also counts when `ops` hold `read-file` and the argument is an absolute path with an extension of [Client policy](#client-policy) rule 7.
+4. For `flow-add-step`, `name` is a valid flow name, `command` is a string, and `args` is absent or the JSON text of an object. For `flow-execute`, the arguments carry exactly one flow source:
+   - a `name` that is a valid flow name
+   - a `flow_path` that is an absolute path without a `..` segment, with a valid flow file name
+5. For `flow-execute`, the root flow file is on the client and under the roots. The file has at least one of these steps:
+   - a `run:` step
+   - a `snapshot:` step, when `ops` hold `read-file` or `write-file`
+   - a `tool: flow-execute` step with `name` and an absolute `project_root` without a `..` segment, when `ops` hold `resolve-file`
+   - a `tool:` step with an argument that is an absolute path with an extension of [Client policy](#client-policy) rule 7, when `ops` hold `read-file`
+6. For `flow-add-step`, the recorded step names a file. The recording file does not need to exist on the client. The step names a file in one of these forms:
+   - a `flow-execute` step with `name` and an absolute `project_root` without a `..` segment, when `ops` hold `resolve-file`
+   - a `flow-execute` step with an absolute `flow_path` without a `..` segment to a valid flow file name, when `ops` hold `resolve-file`
+   - an argument that is an absolute path with an extension of rule 7, when `ops` hold `read-file`
 
 ```json
 {
@@ -58,12 +68,12 @@ The client adds a `client_services` parameter to the arguments of a call when al
 }
 ```
 
-| Field   | Value                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements. The client offers `write-file` only when the arguments set `updateBaselines: true`                                                                                                                                                                                                                      |
-| `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of the root flow file, and the directory of the real file behind the root flow when that real file is a YAML file (`.yaml` or `.yml`). When the root flow file or that real file is under `<P>/.argent/flows/`, the project `<P>` is also a root. A root inside another root is not sent |
+| Field   | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements. The client offers `write-file` only when the arguments set `updateBaselines: true`. The client never offers `write-file` for a `flow-add-step` call                                                                                                                                                                                                                                                          |
+| `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of the root flow file, and the directory of the real file behind the root flow when that real file is a YAML file (`.yaml` or `.yml`). When the root flow file or that real file is under `<P>/.argent/flows/`, the project `<P>` is also a root. A root inside another root is not sent. For `flow-add-step`, the root flow is the recording file `<project_root>/.argent/flows/<name>.yaml` |
 
-The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 with `HTTP_ZOD_VALIDATION_FAILED` and the error kind `validation` to a call that carries `client_services` without that header, or with a malformed `client_services`. A proxy that rewrites `Accept` therefore gets this 400 for a flow with a `run:` step, a `snapshot:` step or a file argument. A directory run of `argent flow run` reports that flow as rejected and continues with the next flow. The tool-server takes `client_services` off the arguments before it validates them, so the input schema of `flow-execute` does not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
+The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 with `HTTP_ZOD_VALIDATION_FAILED` and the error kind `validation` to a call that carries `client_services` without that header, or with a malformed `client_services`. A proxy that rewrites `Accept` therefore gets this 400 for each call that meets condition 5 or condition 6. A directory run of `argent flow run` reports such a flow as rejected and continues with the next flow. The tool-server takes `client_services` off the arguments before it validates them, so the input schemas of `flow-execute` and `flow-add-step` do not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
 
 Each request line must reach the client at once, because the run waits for the answer. For this reason, the client sends `Accept-Encoding: identity` with the call, and the tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. Each reverse proxy between the client and the tool-server must:
 
@@ -71,11 +81,34 @@ Each request line must reach the client at once, because the run waits for the a
 - forward `POST /invocations/<invocation>/client-responses` while the stream of the call is open
 - accept a request body of up to 48 MB on `POST /invocations/<invocation>/client-responses`, because an answer to `read-file` carries the file
 
-`X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. nginx does not forward the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream keeps the request line from the client. The tool-server then reports a timeout after 30 s. A flow without a `run:` step, a `snapshot:` step or a `tool:` step argument of condition 5 carries no `client_services`. Such a flow sends no request. Thus, such a proxy does not stop it.
+`X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. nginx does not forward the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream keeps the request line from the client. The tool-server then reports a timeout after 30 s. A call that meets neither condition 5 nor condition 6 carries no `client_services`. The tool-server sends no request for such a call. Thus, such a proxy does not stop it.
 
 nginx accepts a request body of up to 1 MB by default. A full-screen baseline is often larger. Set `client_max_body_size 48m` in each nginx. When a proxy refuses an answer with the status 413, the client sends a refusal for the same request. The step that waits for the answer then reports `error` at once. A refusal of the request for the root flow fails the run before the first step. See [Timeouts and failures](#timeouts-and-failures).
 
-When one condition does not hold, the client sends no `client_services`, and the call is not a stream for client services. The tool-server then keeps the behavior of a call without client services.
+When a condition for the tool does not hold, the client sends no `client_services`, and the call is not a stream for client services. The tool-server then keeps the behavior of a call without client services.
+
+## The `x-argent-linked` header
+
+The client sends the header `x-argent-linked: 1` with each `POST /tools/<name>` call over a link. A link to `127.0.0.1` counts. The header does not depend on `client_services`. The flow recorder of the tool-server reads the header:
+
+- A recording that `flow-start-recording` starts with the header keeps its file on the client. The tool-server writes nothing, and `savedTo` is a directive that the client applies. This is also true when the `project_root` path also exists on the computer of the tool-server.
+- `flow-add-script` refuses the call, because a replay over a link rejects a `script:` step. No script runs, and the recorder records no step.
+- `flow-add-step` refuses a step that a replay over a link rejects. An example is a `tool:` step that takes a directory, an app or an output directory. No tool runs, and the recorder records no step.
+- `flow-add-step` refuses a `flow-execute` step when the nested flow does not pass. The recorder records no step.
+
+`flow-add-step` uses the client services of a call only when the call carries the header. Without the header, the recorder reads no file from the client.
+
+Without the header, `flow-start-recording` keeps the file on the client only when the `project_root` path does not exist on the computer of the tool-server. For such a recording, the recorder applies the three refusals of the list above also to a call without the header.
+
+An argent client that is older than the tool-server sends no header. The result depends on the place of the recording file:
+
+- The tool-server writes the file over a link to `127.0.0.1`, or when the `project_root` path also exists on its computer. The recorder then applies no refusal. Such a client can record steps that a replay over that link rejects, a `script:` step among them.
+- The client keeps the file when the `project_root` path does not exist on the computer of the tool-server. The recorder applies the refusals. It also refuses each `flow-execute` step and each `tool:` step with a file argument, because it reads no file from such a client. The error tells you to update the argent CLI or the MCP adapter for these steps:
+  - a `flow-execute` step with `name`
+  - a `flow-execute` step with the `flow_path` of a flow beside the recording
+  - a `tool:` step with a file argument
+
+Keep the client and the tool-server at the same version.
 
 ## Request: the `client-request` line
 
@@ -109,7 +142,7 @@ The line sits between the step progress lines. When the flow has a `run:` or `sn
 {"event":"result","data":{...}}
 ```
 
-The tool-server asks once for each `run:` target in a call, and every later read of that target in the call uses the same answer. Without a `device`, the tool-server reads a leading `run:` chain before the first step to find its launch. Then the request for `frag.yaml` comes before the first progress line.
+The tool-server asks once for each `run:` target of a run, and every later read of that target in the run uses the same answer. A nested run of a `tool: flow-execute` step asks again. Without a `device`, the tool-server reads a leading `run:` chain before the first step to find its launch. Then the request for `frag.yaml` comes before the first progress line.
 
 A client that sent no `client_services` never receives the line.
 
@@ -158,15 +191,33 @@ The endpoint sits behind the same bearer-token check and Host check as `/tools/<
 
 ### `resolve-file`
 
-The tool-server sends `resolve-file` once for each `run:` target of a call. The client resolves the target on its own disk and returns the file. When the flow has a `run:` or `snapshot:` step, the tool-server also sends `resolve-file` for the root flow itself before the first step, to learn the real location of the file. The `run:` targets of the root flow and the snapshot baselines resolve beside that location, as they do on one computer. A refusal of that request fails the run before the first step.
+The tool-server sends `resolve-file` once for each `run:` target of a run. A nested run of a `tool: flow-execute` step sends it again. The client resolves the target on its own disk and returns the file. When the flow has a `run:` or `snapshot:` step, the tool-server also sends `resolve-file` for the root flow itself before the first step. The answer gives the real location of the file. The `run:` targets of the root flow and the snapshot baselines resolve beside that location, as they do on one computer. A refusal of that request fails the run before the first step.
+
+The tool-server also sends `resolve-file` once for each flow that a `tool: flow-execute` step names with `name`, in a run. A later step that names the same flow in the same run uses the same answer. A nested run asks again. `anchorDir` is `<project_root>/.argent/flows` of the step, and `target` is `<name>.yaml`. The nested run reads that flow, and resolves its own `run:` targets and snapshot baselines through the client services of the call. An answer with `exists: false` makes the step report `error`. So does an answer with a `case_folded` spelling, as in a run without a link. The reason then starts with `Invalid flow name`.
+
+During a `flow-add-step` call for a `flow-execute` step, the tool-server sends `resolve-file` for the flow of the step before the nested flow runs. When the step has no `delayMs` and the nested flow passed, the tool-server also sends `resolve-file` for these files:
+
+- the recording file
+- the flow beside the recording with the same name as the flow of the step
+
+The recorder uses the answers to record the step as `run: <name>.yaml` when the flow that ran is beside the recording, as without a link. For a step with `flow_path`, the recorder also asks for that file beside the recording file before the nested flow runs. It checks that the directory lists the file name as the step spells it.
 
 Request `args`:
 
 | Field       | Value                                                                           |
 | ----------- | ------------------------------------------------------------------------------- |
-| `anchorDir` | Absolute client path of the directory of the flow file that contains the step   |
-| `target`    | The `run:` target as written, for example `frag.yaml` or `../shared/login.yaml` |
+| `anchorDir` | Absolute client path of a directory. See the next table                         |
+| `target`    | A path relative to `anchorDir`. See the next table                              |
 | `kind`      | `flow`. The protocol also defines `script`, which the client does not serve yet |
+
+| Request for                               | `anchorDir`                                           | `target`                                                                        |
+| ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------- |
+| The root flow of a run                    | The directory of the root flow file                   | The file name of the root flow file                                             |
+| A `run:` step                             | The directory of the flow file that contains the step | The `run:` target as written, for example `frag.yaml` or `../shared/login.yaml` |
+| A `tool: flow-execute` step with `name`   | `<project_root>/.argent/flows` of the step            | `<name>.yaml`                                                                   |
+| The recording file of `flow-add-step`     | The directory of the recording file                   | The file name of the recording file                                             |
+| The flow beside the recording             | The directory of the real file of the recording       | `<name>.yaml`                                                                   |
+| The `flow_path` of a `flow-add-step` call | The directory of the recording file                   | The file name of `flow_path`                                                    |
 
 Answer:
 
@@ -193,7 +244,7 @@ The runner applies the same rules to the answer as to a file on its own disk: th
 
 ### `read-file`
 
-The tool-server sends `read-file` at each `snapshot:` step that compares, to get the baseline. The tool-server builds the path of the baseline beside the real file of the root flow on the client: `<dir>/__baselines__/<flow>/<key>.png`. `<flow>` is the name of that real file without `.yaml`. When that name is not a valid flow name, `<flow>` is the name of the flow. `<key>` is the baseline key of the snapshot. See [Snapshots](/docs/reference/flow-yaml#snapshots). A `snapshot:` step in a fragment uses the baselines of the root flow. The client serves only the baselines in this directory, and the file arguments of `tool:` steps that this section describes below.
+The tool-server sends `read-file` at each `snapshot:` step that compares, to get the baseline. The tool-server builds the path of the baseline beside the real file of the root flow on the client: `<dir>/__baselines__/<flow>/<key>.png`. `<flow>` is the name of that real file without `.yaml`. When that name is not a valid flow name, `<flow>` is the name of the flow. `<key>` is the baseline key of the snapshot. See [Snapshots](/docs/reference/flow-yaml#snapshots). A `snapshot:` step in a fragment uses the baselines of the root flow. A `snapshot:` step in a flow that a `tool: flow-execute` step runs uses the baselines of that flow. These baselines are in `__baselines__/<flow>/` beside the real file of that flow on the client. The client serves only the baselines in these directories, and the file arguments of `tool:` steps that this section describes below.
 
 Request `args`:
 
@@ -216,7 +267,7 @@ The tool-server also sends `read-file` at each `tool:` step, once for each file 
 
 ### `write-file`
 
-The tool-server sends `write-file` at each `snapshot:` step when the call sets `updateBaselines`. The request carries the new baseline. The tool-server sends no `read-file` for this step. The answer tells whether a baseline was at the path, so the step reason says `baseline written` or `baseline updated`. The step reason also gives the client path of the baseline. The step returns no artifact, because the baseline is on the client. A run without a link gives the file name of the baseline in the step reason, and returns the baseline as an artifact.
+The tool-server sends `write-file` at each `snapshot:` step when the call sets `updateBaselines`. A run that sets `updateBaselines` gives it to each nested run of a `tool: flow-execute` step, unless the step sets `updateBaselines` itself. A step that sets `updateBaselines: true` gets no `write-file` when the call does not set `updateBaselines`, because the client then does not offer the op. The nested run then rejects its `snapshot:` steps, and the step does not pass. The error does not tell you to update the client. It says that a nested flow updates its baselines only when the run that starts it updates baselines. The request carries the new baseline. The tool-server sends no `read-file` for this step. The answer tells whether a baseline was at the path, so the step reason says `baseline written` or `baseline updated`. The step reason also gives the client path of the baseline. The step returns no artifact, because the baseline is on the client. A run without a link gives the file name of the baseline in the step reason, and returns the baseline as an artifact.
 
 Request `args`:
 
@@ -225,7 +276,7 @@ Request `args`:
 | `path`    | Absolute client path of the baseline file, of the form `<dir>/__baselines__/<flow>/<key>.png` |
 | `content` | The new baseline as base64                                                                    |
 
-The content travels in the request line on the NDJSON stream, not in an answer. The tool-server does not send a baseline above the 32 MiB cap. The step then reports `error`, and the reason names the cap. The client writes only into the `__baselines__/<flow>/` directory of the root flow. The client creates `__baselines__/` and `__baselines__/<flow>/` beside the real file of the root flow when they do not exist. The client creates no other directory. The client writes the new baseline to a temporary file in the same directory, and then renames that file over the baseline. When the client stops during the write, the old baseline stays complete. The new baseline keeps the mode of the file that it replaces. When the baseline is a link to a file under the roots, the client replaces that file and keeps the link. See [Client policy](#client-policy) for the paths that the client writes.
+The content travels in the request line on the NDJSON stream, not in an answer. The tool-server does not send a baseline above the 32 MiB cap. The step then reports `error`, and the reason names the cap. The client writes only into the `__baselines__/<flow>/` directory of the root flow, and into that of each nested flow that the client served. The client creates `__baselines__/` and `__baselines__/<flow>/` beside the real file of that flow when they do not exist. The client creates no other directory. The client writes the new baseline to a temporary file in the same directory, and then renames that file over the baseline. When the client stops during the write, the old baseline stays complete. The new baseline keeps the mode of the file that it replaces. When the baseline is a link to a file under the roots, the client replaces that file and keeps the link. See [Client policy](#client-policy) for the paths that the client writes.
 
 Answer:
 
@@ -266,14 +317,28 @@ The answer does not reach the tool-server when the answer request fails, or when
 
 The client enforces these rules. The tool-server checks only the shape of each answer and the 32 MiB cap. The tool-server already holds the bearer token, so the rules protect the files of the project, not the token.
 
-1. The client serves only the files that the flows of the call compose. These are the root flow, the `run:` targets and the file arguments of the served files, and the snapshot baselines of the run. A `run:` target resolves beside the file that names it. The client refuses any other request before it reads the file. The refusal is the same whether the file exists or not.
+1. The client serves only the files that the flows of the call compose. The client refuses any other request before it reads the file. The refusal is the same whether the file exists or not. The client serves these files:
+   - For a `flow-execute` call:
+     - the root flow
+     - the `run:` targets of the served files. A `run:` target resolves beside the file that names it.
+     - the flows that `tool: flow-execute` steps of the served files name with `name` and `project_root`. Such a nested flow is `<project_root>/.argent/flows/<name>.yaml`, as the step spells it.
+     - the file arguments of the served files
+     - the snapshot baselines of the run, and of each nested flow that the client served
+   - For a `flow-add-step` call, the files that the recorded step names, not the files that the recording file names:
+     - the flow that a `flow-execute` step names with `name` or `flow_path`, and the files that this flow composes
+     - the file arguments of the step
+     - the recording file itself, when it exists
 2. The client reads and writes nothing outside the roots it sent. It resolves a requested path one segment at a time, as the operating system does. Before it looks at a place on the disk, it checks that the place is in a root or on the way to a root. It refuses a symlink that points outside a root. It refuses a target that passes through a place outside the roots, also when the target ends in a root.
 3. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
 4. `resolve-file` serves `.yaml` names only. The client refuses a `.yaml` name that links to a file that is not a YAML file (`.yaml` or `.yml`).
-5. Rule 7 gives the paths of file arguments. For any other path, `read-file` and `write-file` take only the form `<dir>/__baselines__/<flow>/<key>.png`. The path must be absolute and in normal form: no `..`, no `.` and no double `/`. `<flow>` holds only letters, digits, `_` and `-`. The client refuses every other path. The path must also be in the baseline directory of the run: `__baselines__/<flow>/` beside the real file of the root flow, with the `<flow>` that the tool-server uses. The client refuses a baseline of another flow and a `__baselines__` directory in another place. When the root flow is not a YAML file on the client, the client refuses every baseline path.
+5. Rule 7 gives the paths of file arguments. For any other path, `read-file` and `write-file` take only the form `<dir>/__baselines__/<flow>/<key>.png`. The client refuses a path that does not meet all these conditions:
+   - The path is absolute and in normal form: no `..`, no `.` and no double `/`.
+   - `<flow>` holds only letters, digits, `_` and `-`.
+   - The path is in a baseline directory of the run, with the `<flow>` that the tool-server uses. A baseline directory is `__baselines__/<flow>/` beside the real file of the root flow or of a nested flow that the client served. Thus the client refuses a baseline of another flow and a `__baselines__` directory in another place.
+   - For a baseline of the root flow, the root flow is a YAML file on the client.
 6. For a baseline, the client refuses a `.png` name that links to a file that is not a PNG file (`.png`).
 7. `read-file` serves a path when a `tool:` step of a served file has that path as the value of an argument. The value must be an absolute path with the extension `.png` or `.yaml`. The case of the letters does not matter. The client refuses a name that links to a file with another extension. The client resolves the path as rule 2 says. The tool-server can write a flow on the client when it records one, so the path gets no more trust than a request.
-8. The client offers `write-file` only for a call that sets `updateBaselines: true`. A run that compares baselines cannot change them.
+8. The client offers `write-file` only for a call that sets `updateBaselines: true`. A run that compares baselines cannot change them. A `tool: flow-execute` step that sets `updateBaselines: true` does not change this rule. The client also refuses to write the baselines of a nested flow when each step that names that flow sets `updateBaselines: false`.
 9. Before `write-file` creates `__baselines__/<flow>/`, the client checks the real location of that directory against the roots. Before it writes the file, the client checks the real location of the file again. The client follows a link to a file that does not exist to check where it leads, and then refuses it.
 10. The client refuses a file above 32 MiB, for a read and for a write. The error names the cap.
 11. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
@@ -307,13 +372,28 @@ A file argument needs `read-file` on both sides.
 | Without `read-file` | With `read-file`    | The tool-server rejects the flow before the first step and adds: "This tool-server serves the file arguments of tool: steps for a client that offers the read-file client service. Update the argent CLI or MCP adapter on the client." |
 | Any                 | Without `read-file` | The tool-server rejects the flow before the first step                                                                                                                                                                                  |
 
+A `tool: flow-execute` step that names its flow with `name` needs these conditions:
+
+- The client offers `resolve-file` and sends the [`x-argent-linked` header](#the-x-argent-linked-header).
+- The tool-server runs nested flows over a link.
+
+An older client sends no header and serves no nested flow. The tool-server then rejects the flow before the first step, also when the call has `client_services`. The error adds this text: "This tool-server serves tool: flow-execute steps that name a flow with name, for a client that serves those flows. Update the argent CLI or MCP adapter on the client."
+
+An older tool-server can have client services but not run nested flows over a link. Such a tool-server rejects each `tool: flow-execute` step before the first step, also for a current client. Keep the client and the tool-server at the same version.
+
 These steps need a run without a link in every row, or the fix that the error names:
 
 - `script:` steps
 - `tool:` steps that name a file by a relative path, or a file that does not end in `.png` or `.yaml`
 - `tool:` steps that take a directory, an app or an output directory
 - `tool:` steps that build a file path from two or more arguments
-- `tool: flow-execute` steps
+- `tool: flow-execute` steps that name a flow with `flow_path`, or with `name` and a `project_root` that is relative or has a `..` segment
 - `tool:` steps that record a flow
 
-In the root flow, the tool-server rejects them before the first step and lists each one. In a fragment that the client serves, the tool-server rejects them when the `run:` step loads the fragment: that step reports `error` with the same list, and no step of the fragment runs. The tool-server rejects a `snapshot:` step that the client cannot serve at the same points.
+The tool-server rejects these steps at these points, and lists each one:
+
+- In the root flow, before the first step.
+- In a fragment that the client serves, when the `run:` step loads the fragment. That step reports `error` with the same list, and no step of the fragment runs.
+- In a flow that a `tool: flow-execute` step runs, when that step runs. That step reports `error` with the same list, and no step of that flow runs.
+
+The tool-server rejects a `snapshot:` step that the client cannot serve at the same points.

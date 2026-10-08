@@ -274,6 +274,8 @@ A `run:` path resolves against the directory of the flow file that contains the 
 
 A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequisite`. Parsing accepts the file, the run rejects it.
 
+A `tool: flow-execute` step runs a different flow as a nested run. `run:` steps and nested runs make one chain of flows. Argent stops the run at a step that closes a cycle in this chain, for example a flow that runs itself through `tool: flow-execute`. The reason is `cyclic flow reference:`, followed by the chain of flows. Argent also stops the run at a step that makes the chain longer than 20 flows. The reason is `max run depth exceeded`. These rules apply with and without a link.
+
 ## Snapshots
 
 ```yaml
@@ -285,7 +287,9 @@ A snapshot compares the current screen, or the frame of `cropOn`, with a stored 
 
 Baselines live in `.argent/flows/__baselines__/<flow>/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A run on a remote simulator uses `ios` in the key. It uses the same baseline as a local iOS run with the same capture geometry. Run `argent flow run <name> --update-baselines` to write the baselines from a known-good state. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses. The step reason then says that a remote simulator wrote the baseline. Review each baseline before you commit it.
 
-Over a link, the baselines stay in the project on the client. This is also true over a link to `127.0.0.1`. The tool-server asks the client for the baseline of each `snapshot:` step. The tool-server compares the images. With `--update-baselines`, the tool-server gives the new baseline to the client, and the client writes the file. The client uses the same `__baselines__/<flow>/` directory as a run without a link. See [Flows over a link](#flows-over-a-link).
+A flow that a `tool: flow-execute` step runs uses its own baselines, in `__baselines__/<flow>/` beside that flow. A run with `--update-baselines` also writes the baselines of each flow that a `tool: flow-execute` step runs. A step that sets `updateBaselines` itself keeps its own value. Over a link, a step that sets `updateBaselines: true` writes baselines only in a run with `--update-baselines`. In another run, the step does not pass when its flow has a `snapshot:` step.
+
+Over a link, the baselines stay in the project on the client. This is also true over a link to `127.0.0.1`. The tool-server asks the client for the baseline of each `snapshot:` step. The tool-server compares the images. With `--update-baselines`, the tool-server gives the new baseline to the client, and the client writes the file. The client uses the same `__baselines__/<flow>/` directory as a run without a link. This is also true for the baselines of a flow that a `tool: flow-execute` step runs. See [Flows over a link](#flows-over-a-link).
 
 Use a snapshot for layout, color, spacing, typography, clipping and icons. Do not use a snapshot as the only proof of navigation, data or network behavior. Avoid timestamps, live data, ads and animation in the captured region. The runner pins the mobile status bar during a visual run.
 
@@ -297,6 +301,8 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 ```
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local `.mjs` file.
+
+Over a link, the tool-server rejects a flow with a `script` step. Over a link, the `flow-add-script` tool also refuses to record a `script` step. An argent client that is older than the tool-server can record it when the `project_root` path also exists on the computer of the tool-server. Over a link to `127.0.0.1`, the path always exists. Record and replay a flow with a `script` step without a link. See [Flows over a link](#flows-over-a-link).
 
 A `script` step needs no device. A flow of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the flow resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
@@ -354,16 +360,16 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 | `argent flow run <dir>`       | Run every flow in the directory, one after the other |
 | `argent flow list`            | List the flow files in `.argent/flows`               |
 
-| Option               | Description                                                                                                                                                       |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                       |
-| `--platform <p>`     | `ios`, `android`, `chromium`, `vega` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either |
-| `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                                                            |
-| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                                                                   |
-| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                                                            |
-| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                                                         |
-| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                                                       |
-| `--`                 | End of options, for a flow name that starts with `-`                                                                                                              |
+| Option               | Description                                                                                                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                |
+| `--platform <p>`     | `ios`, `android`, `chromium`, `vega` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either          |
+| `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the flows that `tool: flow-execute` steps run, unless the step sets `updateBaselines` |
+| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                                                                            |
+| `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                                                                     |
+| `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                                                                  |
+| `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                                                                |
+| `--`                 | End of options, for a flow name that starts with `-`                                                                                                                       |
 
 ```bash
 argent flow run checkout --platform ios
@@ -440,23 +446,25 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 A file argument is an argument that a `tool:` step reads as one file, named by an absolute path that ends in `.png` or `.yaml`. The case of the letters does not matter. An example is `baselinePath` of `screenshot-diff`.
 
-| Flow content                                                                                                                                                     | Over a link                                                                                                                                                                                                        |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Directives that drive the device, `echo`, `when`                                                                                                                 | Runs                                                                                                                                                                                                               |
-| `run:`                                                                                                                                                           | Runs. When the client or the tool-server has no client services, the tool-server rejects the flow before the first step                                                                                            |
-| `snapshot:`                                                                                                                                                      | Runs when the client and the tool-server have the client services for baselines: `read-file` to compare, `write-file` with `--update-baselines`. Otherwise, the tool-server rejects the flow before the first step |
-| `script:`                                                                                                                                                        | The tool-server rejects the flow before the first step                                                                                                                                                             |
-| A `tool:` step with a file argument, for example `screenshot-diff` with `baselinePath`                                                                           | Runs when the client and the tool-server have the `read-file` client service. The tool-server reads the file from the client during the run. Otherwise, the tool-server rejects the flow before the first step     |
-| A `tool:` step that names a file by a relative path, or a file that does not end in `.png` or `.yaml`                                                            | The tool-server rejects the flow before the first step. Use an absolute path to a `.png` or `.yaml` file                                                                                                           |
-| A `tool:` step that takes a directory, an app or an output directory, for example `gather-workspace-data`, `reinstall-app` or `screenshot-diff` with `outputDir` | The tool-server rejects the flow before the first step                                                                                                                                                             |
-| A `tool:` step that builds a file path from two or more arguments, for example `flow-read-prerequisite` with `name`                                              | The tool-server rejects the flow before the first step                                                                                                                                                             |
-| `tool: flow-execute`                                                                                                                                             | The tool-server rejects the flow before the first step                                                                                                                                                             |
-| A `tool:` step that records a flow, for example `flow-add-step`                                                                                                  | The tool-server rejects the flow before the first step                                                                                                                                                             |
-| A relative `launch: { chromium: <path> }`                                                                                                                        | The launch fails. Use an absolute path on the tool-server                                                                                                                                                          |
+| Flow content                                                                                                                                                     | Over a link                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Directives that drive the device, `echo`, `when`                                                                                                                 | Runs                                                                                                                                                                                                                                                                                                                              |
+| `run:`                                                                                                                                                           | Runs. When the client or the tool-server has no client services, the tool-server rejects the flow before the first step                                                                                                                                                                                                           |
+| `snapshot:`                                                                                                                                                      | Runs when the client and the tool-server have the client services for baselines: `read-file` to compare, `write-file` with `--update-baselines`. Otherwise, the tool-server rejects the flow before the first step                                                                                                                |
+| `script:`                                                                                                                                                        | The tool-server rejects the flow before the first step                                                                                                                                                                                                                                                                            |
+| A `tool:` step with a file argument, for example `screenshot-diff` with `baselinePath`                                                                           | Runs when the client and the tool-server have the `read-file` client service. The tool-server reads the file from the client during the run. Otherwise, the tool-server rejects the flow before the first step                                                                                                                    |
+| A `tool:` step that names a file by a relative path, or a file that does not end in `.png` or `.yaml`                                                            | The tool-server rejects the flow before the first step. Use an absolute path to a `.png` or `.yaml` file                                                                                                                                                                                                                          |
+| A `tool:` step that takes a directory, an app or an output directory, for example `gather-workspace-data`, `reinstall-app` or `screenshot-diff` with `outputDir` | The tool-server rejects the flow before the first step                                                                                                                                                                                                                                                                            |
+| A `tool:` step that builds a file path from two or more arguments, for example `flow-read-prerequisite` with `name`                                              | The tool-server rejects the flow before the first step                                                                                                                                                                                                                                                                            |
+| `tool: flow-execute` with `name` and an absolute `project_root` without a `..` segment                                                                           | Runs. The tool-server reads the flow from the client during the run. The same rules apply to that flow when its step runs. Its `snapshot:` steps run too, with the baselines of that flow. When the client or the tool-server has no support for nested flows over a link, the tool-server rejects the flow before the first step |
+| `tool: flow-execute` with `flow_path`, or with `name` and a `project_root` that is relative or has a `..` segment                                                | The tool-server rejects the flow before the first step                                                                                                                                                                                                                                                                            |
+| A `tool:` step that records a flow, for example `flow-add-step`                                                                                                  | The tool-server rejects the flow before the first step                                                                                                                                                                                                                                                                            |
+| A relative `launch: { chromium: <path> }`                                                                                                                        | The launch fails. Use an absolute path on the tool-server                                                                                                                                                                                                                                                                         |
 
 The tool-server asks the client for these files during the run:
 
 - each `run:` fragment
+- each flow that a `tool: flow-execute` step names with `name`
 - each snapshot baseline
 - each file argument
 
@@ -464,29 +472,36 @@ With `--update-baselines`, the tool-server gives each new baseline to the client
 
 - the flow file
 - the fragments that its `run:` steps name at any depth
-- the snapshot baselines of the flow file
+- the flows that `tool: flow-execute` steps in these flows name with `name`, and the fragments and flows that they name in turn
+- the snapshot baselines of the flow file, and of each flow that a `tool: flow-execute` step runs
 - the file arguments of the `tool:` steps in these flows
 
-Each fragment and each file argument must be under one of these directories:
+Each fragment, each flow that a `tool: flow-execute` step names, and each file argument must be under one of these directories:
 
 - the project root, which is the working directory of the CLI
 - the project of a flow saved under `<project>/.argent/flows/`
 - the `.argent/flows` directory of the project root
 - the directory of the flow file, and the directory of its real file when the flow file is a symlink
 
-The client checks the path as the flow spells it. A path through a symlink outside these directories is outside, also when the symlink points into them. The client does not serve a file argument outside these directories. The `tool:` step then reports `error` during the run. A file argument that is not on the client also makes the step report `error`. The tool-server never uses a file at the same path on its own computer.
+The client checks the path as the flow spells it. A path through a symlink outside these directories is outside, also when the symlink points into them. The client does not serve a file argument or a flow outside these directories. The `tool:` step then reports `error` during the run. A file argument or a flow that is not on the client also makes the step report `error`. The tool-server never uses a file at the same path on its own computer.
 
-The client reads and writes snapshot baselines only in the `__baselines__/<flow>/` directory beside the real file of the flow file. The client writes them only for a run with `--update-baselines`. A `snapshot:` step in a fragment that the client serves also runs. The step uses the baselines of the flow file, as in a run without a link.
+The client reads and writes snapshot baselines only in these directories:
 
-The CLI must keep running until the run ends, because the tool-server stops a run when the CLI disconnects. A flow with a `run:` step, a `snapshot:` step or a file argument also needs these conditions:
+- the `__baselines__/<flow>/` directory beside the real file of the flow file
+- the `__baselines__/<flow>/` directory beside the real file of each flow that a `tool: flow-execute` step runs
+
+The client writes them only for a run with `--update-baselines`. A `snapshot:` step in a fragment that the client serves also runs. The step uses the baselines of the flow file, as in a run without a link. A `snapshot:` step in a flow that a `tool: flow-execute` step runs uses the baselines of that flow.
+
+The CLI must keep running until the run ends, because the tool-server stops a run when the CLI disconnects. A flow with a `run:` step, a `snapshot:` step, a `tool: flow-execute` step with `name` or a file argument also needs these conditions:
 
 - The CLI answers each request within 30 s. A paused or sleeping CLI fails the run.
 - Each reverse proxy between the CLI and the tool-server passes the response stream through without compression or buffering.
 - Each reverse proxy forwards `POST /invocations/<invocation>/client-responses` to the tool-server while the run continues. The CLI sends its answers on this route.
 - Each reverse proxy accepts a request body of up to 48 MB on this route. The answer of the CLI to a request for a file carries the file.
 - Each reverse proxy keeps the `Accept` header of the call.
+- Each reverse proxy keeps the `x-argent-linked` header of the call. A `tool: flow-execute` step with `name` needs this header.
 
-The rows of the table that the tool-server rejects still need a run without a link, unless the row gives another fix. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs. The tool-server rejects a `snapshot:` step that the client cannot serve at the same points.
+The rows of the table that the tool-server rejects still need a run without a link, unless the row gives another fix. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs. In a flow that a `tool: flow-execute` step runs, that step reports an error and no step of that flow runs. The tool-server rejects a `snapshot:` step that the client cannot serve at the same points.
 
 For each rejection in the table, the error lists the steps that caused it. The tool-server can serve some steps that an older client cannot serve. For such a step, the error also tells you to update the argent CLI or the MCP adapter. For a `tool:` step that names a file by a relative path, the error tells you to use an absolute path. For a file that does not end in `.png` or `.yaml`, the error says that a `tool:` step can name only such a file.
 
@@ -512,36 +527,63 @@ When an answer of the CLI gets no reply within 30 s, the CLI does not stop the f
 
 When a proxy refuses an answer with the status 413, the CLI does not stop the flow. The CLI sends a short refusal in place of the answer. The `run:`, `snapshot:` or `tool:` step that waits for the answer reports `error`. The reason names the status and the request body size that the proxy must accept. A refusal of the request for the root flow fails the run before the first step. The flow fails, and a directory run continues with the next flow. When the refusal does not reach the tool-server either, the CLI stops the flow at once. A refusal that gets no reply within 30 s does not stop the flow.
 
-When a proxy changes the `Accept` header, the tool-server rejects a flow with a `run:` step, a `snapshot:` step or a file argument. The JSON object holds `"error_code": "HTTP_ZOD_VALIDATION_FAILED"` and `"error_kind": "validation"`. A directory run continues with the next flow. A flow without a `run:` step, a `snapshot:` step and an absolute `.png` or `.yaml` path in a `tool:` step argument is not affected.
+When a proxy changes the `Accept` header, the tool-server rejects a flow with one of these steps:
+
+- a `run:` step
+- a `snapshot:` step
+- a `tool: flow-execute` step with `name`
+- a `tool:` step with a file argument
+
+The JSON object holds `"error_code": "HTTP_ZOD_VALIDATION_FAILED"` and `"error_kind": "validation"`. A directory run continues with the next flow. A flow without these steps is not affected.
 
 When the CLI cannot connect to the tool-server that a link names, the flow does not run. The CLI prints the address of that tool-server, the setting that names it and the reason, for example `connection refused`. The exit code is 2. The JSON object holds `"error_code": "TOOL_SERVER_UNREACHABLE"` and `"error_kind": "network"`. A directory run stops at that flow and marks the flows after it as skipped.
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks that file before it runs the first step, and each fragment when its `run:` step loads the fragment. During the run, the tool-server asks the client for each `run:` fragment, each snapshot baseline and each file argument. The [Tool-server API reference](/docs/reference/tool-server-api) documents this exchange. The client serves only these files:
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks the files of the run at these points:
+
+- the flow file, before the first step
+- each fragment, when its `run:` step loads the fragment
+- each nested flow, when its `tool: flow-execute` step runs
+
+During the run, the tool-server asks the client for these files:
+
+- each `run:` fragment
+- each flow that a `tool: flow-execute` step names with `name`
+- each snapshot baseline
+- each file argument
+
+The [Tool-server API reference](/docs/reference/tool-server-api) documents this exchange. The client serves only these files:
 
 - the flow file
 - the fragments that its `run:` steps name
-- the snapshot baselines of the flow file
+- the flows that `tool: flow-execute` steps in these flows name with `name` and `project_root`, and the fragments and flows that they name in turn
+- the snapshot baselines of the flow file, and of each flow that a `tool: flow-execute` step runs
 - the file arguments of the `tool:` steps in these flows
 
-Each fragment and each file argument must be in one of these places:
+Each fragment, each flow that a `tool: flow-execute` step names, and each file argument must be in one of these places:
 
 - under `project_root`
 - under the project of a flow saved under `<project>/.argent/flows/`
 - under the `.argent/flows` directory of `project_root`
 - beside the flow file or its real file
 
-The client writes each new baseline when the call sets `updateBaselines`. The client reads and writes no other baseline. At any depth, Argent rejects these steps:
+The client writes each new baseline when the call sets `updateBaselines`. A `tool: flow-execute` step in the flow then also writes the baselines of its flow, unless the step sets `updateBaselines` itself. A step that sets `updateBaselines: true` in a call without `updateBaselines` writes no baseline. When its flow has a `snapshot:` step, the step does not pass. The client reads and writes no other baseline. At any depth, Argent rejects these steps:
 
 - a `script:` step
 - a `tool:` step that names a file by a relative path, or a file that does not end in `.png` or `.yaml`
 - a `tool:` step that takes a directory, an app or an output directory
 - a `tool:` step that builds a file path from two or more arguments
-- a `tool: flow-execute` step
+- a `tool: flow-execute` step with `flow_path`, or with `name` and a `project_root` that is relative or has a `..` segment
 - a `tool:` step that records a flow
 
-Argent also rejects a `snapshot:` step or a file argument when the client does not offer the client service for it. The error lists each such step. In a fragment that the client serves, the `run:` step reports the same error when it loads the fragment. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+Argent also rejects these steps when the client does not offer the client service for them:
+
+- a `snapshot:` step
+- a `tool: flow-execute` step with `name`
+- a `tool:` step with a file argument
+
+The error lists each such step. In a fragment that the client serves, the `run:` step reports the same error when it loads the fragment. In a flow that a `tool: flow-execute` step runs, that step reports the same error. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 
