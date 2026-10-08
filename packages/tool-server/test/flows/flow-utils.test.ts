@@ -1467,7 +1467,7 @@ describe("chromium launch parsing", () => {
 
   it("rejects a chromium map with non-string args", async () => {
     expect(() =>
-      parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [1, 2] } }\n")
+      parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [[--flag]] } }\n")
     ).toThrow(/launch needs/);
   });
 });
@@ -1534,8 +1534,20 @@ describe("ios launch args", () => {
     );
     expect(() => parseFlow('steps:\n  - launch: { ios: { app: "" } }\n')).toThrow(/launch needs/);
     expect(() =>
-      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, args: [1] } }\n")
+      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, args: [[-Flag]] } }\n")
     ).toThrow(/launch needs/);
+  });
+
+  it("names an unquoted number or boolean arg and says to quote it", async () => {
+    expect(() =>
+      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, args: [-Count, 5] } }\n")
+    ).toThrow('launch.ios.args[1] is a number (5); quote it so it stays a string: "5"');
+    expect(() =>
+      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, args: [-Flag, true] } }\n")
+    ).toThrow('launch.ios.args[1] is a boolean (true); quote it so it stays a string: "true"');
+    expect(() =>
+      parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [--port, 9222] } }\n")
+    ).toThrow("launch.chromium.args[1] is a number (9222)");
   });
 
   it("rejects an unknown key in an ios map", async () => {
