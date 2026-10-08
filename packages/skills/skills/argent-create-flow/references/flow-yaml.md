@@ -97,7 +97,7 @@ Flow selectors support frame-based `within`, `after`, and `next` in every select
 - tap: { role: Switch, next: { text: Wi-Fi } } # nearest matching follower
 ```
 
-`within` means visual frame containment, not source-tree ancestry. Overflowing children and anchored popovers can fall outside it. `after` and `next` use top-to-bottom, left-to-right reading order as the user sees the UI. This is also true on a landscape UI, for example a rotated iPhone or an unfolded foldable. A target cannot satisfy its own `within`, `after`, or `next` anchor. The synthetic root never counts.
+`within` means visual frame containment, not source-tree ancestry. Overflowing children and anchored popovers can fall outside it. `after` and `next` use top-to-bottom, left-to-right reading order as the user sees the UI. On an iOS simulator with a landscape UI, for example a rotated iPhone or an unfolded foldable, the order and the `swipe`/`scroll-to` directions follow the portrait axes of the screen instead. Rotate the simulator to portrait before you record. A target cannot satisfy its own `within`, `after`, or `next` anchor. The synthetic root never counts.
 
 `next` finds the nearest matching follower and skips non-matches. It can therefore reach the next row when the intended row lacks a control. Prefer a stable row container with `within`, or assert the row-local control first.
 
@@ -113,7 +113,7 @@ Directives stop the flow on failure and skip later steps. The available directiv
 
 - The coordinates change with the panel. Selectors resolve against a new tree.
 - A `snapshot` baseline is valid only for the posture that made it.
-- Unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
+- Unfolded, the UI is landscape. On an iOS simulator, `swipe` and `scroll-to` directions and the reading order then follow the portrait axes of the screen. Coordinates stay in the space of the `describe` frames.
 - A fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
 Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, `launch:` waits up to 15 s until the app is in the foreground. A permission prompt at launch does not fail it. On timeout, the step fails and names the app that was in front. See [The flow tree and `describe`](#the-flow-tree-and-describe).
