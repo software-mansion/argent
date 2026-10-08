@@ -17,6 +17,7 @@ const LEGACY_UNSUPPORTED_FIELDS = [
   "heading",
   "keyboardVisible",
   "foregroundApp",
+  "alertVisible",
 ];
 
 // AccessibilityWindowInfo types.
@@ -25,17 +26,18 @@ const TYPE_INPUT_METHOD = 2;
 const TYPE_SYSTEM = 3;
 
 // System apps whose dialogs are application windows above the app: runtime
-// permissions (packageinstaller before API 29), choosers and SystemUI prompts.
-// A full-screen window of one of them is a screen the user opened, not a dialog.
+// permissions (packageinstaller before API 29) and SystemUI prompts. A
+// full-screen window of one of them is a screen the user opened, not a dialog.
 const SYSTEM_DIALOG_PACKAGES = new Set([
   "com.android.packageinstaller",
   "com.google.android.packageinstaller",
   "com.android.permissioncontroller",
   "com.google.android.permissioncontroller",
   "com.android.systemui",
-  "com.android.intentresolver",
-  "android",
 ]);
+
+// The chooser draws its sheet inside a translucent full-screen window.
+const SYSTEM_SHEET_PACKAGES = new Set(["android", "com.android.intentresolver"]);
 
 type XmlNode = NonNullable<ReturnType<typeof parseUiAutomatorXml>>;
 
@@ -161,8 +163,12 @@ export function adaptAndroidTree(
       // The system server's crash and "isn't responding" dialogs.
       if (windowType === TYPE_SYSTEM && root.bundleId === "android") alert = true;
       if (windowType !== TYPE_APPLICATION) return;
-      if (SYSTEM_DIALOG_PACKAGES.has(root.bundleId) && !fillsScreen(root.frame)) alert = true;
-      else foreground = i;
+      if (
+        SYSTEM_SHEET_PACKAGES.has(root.bundleId) ||
+        (SYSTEM_DIALOG_PACKAGES.has(root.bundleId) && !fillsScreen(root.frame))
+      ) {
+        alert = true;
+      } else foreground = i;
     });
     // A truncated walk may have cut the windows below.
     const unknown = truncated ? undefined : false;

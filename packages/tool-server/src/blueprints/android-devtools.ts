@@ -52,7 +52,7 @@ export interface HierarchyResult {
   nodeCount: number;
   truncated: boolean;
   elapsedMs: number;
-  /** 2: the F2 attributes (hint, editable, visible-to-user, heading, window-type). Absent before. */
+  /** 2: nodes carry hint, editable, visible-to-user and heading, roots window-type. Absent before. */
   treeVersion?: number;
   /** The device's API level; hint needs 26, heading 28. Sent with `treeVersion` 2. */
   sdkInt?: number;

@@ -76,7 +76,10 @@ export interface UiTree {
   source: "ax-service" | "android-devtools";
   /** Native units: iOS points, Android pixels. */
   screen?: { width: number; height: number };
-  /** While an iOS system alert shows, the system app first and the app it covers second. */
+  /**
+   * iOS: while a system alert shows, the system app first and the app it covers
+   * second. Android: one root per window, topmost first.
+   */
   roots: UiTreeNode[];
   truncated: boolean;
   alertVisible?: boolean;

@@ -136,6 +136,7 @@ describe("ui-tree Android adapter", () => {
       "heading",
       "keyboardVisible",
       "foregroundApp",
+      "alertVisible",
     ]);
   });
 
@@ -316,6 +317,18 @@ describe("ui-tree Android adapter", () => {
       V2
     );
     expect(crash).toMatchObject({ alertVisible: true, foregroundApp: "com.example" });
+
+    // The chooser's sheet sits in a full-screen translucent window.
+    const chooser = adapt(
+      dump(
+        node({ "window-type": "1", "package": "android", "bounds": "[0,0][1000,2000]" }),
+        node({ "window-type": "1", "package": "com.example", "bounds": "[0,0][1000,2000]" })
+      ),
+      false,
+      SCREEN,
+      V2
+    );
+    expect(chooser).toMatchObject({ alertVisible: true, foregroundApp: "com.example" });
   });
 
   it("lists what an old API level or the active-window fallback cannot report", () => {
