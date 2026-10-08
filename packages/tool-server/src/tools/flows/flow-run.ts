@@ -2047,7 +2047,10 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
 async function captureFailureScreen(state: ExecState): Promise<ArtifactHandle | undefined> {
   if (!state.device || state.signal?.aborted || state.secretTyped) return undefined;
   try {
+    // Full resolution: the image is a file in the report, never in an agent's
+    // context (the MCP client prints only its path).
     const shot = (await invokeOnDevice(deviceEnv(state), "screenshot", {
+      scale: 1.0,
       includeImageInContext: false,
     })) as { image?: ArtifactHandle };
     return shot.image;

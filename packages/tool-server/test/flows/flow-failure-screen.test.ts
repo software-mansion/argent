@@ -71,7 +71,7 @@ describe("flow-execute screenshot of a failed step", () => {
     const { result, shots } = await run(TAP + AWAIT + TAP, false, async () => ({ image: SHOT }));
 
     expect(shots).toHaveLength(1);
-    expect(shots[0][1]).toMatchObject({ udid: "X", includeImageInContext: false });
+    expect(shots[0][1]).toMatchObject({ udid: "X", scale: 1, includeImageInContext: false });
     const failed = result.steps[1];
     expect(failed.status).toBe("fail");
     expect(failed.artifacts).toEqual({ screen: SHOT });
