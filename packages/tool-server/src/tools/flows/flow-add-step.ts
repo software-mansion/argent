@@ -747,8 +747,9 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     tool: "restart-app",
     rewritten: true,
     rewriteCondition:
-      "when it carries only the bundle id (a call with an extra arg, e.g. an Android `activity`, " +
-      "is kept as a raw `tool: restart-app` step to convert during polish)",
+      "when it carries only the bundle id, plus `launchArgs` on iOS (a call with another extra " +
+      "arg, e.g. an Android `activity`, or with `launchArgs` off iOS, is kept as a raw " +
+      "`tool: restart-app` step to convert during polish)",
   },
   run: {
     tool: "flow-execute",

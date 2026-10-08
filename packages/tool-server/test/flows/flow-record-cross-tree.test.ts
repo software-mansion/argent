@@ -2383,6 +2383,10 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect((await hint("launch")).message).toContain("rewrites it into the `launch:` step");
   });
 
+  it("tells `launch` that iOS launchArgs are rewritten too", async () => {
+    expect((await hint("launch")).message).toContain("plus `launchArgs` on iOS");
+  });
+
   it("names the TOOL that records each directive the recorder stores raw", async () => {
     const named: [string, string][] = [
       ["type", "keyboard"],
