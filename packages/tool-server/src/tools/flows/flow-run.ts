@@ -39,7 +39,7 @@ import {
   type Launch,
   SELECTABLE_PLATFORMS,
 } from "./flow-utils";
-import { axServiceUnavailableReason } from "./flow-ax-tree";
+import { probeAxService } from "./flow-ax-tree";
 import { createScriptLogBudget, FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import { runFlowScriptStep } from "./flow-script-step";
@@ -67,8 +67,11 @@ import {
   DirectiveOutcome,
 } from "./flow-actions";
 import {
+  isInjectableBundleId,
   isNativeDevtoolsBlockResult,
+  nativeDevtoolsRef,
   NATIVE_DEVTOOLS_CONNECT_BUDGET_MS,
+  type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
 import { androidDevtoolsRef, AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
@@ -405,8 +408,45 @@ async function androidDevtoolsReady(
  * `com.apple.*` process satisfy, and the first selector read refuses that pin
  * anyway (see `queryFullHierarchyTree`).
  */
-/** The gate's verdict: a reason the launch failed, or ready, with a warning worth carrying on the step. */
-type TreeSourceGate = { reason: string } | { warning?: string };
+/**
+ * Wait, best effort, for the native-devtools connection of an app the tools can
+ * inject into, so a `tool: native-*` step right after the launch finds it. Null
+ * when connected or not applicable; else a warning for the launch step.
+ */
+async function nativeDevtoolsLate(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  if (!isInjectableBundleId(bundleId)) return null;
+  let api: NativeDevtoolsApi;
+  try {
+    const ref = nativeDevtoolsRef(device);
+    api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+  } catch {
+    return null;
+  }
+  if (typeof api.isConnected !== "function") return null;
+  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  for (;;) {
+    try {
+      if (signal?.aborted || api.isConnected(bundleId)) return null;
+    } catch {
+      return null;
+    }
+    if (Date.now() >= deadline) break;
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
+  }
+  return (
+    `${bundleId} did not connect to native devtools within ${NATIVE_READY_TIMEOUT_MS} ms; ` +
+    `selectors resolve on the accessibility daemon regardless, but a tool: native-* step after ` +
+    `this launch can find no connection`
+  );
+}
+
+/** The gate's verdict: a reason the launch failed, or ready, with what the launch learnt for later reads. */
+type TreeSourceGate = { reason: string } | { frontLabel?: string; warning?: string };
 
 async function treeSourceGate(
   registry: Registry,
@@ -432,10 +472,17 @@ async function treeSourceGate(
   // Both iOS simulator platforms read the accessibility daemon's tree, which
   // needs no injection: the gate reads it once so a cold start cannot hand the
   // next step an outage that reads like a selector error. The daemon's
-  // explained outage is the step's reason; there is no other tree source.
+  // explained outage is the step's reason; there is no other tree source. The
+  // read also names the app in front, which the launch pins for later reads.
   if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
-    const axReason = await axServiceUnavailableReason(registry, device);
-    if (axReason !== null && !signal?.aborted) return { reason: axReason };
+    const probe = await probeAxService(registry, device);
+    if ("reason" in probe) return probe;
+    if (signal?.aborted) return {};
+    // Selectors need no instrumentation, but a `tool: native-*` step right
+    // after the launch does: give the injected dylib the time it had before,
+    // and say so when it does not connect, without failing the launch.
+    const warning = await nativeDevtoolsLate(registry, device, bundleId, signal);
+    return { ...probe, ...(warning ? { warning } : {}) };
   }
   if (device.platform === "android" && !signal?.aborted) {
     const { ready, reason } = await androidDevtoolsReady(registry, device);
@@ -523,7 +570,12 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   if ("reason" in gate) return { ok: false, reason: gate.reason };
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
-  state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
+  state.treeTarget = {
+    bundleId,
+    pinned: true,
+    probeAnswered: false,
+    ...(gate.frontLabel ? { frontLabel: gate.frontLabel } : {}),
+  };
   return { ok: true, ...(gate.warning ? { warning: gate.warning } : {}) };
 }
 

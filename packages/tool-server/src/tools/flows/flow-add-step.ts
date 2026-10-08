@@ -669,7 +669,7 @@ async function captureTapSelector(
       // the id-only containers: derive the selector there, scoped (`within`,
       // `next`, `after`) when the element is not unique, and keep the tap's
       // position inside the element when it was not the centre.
-      const { tree } = await readSettledIosFlowTree(registry, device);
+      const { tree, hint } = await readSettledIosFlowTree(registry, device);
       let derived = deriveScopedSelector(tree, point);
       if ("warning" in derived && /no stable text\/id/.test(derived.warning)) {
         derived = deriveRoleInScope(tree, point) ?? derived;
@@ -686,6 +686,7 @@ async function captureTapSelector(
       if (derived.offset)
         notes.push(`tap kept at ${derived.offset.x},${derived.offset.y} of the element's frame`);
       if (derived.notes) notes.push(derived.notes);
+      if (hint) notes.push(hint);
       return {
         selector: derived.selector,
         ...(derived.offset ? { x: derived.offset.x, y: derived.offset.y } : {}),

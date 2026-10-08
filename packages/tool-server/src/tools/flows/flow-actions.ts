@@ -94,6 +94,13 @@ export interface FlowTreeTarget {
    * an unpinned target neither consults nor arms it.
    */
   probeAnswered: boolean;
+  /**
+   * On an iOS simulator, the label of the app in front when the launch probed
+   * the accessibility daemon. A later pinned read whose front app differs means
+   * the app crashed, was dismissed or opened another app, and the read fails
+   * rather than describing the home screen as the app's screen.
+   */
+  frontLabel?: string;
 }
 
 /** Everything a directive needs to act on the run's device. */
@@ -248,6 +255,7 @@ const TYPE_FOCUS_TIMEOUT_MS = 3000;
 //   the whole timeout on every type step.
 // - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
+  "ax-service",
   "native-devtools",
   "android-devtools",
   "cdp-dom",

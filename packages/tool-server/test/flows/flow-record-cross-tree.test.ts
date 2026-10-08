@@ -615,9 +615,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     expect(warningOf(result, "tap")).toBeUndefined();
-    expect(await recordedSteps("tap")).toEqual([
-      { kind: "tap", selector: { text: "Continue", role: "AXButton" } },
-    ]);
+    expect(await recordedSteps("tap")).toEqual([{ kind: "tap", selector: { text: "Continue" } }]);
     // The simulator tap's own capture reads the daemon through the registry,
     // not `fetchFlowTree`: any read here means the probe ran.
     expect(fetchCount).toBe(0);

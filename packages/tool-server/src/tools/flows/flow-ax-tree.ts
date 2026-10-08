@@ -1,17 +1,19 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
-import { axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
+import { axServiceRef, type AXServiceApi, type AXTreeResponse } from "../../blueprints/ax-service";
 import type { DescribeFrame, DescribeNode, DescribeTreeData } from "../describe/contract";
 import { adaptAxTree } from "../ui-tree/ios";
 import type { UiTree, UiTreeNode } from "../ui-tree/index";
 import {
   findAll,
   frameContains,
+  hasVisibleText,
   nodeAtPoint,
   nodeText,
   selectorToFrame,
   treeFingerprint,
   type Selector,
 } from "../../utils/ui-tree-match";
+import type { FlowTreeTarget } from "./flow-actions";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 
 /**
@@ -97,9 +99,28 @@ function stampOrder(node: UiTreeNode): void {
   for (const child of node.children) stampOrder(child);
 }
 
+/** The software keyboard: its layout container, and every key (`keyboardKey` trait). A flow types with `keyboard`, never by tapping a key. */
+function isKeyboard(node: UiTreeNode): boolean {
+  return (
+    /^UIKeyboardLayoutStar/.test(node.label ?? "") || (node.traits ?? []).includes("keyboardKey")
+  );
+}
+
+/**
+ * The daemon reports no scroll containers, but a UIScrollView exposes its
+ * scroll bars as adjustable elements of its own, so a node with a "scroll bar"
+ * child is one. Its frame then clips its content: rows scrolled under a fixed
+ * footer or header keep on-screen frames in the daemon tree, and would count
+ * as visible and tappable without the clip.
+ */
+function isScrollView(node: UiTreeNode): boolean {
+  return node.children.some((c) => /scroll bar/i.test(c.label ?? ""));
+}
+
 function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
-  const skip = node.covered === true;
+  const skip = node.covered === true || isKeyboard(node);
   const frame = node.frame ? normalizeFrame(node.frame) : null;
+  const scrolls = !skip && isScrollView(node);
   const eligible =
     !skip &&
     Boolean(node.identifier || node.label || node.value || node.focused || node.role !== "AXGroup");
@@ -114,6 +135,7 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
     if (node.selected) leaf.selected = true;
     if (node.checked !== undefined) leaf.checked = node.checked;
     if (node.password) leaf.password = true;
+    if (scrolls) leaf.scrollable = true;
     SOURCE_OF.set(leaf, node);
     if (node.accessible) TARGETS.add(leaf);
   }
@@ -124,10 +146,13 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
     ownText: leaf ? nodeText(leaf) : "",
     leaf,
     shield: Boolean(node.identifier),
-    // The daemon reports no scroll containers; scrolled-out content arrives
-    // off screen and is dropped by the frame clamp above.
-    rect: null,
-    scrolls: false,
+    // The daemon's frames are unclipped and in one space (fractions of the
+    // screen, past 1 for content scrolled out), so they serve as the clip
+    // rects: a node fully outside its nearest scroll view's frame is pruned.
+    rect: node.frame
+      ? { x: node.frame.x, y: node.frame.y, w: node.frame.width, h: node.frame.height }
+      : null,
+    scrolls,
   };
 }
 
@@ -151,11 +176,11 @@ function dedupeIdenticalLeaves(leaves: DescribeNode[]): DescribeNode[] {
   return leaves.filter((n) => keep.get(key(n)) === n);
 }
 
-/** Read the daemon tree once and project it for the flow runner and recorder. */
-export async function queryAxFlowTree(
+/** One daemon read: the raw reply (for the front app's label) and its projection. */
+async function readAxTree(
   registry: Registry,
   device: DeviceInfo
-): Promise<DescribeTreeData> {
+): Promise<{ raw: AXTreeResponse; data: DescribeTreeData }> {
   const ref = axServiceRef(device);
   const ax = await registry.resolveService<AXServiceApi>(ref.urn, ref.options);
   const raw = await ax.tree();
@@ -171,7 +196,18 @@ export async function queryAxFlowTree(
           : "")
     );
   }
-  return projectUiTreeForFlows(adaptAxTree(raw));
+  return { raw, data: projectUiTreeForFlows(adaptAxTree(raw)) };
+}
+
+/** The app in front: the daemon's first root is the front app's element, labelled with its name. */
+const frontLabel = (raw: AXTreeResponse): string | undefined => raw.nodes[0]?.label;
+
+/** Read the daemon tree once and project it for the flow runner and recorder. */
+export async function queryAxFlowTree(
+  registry: Registry,
+  device: DeviceInfo
+): Promise<DescribeTreeData> {
+  return (await readAxTree(registry, device)).data;
 }
 
 /** Project an adapted daemon tree into the flow contract. Pure, for tests and offline checks. */
@@ -243,34 +279,50 @@ function explainAxOutage(device: DeviceInfo, reason: string): string {
 }
 
 /**
- * Null when the accessibility daemon reads this simulator, else the explained
- * outage. One real read, not a bare resolve: a daemon build without `tree`,
- * or one that answers blind, resolves fine and fails only when asked. The
- * launch gate asks this so a cold start cannot hand the next step an outage
- * that reads like a selector error.
+ * The launch gate's probe: one real read, not a bare resolve, because a daemon
+ * build without `tree`, or one that answers blind, resolves fine and fails only
+ * when asked. On success, the label of the app in front, which the launch pins
+ * so a later read can tell that the app left the screen.
  */
-export async function axServiceUnavailableReason(
+export async function probeAxService(
   registry: Registry,
   device: DeviceInfo
-): Promise<string | null> {
+): Promise<{ reason: string } | { frontLabel?: string }> {
   try {
-    await queryAxFlowTree(registry, device);
-    return null;
+    const { raw } = await readAxTree(registry, device);
+    return { frontLabel: frontLabel(raw) };
   } catch (err) {
-    return explainAxOutage(device, errMsg(err));
+    return { reason: explainAxOutage(device, errMsg(err)) };
   }
 }
 
-/** The iOS simulator flow tree: the daemon's `tree`, or the explained outage as the step's error. */
+/**
+ * The iOS simulator flow tree: the daemon's `tree`, or the explained outage as
+ * the step's error. With a launched app pinned, a read whose front app is not
+ * the one the launch saw is an error too: the daemon reads whatever is in
+ * front, and after a crash that is the home screen, whose tree would let
+ * `hidden` pass for everything the app showed.
+ */
 export async function queryIosSimulatorFlowTree(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
+  let read: { raw: AXTreeResponse; data: DescribeTreeData };
   try {
-    return await queryAxFlowTree(registry, device);
+    read = await readAxTree(registry, device);
   } catch (err) {
     throw new Error(explainAxOutage(device, errMsg(err)), { cause: err });
   }
+  const front = frontLabel(read.raw);
+  if (target?.frontLabel && front && front !== target.frontLabel) {
+    throw new Error(
+      `${target.bundleId} is no longer in front: the accessibility daemon reads "${front}". ` +
+        `The app crashed, was dismissed or opened another app. Relaunch it with a launch: step ` +
+        `before the next selector step`
+    );
+  }
+  return read.data;
 }
 
 /** Read until two consecutive reads agree, within a short budget, so a mid-animation read does not derive a selector. */
@@ -313,7 +365,15 @@ const overlapOf = (a: DescribeFrame, b: DescribeFrame): number => {
 const readingOrder = (a: DescribeNode, b: DescribeNode): number =>
   Math.abs(a.frame.y - b.frame.y) > 0.012 ? a.frame.y - b.frame.y : a.frame.x - b.frame.x;
 const equalsCI = (a: string | undefined, b: string): boolean =>
-  (a ?? "").toLowerCase() === b.toLowerCase();
+  (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+/** Text that follows the clock or a count ("5m", "12:30", "3", "now"): no anchor for a selector. */
+const volatileText = (s: string): boolean =>
+  /^\d+\s*[smhdw]?$|^\d{1,2}:\d{2}|^\d+[.,]\d+$|^(now|just now|today|yesterday)$/i.test(s.trim());
+/** A node's own label as selector text: visible characters only, never its value (a typed secret, a slider's number). */
+const ownLabel = (n: DescribeNode): string => {
+  const label = (n.label ?? "").trim();
+  return hasVisibleText(label) ? label : "";
+};
 
 /**
  * Matches counted the way replay ranks them: a `text` must match exactly
@@ -421,8 +481,14 @@ function targetAt(flat: DescribeNode, point: { x: number; y: number }): Describe
   const background = (b: DescribeNode, a: DescribeNode) =>
     !control(b) && overlapOf(a.frame, b.frame) >= 2 / 3 && area(b) > 1.5 * area(a);
   const plainText = (n: DescribeNode) => n.role === "AXStaticText" && !n.identifier;
+  // A non-control never covers a control: a navigation bar listed before the
+  // content it floats over keeps its buttons on top.
   const covers = (b: DescribeNode, a: DescribeNode) =>
-    order(b) > order(a) && !related(a, b) && !background(b, a) && !plainText(b);
+    order(b) > order(a) &&
+    !related(a, b) &&
+    !background(b, a) &&
+    !plainText(b) &&
+    !(control(a) && !control(b));
   const top = under.filter((a) => !under.some((b) => covers(b, a)));
   top.sort(
     (a, b) =>
@@ -433,6 +499,17 @@ function targetAt(flat: DescribeNode, point: { x: number; y: number }): Describe
       area(a) - area(b)
   );
   return top[0] ?? nodeAtPoint(flat, point);
+}
+
+/** Where the tap sits inside `frame`, as rounded fractions, when it is not near the centre. */
+function offsetWithin(
+  frame: DescribeFrame,
+  point: { x: number; y: number }
+): { x: number; y: number } | undefined {
+  const fx = (point.x - frame.x) / frame.width;
+  const fy = (point.y - frame.y) / frame.height;
+  if (Math.abs(fx - 0.5) <= 0.15 && Math.abs(fy - 0.5) <= 0.15) return undefined;
+  return { x: Math.round(clamp01(fx) * 100) / 100, y: Math.round(clamp01(fy) * 100) / 100 };
 }
 
 interface DerivedSelector {
@@ -460,7 +537,7 @@ export function deriveScopedSelector(
 ): DerivedSelector | { warning: string } {
   const node = targetAt(flat, point);
   if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-  const own = (node.label ?? node.value ?? "").trim();
+  const own = ownLabel(node);
   const textSel: Selector | null = own ? { text: own, role: node.role } : null;
   const title = titlePart(node);
   const idSel: Selector | null = node.identifier ? { identifier: node.identifier } : null;
@@ -476,15 +553,8 @@ export function deriveScopedSelector(
     scope?: string
   ): DerivedSelector => {
     const out: DerivedSelector = { selector, strategy, ...(scope ? { scope } : {}) };
-    const f = selectorToFrame(flat, selector, orientation)!;
-    const fx = (point.x - f.x) / f.width;
-    const fy = (point.y - f.y) / f.height;
-    if (Math.abs(fx - 0.5) > 0.15 || Math.abs(fy - 0.5) > 0.15) {
-      out.offset = {
-        x: Math.round(clamp01(fx) * 100) / 100,
-        y: Math.round(clamp01(fy) * 100) / 100,
-      };
-    }
+    const offset = offsetWithin(selectorToFrame(flat, selector, orientation)!, point);
+    if (offset) out.offset = offset;
     const notes: string[] = [];
     const scopeId =
       selector.within?.identifier ?? selector.next?.identifier ?? selector.after?.identifier;
@@ -520,15 +590,22 @@ export function deriveScopedSelector(
   // A row whose label joins its parts ("Wawel Royal Castle, Wawel 5, Kraków"
   // over a title and an address) follows the content: it gains "Recently
   // Viewed" on the next visit. Its title part, matched as a substring, holds.
+  // Bare text first: a flow recorded on a simulator then replays on Android,
+  // whose roles are named differently. The role joins only when the text alone
+  // is not unique.
   if (title) {
-    const s: Selector = { text: title, role: node.role };
-    if (findAll(flat, s, orientation).length === 1 && covers(s)) return finish(s, "text");
+    for (const s of [{ text: title }, { text: title, role: node.role }] as Selector[]) {
+      if (findAll(flat, s, orientation).length === 1 && covers(s)) return finish(s, "text");
+    }
   }
   if (textSel) {
-    if (ok(textSel)) return finish(textSel, "text");
+    const forms: Selector[] = [{ text: own }, textSel];
+    for (const s of forms) if (ok(s)) return finish(s, "text");
     for (const a of stableAncestors()) {
-      const s: Selector = { ...textSel, within: { identifier: a.identifier } };
-      if (ok(s)) return finish(s, "within", a.identifier);
+      for (const base of forms) {
+        const s: Selector = { ...base, within: { identifier: a.identifier } };
+        if (ok(s)) return finish(s, "within", a.identifier);
+      }
     }
   }
   // 3. A numbered or data-like own id, the last unique single-field form.
@@ -548,8 +625,14 @@ export function deriveScopedSelector(
   const cands: { s: Selector; dist: number; sameHome: number; ugly: number }[] = [];
   for (let i = ni - 1; i >= 0 && i >= ni - 12; i--) {
     const m = order[i];
-    const text = m.label ?? m.value;
-    const s: Selector | null = m.identifier ? { identifier: m.identifier } : text ? { text } : null;
+    // An anchor is an id or a visible label, never a value: an unlabelled
+    // field's value is what was typed into it, a secret included.
+    const text = ownLabel(m);
+    const s: Selector | null = m.identifier
+      ? { identifier: m.identifier }
+      : text && !volatileText(text)
+        ? { text }
+        : null;
     if (!s || !unique(s)) continue;
     cands.push({
       s,
@@ -583,7 +666,7 @@ export function deriveRoleInScope(
   orientation?: UiOrientation
 ): DerivedSelector | undefined {
   const node = targetAt(flat, point);
-  if (!node || node.identifier || (node.label ?? node.value ?? "").trim()) return undefined;
+  if (!node || node.identifier || ownLabel(node)) return undefined;
   const unique = (s: Selector) => findAll(flat, s, orientation).length === 1;
   const covers = (s: Selector) => {
     const f = selectorToFrame(flat, s, orientation);
@@ -593,10 +676,12 @@ export function deriveRoleInScope(
     if (positional(a.identifier!) || dataLike(a.identifier!)) continue;
     const s: Selector = { role: node.role, within: { identifier: a.identifier } };
     if (unique(s) && covers(s)) {
+      const offset = offsetWithin(selectorToFrame(flat, s, orientation)!, point);
       return {
         selector: s,
         strategy: "within",
         scope: a.identifier,
+        ...(offset ? { offset } : {}),
         notes: `the element has no id and no text, so the selector is its role inside ${a.identifier}; re-record against a labelled element if that is not reliably this one`,
       };
     }

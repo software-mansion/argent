@@ -162,7 +162,7 @@ describe("tap times: parse/serialize", () => {
       { kind: "tap", selector: { text: "A", loose: true }, x: 0.5, y: 0.5 },
     ]);
     expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, times: 2 }\n")).toThrow(
-      /needs a target under on/i
+      /options form takes a nested point/i
     );
   });
 

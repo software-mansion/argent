@@ -101,7 +101,7 @@ Classify before editing:
 Then:
 
 1. Record the first failure or divergence index and message.
-2. Capture `screenshot` and `describe`. Use native or React Native discovery when needed.
+2. Capture `screenshot` and `describe`. Use `debugger-component-tree` for React Native when needed.
 3. Compare actual state with the preceding echo and expected destination.
 4. Classify the cause: selector, screen, missing element, readiness, stale data, optional interstitial, or product behavior.
 5. State the diagnosis in one sentence before correcting it.

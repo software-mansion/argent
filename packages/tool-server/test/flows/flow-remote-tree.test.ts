@@ -142,7 +142,7 @@ describe("the recorder reads the runner's tree on a remote simulator", () => {
   it("writes a selector, not the coordinates it tapped", async () => {
     const { result, steps } = await recordTapOn(REMOTE);
 
-    expect(steps).toEqual([{ kind: "tap", selector: { text: "Log In", role: "AXButton" } }]);
+    expect(steps).toEqual([{ kind: "tap", selector: { text: "Log In" } }]);
     expect(result.message).not.toContain("kept coordinates");
     expect(reads.length).toBeGreaterThan(0);
     expect(new Set(reads)).toEqual(new Set([`AXService:${REMOTE}`]));

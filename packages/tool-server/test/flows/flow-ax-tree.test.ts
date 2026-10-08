@@ -10,6 +10,7 @@ import {
 } from "../../src/blueprints/ax-service";
 import type { DescribeFrame, DescribeNode } from "../../src/tools/describe/contract";
 import {
+  deriveRoleInScope,
   deriveScopedSelector,
   queryAxFlowTree,
   queryIosSimulatorFlowTree,
@@ -564,6 +565,345 @@ describe("queryIosSimulatorFlowTree: the daemon, or the explained outage", () =>
   });
 });
 
+describe("what the sweeps and the review found: projection and recorder guards", () => {
+  const ROW = { x: 0, y: 0.5, width: 1, height: 0.1 };
+
+  it("drops the software keyboard: its layout container and every key", async () => {
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        label: "Search",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0.7, y: 0.1, width: 0.2, height: 0.05 },
+      },
+      {
+        index: 2,
+        parentIndex: 0,
+        label: "UIKeyboardLayoutStar Preview",
+        frame: { x: 0, y: 0.6, width: 1, height: 0.4 },
+      },
+      {
+        index: 3,
+        parentIndex: 2,
+        identifier: "Search",
+        label: "search",
+        traits: ["button", "keyboardKey"],
+        accessible: true,
+        frame: { x: 0.8, y: 0.9, width: 0.2, height: 0.08 },
+      },
+      {
+        index: 4,
+        parentIndex: 0,
+        identifier: "delete",
+        label: "delete",
+        traits: ["keyboardKey"],
+        accessible: true,
+        frame: { x: 0.8, y: 0.7, width: 0.2, height: 0.08 },
+      },
+    ]);
+
+    expect(leaves(tree)).toEqual(["Search"]);
+    expect(findAll(tree, { identifier: "Search" })).toHaveLength(0);
+    expect(selectorToFrame(tree, { text: "Search" })?.y).toBeCloseTo(0.1, 9);
+  });
+
+  it("clips a scroll view's content to its frame: a row scrolled under the footer is not visible", async () => {
+    // A UIScrollView shows up by its scroll-bar children; rows the daemon
+    // still reports inside the footer's band are pruned, like the UIView tree did.
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        identifier: "list",
+        frame: { x: 0, y: 0.2, width: 1, height: 0.6 },
+      },
+      {
+        index: 2,
+        parentIndex: 1,
+        label: "Vertical scroll bar, 2 pages",
+        traits: ["adjustable"],
+        frame: { x: 0.95, y: 0.2, width: 0.05, height: 0.6 },
+      },
+      {
+        index: 3,
+        parentIndex: 1,
+        label: "Row 2",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.3, width: 1, height: 0.1 },
+      },
+      {
+        index: 4,
+        parentIndex: 1,
+        label: "Row 13",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.85, width: 1, height: 0.1 },
+      },
+      {
+        index: 5,
+        parentIndex: 0,
+        label: "Footer",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.8, width: 1, height: 0.2 },
+      },
+    ]);
+
+    expect(leaves(tree)).toEqual(["Vertical scroll bar, 2 pages", "Row 2", "list", "Footer"]);
+    expect(tree.children.find((n) => n.identifier === "list")?.scrollable).toBe(true);
+    expect(findAll(tree, { text: "Row 13" })).toHaveLength(0);
+  });
+
+  it("never turns a value into selector text: a typed secret stays out of the selector and out of an anchor", async () => {
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        label: "API key",
+        traits: ["staticText"],
+        accessible: true,
+        frame: { x: 0, y: 0.1, width: 1, height: 0.05 },
+      },
+      {
+        index: 2,
+        parentIndex: 0,
+        value: "sk_live_TEST123",
+        traits: ["textEntry"],
+        accessible: true,
+        frame: { x: 0, y: 0.15, width: 1, height: 0.05 },
+      },
+      {
+        index: 3,
+        parentIndex: 0,
+        label: "Save",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.2, width: 0.3, height: 0.05 },
+      },
+      {
+        index: 4,
+        parentIndex: 0,
+        label: "Webhook URL",
+        traits: ["staticText"],
+        accessible: true,
+        frame: { x: 0, y: 0.3, width: 1, height: 0.05 },
+      },
+      {
+        index: 5,
+        parentIndex: 0,
+        value: "https://x",
+        traits: ["textEntry"],
+        accessible: true,
+        frame: { x: 0, y: 0.35, width: 1, height: 0.05 },
+      },
+      {
+        index: 6,
+        parentIndex: 0,
+        label: "Save",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.4, width: 0.3, height: 0.05 },
+      },
+    ]);
+
+    const first = deriveScopedSelector(tree, { x: 0.15, y: 0.225 });
+    expect(JSON.stringify(first)).not.toContain("sk_live");
+    expect(first).toMatchObject({ selector: { text: "Save", next: { text: "API key" } } });
+    // The unlabelled field itself: no text to name it by, so a role in scope or coordinates.
+    const field = deriveScopedSelector(tree, { x: 0.5, y: 0.175 });
+    expect(JSON.stringify(field)).not.toContain("sk_live");
+  });
+
+  it("treats a label with no visible character (an icon-font glyph) as no text, in the target and in anchors", async () => {
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        label: "\uE900",
+        traits: ["button"],
+        accessible: true,
+        frame: ROW,
+      },
+    ]);
+
+    const derived = deriveScopedSelector(tree, centre(ROW));
+    expect("warning" in derived).toBe(true);
+    expect(JSON.stringify(derived)).not.toContain("\uE900");
+  });
+
+  it("skips an anchor whose text follows the clock, like a relative time", async () => {
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        label: "5m",
+        traits: ["staticText"],
+        accessible: true,
+        frame: { x: 0.8, y: 0.1, width: 0.1, height: 0.05 },
+      },
+      {
+        index: 2,
+        parentIndex: 0,
+        label: "Alice",
+        traits: ["staticText"],
+        accessible: true,
+        frame: { x: 0, y: 0.1, width: 0.3, height: 0.05 },
+      },
+      {
+        index: 3,
+        parentIndex: 0,
+        label: "Reply",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.16, width: 0.3, height: 0.05 },
+      },
+      {
+        index: 4,
+        parentIndex: 0,
+        label: "12m",
+        traits: ["staticText"],
+        accessible: true,
+        frame: { x: 0.8, y: 0.3, width: 0.1, height: 0.05 },
+      },
+      {
+        index: 5,
+        parentIndex: 0,
+        label: "Bob",
+        traits: ["staticText"],
+        accessible: true,
+        frame: { x: 0, y: 0.3, width: 0.3, height: 0.05 },
+      },
+      {
+        index: 6,
+        parentIndex: 0,
+        label: "Reply",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.36, width: 0.3, height: 0.05 },
+      },
+    ]);
+
+    expect(deriveScopedSelector(tree, { x: 0.15, y: 0.385 })).toMatchObject({
+      selector: { text: "Reply", next: { text: "Bob" } },
+    });
+  });
+
+  it("writes bare text when it is unique, and adds the role only to tell a button from a text", async () => {
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        label: "Log In",
+        traits: ["button"],
+        accessible: true,
+        frame: ROW,
+      },
+      {
+        index: 2,
+        parentIndex: 0,
+        label: "Terms",
+        traits: ["staticText"],
+        accessible: true,
+        frame: { x: 0, y: 0.7, width: 1, height: 0.05 },
+      },
+      {
+        index: 3,
+        parentIndex: 0,
+        label: "Terms",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0, y: 0.8, width: 1, height: 0.05 },
+      },
+    ]);
+
+    expect(deriveScopedSelector(tree, centre(ROW))).toMatchObject({ selector: { text: "Log In" } });
+    expect(deriveScopedSelector(tree, { x: 0.5, y: 0.825 })).toMatchObject({
+      selector: { text: "Terms", role: "AXButton" },
+    });
+  });
+
+  it("keeps a navigation bar's button on top of the content listed after it", async () => {
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        label: "Edit",
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0.7, y: 0.08, width: 0.1, height: 0.04 },
+      },
+      {
+        index: 2,
+        parentIndex: 0,
+        label: "Scheduled, 0 reminders",
+        accessible: true,
+        frame: { x: 0.5, y: 0.05, width: 0.45, height: 0.15 },
+      },
+    ]);
+
+    expect(deriveScopedSelector(tree, { x: 0.75, y: 0.1 })).toMatchObject({
+      selector: { text: "Edit" },
+    });
+  });
+
+  it("keeps the off-centre position for a role-in-scope selector", async () => {
+    const { tree } = await project([
+      {
+        index: 1,
+        parentIndex: 0,
+        identifier: "toolbar",
+        frame: { x: 0, y: 0.9, width: 1, height: 0.1 },
+      },
+      {
+        index: 2,
+        parentIndex: 1,
+        traits: ["button"],
+        accessible: true,
+        frame: { x: 0.6, y: 0.9, width: 0.4, height: 0.1 },
+      },
+    ]);
+
+    expect(deriveRoleInScope(tree, { x: 0.95, y: 0.95 })).toMatchObject({
+      selector: { role: "AXButton", within: { identifier: "toolbar" } },
+      offset: { x: 0.87 },
+    });
+  });
+
+  it("fails a pinned read when another app is in front, instead of describing the home screen", async () => {
+    const home = reply(
+      [
+        {
+          index: 1,
+          parentIndex: 0,
+          label: "Settings",
+          traits: ["button"],
+          accessible: true,
+          frame: ROW,
+        },
+      ],
+      {}
+    );
+    home.nodes[0] = { index: 0, label: "SpringBoard", frame: FULL };
+    const registry = registryServing(home);
+
+    await expect(
+      queryIosSimulatorFlowTree(registry, DEVICE, {
+        bundleId: "com.example.app",
+        pinned: true,
+        probeAnswered: false,
+        frontLabel: "MyApp",
+      })
+    ).rejects.toThrow(
+      /com\.example\.app is no longer in front: the accessibility daemon reads "SpringBoard"/
+    );
+    // Unpinned, or the same app, reads as before.
+    await expect(queryIosSimulatorFlowTree(registry, DEVICE)).resolves.toBeTruthy();
+  });
+});
+
 describe("readSettledIosFlowTree", () => {
   const row = { x: 0, y: 0.1, width: 1, height: 0.1 };
   const LOADING = reply([
@@ -688,7 +1028,7 @@ describe("deriveScopedSelector", () => {
     });
   });
 
-  it("uses the text plus role when the element has no id", async () => {
+  it("uses the text alone when the element has no id and the text is unique", async () => {
     const { tree } = await project([
       {
         index: 1,
@@ -701,7 +1041,7 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, centre(ROW))).toEqual({
-      selector: { text: "Continue", role: "AXButton" },
+      selector: { text: "Continue" },
       strategy: "text",
     });
   });
@@ -790,7 +1130,7 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, { x: 0.75, y: 0.95 })).toEqual({
-      selector: { text: "Search", role: "AXButton", within: { identifier: "main-tabs" } },
+      selector: { text: "Search", within: { identifier: "main-tabs" } },
       strategy: "within",
       scope: "main-tabs",
     });
@@ -819,11 +1159,11 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, centre(SAVE))).toEqual({
-      selector: { text: "Save", role: "AXButton" },
+      selector: { text: "Save" },
       strategy: "text",
     });
     expect(deriveScopedSelector(tree, centre(SAVE_CHANGES))).toEqual({
-      selector: { text: "Save changes", role: "AXButton" },
+      selector: { text: "Save changes" },
       strategy: "text",
     });
   });
@@ -936,7 +1276,7 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, { x: 0.7, y: 0.545 })).toMatchObject({
-      selector: { text: "Buy", role: "AXButton" },
+      selector: { text: "Buy" },
       strategy: "text",
       offset: { x: 0.75 },
     });
@@ -969,7 +1309,7 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, { x: 0.906, y: 0.1145 })).toMatchObject({
-      selector: { text: "Done", role: "AXButton" },
+      selector: { text: "Done" },
       strategy: "text",
     });
   });
@@ -995,7 +1335,7 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, { x: 0.5, y: 0.219 })).toMatchObject({
-      selector: { text: "Sweepy", role: "AXGroup" },
+      selector: { text: "Sweepy" },
       strategy: "text",
     });
   });
@@ -1031,7 +1371,7 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, { x: 0.9235, y: 0.585 })).toMatchObject({
-      selector: { text: "Close", role: "AXButton" },
+      selector: { text: "Close" },
       strategy: "text",
     });
     expect(deriveScopedSelector(tree, { x: 0.3, y: 0.58 })).toMatchObject({
@@ -1240,7 +1580,7 @@ describe("deriveScopedSelector", () => {
     ]);
 
     expect(deriveScopedSelector(tree, { x: 0.7625, y: 0.123 })).toMatchObject({
-      selector: { text: "Clear text", role: "AXButton" },
+      selector: { text: "Clear text" },
       strategy: "text",
     });
     expect(deriveScopedSelector(tree, { x: 0.3, y: 0.123 })).toMatchObject({

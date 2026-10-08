@@ -86,8 +86,8 @@ Reach each screen through the app's UI. Do not replace tested navigation with `o
 
 For every action:
 
-1. **Discover without mutation.** Use `describe`, iOS native discovery, `debugger-component-tree`, or `screenshot`. Do not record discovery or `debugger-*` calls: `port` is not a device-bind key, so a recorded one replays against whatever Metro owns that port.
-2. **Choose a durable target.** Prefer a stable id, then stable text or an accessibility label. On iOS, use native discovery for ids that trimmed accessibility output omits.
+1. **Discover without mutation.** Use `describe`, `debugger-component-tree`, or `screenshot`. Do not record discovery or `debugger-*` calls: `port` is not a device-bind key, so a recorded one replays against whatever Metro owns that port.
+2. **Choose a durable target.** Prefer a stable id, then stable text or an accessibility label. On iOS, `describe` shows every id a selector can use.
 3. **Add an echo.** Name the current state, action, and expected outcome before the action can fail.
 4. **Execute through `flow-add-step`.** Inspect the result and the `recorded` line immediately.
 5. **Verify immediately.** Record outcome checks when their states first appear. After navigation, prove identity then readiness: record the identity check live, and add the readiness gate during polish.
@@ -112,15 +112,15 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 ### Taps
 
-`flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order — `id`, then `text`, then `role` — giving three outcomes. Read the `recorded` line after every tap, because only two of them warn. It names the derived form — a selector map, or the kept point:
+`flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and writes the shortest selector that names the tapped element alone: its `id`; else its visible text, with `role` only when the text alone is not unique; scoped by `within`, `next` or `after` when needed. It never uses a value. Read the `recorded` line after every tap:
 
-1. **`tap: { id: ... }` or `tap: { text: ... }`** — the good case.
-2. **`tap: { role: ... }`, appended with no warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](flow-yaml.md#selectors-from-describe) and the tap reports a pass on the wrong control.
+1. **`tap: { id: ... }`, `tap: { text: ... }` or a scoped form** — the good case. The `message` names a scope, a position inside the element (`x`/`y` beside `on`), a positional or data-like id, or a combined row label. Keep what it wrote.
+2. **`tap: { role: ..., within: ... }`, with a warning.** The element has no id and no visible label. A second control of that role inside the scope can win the [ranking](flow-yaml.md#selectors-from-describe) on replay, and the tap reports a pass on the wrong control.
 3. **A kept raw point**, with a warning naming the reason and the retarget.
 
 Treat outcomes 2 and 3 alike. Restore the source screen with direct MCP calls, record a corrected tap, then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate).
 
-Never tap the on-screen keyboard through the recorder. Some platforms expose it as one large node, so replay can tap the wrong key while reporting success. Record text with `keyboard`.
+Never tap the on-screen keyboard through the recorder. On an iOS simulator the keyboard is not in the flow tree; on other platforms replay can tap the wrong key while reporting success. Record text with `keyboard`.
 
 ### Typing
 
@@ -128,9 +128,9 @@ Record the focus tap, then record `keyboard` with `text`. A `keyboard` call carr
 
 **Never `describe` or `screenshot` a non-secure field you just filled from `{{secret:…}}`.** Only a password field is redacted; a plain text input hands the resolved value back into your context, and an API key or token typed into one is the ordinary case. Submit or navigate away first, then verify the resulting screen.
 
-**`describe` reports focus on Chromium only.** iOS and Android leave it unset — it is a Vega/D-pad signal there — so those platforms have no live pre-typing focus check, and the value check afterwards is what proves the keys landed. On Chromium, read `focused` before recording `keyboard`.
+**`describe` reports focus on Chromium and on an iOS simulator.** Android and a physical iPhone leave it unset, so there the value check afterwards is what proves the keys landed. On Chromium and an iOS simulator, read `focused` before recording `keyboard`.
 
-If characters are lost, restore the field with direct calls. Do not record a duplicate typing step. Polish the valid pair into `type:`. Its replay focus wait reads the runner's own tree, which does report focus on iOS, Android, and Chromium, but an unconfirmed poll falls through to typing rather than failing — so retain the committed-value check. Store credentials as `{{secret:NAME}}`. Never record a literal credential.
+If characters are lost, restore the field with direct calls. Do not record a duplicate typing step. Polish the valid pair into `type:`. Its replay focus wait reads the runner's own tree, which reports focus on an iOS simulator, Android, and Chromium (a physical iPhone types after a fixed settle), but an unconfirmed poll falls through to typing rather than failing — so retain the committed-value check. Store credentials as `{{secret:NAME}}`. Never record a literal credential.
 
 ### Scrolling and swiping
 
@@ -251,7 +251,8 @@ The condition grep matches a condition key with a scalar after it — `visible: 
 Resolve every hit and confirm:
 
 - Every element action uses a stable selector unless the fallback gate cleared and documented it.
-- **No `role:` stands as the only key under a `tap:`/`long-press:`.** That is the recorder's silent fallback, which warned about nothing. Replace it, or clear it through the fallback gate. A `role:` beside another field or a scope (`within`, `after`, `next`) is deliberate and needs no defence.
+- **An `x:`/`y:` pair directly under an `on:` block is a position inside the element**, kept by the recorder for an off-centre tap. It is not a coordinate target: keep it.
+- **No `role:` stands as the only key under a `tap:`/`long-press:`, nor with only a scope.** A `role:` beside `text` is deliberate and needs no defence. A `role:` with only `within`, `after` or `next` is the recorder's weakest form (outcome 2 above): replace it, or clear it through the fallback gate.
 - Every element-seeking gesture became `scroll-to`.
 - No device id or literal credential remains.
 - Every selector-bearing condition uses an explicit selector map without positional or data-derived values.

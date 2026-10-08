@@ -83,7 +83,7 @@ describe("create-flow selector-scope docs", () => {
     const snippets = [
       ...section.matchAll(/^\s*- ((?:tap|assert|await|type|scroll-to):.+?)(?:\s+#.*)?$/gm),
     ].map((m) => m[1]!);
-    expect(snippets).toHaveLength(3);
+    expect(snippets).toHaveLength(4);
     for (const snippet of snippets) {
       expect(() => parseFlow(`steps:\n  - ${snippet}\n`), snippet).not.toThrow();
     }

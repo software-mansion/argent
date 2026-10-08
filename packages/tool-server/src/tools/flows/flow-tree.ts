@@ -45,18 +45,19 @@ const FLOW_TREE_SOURCES: Record<
 > = {
   // Simulator iOS reads the accessibility daemon's `tree`: the source
   // `describe` reads, with the id-only containers and the covered-content flag
-  // flows need. It reads whatever is in front, so the launch target is not
-  // consulted; a daemon that cannot read is the step's error, with the remedy
-  // (see `queryIosSimulatorFlowTree`). Physical devices use the XCUITest
-  // runner tree.
-  "ios": (registry, device) =>
+  // flows need. It reads whatever is in front; the launch target only lends
+  // the front app's label, so a read after the app left the screen fails
+  // instead of describing the home screen. A daemon that cannot read is the
+  // step's error, with the remedy (see `queryIosSimulatorFlowTree`). Physical
+  // devices use the XCUITest runner tree.
+  "ios": (registry, device, target) =>
     device.kind === "device"
       ? queryIosDeviceFlowTree(registry, device)
-      : queryIosSimulatorFlowTree(registry, device),
+      : queryIosSimulatorFlowTree(registry, device, target),
   // A remote sim is an iOS simulator reached over the sim-remote tunnel; the
   // ax-service blueprint serves it over TCP. `ios-remote` is always kind
   // "simulator" (utils/device-info.ts) and has no physical-device variant.
-  "ios-remote": (registry, device) => queryIosSimulatorFlowTree(registry, device),
+  "ios-remote": (registry, device, target) => queryIosSimulatorFlowTree(registry, device, target),
   "android": (registry, device) => queryAndroidFullHierarchy(registry, device),
   "chromium": (registry, device) => queryChromiumTree(registry, device),
   "vega": (_registry, device) => queryVegaTree(device),

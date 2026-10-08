@@ -252,7 +252,7 @@ describe("flow-add-step tap selector capture on an iOS simulator", () => {
     expect(result.recorded).toBe(summarizeStep((await recordedSteps())[0], 1));
   });
 
-  it("captures text plus role when the node has no identifier", async () => {
+  it("captures the text alone when the node has no identifier and the text is unique", async () => {
     // Text alone is the loose spelling; the role pins the kind of element the
     // author tapped, so a label repeated on a heading cannot take the match.
     setAxTree([axLeaf({ index: 1, label: "Add to cart", traits: ["button"], frame: ADD_TO_CART })]);
@@ -260,9 +260,7 @@ describe("flow-add-step tap selector capture on an iOS simulator", () => {
     const result = await recordTap(ADD_TO_CART_CENTRE);
 
     expect(result.message).toBe(`Step added to "${FLOW}" flow`);
-    expect(await recordedSteps()).toEqual([
-      { kind: "tap", selector: { text: "Add to cart", role: "AXButton" } },
-    ]);
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Add to cart" } }]);
   });
 
   it("records the label alone for a control that also exposes a value", async () => {
@@ -283,9 +281,7 @@ describe("flow-add-step tap selector capture on an iOS simulator", () => {
     const result = await recordTap({ x: 0.5, y: 0.44 });
 
     expect(result.message).not.toContain("kept coordinates");
-    expect(await recordedSteps()).toEqual([
-      { kind: "tap", selector: { text: "Volume", role: "AXAdjustable" } },
-    ]);
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Volume" } }]);
   });
 
   it("carries a recorded clickCount into the tap step's times", async () => {
@@ -294,9 +290,7 @@ describe("flow-add-step tap selector capture on an iOS simulator", () => {
 
     await recordTap(ADD_TO_CART_CENTRE, { clickCount: 2 });
 
-    expect(await recordedSteps()).toEqual([
-      { kind: "tap", selector: { text: "Photo", role: "AXImage" }, times: 2 },
-    ]);
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Photo" }, times: 2 }]);
   });
 
   it("scopes a repeated id by the stable container it sits in", async () => {
@@ -380,11 +374,7 @@ describe("flow-add-step tap selector capture on an iOS simulator", () => {
     expect(await recordedSteps()).toEqual([
       {
         kind: "tap",
-        selector: {
-          text: "Remove",
-          role: "AXButton",
-          within: { identifier: "wishlist-section" },
-        },
+        selector: { text: "Remove", within: { identifier: "wishlist-section" } },
       },
     ]);
   });
@@ -705,9 +695,7 @@ describe("flow-add-step tap selector capture on an iOS simulator", () => {
     const result = await recordTap({ x: 0.8, y: 0.825 });
 
     expect(result.message).toBe(`Step added to "${FLOW}" flow`);
-    expect(await recordedSteps()).toEqual([
-      { kind: "tap", selector: { text: "Done", role: "AXButton" } },
-    ]);
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Done" } }]);
   });
 
   it("keeps coordinates with a warning when the daemon read fails", async () => {

@@ -81,6 +81,7 @@ Flow selectors support frame-based `within`, `after`, and `next` in every select
 - tap: { text: Delete, within: { id: profile-card } } # inside a container
 - assert: { visible: { role: Button, after: { text: Danger zone } } } # any follower
 - tap: { role: Switch, next: { text: Wi-Fi } } # nearest matching follower
+- tap: { on: { id: merged-row }, x: 0.75, y: 0.48 } # a position inside the element, as fractions of its frame
 ```
 
 `within` means visual frame containment, not source-tree ancestry. Overflowing children and anchored popovers can fall outside it. `after` and `next` use top-to-bottom, left-to-right reading order as the user sees the UI. This is also true on a landscape UI, for example a rotated iPhone or an unfolded foldable. A target cannot satisfy its own `within`, `after`, or `next` anchor. The synthetic root never counts.

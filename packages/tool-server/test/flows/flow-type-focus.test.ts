@@ -5,12 +5,12 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
-// The iOS test exercises the focus-wait's source gate (a source that can't
-// report focus bails out of the poll) by stubbing the tree fetch with an
-// `ax-service`-tagged tree — flows no longer degrade to that source on their
-// own, so the stub is the only way to present it. The Android test leaves
-// `currentFetch` unset and drives the REAL fetch path: its tree comes from the
-// android-devtools getHierarchy stub below.
+// The iOS test exercises the focus-wait's source gate (a source that reports
+// no focus bails out of the poll) by stubbing the tree fetch with an
+// `xcuitest-runner`-tagged tree, the physical iPhone's source; the simulator's
+// `ax-service` tree reports focus and polls like native-devtools. The Android
+// test leaves `currentFetch` unset and drives the REAL fetch path: its tree
+// comes from the android-devtools getHierarchy stub below.
 let currentTree: () => DescribeNode;
 let currentFetch: (() => DescribeTreeData) | undefined;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => {
@@ -120,7 +120,7 @@ describe("type directive focus wait", () => {
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(720);
   });
 
-  it("skips the focus poll on a source that can't report focus", async () => {
+  it("skips the focus poll on a source that reports no focus", async () => {
     let axReads = 0;
     currentTree = () => {
       axReads++;
@@ -137,7 +137,7 @@ describe("type directive focus wait", () => {
         ],
       };
     };
-    currentFetch = () => ({ tree: currentTree(), source: "ax-service" });
+    currentFetch = () => ({ tree: currentTree(), source: "xcuitest-runner" });
     const calls: Call[] = [];
     const registry = mockRegistry(calls, () => ({ xml: emailXml(false) }));
 
@@ -156,7 +156,9 @@ describe("type directive focus wait", () => {
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
     // Reads 1-2: pre-tap settle. Read 3: the focus wait's single look, after
-    // which the ax-service source bails out instead of polling to the timeout.
+    // which a source that reports no focus (the XCUITest runner on a physical
+    // iPhone) bails out instead of polling to the timeout. The simulator's
+    // daemon reports focus, so it polls like native-devtools does.
     expect(axReads).toBe(3);
 
     const tap = calls.find((c) => c.id === "gesture-tap");

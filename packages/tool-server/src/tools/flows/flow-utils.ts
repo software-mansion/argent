@@ -2556,7 +2556,9 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
     if (obj.on === undefined) {
       badEntry(
         entry,
-        'tap with times, x or y needs a target under on — e.g. tap: { on: "Photo", times: 2 }'
+        obj.x !== undefined || obj.y !== undefined
+          ? "the tap options form takes a nested point — e.g. tap: { on: { x: 0.5, y: 0.5 }, times: 2 }"
+          : 'tap with times needs a target — e.g. tap: { on: "Photo", times: 2 }'
       );
     }
     const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
