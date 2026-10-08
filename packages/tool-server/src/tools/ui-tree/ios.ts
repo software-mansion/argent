@@ -14,21 +14,92 @@ const LEGACY_UNSUPPORTED_FIELDS = [
   "foregroundApp",
 ];
 
-// XCUIElementType, by value, as XCTest names it. AX answers 0 (`Any`, a query
-// wildcard) for a plain container, which XCTest reports as `Other`.
-const ELEMENT_TYPES = `
-  Other Other Application Group Window Sheet Drawer Alert Dialog Button RadioButton RadioGroup
-  CheckBox DisclosureTriangle PopUpButton ComboBox MenuButton ToolbarButton Popover Keyboard Key
-  NavigationBar TabBar TabGroup Toolbar StatusBar Table TableRow TableColumn Outline OutlineRow
-  Browser CollectionView Slider PageIndicator ProgressIndicator ActivityIndicator
-  SegmentedControl Picker PickerWheel Switch Toggle Link Image Icon SearchField ScrollView
-  ScrollBar StaticText TextField SecureTextField DatePicker TextView Menu MenuItem MenuBar
-  MenuBarItem Map WebView IncrementArrow DecrementArrow Timeline RatingIndicator ValueIndicator
-  SplitGroup Splitter RelevanceIndicator ColorWell HelpTag Matte DockItem Ruler RulerMarker Grid
-  LevelIndicator Cell LayoutArea LayoutItem Handle Stepper Tab TouchBar StatusItem
-`
-  .split(/\s+/)
-  .filter(Boolean);
+// XCUIElementType, by value, as XCTest names it.
+const ELEMENT_TYPES = [
+  "Any",
+  "Other",
+  "Application",
+  "Group",
+  "Window",
+  "Sheet",
+  "Drawer",
+  "Alert",
+  "Dialog",
+  "Button",
+  "RadioButton",
+  "RadioGroup",
+  "CheckBox",
+  "DisclosureTriangle",
+  "PopUpButton",
+  "ComboBox",
+  "MenuButton",
+  "ToolbarButton",
+  "Popover",
+  "Keyboard",
+  "Key",
+  "NavigationBar",
+  "TabBar",
+  "TabGroup",
+  "Toolbar",
+  "StatusBar",
+  "Table",
+  "TableRow",
+  "TableColumn",
+  "Outline",
+  "OutlineRow",
+  "Browser",
+  "CollectionView",
+  "Slider",
+  "PageIndicator",
+  "ProgressIndicator",
+  "ActivityIndicator",
+  "SegmentedControl",
+  "Picker",
+  "PickerWheel",
+  "Switch",
+  "Toggle",
+  "Link",
+  "Image",
+  "Icon",
+  "SearchField",
+  "ScrollView",
+  "ScrollBar",
+  "StaticText",
+  "TextField",
+  "SecureTextField",
+  "DatePicker",
+  "TextView",
+  "Menu",
+  "MenuItem",
+  "MenuBar",
+  "MenuBarItem",
+  "Map",
+  "WebView",
+  "IncrementArrow",
+  "DecrementArrow",
+  "Timeline",
+  "RatingIndicator",
+  "ValueIndicator",
+  "SplitGroup",
+  "Splitter",
+  "RelevanceIndicator",
+  "ColorWell",
+  "HelpTag",
+  "Matte",
+  "DockItem",
+  "Ruler",
+  "RulerMarker",
+  "Grid",
+  "LevelIndicator",
+  "Cell",
+  "LayoutArea",
+  "LayoutItem",
+  "Handle",
+  "Stepper",
+  "Tab",
+  "TouchBar",
+  "StatusItem",
+];
 
 const FULL_SCREEN: DescribeFrame = { x: 0, y: 0, width: 1, height: 1 };
 
@@ -73,8 +144,12 @@ export function adaptAxTree(response: AXTreeResponse): UiTree {
       frame: raw.frame,
       children: [],
     };
+    // AX answers 0 (Any, a query wildcard) for a plain container; XCTest reports it as Other.
     if (raw.elementType !== undefined)
-      node.type = ELEMENT_TYPES[raw.elementType] ?? String(raw.elementType);
+      node.type =
+        raw.elementType === 0
+          ? "Other"
+          : (ELEMENT_TYPES[raw.elementType] ?? String(raw.elementType));
     if (traits.length > 0) node.traits = traits;
     if (raw.bundleId) node.bundleId = raw.bundleId;
     if (has("header")) node.heading = true;
