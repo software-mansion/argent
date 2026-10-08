@@ -176,9 +176,10 @@ async function cropPngFile(
  * baseline, and registered as the `current` artifact.
  *
  * The baseline is read and written through `project`: on this host beside the
- * root flow, or, for an upload whose client serves its files, on the client
- * beside the root flow's real file there. The capture, the differ and every
- * artifact stay on this host.
+ * root flow, or, for an upload whose client sent the run's baselines with it,
+ * in those files, keyed beside the root flow's real file on the client, and a
+ * new one goes back to the client with the result. The capture, the differ
+ * and every artifact stay on this host.
  */
 export async function runSnapshot(
   env: ActionEnv,
@@ -403,8 +404,7 @@ export async function runSnapshot(
     // A read error from this host's disk does not always say which file it hit
     // (a directory at the baseline path fails the read with a bare EISDIR), so
     // it names the baseline as the differ names a file it cannot decode. A
-    // client's errors name their request, and the run's own abort must stay
-    // an abort.
+    // client's refusal names its file already.
     const stored = await opts.project.readFile(baselinePath).catch((err: unknown) => {
       if (
         opts.project.mode !== "host" ||

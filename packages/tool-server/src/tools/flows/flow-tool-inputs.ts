@@ -1,40 +1,23 @@
 import * as path from "node:path";
 import {
   FILE_INPUT_MARKER,
-  hasToolFileExtension,
-  interpolateFileInputPath,
-  type ClientServiceOp,
-  type FileInputSpec,
+  isClientFileArgument,
+  toolStepFiles,
   type FileInputWire,
   type Registry,
   type ResolvedFileInput,
+  type ToolStepFile,
 } from "@argent/registry";
 import { FileInputError, resolveFileInputs } from "../../file-inputs";
 import type { ProjectAccess } from "./project-access";
 
-/** A file input a `tool:` step fills, and the path its args fill in. */
-export interface ToolStepFile {
-  spec: FileInputSpec;
-  path: string;
-}
-
-/**
- * The file inputs a `tool:` step's args fill in for the tool it names: a spec
- * applies when every `${param}` it names is a non-empty string and no
- * superseding source is set, as when the client wraps a call.
- */
+/** The file inputs a `tool:` step's args fill in for the tool it names ({@link toolStepFiles}). */
 export function toolStepFilePaths(
   registry: Registry,
   tool: string,
   args: Record<string, unknown>
 ): ToolStepFile[] {
-  const files: ToolStepFile[] = [];
-  for (const spec of registry.getTool(tool)?.fileInputs ?? []) {
-    if (spec.skipWhenSet !== undefined && args[spec.skipWhenSet] !== undefined) continue;
-    const filled = interpolateFileInputPath(spec.path, args);
-    if (filled !== null) files.push({ spec, path: filled });
-  }
-  return files;
+  return toolStepFiles(registry.getTool(tool)?.fileInputs, args);
 }
 
 /**
@@ -46,35 +29,21 @@ function isFileArgument({ spec }: ToolStepFile): boolean {
 }
 
 /**
- * A file the client can send for a `tool:` step: a file argument
- * ({@link isFileArgument}) at an absolute path with a name the registry's
- * `hasToolFileExtension` accepts. The client serves exactly those paths: the
- * ones a `tool:` step of a flow it served names.
- */
-function isClientFileArgument(file: ToolStepFile): boolean {
-  return (
-    isFileArgument(file) && path.posix.isAbsolute(file.path) && hasToolFileExtension(file.path)
-  );
-}
-
-/**
  * Whether a `tool:` step's file input runs over a link: a file argument the
- * client sends ({@link isClientFileArgument}) when it offers `read-file`. A
- * directory, an app bundle and `screenshot-diff`'s `outputDir` have no op that
- * carries them, so a step that fills one stays refused for every client.
+ * client sends with the call ({@link isClientFileArgument}), when the call
+ * came with the flow's files (`withFiles`). A directory, an app bundle and
+ * `screenshot-diff`'s `outputDir` do not travel with the call, so a step that
+ * fills one stays refused for every client.
  */
-export function servedToolInput(
-  file: ToolStepFile,
-  offeredOps: readonly ClientServiceOp[] | undefined
-): boolean {
-  return isClientFileArgument(file) && (offeredOps?.includes("read-file") ?? false);
+export function servedToolInput(file: ToolStepFile, withFiles: boolean): boolean {
+  return isClientFileArgument(file) && withFiles;
 }
 
 /**
  * Why a refused file input of a `tool:` step would run with a different client
- * or path, or undefined: `update` when only the `read-file` op is missing,
- * `relative` when the path is relative, `extension` when its name is not one
- * the client serves.
+ * or path, or undefined: `update` when only the files sent with the call are
+ * missing, `relative` when the path is relative, `extension` when its name is
+ * not one the client sends.
  */
 export function refusedToolInputFix(
   file: ToolStepFile
@@ -110,14 +79,15 @@ export function withClientPaths(prepared: PreparedToolStep, text: string): strin
 
 /**
  * The file boundary of an HTTP call, for a `tool:` step of a flow whose files
- * are on the client: each file argument is read from the client and written to
- * a temp file on this host by the resolver of an HTTP call, so the tool gets
+ * are on the client: each file argument is looked up in the files the client
+ * sent with the call (a baseline this call wrote first), and written to a
+ * temp file on this host by the resolver of an HTTP call, so the tool gets
  * the same paths and the same `ctx.fileInputs` as for a direct call. A file
  * the client does not have fails the step: a server file at the same path is
  * never used in its place. In host mode, and for `flow-execute`, the args pass
  * through unchanged. An input whose `unwrapWhenSet` param is set stays the
  * client path, unread, as an HTTP call unwraps it: the tool's own validation
- * diagnoses the second source.
+ * diagnoses the second source. The client skips such an input too.
  */
 export async function prepareToolStepInputs(
   registry: Registry,

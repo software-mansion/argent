@@ -9,17 +9,46 @@
  *
  * {@link applyClientFileDirectives} is the reverse: a `__argentClientFile`
  * directive (e.g. a recorded flow YAML) is written here, constrained to
- * `.argent/flows/*.yaml` so a misbehaving tool-server cannot write elsewhere.
+ * `.argent/flows/*.yaml` so a misbehaving tool-server cannot write elsewhere,
+ * or, for a base64 snapshot baseline, to the baseline directories the client
+ * itself computed for the call.
  */
 
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, rmSync } from "node:fs";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { constants, tmpdir } from "node:os";
 import * as path from "node:path";
 
+import { parse as parseYaml } from "yaml";
+
 import { createTarGzFile } from "@argent/archive";
-import { FLOW_FILE_NAME_PATTERN } from "@argent/registry";
+import {
+  FLOW_FILE_NAME_PATTERN,
+  MAX_RUN_DEPTH,
+  TOOL_FILE_EXTENSIONS,
+  baselineKeyFor,
+  canonicalFlowPath,
+  classifyOnDiskSpelling,
+  collectFlowRequests,
+  flowMemberKey,
+  hasToolFileExtension,
+  isClientFileArgument,
+  toolStepFiles,
+  type FileInputMember,
+  type OnDiskSpelling,
+} from "@argent/registry";
 
 /** Must match the wire contract in `@argent/registry`'s file-inputs.ts. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
@@ -39,6 +68,12 @@ export interface FileInputSpec {
    * it (the tool's own validation diagnoses dual-source calls).
    */
   skipWhenSet?: string;
+  /**
+   * Over a link, also send the flow's `run:` closure, its run's snapshot
+   * baselines and the file arguments of its `tool:` steps as `members` (see
+   * {@link collectFlowMembers}).
+   */
+  collect?: "flow";
 }
 
 export interface FileInputWire {
@@ -52,12 +87,17 @@ export interface FileInputWire {
   uploadId?: string;
   /** SHA-256 hex digest of the streamed tarball; the server verifies it before extracting. */
   contentHash?: string;
+  canonical?: string;
+  spelling?: OnDiskSpelling;
+  members?: FileInputMember[];
 }
 
 export interface ClientFileDirective {
   [CLIENT_FILE_MARKER]: true;
   path: string;
   content: string;
+  /** `base64`: a snapshot baseline, written only into a baseline directory of the call. */
+  encoding?: "base64";
 }
 
 /**
@@ -81,6 +121,23 @@ export interface PrepareFileInputsOptions {
    * Absent for co-located sessions (the server reads the path in place).
    */
   uploadEndpoint?: { url: string; token: string };
+  /**
+   * Receives the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on,
+   * one for each member a `collect` spec sends. Defaults to stderr.
+   */
+  log?: (line: string) => void;
+  /**
+   * Filled with the baseline directory of each run a `collect` call updates
+   * baselines for: the only places {@link applyClientFileDirectives} writes a
+   * baseline the result returns (its `allowedDirs`).
+   */
+  baselineDirs?: string[];
+  /**
+   * The file inputs a tool declares, from the same `GET /tools` listing, so a
+   * `collect` call sends the file arguments of the flow's `tool:` steps.
+   * Without it, no `tool:` step sends a file.
+   */
+  toolFileInputs?: (tool: string) => readonly FileInputSpec[] | undefined;
 }
 
 /**
@@ -181,6 +238,23 @@ async function uploadTar(
   return json.uploadId;
 }
 
+/** Tar `sourcePath`, stream it to `POST /upload`, and return what the wire names it by. */
+async function uploadFile(
+  sourcePath: string,
+  endpoint: { url: string; token: string }
+): Promise<{ uploadId: string; contentHash: string }> {
+  const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
+  trackArchive(tarPath);
+  try {
+    await createTarGzFile(sourcePath, tarPath);
+    const contentHash = await sha256File(tarPath);
+    return { uploadId: await uploadTar(tarPath, endpoint), contentHash };
+  } finally {
+    untrackArchive(tarPath);
+    await rm(tarPath, { force: true }).catch(() => {});
+  }
+}
+
 /**
  * Stat and, when asked, read one `kind: "file"` input as the wire carries it.
  * Null when the path cannot be stat'ed or is not a regular file. With
@@ -190,10 +264,10 @@ async function uploadTar(
  * "file not found" guidance, and the stat fields stay for in-place resolution.
  * A file that stats but cannot be read keeps the stat fields and no content.
  *
- * Shared by {@link prepareFileInputs} and the client-services handler, so a
- * file read for an answer is read exactly as one read for a call.
+ * Shared by a declared input and a member of its closure, so both are read
+ * alike.
  */
-export async function readFileInputWire(
+async function readFileInputWire(
   filePath: string,
   opts: { includeContent: boolean }
 ): Promise<Pick<FileInputWire, "size" | "mtimeMs" | "content" | "contentOmitted"> | null> {
@@ -219,6 +293,420 @@ export async function readFileInputWire(
     out.contentOmitted = "size-limit";
   }
   return out;
+}
+
+/**
+ * Inline member bytes, summed over a call, up to which members ride in the
+ * call body; past it each member goes through `POST /upload`, so a proxy's
+ * body limit never sees a large closure.
+ */
+const INLINE_MEMBERS_BYTES = 256 * 1024;
+
+const FLOW_FILES_LOG_ENV = "ARGENT_FLOW_FILES_LOG";
+
+/** `inner` is `outer` or lies under it; both absolute and normalized. */
+function isWithin(inner: string, outer: string): boolean {
+  return inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : outer + path.sep);
+}
+
+/** Escapes control characters, so a name cannot forge a log line. */
+function printable(text: string): string {
+  return [...text]
+    .map((c) =>
+      c < " " || c === "\x7f" ? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}` : c
+    )
+    .join("");
+}
+
+/** `<P>` for a file under `<P>/.argent/flows/`, the innermost such `<P>`. */
+function savedFlowProject(file: string): string | null {
+  const parts = file.split(path.sep);
+  for (let i = parts.length - 3; i >= 0; i--) {
+    if (parts[i] === ".argent" && parts[i + 1] === "flows") {
+      return parts.slice(0, i).join(path.sep) || path.sep;
+    }
+  }
+  return null;
+}
+
+/**
+ * Where `spelled` lands on this machine: its realpath, or, when a component
+ * is missing, the realpath of the nearest existing ancestor with the rest
+ * appended. `error` is the kernel's refusal other than a missing component
+ * (a link loop, a file used as a directory).
+ */
+async function landing(spelled: string): Promise<{ canonical: string; error?: string }> {
+  try {
+    return { canonical: await realpath(spelled) };
+  } catch (err) {
+    const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
+    const rest: string[] = [];
+    let at = spelled;
+    for (;;) {
+      rest.unshift(path.basename(at));
+      const parent = path.dirname(at);
+      if (parent === at) return { canonical: spelled };
+      const real = await realpath(parent).catch(() => null);
+      if (real !== null) {
+        const canonical = path.join(real, ...rest);
+        return missing ? { canonical } : { canonical, error: (err as Error).message };
+      }
+      at = parent;
+    }
+  }
+}
+
+/**
+ * The directories a flow's closure may come from, as real paths: the project
+ * (`project_root`) and its `.argent/flows` (which may be a symlink to a tree
+ * elsewhere), the directory of the root flow as spelled and as its real file,
+ * and the project of a root flow saved under `<P>/.argent/flows/`, by either
+ * path, since the CLI sends its working directory as `project_root`.
+ */
+async function closureRoots(
+  rootPath: string,
+  rootCanonical: string,
+  projectRoot: unknown
+): Promise<string[]> {
+  const candidates: string[] = [];
+  if (typeof projectRoot === "string" && path.isAbsolute(projectRoot)) {
+    candidates.push(projectRoot, path.join(projectRoot, ".argent", "flows"));
+  }
+  candidates.push(path.dirname(rootPath), path.dirname(rootCanonical));
+  for (const file of [rootPath, rootCanonical]) {
+    const project = savedFlowProject(file);
+    if (project !== null) candidates.push(project);
+  }
+  const real: string[] = [];
+  for (const candidate of candidates) {
+    const resolved = await realpath(candidate).catch(() => null);
+    if (resolved !== null && !real.includes(resolved)) real.push(resolved);
+  }
+  // A root inside another root adds no reach; a refusal names the outermost.
+  return real.filter((root) => !real.some((other) => other !== root && isWithin(root, other)));
+}
+
+/**
+ * One `run:` target as the runner will resolve it: beside the real file that
+ * names it. Sent only from inside `roots`, and only as a YAML file within the
+ * 32 MiB cap; anything else is a `refused` member with the reason, and a
+ * target with nothing there a `missing` one. `text` is the file's content, for
+ * the walk to read its own targets.
+ */
+async function readFlowMember(
+  anchorDir: string,
+  target: string,
+  roots: string[],
+  budget: { inline: number },
+  opts: PrepareFileInputsOptions
+): Promise<{ member: FileInputMember; text?: string; sent: string }> {
+  const spelled = anchorDir + path.sep + target;
+  const { canonical, error } = await landing(spelled);
+  const spelling = await classifyOnDiskSpelling(
+    path.dirname(spelled),
+    path.posix.basename(target),
+    FLOW_FILE_NAME_PATTERN
+  );
+  const member: FileInputMember = {
+    role: "flow",
+    key: flowMemberKey(anchorDir, target),
+    path: spelled,
+    canonical,
+    spelling,
+  };
+  const refuse = (reason: string) => ({
+    member: { ...member, state: "refused" as const, error: reason },
+    sent: `refused (${reason})`,
+  });
+  if (!roots.some((root) => isWithin(canonical, root))) {
+    return refuse(`${target} is outside every root this client serves (${roots.join(", ")})`);
+  }
+  if (error !== undefined) return refuse(error);
+  const st = await stat(canonical).catch((err: NodeJS.ErrnoException) => err);
+  if (st instanceof Error) {
+    if (st.code !== "ENOENT") return refuse(st.message);
+    return { member: { ...member, state: "missing" }, sent: "missing" };
+  }
+  if (st.isDirectory()) return refuse("EISDIR: illegal operation on a directory, read");
+  // A `.yaml` name that links to a file that is not YAML (a `.env`) would
+  // send that file; a link to a `.yml` flow is an ordinary layout.
+  if (!/\.ya?ml$/i.test(path.basename(canonical))) {
+    return refuse(`${target} links to a file that is not a YAML file`);
+  }
+  const sent = await sendBytes(member, canonical, budget, opts);
+  return { ...sent, text: sent.bytes?.toString("utf8") };
+}
+
+/**
+ * A file argument of a `tool:` step, read as the step spells it. Sent only
+ * from inside `roots`, and only when the file it really is also has a
+ * {@link TOOL_FILE_EXTENSIONS} name, so a link named like an image cannot send
+ * a `.env`. Nothing there, or a file where a directory should be, is a
+ * `missing` member; a directory or a file that cannot be read is `refused`.
+ */
+async function readToolMember(
+  file: string,
+  roots: string[],
+  budget: { inline: number },
+  opts: PrepareFileInputsOptions
+): Promise<{ member: FileInputMember; sent: string }> {
+  const member: FileInputMember = { role: "tool", key: file, path: file };
+  const refuse = (reason: string) => ({
+    member: { ...member, state: "refused" as const, error: reason },
+    sent: `refused (${reason})`,
+  });
+  const { canonical } = await landing(file);
+  if (!roots.some((root) => isWithin(canonical, root))) {
+    return refuse(`${file} is outside every root this client serves (${roots.join(", ")})`);
+  }
+  if (!hasToolFileExtension(canonical)) {
+    return refuse(`${file} links to a file that is not one of ${TOOL_FILE_EXTENSIONS.join(", ")}`);
+  }
+  const st = await stat(canonical).catch((err: NodeJS.ErrnoException) => err);
+  if (st instanceof Error) {
+    if (st.code === "ENOENT" || st.code === "ENOTDIR") {
+      return { member: { ...member, state: "missing" }, sent: "missing" };
+    }
+    return refuse(st.message);
+  }
+  if (st.isDirectory()) return refuse("EISDIR: illegal operation on a directory, read");
+  return sendBytes(member, canonical, budget, opts);
+}
+
+/** The platform whose baselines a compare run reads, when the call names it. */
+function callPlatform(args: Record<string, unknown>): string | undefined {
+  if (typeof args.device === "string" && args.device.startsWith("chromium-cdp-")) return "chromium";
+  if (typeof args.platform !== "string") return undefined;
+  // The baseline key folds a remote simulator into `ios` (authoringPlatform).
+  return args.platform === "ios-remote" ? "ios" : args.platform;
+}
+
+/**
+ * What a baseline at `file` (an entry of a baseline directory) is to this
+ * client: `ok` (`real` is its real path), `missing` (a link to nothing), or
+ * `refused` with the reason. Outside the roots, a `.png` name that links to
+ * another kind of file, and, for a read, a directory are refused; for a
+ * write, a link to nothing and anything but a regular file are refused too.
+ */
+async function baselineEntry(
+  file: string,
+  roots: string[],
+  forWrite: boolean
+): Promise<
+  { state: "ok"; real: string } | { state: "missing" } | { state: "refused"; error: string }
+> {
+  const { canonical, error } = await landing(file);
+  if (!roots.some((root) => isWithin(canonical, root))) {
+    return {
+      state: "refused",
+      error: `${file} is outside every root this client serves (${roots.join(", ")})`,
+    };
+  }
+  if (error !== undefined) return { state: "refused", error };
+  const st = await stat(canonical).catch((err: NodeJS.ErrnoException) => err);
+  if (st instanceof Error) {
+    if (st.code !== "ENOENT") return { state: "refused", error: st.message };
+    return forWrite
+      ? { state: "refused", error: `${file} is a symbolic link to a missing file` }
+      : { state: "missing" };
+  }
+  if (!canonical.endsWith(".png")) {
+    return { state: "refused", error: `${file} links to a file that is not a PNG file` };
+  }
+  if (forWrite && !st.isFile()) return { state: "refused", error: `${file} is not a regular file` };
+  if (st.isDirectory()) {
+    return { state: "refused", error: "EISDIR: illegal operation on a directory, read" };
+  }
+  return st.isFile() ? { state: "ok", real: canonical } : { state: "missing" };
+}
+
+/**
+ * A member's bytes, read from `real`: inline while the call's inline budget
+ * lasts, else through `POST /upload`. A file over the 32 MiB cap, or one that
+ * cannot be read, is a `refused` member with the reason.
+ */
+async function sendBytes(
+  member: FileInputMember,
+  real: string,
+  budget: { inline: number },
+  opts: PrepareFileInputsOptions
+): Promise<{ member: FileInputMember; sent: string; bytes?: Buffer }> {
+  const read = await readFileInputWire(real, { includeContent: true });
+  if (read?.contentOmitted) {
+    const error = `${real} is larger than the 32 MiB cap on a file sent to the tool-server`;
+    return { member: { ...member, state: "refused", error }, sent: `refused (${error})` };
+  }
+  if (read?.content === undefined) {
+    // The wire read keeps no error; read once more for the one a host read
+    // would report (EACCES and the like).
+    const error = await readFile(real).then(
+      () => `${real} could not be read on this client`,
+      (err: unknown) => (err instanceof Error ? err.message : String(err))
+    );
+    return { member: { ...member, state: "refused", error }, sent: `refused (${error})` };
+  }
+  const bytes = Buffer.from(read.content, "base64");
+  const size = read.size ?? 0;
+  if (budget.inline + size <= INLINE_MEMBERS_BYTES || !opts.uploadEndpoint) {
+    budget.inline += size;
+    return { member: { ...member, ...read }, sent: `inline ${size}`, bytes };
+  }
+  const uploaded = await uploadFile(real, opts.uploadEndpoint);
+  return {
+    member: { ...member, size: read.size, mtimeMs: read.mtimeMs, ...uploaded },
+    sent: `upload ${size}`,
+    bytes,
+  };
+}
+
+/**
+ * The snapshot baselines of the run of the root flow at `canonical`, from
+ * `<its dir>/__baselines__/<key>/`, where the runner keys them
+ * ({@link baselineKeyFor}). A run that updates baselines never reads one, so
+ * each `.png` there goes by name only (`listed`), for the runner to say
+ * whether a write replaced one; its directory is the only place a baseline
+ * in the result may be written. A run that compares gets the bytes of the
+ * baselines of its own snapshots only (`<snapshot>__*.png`, crops included),
+ * of one platform when the call names it ({@link callPlatform}). A directory
+ * outside the roots sends nothing and takes no write. A baseline already in
+ * `sent`, as the file argument of a `tool:` step, is not sent twice.
+ */
+async function collectBaselineMembers(
+  canonical: string,
+  flowName: string,
+  snapshots: string[],
+  args: Record<string, unknown>,
+  roots: string[],
+  budget: { inline: number },
+  opts: PrepareFileInputsOptions,
+  sent: ReadonlySet<string>,
+  emit: (member: FileInputMember, sent: string) => void
+): Promise<void> {
+  const dir = path.join(
+    path.dirname(canonical),
+    "__baselines__",
+    baselineKeyFor(canonical, flowName)
+  );
+  const real = (await landing(dir)).canonical;
+  if (!roots.some((root) => isWithin(real, root))) return;
+  const updates = args.updateBaselines === true;
+  if (updates) opts.baselineDirs?.push(dir);
+  const platform = callPlatform(args);
+  const prefixes = snapshots.map(
+    (name) => `${name}__${platform === undefined ? "" : `${platform}-`}`
+  );
+  const names = await readdir(dir).catch(() => [] as string[]);
+  for (const name of names.sort()) {
+    if (!name.endsWith(".png")) continue;
+    if (!updates && !prefixes.some((prefix) => name.startsWith(prefix))) continue;
+    const file = path.join(dir, name);
+    if (sent.has(file)) continue;
+    const member: FileInputMember = { role: "baseline", key: file, path: file };
+    const entry = await baselineEntry(file, roots, updates);
+    if (entry.state === "refused") {
+      emit({ ...member, state: "refused", error: entry.error }, `refused (${entry.error})`);
+    } else if (entry.state === "missing") {
+      emit({ ...member, state: "missing" }, "missing");
+    } else if (updates) {
+      emit({ ...member, state: "listed" }, "listed");
+    } else {
+      const sent = await sendBytes(member, entry.real, budget, opts);
+      emit(sent.member, sent.sent);
+    }
+  }
+}
+
+/**
+ * The project files the flow at `rootPath` makes the runner read, sent with
+ * its wire. Its `run:` closure: every file a `run:` step of the flow or of a
+ * file it reaches names, in breadth order, each resolution once, as deep as
+ * the runner resolves ({@link MAX_RUN_DEPTH}). Every branch of a `when:`
+ * counts, since which one runs is decided on the device. The file arguments
+ * of the `tool:` steps of those files ({@link readToolMember}): the arguments
+ * that the tool declares as a `file` input, at an absolute path with a
+ * {@link TOOL_FILE_EXTENSIONS} name, each path once, as spelled. Then the
+ * snapshot baselines of its run ({@link collectBaselineMembers}), for the
+ * snapshots of the flow and of its closure. The targets, snapshot names and
+ * tool steps come from the registry's {@link collectFlowRequests}, which the
+ * tool-server's own tests hold to the runner's parse. `canonical` and
+ * `spelling` describe the root flow itself.
+ */
+async function collectFlowMembers(
+  rootPath: string,
+  rootBytes: Buffer,
+  args: Record<string, unknown>,
+  opts: PrepareFileInputsOptions
+): Promise<Pick<FileInputWire, "canonical" | "spelling" | "members">> {
+  const canonical = await canonicalFlowPath(rootPath);
+  const spelling = await classifyOnDiskSpelling(
+    path.dirname(rootPath),
+    path.basename(rootPath),
+    FLOW_FILE_NAME_PATTERN
+  );
+  const roots = await closureRoots(rootPath, canonical, args.project_root);
+  const members: FileInputMember[] = [];
+  const seen = new Set<string>();
+  const snapshots = new Set<string>();
+  const budget = { inline: 0 };
+  const logging = process.env[FLOW_FILES_LOG_ENV] === "1";
+  const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
+  const emit = (member: FileInputMember, sent: string): void => {
+    members.push(member);
+    const subject = member.role === "flow" ? member.canonical : member.key;
+    if (logging) log(printable(`[flow-files] ${member.role} ${subject}: ${sent}`));
+  };
+  const queue = [{ canonical, text: rootBytes.toString("utf8"), hop: 0 }];
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    let doc: unknown;
+    try {
+      // The runner's parse; its warnings belong to the run, not to this terminal.
+      doc = parseYaml(file.text.trim(), { logLevel: "error" });
+    } catch {
+      continue;
+    }
+    const requests = collectFlowRequests(doc);
+    for (const name of requests.snapshots) snapshots.add(name);
+    for (const step of requests.toolSteps) {
+      // A nested flow is not a file argument the runner reads for its tool.
+      if (step.tool === "flow-execute") continue;
+      for (const file of toolStepFiles(opts.toolFileInputs?.(step.tool), step.args)) {
+        // An input whose superseding param is also set stays unread: the
+        // tool's own validation refuses the call.
+        const { unwrapWhenSet } = file.spec;
+        if (unwrapWhenSet !== undefined && step.args[unwrapWhenSet] !== undefined) continue;
+        if (!isClientFileArgument(file) || seen.has(file.path)) continue;
+        seen.add(file.path);
+        const read = await readToolMember(file.path, roots, budget, opts);
+        emit(read.member, read.sent);
+      }
+    }
+    const anchorDir = path.dirname(file.canonical);
+    for (const target of requests.runTargets) {
+      const key = flowMemberKey(anchorDir, target);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const { member, text, sent } = await readFlowMember(anchorDir, target, roots, budget, opts);
+      emit(member, sent);
+      if (text !== undefined && file.hop + 1 < MAX_RUN_DEPTH) {
+        queue.push({ canonical: member.canonical!, text, hop: file.hop + 1 });
+      }
+    }
+  }
+  if (snapshots.size > 0) {
+    const flowName = path.basename(rootPath, ".yaml");
+    await collectBaselineMembers(
+      canonical,
+      flowName,
+      [...snapshots],
+      args,
+      roots,
+      budget,
+      opts,
+      seen,
+      emit
+    );
+  }
+  return { canonical, spelling, members };
 }
 
 /**
@@ -256,6 +744,14 @@ export async function prepareFileInputs(
       // resolves if the server has the file, and errors precisely otherwise.
       const read = await readFileInputWire(filePath, { includeContent: opts.includeContent });
       if (read) Object.assign(wire, read);
+      // Only a routed call sends the closure: co-located, the tool-server
+      // reads every file in place.
+      if (spec.collect === "flow" && opts.includeContent && wire.content !== undefined) {
+        Object.assign(
+          wire,
+          await collectFlowMembers(filePath, Buffer.from(wire.content, "base64"), record, opts)
+        );
+      }
     }
 
     if (spec.kind === "tar-upload") {
@@ -266,20 +762,9 @@ export async function prepareFileInputs(
       }
 
       if (opts.uploadEndpoint && st) {
-        const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
-        trackArchive(tarPath);
-        try {
-          // stderr, not stdout (MCP owns it), so a slow upload isn't silent.
-          process.stderr.write(
-            `Uploading ${path.basename(filePath)} to the remote tool-server...\n`
-          );
-          await createTarGzFile(filePath, tarPath);
-          wire.contentHash = await sha256File(tarPath);
-          wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint);
-        } finally {
-          untrackArchive(tarPath);
-          await rm(tarPath, { force: true }).catch(() => {});
-        }
+        // stderr, not stdout (MCP owns it), so a slow upload isn't silent.
+        process.stderr.write(`Uploading ${path.basename(filePath)} to the remote tool-server...\n`);
+        Object.assign(wire, await uploadFile(filePath, opts.uploadEndpoint));
       }
     }
 
@@ -291,17 +776,23 @@ export async function prepareFileInputs(
 }
 
 export interface AppliedClientFiles {
-  /** The result with every directive replaced by the written path (or null). */
+  /**
+   * The result with every directive replaced by the written path (or null);
+   * a baseline that was not written by `{ path, error }`.
+   */
   result: unknown;
   /** Paths actually written on this machine. */
   written: string[];
+  /** Baselines that were not written, and why. */
+  failed: { path: string; error: string }[];
 }
 
 /**
  * Trust boundary: the directive path is authored by the tool-server. Flow
- * recording is the only producer today, so writes are confined to an absolute
- * path ending `.argent/flows/<name>.yaml`, with no `..` anywhere. Widen
- * deliberately (and equally conservatively) if another tool needs this channel.
+ * recording is the only producer of text directives, so they are confined to
+ * an absolute path ending `.argent/flows/<name>.yaml`, with no `..` anywhere.
+ * Widen deliberately (and equally conservatively) if another tool needs this
+ * channel.
  */
 function isAllowedClientFilePath(p: string): boolean {
   if (!path.isAbsolute(p)) return false;
@@ -323,15 +814,102 @@ function isClientFileDirective(value: unknown): value is ClientFileDirective {
 }
 
 /**
- * Deep-walk a tool result, writing every client-file directive to disk and
- * rewriting it to the written path. A directive that fails validation or the
- * write resolves to null, mirroring how the artifact materializer signals a
- * missing file.
+ * Replace `target` in one step: write a temporary file beside it, give that
+ * file the mode of the one it replaces, and rename it over `target`. A client
+ * killed mid-write leaves the old file whole, and at worst a stray dotfile.
+ * The temporary file is removed when a step fails. Its name does not grow
+ * with the baseline's, so a name near the length limit still gets one.
  */
-export async function applyClientFileDirectives(result: unknown): Promise<AppliedClientFiles> {
+async function replaceFile(target: string, bytes: Buffer, mode: number | undefined): Promise<void> {
+  const temp = path.join(path.dirname(target), `.baseline-${randomUUID()}.tmp`);
+  try {
+    await writeFile(temp, bytes, { flag: "wx" });
+    if (mode !== undefined) await chmod(temp, mode & 0o777);
+    await rename(temp, target);
+  } catch (err) {
+    await rm(temp, { force: true });
+    throw err;
+  }
+}
+
+/**
+ * Write one baseline the result returns, or say why not. Only a `.png` file
+ * directly inside one of `allowedDirs`, the baseline directories the client
+ * computed for the call, in normal form with no `..`. A `.png` name that is a
+ * link must lead to a PNG file in the same real directory; a link to nothing
+ * and anything but a regular file are refused, as a host write would not
+ * replace them. The file is replaced in one rename, over its real path.
+ */
+async function writeBaselineFile(
+  file: string,
+  bytes: Buffer,
+  allowedDirs: readonly string[]
+): Promise<string | null> {
+  if (
+    !path.isAbsolute(file) ||
+    path.normalize(file) !== file ||
+    file.split(/[\\/]/).includes("..") ||
+    !file.endsWith(".png") ||
+    !allowedDirs.includes(path.dirname(file))
+  ) {
+    return allowedDirs.length === 0
+      ? "this call writes no baselines"
+      : `${file} is not a baseline of this call (${allowedDirs.map((d) => `${d}/<name>.png`).join(", ")})`;
+  }
+  if (bytes.length > MAX_CONTENT_BYTES) {
+    return `${file}: the baseline is larger than the 32 MiB cap on a file this client writes`;
+  }
+  const dir = path.dirname(file);
+  await mkdir(dir, { recursive: true });
+  const link = await lstat(file).catch(() => null);
+  const real = link === null ? null : await realpath(file).catch(() => null);
+  if (link !== null && real === null) return `${file} is a symbolic link to a missing file`;
+  if (real !== null) {
+    if (!real.endsWith(".png")) return `${file} links to a file that is not a PNG file`;
+    if (path.dirname(real) !== (await realpath(dir))) {
+      return `${file} links outside its baseline directory`;
+    }
+  }
+  const existing = real === null ? null : await stat(real);
+  if (existing !== null && !existing.isFile()) return `${file} is not a regular file`;
+  await replaceFile(
+    real ?? path.join(await realpath(dir), path.basename(file)),
+    bytes,
+    existing?.mode
+  );
+  return null;
+}
+
+/**
+ * Deep-walk a tool result, writing every client-file directive to disk and
+ * rewriting it to the written path. A text directive that fails validation or
+ * the write resolves to null, mirroring how the artifact materializer signals
+ * a missing file. A base64 directive is a snapshot baseline: written only
+ * into `opts.allowedDirs` ({@link writeBaselineFile}), and one that is not
+ * written becomes `{ path, error }` and an entry of `failed`, so the caller
+ * can report it.
+ */
+export async function applyClientFileDirectives(
+  result: unknown,
+  opts: { allowedDirs?: readonly string[] } = {}
+): Promise<AppliedClientFiles> {
   const written: string[] = [];
+  const failed: { path: string; error: string }[] = [];
 
   async function walk(value: unknown): Promise<unknown> {
+    if (isClientFileDirective(value) && value.encoding === "base64") {
+      const error = await writeBaselineFile(
+        value.path,
+        Buffer.from(value.content, "base64"),
+        opts.allowedDirs ?? []
+      ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
+      if (error !== null) {
+        failed.push({ path: value.path, error });
+        return { path: value.path, error };
+      }
+      written.push(value.path);
+      return value.path;
+    }
     if (isClientFileDirective(value)) {
       if (!isAllowedClientFilePath(value.path)) return null;
       try {
@@ -344,7 +922,10 @@ export async function applyClientFileDirectives(result: unknown): Promise<Applie
       }
     }
     if (Array.isArray(value)) {
-      return Promise.all(value.map(walk));
+      // One at a time, so the writes and their reports keep the result's order.
+      const out: unknown[] = [];
+      for (const item of value) out.push(await walk(item));
+      return out;
     }
     if (value && typeof value === "object") {
       const out: Record<string, unknown> = {};
@@ -357,5 +938,5 @@ export async function applyClientFileDirectives(result: unknown): Promise<Applie
   }
 
   const rewritten = await walk(result);
-  return { result: rewritten, written };
+  return { result: rewritten, written, failed };
 }

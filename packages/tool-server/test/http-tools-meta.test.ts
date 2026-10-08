@@ -44,7 +44,7 @@ function stubRegistry(): Registry {
         "plain-tool",
         "device-tool",
         "boot-tool",
-        "served-tool",
+        "collecting-tool",
       ],
     })),
     getTool: vi.fn((name: string) => {
@@ -98,12 +98,20 @@ function stubRegistry(): Registry {
           execute: async () => ({}),
         };
       }
-      if (name === "served-tool") {
+      if (name === "collecting-tool") {
         return {
-          id: "served-tool",
-          description: "Uses client services",
+          id: "collecting-tool",
+          description: "Takes a flow and its run: closure",
           inputSchema: { type: "object", properties: {} },
-          clientServices: { ops: ["resolve-file"] },
+          fileInputs: [
+            {
+              target: "flow_path",
+              path: "${flow_path}",
+              kind: "file",
+              optional: true,
+              collect: "flow",
+            },
+          ],
           services: () => ({}),
           execute: async () => ({}),
         };
@@ -147,16 +155,16 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
   });
 
-  it("passes clientServices through on /tools response, exactly as declared", async () => {
+  it("ships a file input's collect field on /tools exactly as declared: it is the advert", async () => {
     const res = await request(handle.app).get("/tools").expect(200);
     const byName = new Map<string, Record<string, unknown>>(
       (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
     );
 
-    expect(byName.get("served-tool")!.clientServices).toEqual({
-      ops: ["resolve-file"],
-    });
-    expect(byName.get("plain-tool")).not.toHaveProperty("clientServices");
+    expect(byName.get("collecting-tool")!.fileInputs).toEqual([
+      { target: "flow_path", path: "${flow_path}", kind: "file", optional: true, collect: "flow" },
+    ]);
+    expect(byName.get("plain-tool")).not.toHaveProperty("fileInputs");
   });
 
   it("does not pass bundleId into telemetry invocation metadata", async () => {

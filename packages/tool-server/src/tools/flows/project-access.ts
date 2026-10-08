@@ -1,17 +1,15 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
-  CLIENT_CONTENT_CAP_BYTES,
-  CLIENT_FILE_OP_TIMEOUT_MS,
+  CLIENT_FILE_MARKER,
   FAILURE_CODES,
   FailureError,
   FLOW_FILE_NAME_PATTERN,
+  flowMemberKey,
   resolveFlowRelativeFile,
+  type ClientFileDirective,
   type OnDiskSpelling,
-  type ReadFileArgs,
-  type ResolveFileArgs,
-  type ToolContext,
-  type WriteFileArgs,
+  type ResolvedMember,
 } from "@argent/registry";
 
 /**
@@ -21,7 +19,7 @@ import {
  * — null when nothing is at `canonical`, which the caller reports as the
  * missing fragment it is. The read is deferred so the runner's guards (cycle,
  * depth, casing) decide before any file is opened, as they do today on the
- * host; over the channel the text arrived with the answer, so `read` is free.
+ * host; a client's member already carries its text, so `read` is free.
  */
 export interface ResolvedFlowFile {
   canonical: string;
@@ -34,14 +32,13 @@ export interface ResolvedFlowFile {
  * The runner stays on the tool-server; the project is wherever the caller's
  * files are. {@link HostProjectAccess} uses this host's disk — a co-located
  * caller, or a flow the tool-server found in place. {@link ClientProjectAccess}
- * sends each read and write to the caller over the client-services channel,
- * for a flow that arrived as an upload from a client that offered to serve its
- * files.
+ * looks each read up in the files the client sent with an uploaded flow (the
+ * members of its file input), and keeps each baseline write for the result.
  *
  * In client mode every path is a CLIENT path: `canonical` serves the runner as
- * a key (the `run:` cycle guard) and for display, the snapshot baselines are
- * read and written there, and the file arguments of `tool:` steps are read
- * there, always through the client, never on this host.
+ * a key (the `run:` cycle guard) and for display, and the snapshot baselines
+ * and the file arguments of `tool:` steps are the client's files, never files
+ * on this host.
  */
 export interface ProjectAccess {
   readonly mode: "host" | "client";
@@ -120,96 +117,100 @@ export class HostProjectAccess implements ProjectAccess {
   }
 }
 
-type ClientServices = NonNullable<ToolContext["clientServices"]>;
+/** The decoded size cap of a baseline the client writes; mirrors the file-input cap. */
+const BASELINE_CAP_BYTES = 32 * 1024 * 1024;
 
-function invalidAnswer(op: string, subject: string): FailureError {
-  return new FailureError(
-    `the client answered the ${op} request for "${subject}" with an invalid payload`,
-    {
-      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-      failure_stage: "client_request_refused",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    }
-  );
-}
-
-function isSpelling(value: unknown): value is OnDiskSpelling {
-  if (typeof value !== "object" || value === null) return false;
-  const { state, actual, addressable } = value as Record<string, unknown>;
-  if (state === "listed" || state === "absent") return true;
-  return state === "case_folded" && typeof actual === "string" && typeof addressable === "boolean";
+function clientRefusal(subject: string, reason: string, verb = "send"): FailureError {
+  return new FailureError(`the client refused to ${verb} "${subject}": ${reason}`, {
+    error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+    failure_stage: "client_member_refused",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
 }
 
 /**
- * The client-services implementation: each read or write is one request line
- * on the call's stream, answered by the client from its own disk through the
- * same resolution code the host implementation runs. The client decides what
- * it serves and accepts (its roots, the file kinds, the size cap, where a
- * baseline may land); this side only checks that an answer has the shape the
- * op promises, and sends no baseline above the size cap.
+ * The client's files, looked up by the key the runner resolves: the client
+ * resolved each `run:` target of its flow before the call, with the same
+ * resolution code the host implementation runs, and sent what it found, and
+ * it sent the run's snapshot baselines by their client paths and the file
+ * arguments of its `tool:` steps as the steps spell them. A `run:` pair the
+ * client did not send, or refused to send, is refused here with the client's
+ * reason.
  *
- * One instance serves one call, and it asks once per `run:` reference: the
- * prerequisite guard, the device scan and the run each walk a leading `run:`
- * chain, and one answer serves all three, so they cannot see two versions of a
- * file edited mid-run. A rejection is kept as well: a refusal, a timeout or an
- * abort is the same for every walk, as the broker already makes a timeout.
+ * A baseline this call writes goes into an in-call overlay, which later reads
+ * see first, and travels back to the client in the result
+ * ({@link baselineDirectives}).
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;
-  private readonly answers = new Map<string, Promise<ResolvedFlowFile>>();
+  /** Baselines this call wrote, by client path. */
+  private readonly overlay = new Map<string, Buffer>();
 
-  constructor(private readonly services: ClientServices) {}
+  constructor(private readonly members: Readonly<Record<string, ResolvedMember>>) {}
 
-  resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
-    // Keyed by the pair as spelled, not by a joined path: the client resolves
-    // `target` against `anchorDir` itself (symlinks, casing).
-    const key = `${anchorDir}\0${target}`;
-    let answer = this.answers.get(key);
-    if (!answer) {
-      answer = this.request(anchorDir, target);
-      this.answers.set(key, answer);
-    }
-    return answer;
+  /** The member the runner reaches for this pair, or undefined when the client did not send one. */
+  member(anchorDir: string, target: string): ResolvedMember | undefined {
+    const key = flowMemberKey(anchorDir, target);
+    return Object.hasOwn(this.members, key) ? this.members[key] : undefined;
   }
 
-  private async request(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
-    const answer = await this.services.request(
-      "resolve-file",
-      { anchorDir, target, kind: "flow" } satisfies ResolveFileArgs,
-      CLIENT_FILE_OP_TIMEOUT_MS
-    );
-    const { canonical, spelling, exists, content } = answer;
-    if (typeof canonical !== "string" || !isSpelling(spelling) || typeof exists !== "boolean") {
-      throw invalidAnswer("resolve-file", target);
+  async resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
+    const member = this.member(anchorDir, target);
+    if (member?.role !== "flow" || member.state === "refused" || member.canonical === undefined) {
+      throw clientRefusal(
+        target,
+        member?.error ?? `${target} is not a run: target of a flow this client sent`
+      );
     }
-    if (!exists) return { canonical, spelling, read: async () => null };
-    if (typeof content !== "string") throw invalidAnswer("resolve-file", target);
-    const text = Buffer.from(content, "base64").toString("utf8");
-    return { canonical, spelling, read: async () => text };
+    const text = member.state === "present" ? (member.text ?? "") : null;
+    return {
+      canonical: member.canonical,
+      spelling: member.spelling ?? { state: "listed" },
+      read: async () => text,
+    };
   }
 
+  /**
+   * A file the client sent by its path: a baseline, or a file argument of a
+   * `tool:` step. The client sends one path once, so a tool file at a
+   * baseline's path stands for that baseline too.
+   */
+  private file(filePath: string): ResolvedMember | undefined {
+    const member = Object.hasOwn(this.members, filePath) ? this.members[filePath] : undefined;
+    return member?.role === "baseline" || member?.role === "tool" ? member : undefined;
+  }
+
+  /**
+   * A baseline of this run or a file argument of a `tool:` step: the bytes
+   * this call wrote there, else the file the client sent, else null, the "no
+   * baseline" outcome: a compare run gets every baseline of its snapshots the
+   * client has, and every file a `tool:` step names.
+   */
   async readFile(filePath: string): Promise<Buffer | null> {
-    const answer = await this.services.request(
-      "read-file",
-      { path: filePath } satisfies ReadFileArgs,
-      CLIENT_FILE_OP_TIMEOUT_MS
+    const written = this.overlay.get(filePath);
+    if (written !== undefined) return written;
+    const member = this.file(filePath);
+    if (member === undefined || member.state === "missing") return null;
+    if (member.state === "present" && member.hostPath !== undefined) {
+      return fs.readFile(member.hostPath);
+    }
+    throw clientRefusal(
+      filePath,
+      member.error ?? "the client sent only its name, for a run that updates baselines"
     );
-    const { exists, content } = answer;
-    if (typeof exists !== "boolean") throw invalidAnswer("read-file", filePath);
-    if (!exists) return null;
-    if (typeof content !== "string") throw invalidAnswer("read-file", filePath);
-    return Buffer.from(content, "base64");
   }
 
+  /**
+   * Keep a new baseline for the result and for later reads in this call.
+   * `replaced` says whether one was there before: written earlier in this
+   * call, or on the client.
+   */
   async writeBaseline(filePath: string, bytes: Buffer): Promise<{ replaced: boolean }> {
-    // The client refuses such a file too, but only once all of it has arrived.
-    // On a slow connection the transfer alone can outlast the timeout, and
-    // the step would then report the timeout instead of the cap.
-    if (bytes.length > CLIENT_CONTENT_CAP_BYTES) {
+    if (bytes.length > BASELINE_CAP_BYTES) {
       throw new FailureError(
         `the baseline for "${filePath}" is larger than the 32 MiB cap on a file the client ` +
-          `writes, so this tool-server did not send it`,
+          `writes, so this tool-server did not keep it`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "client_content_cap",
@@ -218,15 +219,23 @@ export class ClientProjectAccess implements ProjectAccess {
         }
       );
     }
-    const answer = await this.services.request(
-      "write-file",
-      { path: filePath, content: bytes.toString("base64") } satisfies WriteFileArgs,
-      CLIENT_FILE_OP_TIMEOUT_MS
-    );
-    const { written, replaced } = answer;
-    if (typeof written !== "string" || typeof replaced !== "boolean") {
-      throw invalidAnswer("write-file", filePath);
+    const member = this.file(filePath);
+    if (member?.state === "refused") {
+      throw clientRefusal(filePath, member.error ?? "refused", "write");
     }
+    const replaced =
+      this.overlay.has(filePath) || (member !== undefined && member.state !== "missing");
+    this.overlay.set(filePath, bytes);
     return { replaced };
+  }
+
+  /** The baselines this call wrote, last bytes per path, as directives for the result. */
+  baselineDirectives(): ClientFileDirective[] {
+    return [...this.overlay].map(([filePath, bytes]) => ({
+      [CLIENT_FILE_MARKER]: true,
+      path: filePath,
+      content: bytes.toString("base64"),
+      encoding: "base64",
+    }));
   }
 }

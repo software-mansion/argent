@@ -6,9 +6,9 @@ import {
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
-  type ClientServiceOp,
   type Registry,
   type ToolDefinition,
+  type ToolStepFile,
 } from "@argent/registry";
 import { FileInputError } from "../../src/file-inputs";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
@@ -18,9 +18,8 @@ import {
   refusedToolInputFix,
   servedToolInput,
   toolStepFilePaths,
-  type ToolStepFile,
 } from "../../src/tools/flows/flow-tool-inputs";
-import type { ProjectAccess } from "../../src/tools/flows/project-access";
+import { ClientProjectAccess, type ProjectAccess } from "../../src/tools/flows/project-access";
 import { reinstallAppTool } from "../../src/tools/reinstall-app";
 import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
 import { gatherWorkspaceDataTool } from "../../src/tools/workspace/gather-workspace-data";
@@ -332,7 +331,7 @@ describe("prepareToolStepInputs", () => {
   it("propagates a refusal from the client unchanged and leaves no temp file behind", async () => {
     const refusal = new FailureError(`"/client/b.png" is outside every root the client serves`, {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-      failure_stage: "client_request_refused",
+      failure_stage: "client_member_refused",
       failure_area: "tool_server",
       error_kind: "validation",
     });
@@ -349,14 +348,35 @@ describe("prepareToolStepInputs", () => {
     ).rejects.toBe(refusal);
 
     expect(client.readFile.mock.calls).toEqual([["/client/a.png"], ["/client/b.png"]]);
-    expect(getFailureSignal(refusal)?.failure_stage).toBe("client_request_refused");
+    expect(getFailureSignal(refusal)?.failure_stage).toBe("client_member_refused");
     expect(await inputTempDirs()).toEqual([]);
   });
 });
 
+describe("prepareToolStepInputs with the files a client sent", () => {
+  it("hands the tool a baseline an earlier step of the call wrote, not the copy the client sent", async () => {
+    const sentCopy = await hostFile("page.png", Buffer.from("old baseline"));
+    const baseline = "/client/.argent/flows/__baselines__/raw/page__chromium-1000x713.png";
+    const client = new ClientProjectAccess({
+      [baseline]: { role: "tool", state: "present", hostPath: sentCopy },
+    });
+    await client.writeBaseline(baseline, Buffer.from("new baseline"));
+
+    const prepared = await prepareToolStepInputs(registry, client, "screenshot-diff", {
+      baselinePath: baseline,
+    });
+    cleanups.push(prepared.cleanup);
+
+    expect(await fs.readFile(String(prepared.args.baselinePath), "utf8")).toBe("new baseline");
+    expect(prepared.fileInputs?.baselinePath).toMatchObject({
+      clientPath: baseline,
+      viaUpload: true,
+    });
+  });
+});
+
 describe("servedToolInput", () => {
-  it("serves a file input only with read-file, and never a probe, directory, tar-upload, derived or relative input", () => {
-    const withReadFile: ClientServiceOp[] = ["resolve-file", "read-file"];
+  it("serves a file input only with the files sent with the call, and never a probe, directory, tar-upload, derived or relative input", () => {
     const baseline = fileOf("screenshot-diff", { baselinePath: "/client/a.png" }, "baselinePath");
     const flowPath = fileOf(
       "flow-read-prerequisite",
@@ -364,21 +384,18 @@ describe("servedToolInput", () => {
       "flow_path"
     );
 
-    expect(servedToolInput(baseline, withReadFile)).toBe(true);
-    expect(servedToolInput(baseline, ["read-file"])).toBe(true);
-    expect(servedToolInput(flowPath, ["read-file"])).toBe(true);
+    expect(servedToolInput(baseline, true)).toBe(true);
+    expect(servedToolInput(flowPath, true)).toBe(true);
     // The extension in any case, as the client matches it.
     expect(
       servedToolInput(
         fileOf("screenshot-diff", { baselinePath: "/client/A.PNG" }, "baselinePath"),
-        withReadFile
+        true
       )
     ).toBe(true);
 
-    // The op is what carries the file.
-    expect(servedToolInput(baseline, ["resolve-file", "write-file"])).toBe(false);
-    expect(servedToolInput(baseline, [])).toBe(false);
-    expect(servedToolInput(baseline, undefined)).toBe(false);
+    // A client that sends no files with the call carries none.
+    expect(servedToolInput(baseline, false)).toBe(false);
 
     const neverServed: ToolStepFile[] = [
       fileOf("screenshot-diff", { outputDir: "/client/out" }, "outputDir"),
@@ -391,12 +408,12 @@ describe("servedToolInput", () => {
       ),
       fileOf("screenshot-diff", { baselinePath: "shots/a.png" }, "baselinePath"),
       fileOf("screenshot-diff", { baselinePath: "~/shots/a.png" }, "baselinePath"),
-      // A name the client never serves.
+      // A name the client never sends.
       fileOf("screenshot-diff", { baselinePath: "/client/a.webp" }, "baselinePath"),
       fileOf("screenshot-diff", { baselinePath: "/client/a.json" }, "baselinePath"),
     ];
     for (const file of neverServed) {
-      expect(servedToolInput(file, withReadFile), `${file.spec.target} ${file.path}`).toBe(false);
+      expect(servedToolInput(file, true), `${file.spec.target} ${file.path}`).toBe(false);
     }
   });
 });

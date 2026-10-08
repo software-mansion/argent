@@ -32,46 +32,35 @@ export {
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
   SCRIPT_FILE_NAME_PATTERN,
+  TOOL_FILE_EXTENSIONS,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,
+  hasToolFileExtension,
+  isClientFileArgument,
+  toolStepFiles,
 } from "./file-inputs";
 export type {
   FileInputWire,
   FileInputKind,
   FileInputSpec,
+  FileInputMember,
   ResolvedFileInput,
+  ResolvedMember,
   ClientFileDirective,
+  ToolStepFile,
 } from "./file-inputs";
 export {
+  baselineKeyFor,
   canonicalFlowPath,
   classifyOnDiskSpelling,
+  collectFlowRequests,
   completeRunExtension,
+  flowMemberKey,
+  MAX_RUN_DEPTH,
   resolveFlowRelativeFile,
 } from "./flow-file-refs";
 export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
-export {
-  CLIENT_SERVICE_OPS,
-  CLIENT_REQUEST_EVENT,
-  CLIENT_FILE_OP_TIMEOUT_MS,
-  CLIENT_CONTENT_CAP_BYTES,
-  TOOL_FILE_EXTENSIONS,
-  clientServicesParamSchema,
-  hasToolFileExtension,
-} from "./client-services";
-export type {
-  ClientServiceOp,
-  ClientServicesAdvert,
-  ClientServicesParam,
-  ClientRequestLine,
-  ClientResponseBody,
-  ResolveFileArgs,
-  ResolveFileAnswer,
-  ReadFileArgs,
-  ReadFileAnswer,
-  WriteFileArgs,
-  WriteFileAnswer,
-} from "./client-services";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,
