@@ -96,15 +96,15 @@ A selector can scope its matches by the frames of other elements:
 
 The runner resolves a selector against the tree below. On iOS it is the source `describe` reads, kept whole:
 
-| Platform        | Runner tree                                                                                                                  | `describe` tree                         |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| iOS simulator   | Accessibility tree of the daemon, with the containers that only have an id. The UIView hierarchy when the daemon cannot read | The touchable elements of the same tree |
-| Physical iPhone | Accessibility snapshot of `describe`                                                                                         | Same snapshot                           |
-| Android         | Full accessibility hierarchy                                                                                                 | Trimmed interactable nodes              |
-| Chromium        | DOM nodes with an id, label, value or handler                                                                                | Full DOM                                |
-| Vega            | Toolkit page source                                                                                                          | Same source                             |
+| Platform        | Runner tree                                                                | `describe` tree                         |
+| --------------- | -------------------------------------------------------------------------- | --------------------------------------- |
+| iOS simulator   | Accessibility tree of the daemon, with the containers that only have an id | The touchable elements of the same tree |
+| Physical iPhone | Accessibility snapshot of `describe`                                       | Same snapshot                           |
+| Android         | Full accessibility hierarchy                                               | Trimmed interactable nodes              |
+| Chromium        | DOM nodes with an id, label, value or handler                              | Full DOM                                |
+| Vega            | Toolkit page source                                                        | Same source                             |
 
-On an iOS simulator, every element `describe` shows is in the runner tree with the same id, label, role and frame. The runner tree also holds the containers that carry only an id, for example a list row or a screen root, so a `within` scope can name them. Content under a sheet or an alert is not in the runner tree. The runner reads the app in front, as `describe` does, and needs no instrumentation of the app: system apps and permission dialogs resolve too. When the daemon cannot read the screen, for example a daemon build without the `tree` command or a read that times out, the runner falls back to the UIView hierarchy over native-devtools for a minute, then tries the daemon again. The step report names the fallback and the reason. The fallback lists views by class, has no containers that carry only an id, and needs the injected instrumentation, so a launch step waits for that connection as it did before. On Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve.
+On an iOS simulator, every element `describe` shows is in the runner tree with the same id, label, role and frame. The runner tree also holds the containers that carry only an id, for example a list row or a screen root, so a `within` scope can name them. Content under a sheet or an alert is not in the runner tree. The runner reads the app in front, as `describe` does, and needs no instrumentation of the app: system apps and permission dialogs resolve too. When the daemon cannot read the screen, the launch step or the first selector step fails with the daemon's reason and the fix: update Argent for a daemon without the `tree` command, boot the simulator through Argent when its reads are blind, or restart the daemon with `stop-all-simulator-servers` scoped to the device. A flow has no other tree source on a simulator. On Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve.
 
 ## Directives
 

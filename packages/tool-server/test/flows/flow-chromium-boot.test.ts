@@ -317,8 +317,14 @@ describe("flow-execute chromium boot", () => {
     const registry = makeRegistry(async (id: string) =>
       id === "list-devices" ? { devices: [{ platform: "ios", udid, state: "Booted" }] } : {}
     );
-    // The ios launch waits on native devtools; hand it a connected one.
-    (registry.resolveService as any).mockImplementation(async () => ({ isConnected: () => true }));
+    // The ios launch gates on one accessibility daemon read; serve the app element.
+    (registry.resolveService as any).mockImplementation(async () => ({
+      tree: async () => ({
+        alertVisible: false,
+        nodes: [{ index: 0, label: "App", frame: { x: 0, y: 0, width: 1, height: 1 } }],
+        truncated: false,
+      }),
+    }));
 
     const result = await runFlow(registry, {
       name: "ambiguous",

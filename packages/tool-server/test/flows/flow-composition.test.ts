@@ -2336,9 +2336,9 @@ describe("flow composition (run:)", () => {
         { kind: "echo", message: "should never run" },
       ],
     });
-    // Registry whose ax-service is unavailable, and whose native-devtools (the
-    // UIView hierarchy fallback) is not there either: the launch step must
-    // fail here, rather than leave the outage for the next selector read.
+    // Registry whose ax-service is unavailable: the launch step must fail
+    // here, with the fix, rather than leave the outage for the next selector
+    // read to report as a selector error.
     const resolveService = vi.fn(async () => {
       throw new Error("ax-service unavailable");
     });
@@ -2361,12 +2361,11 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0].reason).toMatch(
       /the accessibility daemon \(ax-service\) is not available for/
     );
-    // The reason names the device the daemon serves and the fallback that
-    // could not stand in for it.
+    // The reason names the device the daemon serves, why a flow needs it, and
+    // what to do.
     expect(result.steps[0].reason).toContain(DEVICE);
-    expect(result.steps[0].reason).toContain(
-      "UIView hierarchy fallback could not connect to native devtools"
-    );
+    expect(result.steps[0].reason).toContain("resolve selectors against its tree");
+    expect(result.steps[0].reason).toContain("To fix:");
     // Resolution fails for reasons the flow author can act on and cannot
     // otherwise see — a socket already bound, a device of the wrong platform —
     // and the step's reason is the only place any of them surfaces.
@@ -2564,16 +2563,14 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0].reason).not.toContain("exited after launch");
   });
 
-  // With the daemon down the gate falls back to the native-devtools wait,
-  // which keeps that service's own rule: an app it can never inject into
-  // (`com.apple.*`) earns no verdict, so a coordinate-driven Settings flow
-  // still runs and a selector step reports the outage where it bites. The
-  // author's own app fails at the launch step, naming both outages.
+  // The daemon serves every app in front, system apps included, so the gate
+  // has no bundle it could excuse: an unresolvable daemon fails a Settings
+  // launch in the same words as a launch of the author's own app.
   it.each([
-    ["com.apple.Preferences", ["launch:pass", "tool:pass"]],
+    ["com.apple.Preferences", ["launch:error", "tool:skip"]],
     ["com.acme.app", ["launch:error", "tool:skip"]],
   ] as const)(
-    "gates a %s launch when the accessibility daemon cannot resolve",
+    "fails a %s launch when the accessibility daemon cannot resolve",
     async (app, expected) => {
       await writeFlow("main", {
         executionPrerequisite: "",
@@ -2600,14 +2597,12 @@ describe("flow composition (run:)", () => {
       );
 
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([...expected]);
-      if (expected[0] === "launch:error") {
-        expect(result.steps[0].reason).toMatch(
-          /the accessibility daemon \(ax-service\) is not available for/
-        );
-        expect(result.steps[0].reason).toContain("EADDRINUSE");
-        expect(result.steps[0].reason).toContain("fallback could not connect to native devtools");
-        expect(result.ok).toBe(false);
-      }
+      expect(result.steps[0].reason).toMatch(
+        /the accessibility daemon \(ax-service\) is not available for/
+      );
+      expect(result.steps[0].reason).toContain("EADDRINUSE");
+      expect(result.steps[0].reason).toContain("To fix:");
+      expect(result.ok).toBe(false);
     }
   );
 });

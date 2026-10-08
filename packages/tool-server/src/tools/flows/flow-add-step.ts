@@ -668,10 +668,8 @@ async function captureTapSelector(
       // The simulator source is the accessibility daemon's tree, which keeps
       // the id-only containers: derive the selector there, scoped (`within`,
       // `next`, `after`) when the element is not unique, and keep the tap's
-      // position inside the element when it was not the centre. When the
-      // daemon cannot read the screen the read falls back to the UIView
-      // hierarchy, and the step says so.
-      const { tree, source, hint } = await readSettledIosFlowTree(registry, device);
+      // position inside the element when it was not the centre.
+      const { tree } = await readSettledIosFlowTree(registry, device);
       let derived = deriveScopedSelector(tree, point);
       if ("warning" in derived && /no stable text\/id/.test(derived.warning)) {
         derived = deriveRoleInScope(tree, point) ?? derived;
@@ -688,7 +686,6 @@ async function captureTapSelector(
       if (derived.offset)
         notes.push(`tap kept at ${derived.offset.x},${derived.offset.y} of the element's frame`);
       if (derived.notes) notes.push(derived.notes);
-      if (source !== "ax-service" && hint) notes.push(hint);
       return {
         selector: derived.selector,
         ...(derived.offset ? { x: derived.offset.x, y: derived.offset.y } : {}),

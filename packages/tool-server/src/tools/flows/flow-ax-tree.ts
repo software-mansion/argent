@@ -1,7 +1,5 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
-import type { FlowTreeTarget } from "./flow-actions";
-import { queryFullHierarchyTree } from "./flow-ios-tree";
 import type { DescribeFrame, DescribeNode, DescribeTreeData } from "../describe/contract";
 import { adaptAxTree } from "../ui-tree/ios";
 import type { UiTree, UiTreeNode } from "../ui-tree/index";
@@ -170,8 +168,7 @@ export async function queryAxFlowTree(
       `the accessibility daemon returned no elements for ${device.id}` +
         (ax.degraded
           ? " (the simulator was not booted through argent, so its reads can be blind)"
-          : "") +
-        `; flows resolve selectors against its tree, so the step fails rather than treating the screen as empty`
+          : "")
     );
   }
   return projectUiTreeForFlows(adaptAxTree(raw));
@@ -211,94 +208,69 @@ function projectUiTreeForFlows(ui: UiTree): DescribeTreeData {
   };
 }
 
-/**
- * After a failed daemon read, how long reads go straight to the fallback
- * before the daemon is tried again. A wedged daemon answers only by timeout
- * (10 s), which a flow of thirty reads must not pay thirty times; a daemon that
- * recovers is picked up at the next window.
- */
-const AX_RETRY_AFTER_MS = 60_000;
-/** Per registry (so tests stay isolated), per device: the last daemon failure and when to retry. */
-const AX_DOWN = new WeakMap<Registry, Map<string, { until: number; reason: string }>>();
-
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Remember that the daemon failed for this device, so the next reads skip straight to the fallback for a while. */
-function markAxUnavailable(registry: Registry, device: DeviceInfo, reason: string): void {
-  let perDevice = AX_DOWN.get(registry);
-  if (!perDevice) AX_DOWN.set(registry, (perDevice = new Map()));
-  perDevice.set(device.id, { until: Date.now() + AX_RETRY_AFTER_MS, reason });
-}
-
-function axDownReason(registry: Registry, device: DeviceInfo): string | undefined {
-  const down = AX_DOWN.get(registry)?.get(device.id);
-  return down && down.until > Date.now() ? down.reason : undefined;
+/**
+ * Why the daemon could not read this simulator, and the one thing to do about
+ * it. Flows on a simulator resolve selectors on the daemon's tree and have no
+ * other source: the UIView hierarchy lists views by class, has no element for
+ * SwiftUI content and none for a system app, so a flow recorded on the daemon
+ * tree would fail on it one step later with a selector error instead of
+ * naming the outage here.
+ */
+function explainAxOutage(device: DeviceInfo, reason: string): string {
+  const restart = `restart the daemon with \`stop-all-simulator-servers\` scoped to \`devices: ["${device.id}"]\`, then relaunch the app`;
+  let remedy: string;
+  if (/predates `tree`/.test(reason)) {
+    remedy = "update argent so its accessibility daemon serves the `tree` command";
+  } else if (/not booted through argent/.test(reason)) {
+    remedy =
+      "boot the simulator through argent (`boot-device` with `force: true`), then relaunch the app";
+  } else if (/returned no elements/.test(reason)) {
+    remedy = `wait for the screen to settle and relaunch the app; if reads stay empty, ${restart}`;
+  } else if (/timed out|timeout/i.test(reason)) {
+    remedy = `the daemon did not answer in time: ${restart}`;
+  } else {
+    remedy = `check that the simulator is booted, then ${restart}`;
+  }
+  return (
+    `the accessibility daemon (ax-service) is not available for ${device.id} (${reason}). ` +
+    `Flows on a simulator resolve selectors against its tree and have no other source. ` +
+    `To fix: ${remedy}.`
+  );
 }
 
 /**
- * Null when the accessibility daemon reads this simulator, else why not (and
- * the failure is remembered, see {@link markAxUnavailable}). One real read,
- * not a bare resolve: a daemon build without `tree`, or one that answers
- * blind, resolves fine and fails only when asked. The launch gate asks this
- * first: a daemon that reads needs no injection, so the launch is ready;
- * otherwise the gate waits for the fallback's native-devtools connection.
+ * Null when the accessibility daemon reads this simulator, else the explained
+ * outage. One real read, not a bare resolve: a daemon build without `tree`,
+ * or one that answers blind, resolves fine and fails only when asked. The
+ * launch gate asks this so a cold start cannot hand the next step an outage
+ * that reads like a selector error.
  */
 export async function axServiceUnavailableReason(
   registry: Registry,
   device: DeviceInfo
 ): Promise<string | null> {
-  const known = axDownReason(registry, device);
-  if (known) return known;
   try {
     await queryAxFlowTree(registry, device);
     return null;
   } catch (err) {
-    const reason = errMsg(err);
-    markAxUnavailable(registry, device, reason);
-    return reason;
+    return explainAxOutage(device, errMsg(err));
   }
 }
 
-/**
- * The iOS simulator flow tree: the daemon's `tree` first; when the daemon
- * cannot read (unavailable, a build without `tree`, a timeout, a blind read),
- * the UIView hierarchy over native-devtools, the source flows read before.
- * The fallback result carries the daemon's reason in its hint, and its own
- * `source` ("native-devtools"), so the recorder and the run report say which
- * tree a step used. The fallback lists views by class, has no id-only
- * containers and needs the injected dylib, so selectors derived from it can
- * differ from the daemon's.
- */
+/** The iOS simulator flow tree: the daemon's `tree`, or the explained outage as the step's error. */
 export async function queryIosSimulatorFlowTree(
   registry: Registry,
-  device: DeviceInfo,
-  target?: FlowTreeTarget
+  device: DeviceInfo
 ): Promise<DescribeTreeData> {
-  let reason = axDownReason(registry, device);
-  if (!reason) {
-    try {
-      return await queryAxFlowTree(registry, device);
-    } catch (err) {
-      reason = errMsg(err);
-      markAxUnavailable(registry, device, reason);
-    }
-  }
-  let fallback: DescribeTreeData;
   try {
-    fallback = await queryFullHierarchyTree(registry, device, target);
+    return await queryAxFlowTree(registry, device);
   } catch (err) {
-    throw new Error(
-      `the accessibility daemon could not read ${device.id} (${reason}), and the UIView hierarchy ` +
-        `fallback failed too: ${errMsg(err)}`,
-      { cause: err }
-    );
+    throw new Error(explainAxOutage(device, errMsg(err)), { cause: err });
   }
-  const note =
-    `the accessibility daemon could not read the screen (${reason}); this read used the UIView ` +
-    `hierarchy over native-devtools, which lists views by class and has no id-only containers`;
-  return { ...fallback, hint: fallback.hint ? `${fallback.hint}; ${note}` : note };
 }
 
 /** Read until two consecutive reads agree, within a short budget, so a mid-animation read does not derive a selector. */

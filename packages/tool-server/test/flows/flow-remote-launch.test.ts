@@ -199,8 +199,9 @@ describe("a remote launch waits for the tree source, exactly as a local one does
     const remote = await run("cross", REMOTE, unavailable);
     const local = await run("cross", LOCAL, unavailable);
 
-    expect(remote.steps[0].reason?.replace(REMOTE, "<device>")).toBe(
-      local.steps[0].reason?.replace(LOCAL, "<device>")
+    // The id appears twice: in the outage and in the scoped restart it advises.
+    expect(remote.steps[0].reason?.replaceAll(REMOTE, "<device>")).toBe(
+      local.steps[0].reason?.replaceAll(LOCAL, "<device>")
     );
   });
 
@@ -212,8 +213,6 @@ describe("a remote launch waits for the tree source, exactly as a local one does
     const result = await run("cross", REMOTE, unavailable);
 
     expect(result.launched).toEqual(["com.acme.app"]);
-    expect(result.steps[0].reason).toContain(
-      "UIView hierarchy fallback could not connect to native devtools"
-    );
+    expect(result.steps[0].reason).toContain("resolve selectors against its tree");
   });
 });

@@ -78,7 +78,14 @@ function mockRegistry(): Registry {
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
     // A `launch` gates on the native-devtools connection before it can pass.
-    resolveService: vi.fn(async () => ({ isConnected: () => true })),
+    // An iOS launch gates on one accessibility daemon read; serve the app element.
+    resolveService: vi.fn(async () => ({
+      tree: async () => ({
+        alertVisible: false,
+        nodes: [{ index: 0, label: "App", frame: { x: 0, y: 0, width: 1, height: 1 } }],
+        truncated: false,
+      }),
+    })),
   } as unknown as Registry;
 }
 

@@ -710,18 +710,16 @@ describe("flow-add-step tap selector capture on an iOS simulator", () => {
     ]);
   });
 
-  it("keeps coordinates with a warning when the daemon read fails and no fallback serves", async () => {
+  it("keeps coordinates with a warning when the daemon read fails", async () => {
     axReads = () => {
       throw new Error("ax-service not connected");
     };
 
     const result = await recordTap({ x: 0.5, y: 0.52 });
 
-    // The daemon failed and the registry serves no native-devtools fallback
-    // either: both reasons, then coordinates.
+    // The daemon's reason, then coordinates.
     expect(result.message).toContain("selector capture failed (");
     expect(result.message).toContain("ax-service not connected");
-    expect(result.message).toContain("fallback failed too");
     expect(result.message).toContain("kept coordinates");
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.52 }]);
   });

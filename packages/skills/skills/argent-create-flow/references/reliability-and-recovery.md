@@ -39,7 +39,7 @@ QA flows are stricter. They can keep a coordinate only for a genuinely unlabeled
 
 ## iOS selector recovery
 
-When a launch step or a recorder `message` says the run used the UIView hierarchy, the accessibility daemon could not read the screen. Restore the daemon with the steps below, then record the step again. A `within` scope on an id-only container does not resolve on that tree.
+When a launch step, a step error or a recorder `message` says the accessibility daemon is not available, do what the message says. The steps below are the same ladder. Then record the step again.
 
 1. Read the exact error. `describe`, the recorder and the runner quote the daemon's reason. An empty tree alone is not an outage: the screen can be blank or mid-transition. Call `await-screen-idle`, then read `describe` again, as the `argent-device-interact` skill says under "If `describe` fails".
 2. If the reason says the simulator was not booted through Argent, call `boot-device` with this simulator's udid and `force: true`, then `restart-app`.

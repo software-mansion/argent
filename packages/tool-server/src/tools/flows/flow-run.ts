@@ -33,14 +33,14 @@ import {
   parseFlow,
   precedesLeadingLaunch,
   runTargetName,
-  type BlockStep,
-  type FlowFile,
+  BlockStep,
+  FlowFile,
   type FlowStep,
   type Launch,
   SELECTABLE_PLATFORMS,
 } from "./flow-utils";
 import { axServiceUnavailableReason } from "./flow-ax-tree";
-import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
+import { createScriptLogBudget, FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
@@ -55,7 +55,7 @@ import {
   flowRequiresDevice,
   flowScopesDevice,
   stepRequiresDevice,
-  type FlowPlatform,
+  FlowPlatform,
 } from "./flow-device";
 import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
 import {
@@ -63,29 +63,24 @@ import {
   invokeOnDevice,
   ABORTED_OUTCOME,
   probeWhenCondition,
-  type ActionEnv,
-  type DirectiveOutcome,
+  ActionEnv,
+  DirectiveOutcome,
 } from "./flow-actions";
 import {
-  buildAppStateMessage,
-  isInjectableBundleId,
   isNativeDevtoolsBlockResult,
-  nativeDevtoolsRef,
   NATIVE_DEVTOOLS_CONNECT_BUDGET_MS,
-  type NativeDevtoolsApi,
-  type NativeDevtoolsAppState,
 } from "../../blueprints/native-devtools";
-import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
+import { androidDevtoolsRef, AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   chromiumCdpRef,
   ensureCdpReachable,
   CHROMIUM_CDP_NAMESPACE,
-  type ChromiumCdpApi,
+  ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
-import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
+import { runSnapshot, DEFAULT_MAX_MISMATCH, SnapshotArtifacts } from "./flow-visual";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -321,14 +316,6 @@ export const NATIVE_READY_TIMEOUT_MS = NATIVE_DEVTOOLS_CONNECT_BUDGET_MS;
 const NATIVE_READY_POLL_MS = 250;
 
 /**
- * How long the launch step has spent on the app by the time the gate takes its
- * verdict: the post-launch settle plus the whole connect wait. The gate's own
- * timeout is only the second half, so quoting it alone understates the age of a
- * process the step launched — the fact the remedies below rest on.
- */
-const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
-
-/**
  * `tool:` steps that can change or relaunch the foreground app — running one
  * drops {@link ActionEnv.treeTarget} outright instead of keeping it as an
  * unpinned hint, since the launched app may no longer be on screen at all, and
@@ -346,137 +333,6 @@ const FOREGROUND_CHANGING_TOOLS = new Set([
   "open-url",
   "button",
 ]);
-
-/**
- * Poll until native-devtools is connected for `bundleId`. Returns null once
- * connected, on abort (the caller reports the cancellation itself), and for an
- * app whose hierarchy this gate cannot wait for at all. Otherwise the reason the
- * connection never came up: the resolution error when the service is
- * unreachable, else the state measured off the running process, rewritten for
- * the one thing that distinguishes this caller — it has just launched the app.
- *
- * Measured rather than guessed: "re-run to relaunch" here would be the same
- * restart loop `appConnectionState` exists to break.
- */
-async function waitForNativeDevtools(
-  registry: Registry,
-  device: DeviceInfo,
-  bundleId: string,
-  signal?: AbortSignal
-): Promise<string | null> {
-  let api: NativeDevtoolsApi;
-  try {
-    const ref = nativeDevtoolsRef(device);
-    api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
-  } catch (err) {
-    // Withheld for the same reason as the timeout below: an app the native
-    // tools refuse to target was never going to be served by this service.
-    if (!isInjectableBundleId(bundleId)) return null;
-    return `the native-devtools service is unavailable for ${bundleId} (${errMsg(err)})`;
-  }
-  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
-  for (;;) {
-    if (signal?.aborted) return null;
-    if (api.isConnected(bundleId)) return null;
-    if (Date.now() >= deadline) break;
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return null;
-  }
-  // Timed out with no connection. An app the native tools refuse to target has
-  // no hierarchy to wait for, so that is its expected outcome rather than a
-  // launch failure; the refusal bites only where a selector needs the hierarchy,
-  // and `fetchFlowTree` reports it there.
-  //
-  // The wait itself still runs, deliberately: whether the dylib loads into a
-  // simulator system app is unsettled (#453 saw `connected: false` for
-  // com.apple.Preferences on iOS 26.5, an E2E run `connected: true` on 18.5).
-  // Only the VERDICT is withheld — before a measurement no arm below would
-  // consult for such an app, costing several uninterruptible simctl round-trips.
-  if (!isInjectableBundleId(bundleId)) return null;
-  // Measure why — the state may have flipped to connected since the last poll.
-  // The loop's abort check covers every exit but this one (`break` follows it
-  // synchronously); an abort during the uninterruptible measurement is caught by
-  // the caller, which drops the reason.
-  const state = await api.appConnectionState(bundleId).catch(() => "indeterminate" as const);
-  if (state === "connected") return null;
-  return flowLaunchGateReason(bundleId, state);
-}
-
-/**
- * The measured diagnosis, rewritten for the one fact that separates this caller
- * from every other consumer of {@link buildAppStateMessage}: it has just run
- * `restart-app` on this bundle id and spent {@link LAUNCH_TO_VERDICT_MS} on it.
- *
- * Those messages are written for a reader who has not launched anything, so
- * emitted verbatim they hand back the action this step just took and an author
- * who obeys re-runs the flow into the identical state. Each state gets the
- * sentence that is true *after* a launch instead; the switch is exhaustive so a
- * state added later cannot inherit a remedy written for a reader who never
- * launched.
- */
-function flowLaunchGateReason(
-  bundleId: string,
-  state: Exclude<NativeDevtoolsAppState, "connected">
-): string {
-  const measured = buildAppStateMessage(bundleId, state);
-  switch (state) {
-    case "not_running":
-      // The step launched it and it is gone: a relaunch provably reproduces
-      // this, so the measured remedy reads as advice to change nothing.
-      return (
-        `${bundleId} was relaunched by this step and is no longer running ${LAUNCH_TO_VERDICT_MS} ms later, ` +
-        `so it exited after launch rather than failing to connect. Re-running the flow repeats the same launch: ` +
-        `start it by hand (launch-app, then describe or screenshot) to see the crash or early exit first.`
-      );
-    case "stale_process":
-      // The first sentence must not pick between the state's two producers: a
-      // process carrying no argent injection at all, or one carrying THIS
-      // endpoint and merely older than the listener — the measured text names
-      // both, and blaming the launchd environment would be false for the second.
-      // The environment IS right on a SECOND landing: a re-run's process is
-      // younger than any long-up listener, which rules that producer out (it
-      // needs `processAge + grace >= listenerAge`).
-      return (
-        `${measured} This step already relaunched it, so the process it measured predates whatever the ` +
-        `relaunch would have given it — re-run the flow to launch again. If it lands here twice, the ` +
-        `simulator's launchd environment is not holding argent's instrumentation: re-boot the device ` +
-        `(boot-device with force) before re-running.`
-      );
-    case "unregistered":
-      // Everywhere else this verdict reads the app's whole lifetime; here only
-      // this step's launch plus its wait, which a cold start can outlast — so the
-      // measured remedy would have the author restart a healthy tool-server. The
-      // figure is the whole spend: the poll checks the live map once before its
-      // first sleep, so a dial during the post-launch settle counts too.
-      return (
-        `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
-        `same way — if that is likely, re-run the flow to relaunch and wait again before restarting anything.`
-      );
-    case "connecting":
-      // A process seconds old, though this step launched the app
-      // LAUNCH_TO_VERDICT_MS ago — something relaunched it in between, so the
-      // handshake being waited on belongs to that later process. "Wait" is
-      // still right; crediting this step with that launch is not.
-      return (
-        `${measured} This step launched it ${LAUNCH_TO_VERDICT_MS} ms before that reading, so the process ` +
-        `being measured started after the step's own launch — something relaunched it in between. Re-run ` +
-        `the flow once the app is settled.`
-      );
-    case "indeterminate":
-      return (
-        `${measured} This step already performed that one restart, so re-run the flow at most once more ` +
-        `before restarting the tool-server rather than the app.`
-      );
-    case "provider_attached":
-      // The measured text offers a retry to a reader whose app has only just
-      // started; this step already spent that wait. What survives is the half
-      // that does not ask argent to restart a process the provider owns.
-      return (
-        `${measured} This step already waited ${LAUNCH_TO_VERDICT_MS} ms after launching it, so the ` +
-        `provider is lending a different app rather than one still connecting. Re-run the flow only ` +
-        `once it is lending this one; otherwise drive the app by coordinate.`
-      );
-  }
-}
 
 /**
  * Poll until the Vega automation toolkit — the only tree source on Vega —
@@ -573,34 +429,13 @@ async function treeSourceGate(
       };
     }
   }
-  // Both iOS simulator platforms read the accessibility daemon's tree first,
-  // which needs no injection: once the daemon resolves, the launch is ready.
-  // When it does not, reads fall back to the UIView hierarchy over
-  // native-devtools, so the gate falls back to that connection's wait
-  // (`waitForNativeDevtools` resolves it through `nativeDevtoolsRef(device)`,
-  // which the blueprint serves over TCP for a remote sim).
+  // Both iOS simulator platforms read the accessibility daemon's tree, which
+  // needs no injection: the gate reads it once so a cold start cannot hand the
+  // next step an outage that reads like a selector error. The daemon's
+  // explained outage is the step's reason; there is no other tree source.
   if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
     const axReason = await axServiceUnavailableReason(registry, device);
-    if (axReason !== null && !signal?.aborted) {
-      const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
-      if (reason !== null && !signal?.aborted) {
-        // Every reason names the bundle id, so the prefix must not: doubled, it
-        // reads as two failures reported back to back.
-        return {
-          reason:
-            `the accessibility daemon (ax-service) is not available for ${device.id} (${axReason}), ` +
-            `and the UIView hierarchy fallback could not connect to native devtools. ${reason}`,
-        };
-      }
-      // Ready on the fallback. Said once, on the launch step, so a report whose
-      // selectors behave differently from the recording has its cause in view.
-      return {
-        warning:
-          `the accessibility daemon (ax-service) is not available for ${device.id} (${axReason}); ` +
-          `this run reads the UIView hierarchy over native-devtools, which lists views by class ` +
-          `and has no id-only containers`,
-      };
-    }
+    if (axReason !== null && !signal?.aborted) return { reason: axReason };
   }
   if (device.platform === "android" && !signal?.aborted) {
     const { ready, reason } = await androidDevtoolsReady(registry, device);

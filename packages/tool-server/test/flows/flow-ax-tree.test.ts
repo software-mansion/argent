@@ -454,28 +454,7 @@ describe("queryAxFlowTree projects the daemon tree into the flow contract", () =
   });
 });
 
-describe("queryIosSimulatorFlowTree: the daemon first, the UIView hierarchy when it cannot read", () => {
-  const WINDOW = { x: 0, y: 0, width: 400, height: 800 };
-  const BUTTON = { x: 100, y: 400, width: 200, height: 50 };
-  const hierarchy = {
-    windows: [
-      {
-        className: "UIWindow",
-        frame: WINDOW,
-        windowFrame: WINDOW,
-        children: [
-          {
-            className: "UIButton",
-            identifier: "ok-btn",
-            label: "OK",
-            frame: BUTTON,
-            windowFrame: BUTTON,
-            children: [],
-          },
-        ],
-      },
-    ],
-  };
+describe("queryIosSimulatorFlowTree: the daemon, or the explained outage", () => {
   const PIN = reply([
     {
       index: 1,
@@ -486,39 +465,21 @@ describe("queryIosSimulatorFlowTree: the daemon first, the UIView hierarchy when
       frame: { x: 0.5, y: 0.4, width: 0.1, height: 0.05 },
     },
   ]);
-  function devtoolsApi(queryViewHierarchy = vi.fn(async () => hierarchy)) {
-    return {
-      listConnectedBundleIds: () => ["com.example.app"],
-      getAppState: vi.fn(async (bundleId: string) => ({
-        bundleId,
-        applicationState: "active",
-        foregroundActiveSceneCount: 1,
-        foregroundInactiveSceneCount: 0,
-        backgroundSceneCount: 0,
-        unattachedSceneCount: 0,
-        isFrontmostCandidate: true,
-      })),
-      queryViewHierarchy,
-    };
-  }
-  /** A registry whose daemon behaves as `ax` says and whose native-devtools serves `hierarchy`. */
-  function registryWith(
-    ax: "missing" | "blind" | AXTreeResponse,
-    devtools = devtoolsApi(),
-    axResolves: string[] = []
-  ): Registry {
+  /** A registry whose daemon behaves as `ax` says: a tree, a thrown reason, or a blind read. */
+  function registryWith(ax: AXTreeResponse | Error | "blind" | "blind-degraded"): Registry {
     return {
       resolveService: vi.fn(async (urn: string) => {
-        if (urn.startsWith(`${AX_SERVICE_NAMESPACE}:`)) {
-          axResolves.push(urn);
-          if (ax === "missing") throw new Error("no ax-service binary for this simulator");
-          return {
-            degraded: false,
-            tree: async () => (ax === "blind" ? { ...reply([]), nodes: [] } : ax),
-          };
-        }
-        return devtools;
+        if (!urn.startsWith(`${AX_SERVICE_NAMESPACE}:`)) throw new Error(`no service for ${urn}`);
+        if (ax instanceof Error) throw ax;
+        return {
+          degraded: ax === "blind-degraded",
+          tree: async () => (typeof ax === "string" ? { ...reply([]), nodes: [] } : ax),
+        };
       }),
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
     } as unknown as Registry;
   }
 
@@ -529,59 +490,50 @@ describe("queryIosSimulatorFlowTree: the daemon first, the UIView hierarchy when
     expect(leaves(tree)).toEqual(["pin-wawel"]);
   });
 
-  it("falls back to the UIView hierarchy when the daemon is missing, and says so", async () => {
-    const { tree, source, hint } = await queryIosSimulatorFlowTree(registryWith("missing"), DEVICE);
-
-    expect(source).toBe("native-devtools");
-    expect(leaves(tree)).toContain("ok-btn");
-    expect(hint).toContain(
-      "the accessibility daemon could not read the screen (no ax-service binary for this simulator)"
-    );
-    expect(hint).toContain("UIView hierarchy");
-  });
-
-  it("falls back on a blind daemon read too", async () => {
-    const { source, hint } = await queryIosSimulatorFlowTree(registryWith("blind"), DEVICE);
-
-    expect(source).toBe("native-devtools");
-    expect(hint).toContain("returned no elements");
-  });
-
-  it("remembers the failure for this registry and skips the daemon on the next reads", async () => {
-    const axResolves: string[] = [];
-    const query = vi.fn(async () => hierarchy);
-    const registry = registryWith("missing", devtoolsApi(query), axResolves);
-
-    await queryIosSimulatorFlowTree(registry, DEVICE);
-    await queryIosSimulatorFlowTree(registry, DEVICE);
-
-    expect(axResolves).toHaveLength(1);
-    expect(query).toHaveBeenCalledTimes(2);
-    // Another registry (another server, another test) starts clean.
-    expect((await queryIosSimulatorFlowTree(registryWith(PIN), DEVICE)).source).toBe("ax-service");
-  });
-
-  it("names both failures when the fallback fails too", async () => {
-    const broken = devtoolsApi(
-      vi.fn(async () => {
-        throw new Error("getFullHierarchy exploded");
-      })
-    );
-
+  it("fails with the reason and the fix when the daemon does not resolve", async () => {
     await expect(
-      queryIosSimulatorFlowTree(registryWith("missing", broken), DEVICE)
+      queryIosSimulatorFlowTree(
+        registryWith(new Error("no ax-service binary for this simulator")),
+        DEVICE
+      )
     ).rejects.toThrow(
-      /accessibility daemon could not read .*\(no ax-service binary for this simulator\).*fallback failed too: .*getFullHierarchy exploded/
+      /is not available for .* \(no ax-service binary for this simulator\)\. Flows on a simulator resolve selectors against its tree and have no other source\. To fix: check that the simulator is booted, then restart the daemon with `stop-all-simulator-servers`/
     );
   });
 
-  it("passes a launch on the fallback with a warning, and resolves selectors on the UIView tree", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "flow-ax-fallback-"));
+  it("tells a daemon build without `tree` to update argent", async () => {
+    await expect(
+      queryIosSimulatorFlowTree(
+        registryWith(new Error("ax-service predates `tree`; update argent")),
+        DEVICE
+      )
+    ).rejects.toThrow(
+      /To fix: update argent so its accessibility daemon serves the `tree` command/
+    );
+  });
+
+  it("names a blind read, and the boot remedy when the simulator was not booted through argent", async () => {
+    await expect(queryIosSimulatorFlowTree(registryWith("blind"), DEVICE)).rejects.toThrow(
+      /returned no elements for .*To fix: wait for the screen to settle and relaunch the app/
+    );
+    await expect(queryIosSimulatorFlowTree(registryWith("blind-degraded"), DEVICE)).rejects.toThrow(
+      /not booted through argent.*To fix: boot the simulator through argent \(`boot-device` with `force: true`\)/
+    );
+  });
+
+  it("surfaces the same error from the recorder's settled read", async () => {
+    await expect(
+      readSettledIosFlowTree(registryWith(new Error("ax-service not connected")), DEVICE, 300)
+    ).rejects.toThrow(/is not available for .*ax-service not connected/);
+  });
+
+  it("fails the launch step with the explained outage, so the run stops before a selector", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "flow-ax-outage-"));
     try {
       const dir = path.join(tmp, ".argent", "flows");
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(
-        path.join(dir, "fb.yaml"),
+        path.join(dir, "out.yaml"),
         serializeFlow({
           executionPrerequisite: "",
           steps: [
@@ -591,38 +543,24 @@ describe("queryIosSimulatorFlowTree: the daemon first, the UIView hierarchy when
         }),
         "utf8"
       );
-      const devtools = { ...devtoolsApi(), isConnected: () => true };
-      const registry = {
-        ...registryWith("missing", devtools),
-        invokeTool: vi.fn(async (id: string) =>
-          id === "list-devices" ? { devices: [] } : { ok: true }
-        ),
-        getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-      } as unknown as Registry;
-
-      const result = await createRunFlowTool(registry).execute(
-        {},
-        { name: "fb", project_root: tmp, device: UDID }
-      );
+      const result = await createRunFlowTool(
+        registryWith(new Error("no ax-service binary for this simulator"))
+      ).execute({}, { name: "out", project_root: tmp, device: UDID });
       if (!("steps" in result)) throw new Error(`notice: ${result.notice}`);
       const run = result as FlowRunResult;
 
-      expect(run.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "assert:pass"]);
-      expect(run.steps[0].warning).toContain(
-        "the accessibility daemon (ax-service) is not available"
+      expect(run.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "launch:error",
+        "assert:skip",
+      ]);
+      expect(run.steps[0].reason).toContain(
+        "the accessibility daemon (ax-service) is not available for"
       );
-      expect(run.steps[0].warning).toContain("UIView hierarchy");
-      expect(run.ok).toBe(true);
+      expect(run.steps[0].reason).toContain("To fix:");
+      expect(run.ok).toBe(false);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
-  });
-
-  it("gives the recorder the fallback tree with its hint", async () => {
-    const { source, hint } = await readSettledIosFlowTree(registryWith("missing"), DEVICE, 300);
-
-    expect(source).toBe("native-devtools");
-    expect(hint).toContain("UIView hierarchy");
   });
 });
 
