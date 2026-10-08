@@ -33,6 +33,9 @@ export type UiTreeNode = Pick<
   editable?: boolean;
   heading?: boolean;
   covered?: boolean;
+  placeholder?: string;
+  hintShowing?: boolean;
+  hidden?: boolean;
   children: UiTreeNode[];
 };
 
@@ -44,6 +47,7 @@ export interface UiTree {
   truncated: boolean;
   alertVisible?: boolean;
   keyboardVisible?: boolean;
+  foregroundApp?: string;
   unsupportedFields: string[];
 }
 
@@ -68,7 +72,7 @@ export function createUiTreeTool(registry: Registry): ToolDefinition<Params, UiT
     },
     description: `Read the raw accessibility tree of the screen as nested JSON, for SDK callers.
 Use when a program needs element ancestry, such as an e2e engine's scoped selectors; agents use describe.
-Returns { schemaVersion, roots, truncated, alertVisible, keyboardVisible, unsupportedFields }.
+Returns { schemaVersion, roots, truncated, alertVisible, keyboardVisible, foregroundApp, unsupportedFields }.
 Fails if the iOS ax-service predates the tree command; update argent.`,
     hideFromMcp: true,
     zodSchema,

@@ -122,7 +122,7 @@ describe("ax-service livePanel", () => {
 });
 
 describe("ax-service tree", () => {
-  it("answers the daemon's nodes, alert state and truncation", async () => {
+  it("answers the daemon's nodes, alert state, truncation and front app", async () => {
     answers.set("tree", {
       alertVisible: true,
       screenFrame: { width: 402, height: 874 },
@@ -131,6 +131,8 @@ describe("ax-service tree", () => {
         { index: 1, parentIndex: 0, covered: true },
       ],
       truncated: true,
+      foregroundApp: "com.example.app",
+      treeVersion: 2,
     });
     const api = await attach();
     expect(await api.tree()).toEqual({
@@ -141,6 +143,8 @@ describe("ax-service tree", () => {
         { index: 1, parentIndex: 0, covered: true },
       ],
       truncated: true,
+      foregroundApp: "com.example.app",
+      treeVersion: 2,
     });
   });
 
