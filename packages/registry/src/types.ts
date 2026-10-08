@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { ArtifactStore } from "./artifacts";
 import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
 import type { FailureSignal } from "./errors";
-import type { ClientServiceOp, ClientServicesAdvert } from "./client-services";
 
 export enum ServiceState {
   IDLE = "IDLE",
@@ -12,6 +11,13 @@ export enum ServiceState {
   TERMINATING = "TERMINATING",
   ERROR = "ERROR",
 }
+
+/**
+ * The request header the argent tools client sets to `1` on every call it
+ * sends over `argent link` or `ARGENT_TOOLS_URL`, a link to 127.0.0.1
+ * included. The tool-server reads it as {@link InvokeToolOptions.linked}.
+ */
+export const LINKED_CALL_HEADER = "x-argent-linked";
 
 /**
  * True when a node holds (or is acquiring) a real process to tear down. ERROR
@@ -103,24 +109,6 @@ export interface InvokeToolOptions {
    * authoritative result.
    */
   emitProgress?: (event: unknown) => void;
-  /**
-   * Set by the HTTP layer when the caller sent `client_services` on an NDJSON
-   * request: the ops the client serves, the client roots it serves them under,
-   * and `request`, which writes one client-request line on the stream and
-   * resolves with the client's answer (the body without `id` and `ok`), or
-   * rejects on timeout, refusal or disconnect. Absent for a call without a
-   * link (the client sends no `client_services` then) and for every transport
-   * that cannot carry the request line.
-   */
-  clientServices?: {
-    ops: readonly ClientServiceOp[];
-    roots: readonly string[];
-    request(
-      op: ClientServiceOp,
-      args: Record<string, unknown>,
-      timeoutMs: number
-    ): Promise<Record<string, unknown>>;
-  };
   /**
    * True when the call came over HTTP with the header `x-argent-linked: 1`,
    * which the argent client sends on every call over `argent link` or
@@ -256,14 +244,6 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * warm for the call's duration.
    */
   longRunning?: boolean;
-  /**
-   * Client services this tool can use during a call: ops the tool-server asks
-   * the client to perform on the client's own files. Advertised through
-   * `GET /tools`; the client sends `client_services` only when this is present.
-   * The HTTP layer takes that parameter off the arguments, so the tool's own
-   * schema does not declare it.
-   */
-  clientServices?: ClientServicesAdvert;
   /**
    * Gates this tool behind a flag name in @argent/configuration-core's
    * FLAG_REGISTRY. Enforced in TWO places, both re-checked per request so

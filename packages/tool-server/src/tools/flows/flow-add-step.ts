@@ -8,6 +8,8 @@ import {
   nestedFlowTarget,
   ToolNotFoundError,
   wrapFailure,
+  type ClientFileDirective,
+  type FileInputSpec,
   type Registry,
   type ToolDefinition,
 } from "@argent/registry";
@@ -36,7 +38,6 @@ import {
 } from "../await-ui-element";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import {
-  FLOW_RUN_CLIENT_OPS,
   UPLOAD_STAGE_BY_KIND,
   prepareToolStepInputs,
   toolFilePathHints,
@@ -913,7 +914,7 @@ const RUN_TARGET_COMMAND = "flow-execute";
  * established through its own boundary. Every other flow_path is refused here —
  * a raw `tool:` step has no boundary to resolve a path through at replay either.
  * The on-disk spelling is the answer of `project`, on the client over a link;
- * a linked call whose client serves no files has no answer to give, and is
+ * a linked call whose client sent no files has no answer to give, and is
  * refused.
  */
 async function rewriteSiblingFlowPath(
@@ -1010,11 +1011,11 @@ async function rewriteSiblingFlowPath(
   const suppliedBase = path.basename(flowPath);
   // Asked last, so a path that no sibling can match gets its own reason. Only
   // an argent client that is older than this tool-server sends a call over a
-  // link without client services here, and it serves no nested flow either.
+  // link without the files of its step, and it sends no nested flow either.
   if (linked && project.mode === "host") {
     throw new FailureError(
-      `Cannot record a flow-execute of flow_path "${flowPath}": the argent client serves no ` +
-        `files for this call, so the recorder cannot check that the file is a sibling of the ` +
+      `Cannot record a flow-execute of flow_path "${flowPath}": the argent client sent no ` +
+        `files with this call, so the recorder cannot check that the file is a sibling of the ` +
         `recording. Update the argent CLI or MCP adapter on the client.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -1081,8 +1082,8 @@ async function rewriteSiblingFlowPath(
  * device, so a throw would discard the record of a step that already happened.
  * The raw step names the flow that ran by `name` and the caller's own
  * `project_root`. Without a link, a replay reads that flow on this host. Over a
- * link, a replay reads it from the client, and only under the roots that the
- * client serves.
+ * link, a replay reads it from the files the client sends with the call, and
+ * only under the roots that the client sends files from.
  */
 async function captureRunTarget(
   session: RecordingSession,
@@ -1175,8 +1176,7 @@ async function captureRunTarget(
     // realpaths before reading). An executed file that is not there means
     // nothing verifiable ran from the flows dir, and the raw step is then the
     // honest record: it replays via name + project_root. Over a link the
-    // client serves only what the call names, so a sibling that is another
-    // file than the flow that ran is refused, which keeps the raw step too.
+    // client sends both files with the call, as resolved on its own disk.
     const executed = await project.resolveFlowFile(flowsDirFor(projectRoot), `${name}.yaml`);
     if ((await executed.read()) === null) {
       return {
@@ -1213,8 +1213,8 @@ function replayRefusal(
   if (issue.kind === "nested") {
     hint =
       nestedFlowTarget(args)?.kind === "name"
-        ? " Over a link, a nested flow-execute runs only when the argent client serves the flow " +
-          "it names. Update the argent CLI or MCP adapter on the client."
+        ? " Over a link, a nested flow-execute runs only when the argent client sends the flow " +
+          "it names with the call. Update the argent CLI or MCP adapter on the client."
         : " Over a link, a nested flow-execute runs only when it names its flow with a flow " +
           "name in name, has an absolute project_root with no .. segment, and has no flow_path.";
   } else if (issue.fixes.length === 0) {
@@ -1225,9 +1225,7 @@ function replayRefusal(
     hint =
       uploadUpdateHint(
         issue.fixes.includes("update")
-          ? [
-              "the file arguments of tool: steps for a client that offers the read-file client service",
-            ]
+          ? ["tool: steps with file arguments for a client that sends them with the call"]
           : []
       ) + toolFilePathHints(issue.fixes);
   }
@@ -1243,6 +1241,18 @@ function replayRefusal(
   );
 }
 
+/**
+ * Over a link, the argent client sends with the call the files the one
+ * recorded step makes this tool read, as a replay over the same link reads
+ * them: the file arguments of the step, the flow a nested `flow-execute` names
+ * with that flow's own files, and the recording file and the sibling the
+ * recorder checks a nested flow against. The probe passes `project_root`
+ * through unchanged.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
+];
+
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
   {
@@ -1251,6 +1261,8 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     stepCount: number;
     recorded?: string;
     savedTo: FlowSavedTo;
+    /** Over a link: the baselines a nested run of the step wrote, which the client writes. */
+    baselineWrites?: ClientFileDirective[];
   }
 > {
   return {
@@ -1275,10 +1287,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
     // more times — and every retry re-runs the action and appends another step,
     // because an aborted request still appends its first.
     longRunning: true,
-    // The recorded call reads what a replay over a link reads from the client:
-    // a nested flow, its sibling, and the file arguments of the step.
-    clientServices: { ops: FLOW_RUN_CLIENT_OPS },
     zodSchema,
+    fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);
@@ -1312,13 +1322,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // Over a link the project is on the client, and the recorder records only
       // what a replay over the same link runs. One predicate decides "over a
-      // link" for every check below. Only a client that sends the link header
-      // serves what the recorded step names: an older one serves what the
-      // recording file names, which is not what this call reads.
+      // link" for every check below. The files the step reads are those the
+      // client sent with the call; an older client sends none.
       const linked = isLinkedRecorderCall(session, ctx);
-      const clientServices = ctx?.linked ? ctx.clientServices : undefined;
-      const project: ProjectAccess = clientServices
-        ? new ClientProjectAccess(clientServices)
+      const stepFiles = ctx?.fileInputs?.project_root?.members;
+      const project: ProjectAccess = stepFiles
+        ? new ClientProjectAccess(stepFiles)
         : new HostProjectAccess();
 
       // A nested flow-execute must never carry a raw flow_path into the live
@@ -1329,7 +1338,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // Refused before the tap capture and the invoke, so nothing runs.
       if (linked) {
-        const issue = toolStepUploadIssue(registry, params.command, args, clientServices?.ops);
+        const issue = toolStepUploadIssue(
+          registry,
+          params.command,
+          args,
+          project.mode === "client"
+        );
         if (issue) throw replayRefusal(issue, args);
       }
 
@@ -1351,10 +1365,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         });
       }
 
-      // Over a link the call reads its files from the client, as a replay
-      // does: a file argument, or the flow a nested flow-execute names, which
-      // then resolves its own files through this call's client services. The
-      // step is recorded from `args`, which keep the client paths.
+      // Over a link the call reads its files from those the client sent, as a
+      // replay does: a file argument, or the flow a nested flow-execute names,
+      // which finds its own files there too. The step is recorded from `args`,
+      // which keep the client paths.
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1363,11 +1377,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           params.command === RUN_TARGET_COMMAND && prepared.fileInputs !== undefined;
         toolResult = await invokeSubTool(registry, ctx, params.command, prepared.args, {
           ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
-          // A nested run whose flow came from the client gets this call's
-          // channel, and a run stack even with no enclosing run, which marks
-          // it as nested: its checks then trust that channel to serve nested
-          // flows, and its refusals name the flow it runs.
-          ...(nestedFromClient ? { clientServices, flowStack: ctx?.flowStack ?? [] } : {}),
+          // A nested run whose flow came from the client gets a run stack even
+          // with no enclosing run, which marks it as nested: its refusals name
+          // the flow it runs, and this call returns the baselines it writes.
+          ...(nestedFromClient ? { flowStack: ctx?.flowStack ?? [] } : {}),
         });
       } catch (err) {
         const hint = isToolNotFound(err, params.command)
@@ -1571,12 +1584,17 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         });
       }
 
+      const baselineWrites =
+        project instanceof ClientProjectAccess && ctx?.flowStack === undefined
+          ? project.baselineDirectives()
+          : [];
       return {
         message: `Step added to "${params.name}" flow${warning ? ` — ${warning}` : ""}`,
         toolResult,
         stepCount,
         recorded: summarizeStep(step, stepCount),
         savedTo,
+        ...(baselineWrites.length > 0 ? { baselineWrites } : {}),
       };
     },
   };

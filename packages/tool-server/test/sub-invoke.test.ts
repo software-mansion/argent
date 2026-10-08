@@ -215,11 +215,17 @@ describe("invokeSubTool", () => {
     expect(recordedOptions?.flowStack).toBe(inner);
   });
 
-  it("does not forward clientServices or linked from ctx", async () => {
-    const clientServices = {
-      ops: ["resolve-file", "read-file"],
-      roots: ["/client/proj"],
-      request: vi.fn(async () => ({})),
+  it("does not forward fileInputs or linked from ctx", async () => {
+    // The outer call's file inputs (a flow and the members the client sent
+    // with it) belong to that call: a sub-tool gets file inputs only when its
+    // dispatcher resolved them for it and passed them in `extra`.
+    const fileInputs: Record<string, ResolvedFileInput> = {
+      flow_file: {
+        clientPath: "/client/proj/.argent/flows/root.yaml",
+        presentOnHost: false,
+        viaUpload: true,
+        members: {},
+      },
     };
     const args = { name: "child", project_root: "/client/proj" };
 
@@ -227,7 +233,7 @@ describe("invokeSubTool", () => {
     const direct = mockRegistry();
     await invokeSubTool(
       direct,
-      { artifacts: {}, clientServices, linked: true } as unknown as ToolContext,
+      { artifacts: {}, fileInputs, linked: true } as unknown as ToolContext,
       "flow-execute",
       args
     );
@@ -240,7 +246,7 @@ describe("invokeSubTool", () => {
       recorded,
       {
         artifacts: {},
-        clientServices,
+        fileInputs,
         linked: true,
         recordChildInvocation,
       } as unknown as ToolContext,
@@ -254,24 +260,6 @@ describe("invokeSubTool", () => {
         args,
         { signal: undefined, toolInvocationId: childId, recordChildInvocation },
       ],
-    ]);
-    expect(clientServices.request).not.toHaveBeenCalled();
-  });
-
-  it("passes an options object when only extra.clientServices is set", async () => {
-    const registry = mockRegistry();
-    const clientServices = {
-      ops: ["resolve-file", "read-file"] as const,
-      roots: ["/client/proj"],
-      request: vi.fn(async () => ({})),
-    };
-    const args = { flow_file: "/tmp/argent-file-input-x/login.yaml" };
-
-    await invokeSubTool(registry, undefined, "flow-execute", args, { clientServices });
-
-    // No signal key: only what was set travels.
-    expect(vi.mocked(registry.invokeTool).mock.calls).toStrictEqual([
-      ["flow-execute", args, { clientServices }],
     ]);
   });
 

@@ -4,12 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   CLIENT_FILE_MARKER,
+  flowMemberKey,
   getFailureSignal,
-  type ClientServiceOp,
   type FileInputSpec,
   type InvokeToolOptions,
   type Registry,
-  type ToolContext,
+  type ResolvedMember,
 } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
@@ -20,8 +20,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
  * refused by the recorder before anything runs. Both sides run on the REAL
  * catalog (`createRegistry`), with the real runner and recorder tools; every
  * other tool is a stub that checks its args against the real schema, and the
- * client is a `clientServices` object that answers `resolve-file` and
- * `read-file` from a map of its files.
+ * client sends the files of a map with each call, as the members of its file
+ * input.
  */
 
 // The recorder's tap capture and the runner's tap read the same tree source,
@@ -34,11 +34,7 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 import { createRegistry } from "../../src/utils/setup-registry";
 import { RECORDING_TOOL_IDS } from "../../src/tools/flows/flow-add-step";
 import type { FlowRunResult } from "../../src/tools/flows/flow-run";
-import {
-  FLOW_RUN_CLIENT_OPS,
-  servedToolInput,
-  toolStepFilePaths,
-} from "../../src/tools/flows/flow-tool-inputs";
+import { servedToolInput, toolStepFilePaths } from "../../src/tools/flows/flow-tool-inputs";
 import {
   __resetRecordingsForTesting,
   parseFlow,
@@ -57,9 +53,6 @@ const REC = "rec";
 const REC_PATH = `${FLOWS}/${REC}.yaml`;
 const BASE_PNG = `${CLIENT_ROOT}/shots/base.png`;
 const NOW_PNG = `${CLIENT_ROOT}/shots/now.png`;
-// The ops a client offers flow-add-step and a replay that updates no
-// baselines: write-file only comes with updateBaselines.
-const LINK_OPS = FLOW_RUN_CLIENT_OPS.filter((op) => op !== "write-file");
 
 // The runner and the recorder run for real; every other tool is stubbed.
 const REAL_TOOLS: ReadonlySet<string> = new Set(["flow-execute", ...RECORDING_TOOL_IDS]);
@@ -125,46 +118,43 @@ function linkRegistry(): { registry: Registry; stubCalls: StubCall[] } {
   return { registry, stubCalls };
 }
 
-type ClientServices = NonNullable<ToolContext["clientServices"]>;
-
-interface FakeClient extends ClientServices {
+interface FakeClient {
   disk: Map<string, Buffer>;
-  asked: Array<{ op: ClientServiceOp; args: Record<string, unknown> }>;
 }
 
-/** A client that resolves and reads the files of `files`, under both project roots. */
-function fakeClient(ops: readonly ClientServiceOp[], files: Record<string, string | Buffer>) {
-  const disk = new Map(Object.entries(files).map(([p, content]) => [p, Buffer.from(content)]));
-  const client: FakeClient = {
-    ops,
-    roots: [CLIENT_ROOT, OTHER_ROOT],
-    disk,
-    asked: [],
-    async request(op, args) {
-      client.asked.push({ op, args });
-      if (!ops.includes(op)) throw new Error(`op ${op} is not served by this client`);
-      if (op === "resolve-file") {
-        const canonical = path.posix.join(args.anchorDir as string, args.target as string);
-        const content = disk.get(canonical);
-        return content === undefined
-          ? { canonical, spelling: { state: "absent" }, exists: false }
-          : {
-              canonical,
-              spelling: { state: "listed" },
-              exists: true,
-              content: content.toString("base64"),
-            };
-      }
-      if (op === "read-file") {
-        const content = disk.get(args.path as string);
-        return content === undefined
-          ? { exists: false }
-          : { exists: true, size: content.length, mtimeMs: 1, content: content.toString("base64") };
-      }
-      throw new Error(`the fake client writes nothing (${op})`);
-    },
-  };
-  return client;
+/** A client with the files of `files`, under both project roots. */
+function fakeClient(files: Record<string, string | Buffer>): FakeClient {
+  return { disk: new Map(Object.entries(files).map(([p, content]) => [p, Buffer.from(content)])) };
+}
+
+/**
+ * The files the client sends with a call over a link, as the tool-server
+ * resolves them: every flow on its disk under the key a lookup beside its own
+ * directory uses (its directory and basename), listed as written, and every
+ * other file as a file argument by its path, its bytes written to this host.
+ * It sends more than one call needs, which changes no lookup the call makes.
+ */
+let sends = 0;
+async function membersOf(client: FakeClient): Promise<Record<string, ResolvedMember>> {
+  const dir = path.join(workDir, `members-${++sends}`);
+  await fs.mkdir(dir, { recursive: true });
+  const members: Record<string, ResolvedMember> = {};
+  for (const [file, bytes] of client.disk) {
+    if (file.endsWith(".yaml")) {
+      members[flowMemberKey(path.posix.dirname(file), path.posix.basename(file))] = {
+        role: "flow",
+        state: "present",
+        canonical: file,
+        spelling: { state: "listed" },
+        text: bytes.toString("utf8"),
+      };
+    } else {
+      const hostPath = path.join(dir, `${Object.keys(members).length}-${path.basename(file)}`);
+      await fs.writeFile(hostPath, bytes);
+      members[file] = { role: "tool", state: "present", hostPath };
+    }
+  }
+  return members;
 }
 
 /** Apply a recorder result's client-write directive, as the argent client does. */
@@ -211,7 +201,17 @@ async function addStep(
     await registry.invokeTool<AddStepResult>(
       "flow-add-step",
       { name: REC, project_root: CLIENT_ROOT, command, args: JSON.stringify(args) },
-      { linked: true, clientServices: client }
+      {
+        linked: true,
+        fileInputs: {
+          project_root: {
+            clientPath: CLIENT_ROOT,
+            presentOnHost: false,
+            viaUpload: false,
+            members: await membersOf(client),
+          },
+        },
+      }
     )
   );
 }
@@ -236,7 +236,7 @@ let uploads = 0;
 /**
  * flow-execute on an uploaded flow, as the HTTP layer hands it over for a
  * linked `name` call: `flow_file` is this host's copy of the YAML, and the
- * file input names the client's path.
+ * file input names the client's path and carries the client's files.
  */
 async function replayUpload(
   registry: Registry,
@@ -256,9 +256,11 @@ async function replayUpload(
           clientPath: `${FLOWS}/${name}.yaml`,
           presentOnHost: false,
           viaUpload: true,
+          canonical: `${FLOWS}/${name}.yaml`,
+          spelling: { state: "listed" },
+          members: await membersOf(client),
         },
       },
-      clientServices: client,
       linked: true,
     }
   );
@@ -276,9 +278,9 @@ afterEach(async () => {
 });
 
 describe("a take recorded over a link replays over the same link", () => {
-  it("replays every flow that a linked take writes through the up-front check with the same ops", async () => {
+  it("replays every flow that a linked take writes through the up-front check", async () => {
     const { registry, stubCalls } = linkRegistry();
-    const client = fakeClient(LINK_OPS, {
+    const client = fakeClient({
       [`${FLOWS}/sibling.yaml`]: flowText([{ kind: "echo", message: "sibling ran" }]),
       [`${OTHER_FLOWS}/other.yaml`]: flowText([{ kind: "echo", message: "other project ran" }]),
       // The recording's folder has an other.yaml of its own, which is not the
@@ -348,7 +350,6 @@ describe("a take recorded over a link replays over the same link", () => {
     });
 
     stubCalls.length = 0;
-    client.asked.length = 0;
     // A refusal of the up-front check would reject here, before step 1.
     const run = await replayUpload(registry, client, REC, yaml);
 
@@ -371,19 +372,8 @@ describe("a take recorded over a link replays over the same link", () => {
     ]);
     const replayedDiff = stubCalls.find((call) => call.tool === "screenshot-diff")!;
     expect(replayedDiff.options?.fileInputs).toEqual(recordedDiff.options?.fileInputs);
-    // Each file the take names came from the client, with the same ops.
-    expect(client.asked).toEqual(
-      expect.arrayContaining([
-        { op: "resolve-file", args: { anchorDir: FLOWS, target: `${REC}.yaml`, kind: "flow" } },
-        { op: "resolve-file", args: { anchorDir: FLOWS, target: "sibling.yaml", kind: "flow" } },
-        {
-          op: "resolve-file",
-          args: { anchorDir: OTHER_FLOWS, target: "other.yaml", kind: "flow" },
-        },
-        { op: "read-file", args: { path: BASE_PNG } },
-        { op: "read-file", args: { path: NOW_PNG } },
-      ])
-    );
+    // The nested run of the other project ran the client's flow.
+    expect(JSON.stringify(run.steps[5])).toContain("other project ran");
   });
 });
 
@@ -399,8 +389,8 @@ interface RefusalRow {
   spec?: FileInputSpec;
   /** The failure stage of the recorder's refusal, or "nothing" for a call answered with guidance. */
   record: string;
-  /** The failure stage of the up-front refusal, or the text of a step 1 error. */
-  replay: { stage: string } | { stepError: string };
+  /** The failure stage of the up-front refusal. */
+  replay: { stage: string };
 }
 
 /**
@@ -462,11 +452,12 @@ const ROWS: RefusalRow[] = [
     replay: { stage: "flow_upload_recording_tool" },
   })),
   {
-    label: "flow-execute of a flow the client serves that has a script: step",
+    // The replay checks the nested flow the client sent before step 1.
+    label: "flow-execute of a flow the client sends that has a script: step",
     tool: "flow-execute",
     args: { name: "scripted", project_root: CLIENT_ROOT },
     record: "flow_upload_script_step",
-    replay: { stepError: "script: { path: seed.mjs }" },
+    replay: { stage: "flow_upload_script_step" },
   },
 ];
 
@@ -481,8 +472,8 @@ describe("the recorder over a link refuses what a replay over it refuses", () =>
     "refuses at record time every step that the replay refuses: %s",
     async (_label, row) => {
       const { registry, stubCalls } = linkRegistry();
-      // A client that offers every op: the refusal is not a missing op.
-      const client = fakeClient(FLOW_RUN_CLIENT_OPS, { [`${FLOWS}/scripted.yaml`]: SCRIPTED });
+      // A client that sends its files: the refusal is not an older client's.
+      const client = fakeClient({ [`${FLOWS}/scripted.yaml`]: SCRIPTED });
 
       // The row fills its input with a path no client sends.
       let line: string | undefined;
@@ -491,7 +482,7 @@ describe("the recorder over a link refuses what a replay over it refuses", () =>
           ({ spec }) => spec === row.spec
         );
         expect(file).toBeDefined();
-        expect(servedToolInput(file!, FLOW_RUN_CLIENT_OPS)).toBe(false);
+        expect(servedToolInput(file!, true)).toBe(false);
         line = `tool: ${row.tool} (${file!.path})`;
       }
 
@@ -515,22 +506,12 @@ describe("the recorder over a link refuses what a replay over it refuses", () =>
       expect((await finishTake(registry, client)).steps).toBe(0);
 
       const yaml = flowText([{ kind: "tool", name: row.tool, args: row.args }]);
-      if ("stage" in row.replay) {
-        const error = await replayUpload(registry, client, "replay", yaml).then(
-          () => undefined,
-          (err: unknown) => err
-        );
-        expect(getFailureSignal(error)?.failure_stage).toBe(row.replay.stage);
-        if (line) expect((error as Error).message).toContain(`  - step 1: ${line}`);
-      } else {
-        const run = await replayUpload(registry, client, "replay", yaml);
-        expect(run.ok).toBe(false);
-        expect(run.steps[0]).toMatchObject({
-          kind: "tool",
-          status: "error",
-          reason: expect.stringContaining(row.replay.stepError),
-        });
-      }
+      const error = await replayUpload(registry, client, "replay", yaml).then(
+        () => undefined,
+        (err: unknown) => err
+      );
+      expect(getFailureSignal(error)?.failure_stage).toBe(row.replay.stage);
+      if (line) expect((error as Error).message).toContain(`  - step 1: ${line}`);
       expect(stubCalls).toEqual([]);
     }
   );

@@ -21,11 +21,10 @@ import type { InvokeToolOptions, Registry, ResolvedFileInput, ToolContext } from
  * itself against. `extra` is what a dispatcher decided for this one call, and
  * a key in it wins over the same key of `ctx`: `fileInputs`, the outcome of
  * the file boundary it applied to `args` itself (a `tool:` step whose files
- * are on the client), forwarded as an HTTP call forwards it; `clientServices`,
- * the channel of the outer call, which only a nested `flow-execute` that reads
- * its flow from the client gets; and `flowStack`. `ctx.clientServices` and
- * `ctx.linked` are never forwarded on their own: a sub-tool call is not an
- * HTTP call.
+ * are on the client, or a nested `flow-execute` whose flow and files the
+ * client sent with the outer call), forwarded as an HTTP call forwards it; and
+ * `flowStack`. `ctx.fileInputs` and `ctx.linked` are never forwarded on
+ * their own: a sub-tool call is not an HTTP call.
  */
 export async function invokeSubTool<T = unknown>(
   registry: Registry,
@@ -34,7 +33,6 @@ export async function invokeSubTool<T = unknown>(
   args: unknown,
   extra?: {
     fileInputs?: Record<string, ResolvedFileInput>;
-    clientServices?: ToolContext["clientServices"];
     flowStack?: InvokeToolOptions["flowStack"];
   }
 ): Promise<T> {
@@ -43,7 +41,6 @@ export async function invokeSubTool<T = unknown>(
   const flowStack = extra?.flowStack ?? ctx?.flowStack;
   const forwarded = {
     ...(extra?.fileInputs ? { fileInputs: extra.fileInputs } : {}),
-    ...(extra?.clientServices ? { clientServices: extra.clientServices } : {}),
     ...(flowStack ? { flowStack } : {}),
   };
   if (!recordChildInvocation) {

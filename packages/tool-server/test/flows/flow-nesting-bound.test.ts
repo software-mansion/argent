@@ -5,17 +5,13 @@ import * as path from "node:path";
 import {
   ArtifactStore,
   FAILURE_CODES,
-  FailureError,
+  flowMemberKey,
   getFailureSignal,
-  Registry,
-  type ClientServiceOp,
-  type ToolContext,
-} from "@argent/registry";
-import {
-  createRunFlowTool,
   MAX_RUN_DEPTH,
-  type FlowRunResult,
-} from "../../src/tools/flows/flow-run";
+  Registry,
+  type ResolvedMember,
+} from "@argent/registry";
+import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import {
@@ -169,7 +165,7 @@ describe("nesting bound of tool: flow-execute", () => {
     expect(countOf(invoke, "flow-execute")).toBe(2);
   });
 
-  it("stops a client-served flow that runs itself", async () => {
+  it("stops a client-sent flow that runs itself", async () => {
     // A flow with no run: or snapshot step keeps its client path as spelled as
     // its canonical, so the outer flow's client path is spelled exactly as the
     // nested step's project_root and name build it.
@@ -180,7 +176,7 @@ describe("nesting bound of tool: flow-execute", () => {
     const uploaded = path.join(root, "upload", "selfy.yaml");
     await fs.mkdir(path.dirname(uploaded), { recursive: true });
     await fs.writeFile(uploaded, selfy, "utf8");
-    const client = fakeClient({ "/client/.argent/flows/selfy.yaml": selfy });
+    const members = sentFlows({ "/client/.argent/flows/selfy.yaml": selfy });
     const { registry, invoke } = realRegistry();
 
     const result = await registry.invokeTool<FlowRunResult>(
@@ -192,9 +188,11 @@ describe("nesting bound of tool: flow-execute", () => {
             clientPath: "/client/.argent/flows/selfy.yaml",
             presentOnHost: false,
             viaUpload: true,
+            canonical: "/client/.argent/flows/selfy.yaml",
+            spelling: { state: "listed" },
+            members,
           },
         },
-        clientServices: client.services,
         linked: true,
       }
     );
@@ -202,12 +200,9 @@ describe("nesting bound of tool: flow-execute", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tool:error"]);
     expect(result.steps[0]!.reason).toContain("cyclic flow reference: selfy → selfy");
     expect(countOf(invoke, "flow-execute")).toBe(2);
-    expect(client.calls).toEqual([
-      {
-        op: "resolve-file",
-        args: { anchorDir: "/client/.argent/flows", target: "selfy.yaml", kind: "flow" },
-      },
-    ]);
+    // The nested run read the flow from the members of the call.
+    const nestedOptions = invoke.mock.calls.filter(([id]) => id === "flow-execute")[1]![2];
+    expect(nestedOptions?.fileInputs?.flow_file?.members).toBe(members);
   });
 
   it("keeps the report name helpers/login for a nested flow login with run: helpers/login.yaml", async () => {
@@ -237,10 +232,13 @@ describe("nesting bound of tool: flow-add-step", () => {
       executionPrerequisite: "",
       steps: [runsFlow("selfy", "/client")],
     });
-    const client = fakeClient({ "/client/.argent/flows/selfy.yaml": selfy }, [
-      "resolve-file",
-      "read-file",
-    ]);
+    // What a current client sends with the flow-add-step call: the nested
+    // flow, its sibling beside the recording (the same file), and the
+    // recording itself.
+    const members = sentFlows({
+      "/client/.argent/flows/selfy.yaml": selfy,
+      "/client/.argent/flows/rec.yaml": serializeFlow({ executionPrerequisite: "", steps: [] }),
+    });
     const { registry, invoke } = realRegistry();
     await flowStartRecordingTool.execute(
       {},
@@ -257,7 +255,17 @@ describe("nesting bound of tool: flow-add-step", () => {
           command: "flow-execute",
           args: JSON.stringify({ name: "selfy", project_root: "/client", device: DEVICE }),
         },
-        { linked: true, clientServices: client.services }
+        {
+          linked: true,
+          fileInputs: {
+            project_root: {
+              clientPath: "/client",
+              presentOnHost: false,
+              viaUpload: false,
+              members,
+            },
+          },
+        }
       )
       .then(
         () => null,
@@ -303,42 +311,20 @@ describe("nesting bound of tool: flow-add-step", () => {
 });
 
 /**
- * A client that serves `files` (by client path) for `resolve-file`, and
- * records every request.
+ * The flows a client sent with a call (by client path, each in its own
+ * directory), as the file-input boundary resolves them: each keyed as the
+ * runner looks it up, by its directory and file name.
  */
-function fakeClient(
-  files: Record<string, string>,
-  ops: ClientServiceOp[] = ["resolve-file", "read-file", "write-file"]
-): {
-  services: NonNullable<ToolContext["clientServices"]>;
-  calls: Array<{ op: ClientServiceOp; args: Record<string, unknown> }>;
-} {
-  const calls: Array<{ op: ClientServiceOp; args: Record<string, unknown> }> = [];
-  const services: NonNullable<ToolContext["clientServices"]> = {
-    ops,
-    roots: ["/client"],
-    request: vi.fn(async (op: ClientServiceOp, args: Record<string, unknown>) => {
-      calls.push({ op, args });
-      if (op !== "resolve-file") {
-        throw new FailureError(`the client refused the ${op} request: not served here`, {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "client_request_refused",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        });
-      }
-      const canonical = path.posix.join(String(args.anchorDir), String(args.target));
-      const text = files[canonical];
-      if (text === undefined) return { canonical, spelling: { state: "absent" }, exists: false };
-      return {
-        canonical,
-        spelling: { state: "listed" },
-        exists: true,
-        size: Buffer.byteLength(text),
-        mtimeMs: 1,
-        content: Buffer.from(text, "utf8").toString("base64"),
-      };
-    }),
-  };
-  return { services, calls };
+function sentFlows(files: Record<string, string>): Record<string, ResolvedMember> {
+  const members: Record<string, ResolvedMember> = {};
+  for (const [file, text] of Object.entries(files)) {
+    members[flowMemberKey(path.posix.dirname(file), path.posix.basename(file))] = {
+      role: "flow",
+      state: "present",
+      canonical: file,
+      spelling: { state: "listed" },
+      text,
+    };
+  }
+  return members;
 }

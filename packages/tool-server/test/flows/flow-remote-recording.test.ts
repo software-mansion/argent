@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { OnDiskSpelling, Registry, ToolContext } from "@argent/registry";
+import type { OnDiskSpelling, Registry, ResolvedMember, ToolContext } from "@argent/registry";
 import {
   ArtifactStore,
   CLIENT_FILE_MARKER,
   FAILURE_CODES,
+  flowMemberKey,
   getFailureSignal,
   zodObjectToJsonSchema,
 } from "@argent/registry";
@@ -82,54 +83,51 @@ function flowExecuteRegistry(result: unknown): Registry {
   return registry;
 }
 
-type ClientServices = NonNullable<ToolContext["clientServices"]>;
-
 /**
- * The client services of a flow-add-step call over a link. `resolve-file`
- * answers each flow in `files` (keyed by the client path it is spelled as,
- * listed as written) and refuses every other one, as the argent client
- * refuses a flow the recorded step does not name. `spellings` overrides how
- * the client finds a spelled path's basename in its directory. Records every
- * request.
+ * The files a current argent client sends with a flow-add-step call over a
+ * link, as the tool-server resolves them: each flow in `files` (keyed by the
+ * client path it is spelled as) under the key the recorder looks it up by, its
+ * directory and basename, with the spelled path as its real path, listed as
+ * written unless `spellings` says otherwise. Each path in `missing` is a flow
+ * the client looked for and does not have. The client sends nothing else.
  */
-function fakeClient(
+function stepMembers(
   files: Record<string, string>,
-  spellings: Record<string, OnDiskSpelling> = {}
-): {
-  services: ClientServices;
-  requests: Array<{ op: string; args: Record<string, unknown> }>;
-} {
-  const requests: Array<{ op: string; args: Record<string, unknown> }> = [];
-  const services: ClientServices = {
-    ops: ["resolve-file", "read-file"],
-    roots: [CLIENT_ROOT, OTHER_CLIENT_ROOT],
-    request: vi.fn(async (op: string, args: Record<string, unknown>) => {
-      requests.push({ op, args });
-      const target = String(args.target);
-      const spelled = path.join(String(args.anchorDir), target);
-      const text = op === "resolve-file" ? files[spelled] : undefined;
-      if (text === undefined) {
-        throw new Error(
-          `the client refused the ${op} request for "${target}": ${target} is not a flow ` +
-            `that the step this call records runs`
-        );
-      }
-      return {
-        canonical: spelled,
-        spelling: spellings[spelled] ?? { state: "listed" },
-        exists: true,
-        size: Buffer.byteLength(text),
-        mtimeMs: 1,
-        content: Buffer.from(text, "utf8").toString("base64"),
-      };
-    }),
-  };
-  return { services, requests };
+  {
+    spellings = {},
+    missing = [],
+  }: { spellings?: Record<string, OnDiskSpelling>; missing?: string[] } = {}
+): Record<string, ResolvedMember> {
+  const members: Record<string, ResolvedMember> = {};
+  for (const spelled of missing) {
+    members[flowMemberKey(path.dirname(spelled), path.basename(spelled))] = {
+      role: "flow",
+      state: "missing",
+      canonical: spelled,
+      spelling: { state: "absent" },
+    };
+  }
+  for (const [spelled, text] of Object.entries(files)) {
+    members[flowMemberKey(path.dirname(spelled), path.basename(spelled))] = {
+      role: "flow",
+      state: "present",
+      canonical: spelled,
+      spelling: spellings[spelled] ?? { state: "listed" },
+      text,
+    };
+  }
+  return members;
 }
 
-/** The ctx of a flow-add-step call over a link from a client that sends client services. */
-function linkedCtx(services: ClientServices): ToolContext {
-  return { artifacts: new ArtifactStore(), linked: true, clientServices: services };
+/** The ctx of a flow-add-step call over a link from a client that sends the files of its step. */
+function linkedCtx(members: Record<string, ResolvedMember>): ToolContext {
+  return {
+    artifacts: new ArtifactStore(),
+    linked: true,
+    fileInputs: {
+      project_root: { clientPath: CLIENT_ROOT, presentOnHost: false, viaUpload: false, members },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -190,16 +188,17 @@ describe("flow recording with a remote client (probe miss)", () => {
 
   it("does not bake a device id into a remotely recorded flow-execute step (issue #607)", async () => {
     // Over a link the recorder writes `run: sub.yaml` only when the client
-    // serves the sibling beside the recording and it is the flow that ran.
-    // This nested call names a flow of a SECOND client project, so the sibling
-    // in the recording's folder is another file, the client refuses it, and
+    // has the sibling beside the recording and it is the flow that ran. This
+    // nested call names a flow of a SECOND client project, and the recording's
+    // folder has no sub.yaml (the client sends it as missing), so
     // captureRunTarget keeps the raw `tool: flow-execute` step. A raw step is
     // where a record-time device id would be baked in and pin every replay.
     const subPath = path.join(OTHER_CLIENT_ROOT, ".argent", "flows", "sub.yaml");
-    const { services, requests } = fakeClient({
-      [subPath]: "steps:\n  - echo: sub\n",
-      [CLIENT_FLOW_PATH]: "steps: []\n",
-    });
+    const sibling = path.join(CLIENT_ROOT, ".argent", "flows", "sub.yaml");
+    const members = stepMembers(
+      { [subPath]: "steps:\n  - echo: sub\n", [CLIENT_FLOW_PATH]: "steps: []\n" },
+      { missing: [sibling] }
+    );
     const registry = flowExecuteRegistry({ ok: true, steps: [] });
     const addStep = createFlowAddStepTool(registry);
 
@@ -221,18 +220,14 @@ describe("flow recording with a remote client (probe miss)", () => {
           device: "RECORD-TIME-ID",
         }),
       },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
-    // The sibling was asked for and refused, so the raw step is the record.
-    expect(requests).toContainEqual({
-      op: "resolve-file",
-      args: {
-        anchorDir: path.join(CLIENT_ROOT, ".argent", "flows"),
-        target: "sub.yaml",
-        kind: "flow",
-      },
-    });
+    // The sibling is missing on the client, so the raw step is the record.
+    expect(stepResult.message).toContain(
+      `could not resolve "sub" as a sibling fragment (ENOENT: no such file or directory, ` +
+        `open '${sibling}')`
+    );
     expect(stepResult.message).toContain("kept the raw flow-execute step");
     const directive = stepResult.savedTo as { content: string };
     expect(parseFlow(directive.content).steps).toEqual([
@@ -245,8 +240,8 @@ describe("flow recording with a remote client (probe miss)", () => {
   });
 
   it("add-step rejects a flow-execute flow_path — a client sibling is unreadable here", async () => {
-    // No client services: the client serves no file, so nothing can confirm
-    // that the flow_path names a sibling of the recording.
+    // No files sent with the call (an older client): nothing can confirm that
+    // the flow_path names a sibling of the recording.
     const registry = createMockRegistry({ "flow-execute": { result: { ok: true, steps: [] } } });
     const addStep = createFlowAddStepTool(registry);
 
@@ -269,7 +264,7 @@ describe("flow recording with a remote client (probe miss)", () => {
           }),
         }
       )
-    ).rejects.toThrow("the argent client serves no files for this call");
+    ).rejects.toThrow("the argent client sent no files with this call");
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
@@ -304,7 +299,7 @@ describe("flow recording with a remote client (probe miss)", () => {
   it("add-step rewrites a flow-execute flow_path to its sibling name when the client lists the sibling", async () => {
     const flowsDir = path.join(CLIENT_ROOT, ".argent", "flows");
     const loginPath = path.join(flowsDir, "login.yaml");
-    const { services } = fakeClient({
+    const members = stepMembers({
       [loginPath]: "steps:\n  - echo: login\n",
       [CLIENT_FLOW_PATH]: "steps: []\n",
     });
@@ -325,11 +320,12 @@ describe("flow recording with a remote client (probe miss)", () => {
         command: "flow-execute",
         args: JSON.stringify({ flow_path: loginPath, project_root: CLIENT_ROOT }),
       },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
     // The live call names the sibling by name, and reads it as the upload of
-    // the flow the client served, not by the client path.
+    // the flow the client sent, not by the client path, with the files of the
+    // call for its own steps.
     expect(registry.invokeTool).toHaveBeenCalledTimes(1);
     const [tool, args, options] = vi.mocked(registry.invokeTool).mock.calls[0]!;
     expect(tool).toBe("flow-execute");
@@ -338,7 +334,9 @@ describe("flow recording with a remote client (probe miss)", () => {
     expect(options?.fileInputs?.flow_file).toMatchObject({
       clientPath: loginPath,
       viaUpload: true,
+      canonical: loginPath,
     });
+    expect(options?.fileInputs?.flow_file?.members).toBe(members);
     expect((args as Record<string, unknown>).flow_file).not.toBe(loginPath);
 
     const directive = stepResult.savedTo as { content: string };
@@ -349,9 +347,13 @@ describe("flow recording with a remote client (probe miss)", () => {
     // The spelling is the client's answer: this host has no such directory,
     // and a host listing it cannot read would skip the check.
     const loginPath = path.join(CLIENT_ROOT, ".argent", "flows", "Login.yaml");
-    const { services } = fakeClient(
+    const members = stepMembers(
       { [loginPath]: "steps: []\n" },
-      { [loginPath]: { state: "case_folded", actual: "login.yaml", addressable: true } }
+      {
+        spellings: {
+          [loginPath]: { state: "case_folded", actual: "login.yaml", addressable: true },
+        },
+      }
     );
     const registry = flowExecuteRegistry({ ok: true, steps: [] });
     const addStep = createFlowAddStepTool(registry);
@@ -371,7 +373,7 @@ describe("flow recording with a remote client (probe miss)", () => {
           command: "flow-execute",
           args: JSON.stringify({ flow_path: loginPath, project_root: CLIENT_ROOT }),
         },
-        linkedCtx(services)
+        linkedCtx(members)
       )
     ).rejects.toThrow(
       '(this filesystem matched it case-insensitively to "login.yaml"), so the recorded run: ' +

@@ -1,9 +1,9 @@
 /**
  * How a flow file reference — a `run:` target, a `script:` path, or the flow a
  * caller named — is turned into the file it denotes on disk. Shared by the
- * tool-server (co-located runs) and the argent client (client services over a
- * link), so both sides resolve a reference with one implementation and the
- * kernel semantics of the machine that has the files.
+ * tool-server (co-located runs) and the argent client (which collects a flow's
+ * files for a call over a link), so both sides resolve a reference with one
+ * implementation and the kernel semantics of the machine that has the files.
  */
 
 import * as fs from "node:fs/promises";
@@ -52,8 +52,8 @@ export async function canonicalFlowPath(p: string): Promise<string> {
  * target and would truncate a real path segment given a bare one (see
  * flow-run.ts). Re-serializing a parsed flow therefore writes the completed
  * spelling back, which is the intended one-way migration. The argent client
- * completes a target the same way to know which file a flow it served will
- * ask for.
+ * completes a target the same way ({@link collectFlowRequests}) to know which
+ * files to send with a flow.
  *
  * The test is the CANDIDATE's basename, not the supplied value's: basename()
  * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
@@ -67,6 +67,110 @@ export function completeRunExtension(value: string): string {
   if (value.endsWith(".yaml")) return value;
   const candidate = `${value}.yaml`;
   return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
+}
+
+/**
+ * Longest chain of `run:` fragments and nested `tool: flow-execute` runs a
+ * flow may nest: the runner refuses the step that would push the chain past
+ * it. The client sends the files of a flow's closure to this depth, the
+ * deepest one the runner resolves.
+ */
+export const MAX_RUN_DEPTH = 20;
+
+/** Deeper than any block nesting the runner parses; also ends a cyclic YAML alias. */
+const MAX_BLOCK_NESTING = 64;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The project files a parsed flow document makes the runner read: the `run:`
+ * targets of its steps and of the steps of its block directives (`when:`),
+ * taken or not, spelled as the runner keeps them (extension completed), the
+ * names of its `snapshot` steps, whose baselines the run reads or writes, and
+ * its `tool:` steps, whose file arguments the run reads (which arguments are
+ * files depends on the tool's declaration: {@link toolStepFiles}). `nested`:
+ * the flow each `tool: flow-execute` step among them names
+ * ({@link nestedFlowTarget}), with the step's args, which say whether its run
+ * updates baselines. A value the runner's parse refuses names nothing. Pure: it walks a document the caller
+ * parsed, so the client and the tool-server's parity test share it without a
+ * YAML or file-system dependency.
+ */
+export function collectFlowRequests(doc: unknown): {
+  runTargets: string[];
+  snapshots: string[];
+  toolSteps: { tool: string; args: Record<string, unknown> }[];
+  nested: { target: NestedFlowTarget; args: Record<string, unknown> }[];
+} {
+  const runTargets = new Set<string>();
+  const snapshots = new Set<string>();
+  const toolSteps: { tool: string; args: Record<string, unknown> }[] = [];
+  const nested: { target: NestedFlowTarget; args: Record<string, unknown> }[] = [];
+  const seen = new Set<unknown>();
+  const visit = (steps: unknown, depth: number): void => {
+    if (!Array.isArray(steps) || depth > MAX_BLOCK_NESTING || seen.has(steps)) return;
+    seen.add(steps);
+    for (const step of steps) {
+      if (!isRecord(step)) continue;
+      const run = step.run;
+      if (
+        typeof run === "string" &&
+        !run.includes("\\") &&
+        !path.posix.isAbsolute(run) &&
+        !/^[A-Za-z]:/.test(run)
+      ) {
+        const target = completeRunExtension(run);
+        if (FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) runTargets.add(target);
+      }
+      const snapshot = isRecord(step.snapshot) ? step.snapshot.name : step.snapshot;
+      if (typeof snapshot === "string" && FLOW_NAME_PATTERN.test(snapshot)) snapshots.add(snapshot);
+      if (typeof step.tool === "string") {
+        const args = isRecord(step.args) ? step.args : {};
+        toolSteps.push({ tool: step.tool, args });
+        const target = step.tool === "flow-execute" ? nestedFlowTarget(args) : undefined;
+        if (target !== undefined) nested.push({ target, args });
+      }
+      visit(step.steps, depth + 1);
+    }
+  };
+  if (isRecord(doc)) visit(doc.steps, 0);
+  return { runTargets: [...runTargets], snapshots: [...snapshots], toolSteps, nested };
+}
+
+/**
+ * The `__baselines__/<segment>` a run's snapshots key their baseline store
+ * under. The store is `<dir>/__baselines__/<key>` beside the CANONICAL root
+ * flow, so the key must name the canonical file too. With the as-written stem
+ * it does not, and the disagreement merges distinct flows: two projects whose
+ * `.argent/flows/smoke.yaml` are symlinks into one shared vault
+ * (`vault/a-smoke.yaml`, `vault/b-smoke.yaml`) both anchor at `vault/` and
+ * both key "smoke", so a single `vault/__baselines__/smoke/` holds one PNG the
+ * two flows silently overwrite in turn while each `--update-baselines` run
+ * reports "baseline updated". For a root flow that is a regular file the
+ * canonical stem IS the as-written one, so only symlinked roots move.
+ *
+ * The canonical stem is the symlink TARGET's filename, which nothing
+ * validates: a vault file may legitimately be called `...yaml`, whose stem
+ * after `.yaml` is `..`, and `<dir>/__baselines__/..` IS the flow directory,
+ * so every baseline would land beside the flow files themselves (the escape
+ * `flow-path-baseline-escape.test.ts` pins for the as-written spelling). Hence
+ * the pattern check, against the same charset every other flow name is held
+ * to. An unsafe stem falls back to the always-validated `flowName` rather than
+ * throwing: an unusually named vault file is not the caller's error to fix
+ * mid-run. Shared by the runner and the argent client, which sends a linked
+ * run's baselines from the same directory.
+ */
+export function baselineKeyFor(canonicalPath: string, flowName: string): string {
+  // path.basename leaves a bare ".yaml" intact (stripping it would leave
+  // nothing) — the pattern rejects that spelling too, so it falls back as well.
+  const stem = path.basename(canonicalPath, ".yaml");
+  return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
+}
+
+/** The key of a `run:` resolution: the directory the target resolves against, and the target as written. */
+export function flowMemberKey(anchorDir: string, target: string): string {
+  return `${anchorDir}\0${target}`;
 }
 
 /**
@@ -149,10 +253,9 @@ export interface ResolvedFlowRelativeFile {
  * the front door already grants: an operator can point `flow_path` at any YAML
  * on the host. The one route that carries untrusted content, an uploaded flow,
  * never resolves a target of its own on the host: the runner either refuses
- * the step kind before any step runs, or — over a link whose client offers
- * client services — sends the reference back to the client, which runs this
- * same function on its OWN files and fences the result to the roots it chose
- * to serve. A nested `tool: flow-execute` naming a flow already on the host is
+ * the step kind before any step runs, or looks the reference up in the files
+ * the client sent with the call, which the client resolved with this same
+ * function on its OWN files and fenced to the roots it chose to send. A nested `tool: flow-execute` naming a flow already on the host is
  * an ordinary `name` run and resolves here as one, with the reach a direct
  * `flow-execute` call for that same `name` already has.
  */
@@ -172,47 +275,14 @@ export async function resolveFlowRelativeFile(
 }
 
 /**
- * The `__baselines__/<segment>` a run's snapshots key their baseline store
- * under. The store is `<flowsDir>/__baselines__/<key>` and `flowsDir` is the
- * CANONICAL root flow's directory, so the key must name the canonical file too.
- * With the as-written stem it does not, and the disagreement merges distinct
- * flows: two projects whose `.argent/flows/smoke.yaml` are symlinks into one
- * shared vault (`vault/a-smoke.yaml`, `vault/b-smoke.yaml`) both anchor at
- * `vault/` and both key "smoke", so a single `vault/__baselines__/smoke/` holds
- * one PNG the two flows silently overwrite in turn while each
- * `--update-baselines` run reports "baseline updated". For a root flow that is a
- * regular file the canonical stem IS the as-written one, so only symlinked roots
- * move.
- *
- * The canonical stem is the symlink TARGET's filename, which nothing validates:
- * `assertSafeFlowName` and `classifyOnDiskSpelling` only run against the
- * as-written spelling, so a vault file may legitimately be called `...yaml` —
- * whose stem after `.yaml` is `..`, and
- * `path.join(flowsDir, "__baselines__", "..")` IS `flowsDir`, so every baseline
- * would land beside the flow files themselves (the escape
- * `flow-path-baseline-escape.test.ts` pins for the as-written spelling). Hence
- * the pattern check, against the same charset every other flow name is held to.
- * An unsafe stem falls back to the always-validated `flowName` rather than
- * throwing: an unusually named vault file is not the caller's error to fix
- * mid-run. The argent client keys the baselines it serves with this same
- * function, so both sides of a link agree on the directory.
- */
-export function baselineKeyFor(canonicalPath: string, flowName: string): string {
-  // path.basename leaves a bare ".yaml" intact (stripping it would leave
-  // nothing) — the pattern rejects that spelling too, so it falls back as well.
-  const stem = path.basename(canonicalPath, ".yaml");
-  return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
-}
-
-/**
  * The flow a nested `tool: flow-execute` step names, in a form both sides of a
  * link accept, or undefined. `name`: a flow name with an absolute
  * `project_root` that has no `..` segment, and no `flow_path`; `path` is the
  * saved flow `<project_root>/.argent/flows/<name>.yaml`. `flow_path`: an
  * absolute path with no `..` segment to a `<flow-name>.yaml` file, and no
- * `name`. The argent client serves the flow of a `name` step, and the
- * tool-server runs a nested step over a link only in that form, so the two
- * decide with this one function.
+ * `name`. The argent client sends the flow of a `name` step with the call,
+ * and the tool-server runs a nested step over a link only in that form, so the
+ * two decide with this one function.
  */
 export type NestedFlowTarget =
   | { kind: "name"; projectRoot: string; name: string; path: string }

@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FILE_INPUT_MARKER, type FileInputSpec } from "@argent/registry";
 import { resolveFileInputs, FileInputError } from "../src/file-inputs";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 let tmpDir: string;
 
@@ -521,5 +526,406 @@ describe("resolveFileInputs", () => {
         { source: wire({ path: path.join(tmpDir, "ghost.yaml") }) }
       )
     ).rejects.toThrow(FileInputError);
+  });
+});
+
+describe("resolveFileInputs: the members of a collect spec", () => {
+  const COLLECT_SPEC: FileInputSpec[] = [
+    { target: "flow", path: "${flow}", kind: "file", collect: "flow" },
+  ];
+  const ROOT_TEXT = "steps:\n  - run: frag.yaml\n";
+  const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
+
+  function member(key: string, overrides: Record<string, unknown> = {}) {
+    return {
+      role: "flow",
+      key,
+      path: `/client/flows/${key}`,
+      canonical: `/client/flows/${key}`,
+      spelling: { state: "listed" },
+      ...overrides,
+    };
+  }
+
+  function root(members: unknown[], overrides: Record<string, unknown> = {}) {
+    return wire({
+      path: "/client/flows/main.yaml",
+      content: b64(ROOT_TEXT),
+      size: Buffer.byteLength(ROOT_TEXT),
+      canonical: "/real/flows/main.yaml",
+      spelling: { state: "case_folded", actual: "Main.yaml", addressable: true },
+      members,
+      ...overrides,
+    });
+  }
+
+  async function resolveRoot(
+    flow: unknown,
+    specs: FileInputSpec[] = COLLECT_SPEC,
+    lookup?: Parameters<typeof resolveFileInputs>[2]
+  ) {
+    const resolved = await resolveFileInputs({ fileInputs: specs }, { flow }, lookup);
+    cleanups.push(resolved.cleanup);
+    return resolved.fileInputs!.flow!;
+  }
+
+  it("decodes inline members to text, keyed by the client's key, beside the root's canonical and spelling", async () => {
+    const text = "steps:\n  - echo: hi\n";
+    const meta = await resolveRoot(
+      root([member("frag.yaml", { content: b64(text), size: Buffer.byteLength(text) })])
+    );
+
+    expect(meta).toMatchObject({
+      viaUpload: true,
+      canonical: "/real/flows/main.yaml",
+      spelling: { state: "case_folded", actual: "Main.yaml", addressable: true },
+    });
+    expect(meta.members).toEqual({
+      "frag.yaml": {
+        role: "flow",
+        state: "present",
+        canonical: "/client/flows/frag.yaml",
+        spelling: { state: "listed" },
+        text,
+      },
+    });
+  });
+
+  it("reads a member sent through POST /upload, and consumes the upload", async () => {
+    const text = "steps:\n  - echo: uploaded\n";
+    const source = path.join(tmpDir, "big.yaml");
+    await fs.writeFile(source, text);
+    const tarPath = path.join(tmpDir, "member.tar.gz");
+    await execFileAsync("tar", ["-czf", tarPath, "-C", tmpDir, "big.yaml"]);
+    const sha256 = createHash("sha256")
+      .update(await fs.readFile(tarPath))
+      .digest("hex");
+    const looked: string[] = [];
+
+    const meta = await resolveRoot(
+      root([member("big.yaml", { uploadId: "u-1", contentHash: sha256, size: text.length })]),
+      COLLECT_SPEC,
+      (id) => {
+        looked.push(id);
+        return id === "u-1" ? { tarPath, sha256 } : undefined;
+      }
+    );
+
+    expect(looked).toEqual(["u-1"]);
+    expect(meta.members!["big.yaml"]).toMatchObject({ state: "present", text });
+  });
+
+  it("refuses a member whose bytes fail a check, and never fails the call for it", async () => {
+    const meta = await resolveRoot(
+      root([
+        member("cut.yaml", { content: b64("steps: []\n"), size: 999 }),
+        member("gone-upload.yaml", { uploadId: "nope", contentHash: "00" }),
+        member("bare.yaml"),
+      ]),
+      COLLECT_SPEC,
+      () => undefined
+    );
+
+    expect(meta.members!["cut.yaml"]).toMatchObject({ state: "refused" });
+    expect(meta.members!["cut.yaml"]!.error).toMatch(/truncated or corrupted/);
+    expect(meta.members!["gone-upload.yaml"]).toMatchObject({ state: "refused" });
+    expect(meta.members!["gone-upload.yaml"]!.error).toMatch(/was not found on the tool-server/);
+    expect(meta.members!["bare.yaml"]).toMatchObject({
+      state: "refused",
+      error: 'the client sent no content for "/client/flows/bare.yaml"',
+    });
+  });
+
+  it("passes the client's missing and refused states through, with the client's reason", async () => {
+    const meta = await resolveRoot(
+      root([
+        member("missing.yaml", { state: "missing" }),
+        member("outside.yaml", { state: "refused", error: "outside every root" }),
+        member("silent.yaml", { state: "refused" }),
+      ])
+    );
+
+    expect(meta.members).toEqual({
+      "missing.yaml": {
+        role: "flow",
+        state: "missing",
+        canonical: "/client/flows/missing.yaml",
+        spelling: { state: "listed" },
+      },
+      "outside.yaml": {
+        role: "flow",
+        state: "refused",
+        canonical: "/client/flows/outside.yaml",
+        spelling: { state: "listed" },
+        error: "outside every root",
+      },
+      "silent.yaml": {
+        role: "flow",
+        state: "refused",
+        canonical: "/client/flows/silent.yaml",
+        spelling: { state: "listed" },
+        error: "the client did not send it",
+      },
+    });
+  });
+
+  it("refuses a malformed member, and leaves out unknown roles, keyless entries and repeated keys", async () => {
+    const meta = await resolveRoot(
+      root([
+        member("odd.yaml", { canonical: 7 }),
+        member("odd-spelling.yaml", { spelling: { state: "case_folded" } }),
+        member("future.bin", { role: "later", content: b64("bin") }),
+        member("listed.yaml", { state: "listed" }),
+        { role: "flow", path: "/client/flows/nokey.yaml" },
+        "not an object",
+        null,
+        member("dup.yaml", { state: "missing" }),
+        member("dup.yaml", { state: "refused", error: "second" }),
+      ])
+    );
+
+    expect(Object.keys(meta.members!)).toEqual([
+      "odd.yaml",
+      "odd-spelling.yaml",
+      "listed.yaml",
+      "dup.yaml",
+    ]);
+    expect(meta.members!["odd.yaml"]).toMatchObject({
+      state: "refused",
+      error: "the client sent an invalid entry for it",
+    });
+    expect(meta.members!["odd-spelling.yaml"]).toMatchObject({ state: "refused" });
+    // Only a baseline goes by name alone.
+    expect(meta.members!["listed.yaml"]).toMatchObject({ state: "refused" });
+    expect(meta.members!["dup.yaml"]).toMatchObject({ state: "missing" });
+  });
+
+  it("materializes a baseline's bytes to a file, and keeps the client's other states", async () => {
+    const baseline = (name: string, overrides: Record<string, unknown> = {}) => ({
+      role: "baseline",
+      key: `/client/flows/__baselines__/main/${name}`,
+      path: `/client/flows/__baselines__/main/${name}`,
+      ...overrides,
+    });
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255]);
+    const meta = await resolveRoot(
+      root([
+        baseline("home__ios-1x1.png", { content: png.toString("base64"), size: png.length }),
+        baseline("listed__ios-1x1.png", { state: "listed" }),
+        baseline("gone__ios-1x1.png", { state: "missing" }),
+        baseline("env__ios-1x1.png", { state: "refused", error: "not a PNG file" }),
+        baseline("cut__ios-1x1.png", { content: png.toString("base64"), size: 99 }),
+      ])
+    );
+
+    const dir = "/client/flows/__baselines__/main";
+    const home = meta.members![`${dir}/home__ios-1x1.png`]!;
+    expect(home).toMatchObject({ role: "baseline", state: "present" });
+    expect(await fs.readFile(home.hostPath!)).toEqual(png);
+    expect(meta.members![`${dir}/listed__ios-1x1.png`]).toEqual({
+      role: "baseline",
+      state: "listed",
+    });
+    expect(meta.members![`${dir}/gone__ios-1x1.png`]).toEqual({
+      role: "baseline",
+      state: "missing",
+    });
+    expect(meta.members![`${dir}/env__ios-1x1.png`]).toEqual({
+      role: "baseline",
+      state: "refused",
+      error: "not a PNG file",
+    });
+    expect(meta.members![`${dir}/cut__ios-1x1.png`]).toMatchObject({ state: "refused" });
+    expect(meta.members![`${dir}/cut__ios-1x1.png`]!.error).toMatch(/truncated or corrupted/);
+  });
+
+  it("materializes a tool file's bytes to a file, keyed by the path as the step spells it", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2]);
+    const spelled = "/client/img/../img/a.png";
+    const meta = await resolveRoot(
+      root([
+        { role: "tool", key: spelled, path: spelled, content: png.toString("base64"), size: 6 },
+        {
+          role: "tool",
+          key: "/client/img/gone.png",
+          path: "/client/img/gone.png",
+          state: "missing",
+        },
+        {
+          role: "tool",
+          key: "/client/img/secret.png",
+          path: "/client/img/secret.png",
+          state: "refused",
+          error: "/client/img/secret.png links to a file that is not one of .png, .yaml",
+        },
+      ])
+    );
+
+    const sent = meta.members![spelled]!;
+    expect(sent).toMatchObject({ role: "tool", state: "present" });
+    expect(await fs.readFile(sent.hostPath!)).toEqual(png);
+    expect(meta.members!["/client/img/gone.png"]).toEqual({ role: "tool", state: "missing" });
+    expect(meta.members!["/client/img/secret.png"]).toEqual({
+      role: "tool",
+      state: "refused",
+      error: "/client/img/secret.png links to a file that is not one of .png, .yaml",
+    });
+  });
+
+  it("extracts a baseline sent through POST /upload to a file", async () => {
+    const png = Buffer.alloc(300 * 1024, 7);
+    await fs.writeFile(path.join(tmpDir, "big__ios-1x1.png"), png);
+    const tarPath = path.join(tmpDir, "baseline.tar.gz");
+    await execFileAsync("tar", ["-czf", tarPath, "-C", tmpDir, "big__ios-1x1.png"]);
+    const sha256 = createHash("sha256")
+      .update(await fs.readFile(tarPath))
+      .digest("hex");
+    const key = "/client/flows/__baselines__/main/big__ios-1x1.png";
+
+    const meta = await resolveRoot(
+      root([
+        {
+          role: "baseline",
+          key,
+          path: key,
+          uploadId: "u-2",
+          contentHash: sha256,
+          size: png.length,
+        },
+      ]),
+      COLLECT_SPEC,
+      (id) => (id === "u-2" ? { tarPath, sha256 } : undefined)
+    );
+
+    expect(meta.members![key]).toMatchObject({ role: "baseline", state: "present" });
+    expect(await fs.readFile(meta.members![key]!.hostPath!)).toEqual(png);
+  });
+
+  it("ignores members on a spec without collect", async () => {
+    const meta = await resolveRoot(root([member("frag.yaml", { state: "missing" })]), [
+      { target: "flow", path: "${flow}", kind: "file" },
+    ]);
+
+    expect(meta).toEqual({
+      clientPath: "/client/flows/main.yaml",
+      presentOnHost: false,
+      viaUpload: true,
+    });
+  });
+
+  it("ignores members on a wire without a valid canonical and spelling, as from an older client", async () => {
+    const noCanonical = await resolveRoot(
+      root([member("frag.yaml", { state: "missing" })], { canonical: undefined })
+    );
+    const badSpelling = await resolveRoot(
+      root([member("frag.yaml", { state: "missing" })], { spelling: { state: "nope" } })
+    );
+    const noMembers = await resolveRoot(root([], { members: undefined }));
+
+    for (const meta of [noCanonical, badSpelling, noMembers]) {
+      expect(meta.members).toBeUndefined();
+      expect(meta.canonical).toBeUndefined();
+    }
+  });
+
+  it("keeps an empty member set from a client that collected nothing", async () => {
+    const meta = await resolveRoot(root([]));
+
+    expect(meta.members).toEqual({});
+  });
+});
+
+describe("resolveFileInputs: the members of flow-add-step's probe", () => {
+  const STEP_SPEC: FileInputSpec[] = [
+    { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
+  ];
+  const nested = "steps:\n  - echo: nested\n";
+
+  async function resolveProbe(projectRoot: unknown, specs: FileInputSpec[] = STEP_SPEC) {
+    const resolved = await resolveFileInputs({ fileInputs: specs }, { project_root: projectRoot });
+    cleanups.push(resolved.cleanup);
+    return resolved;
+  }
+
+  it("resolves the members of a collect step probe and passes the path through", async () => {
+    const key = "/client/proj/.argent/flows\0login.yaml";
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9]);
+    const resolved = await resolveProbe(
+      wire({
+        path: "/client/proj",
+        members: [
+          {
+            role: "flow",
+            key,
+            path: "/client/proj/.argent/flows/login.yaml",
+            canonical: "/client/real/.argent/flows/login.yaml",
+            spelling: { state: "listed" },
+            content: Buffer.from(nested, "utf8").toString("base64"),
+            size: Buffer.byteLength(nested),
+          },
+          {
+            role: "tool",
+            key: "/client/proj/img/a.png",
+            path: "/client/proj/img/a.png",
+            content: png.toString("base64"),
+            size: png.length,
+          },
+          {
+            role: "flow",
+            key: "/client/proj/.argent/flows\0gone.yaml",
+            path: "/client/proj/.argent/flows/gone.yaml",
+            canonical: "/client/proj/.argent/flows/gone.yaml",
+            spelling: { state: "absent" },
+            state: "missing",
+          },
+        ],
+      })
+    );
+
+    // A probe passes the client path through, also with members.
+    expect(resolved.args.project_root).toBe("/client/proj");
+    const meta = resolved.fileInputs!.project_root!;
+    expect(meta).toMatchObject({ clientPath: "/client/proj", viaUpload: false });
+    expect(meta.members![key]).toEqual({
+      role: "flow",
+      state: "present",
+      canonical: "/client/real/.argent/flows/login.yaml",
+      spelling: { state: "listed" },
+      text: nested,
+    });
+    const tool = meta.members!["/client/proj/img/a.png"]!;
+    expect(tool).toMatchObject({ role: "tool", state: "present" });
+    expect(await fs.readFile(tool.hostPath!)).toEqual(png);
+    expect(meta.members!["/client/proj/.argent/flows\0gone.yaml"]).toMatchObject({
+      role: "flow",
+      state: "missing",
+    });
+  });
+
+  it("keeps an empty member set from a client whose step reads no file", async () => {
+    const resolved = await resolveProbe(wire({ path: "/client/proj", members: [] }));
+
+    expect(resolved.args.project_root).toBe("/client/proj");
+    expect(resolved.fileInputs!.project_root!.members).toEqual({});
+  });
+
+  it("ignores members on a probe without collect, and a collect probe without members", async () => {
+    const withoutCollect = await resolveProbe(
+      wire({
+        path: "/client/proj",
+        members: [{ role: "tool", key: "/client/a.png", path: "/client/a.png", state: "missing" }],
+      }),
+      [{ target: "project_root", path: "${project_root}", kind: "probe" }]
+    );
+    const withoutMembers = await resolveProbe(wire({ path: "/client/proj" }));
+
+    for (const resolved of [withoutCollect, withoutMembers]) {
+      expect(resolved.args.project_root).toBe("/client/proj");
+      expect(resolved.fileInputs!.project_root).toEqual({
+        clientPath: "/client/proj",
+        presentOnHost: false,
+        viaUpload: false,
+      });
+    }
   });
 });

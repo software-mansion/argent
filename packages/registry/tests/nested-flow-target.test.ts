@@ -1,10 +1,12 @@
 import * as path from "node:path";
 import { describe, it, expect } from "vitest";
 import { nestedFlowTarget } from "../src/flow-file-refs";
+import { LINKED_CALL_HEADER, nestedFlowTarget as exported } from "../src/index";
 
-// The one form decision both sides of a link share: the client serves the flow
-// of a `name` step, and the tool-server runs a nested step over a link only in
-// that form, so every accepted shape and every refusal is pinned here.
+// The one form decision both sides of a link share: the client sends the flow
+// of a `name` step with the call, and the tool-server runs a nested step over
+// a link only in that form, so every accepted shape and every refusal is
+// pinned here.
 describe("nestedFlowTarget", () => {
   it("accepts a flow name with an absolute project_root, whatever else the args carry", () => {
     expect(nestedFlowTarget({ name: "login", project_root: "/client/proj" })).toEqual({
@@ -152,5 +154,12 @@ describe("nestedFlowTarget", () => {
     ]) {
       expect(nestedFlowTarget({ flow_path: flowPath }), flowPath).toBeUndefined();
     }
+  });
+});
+
+describe("the registry entry point", () => {
+  it("exports nestedFlowTarget and the header a call over a link carries", () => {
+    expect(exported).toBe(nestedFlowTarget);
+    expect(LINKED_CALL_HEADER).toBe("x-argent-linked");
   });
 });

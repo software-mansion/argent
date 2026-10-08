@@ -6,14 +6,16 @@ import {
   ArtifactStore,
   FAILURE_CODES,
   Registry,
+  flowMemberKey,
   getFailureSignal,
-  type ClientServiceOp,
   type InvokeToolOptions,
+  type ResolvedMember,
   type ToolContext,
 } from "@argent/registry";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import { ClientProjectAccess } from "../../src/tools/flows/project-access";
 import {
   __resetRecordingsForTesting,
   getRecordingSession,
@@ -26,24 +28,28 @@ import { gatherWorkspaceDataTool } from "../../src/tools/workspace/gather-worksp
 
 /**
  * flow-add-step over a link, for the calls whose files are on the client: a
- * nested flow-execute, which runs the flow the client serves and records as
- * `run:` only when the client's sibling of the recording is the flow that ran,
- * and a tool: step whose file arguments the client serves. The recorder
- * records only what a replay over the same link runs, so every other such
- * call is refused before anything runs. The nested tools are stubs on a
+ * nested flow-execute, which runs the flow the client sent with the call and
+ * records as `run:` only when the client's sibling of the recording is the
+ * flow that ran, and a tool: step whose file arguments the client sent. The
+ * client sends them as the members of the call's `project_root` probe. The
+ * recorder records only what a replay over the same link runs, so every other
+ * such call is refused before anything runs. The nested tools are stubs on a
  * registry that reports their real file-input declarations.
  */
 
-type ClientServices = NonNullable<ToolContext["clientServices"]>;
+type Members = Record<string, ResolvedMember>;
 type ToolHandler = (args: Record<string, unknown>, options?: InvokeToolOptions) => unknown;
 
 /** The client's project root. It exists on this host too, so a host file can share a client path. */
 let root: string;
 let flowsDir: string;
 let recordingPath: string;
+/** Where the tool-server materializes the bytes of the files the client sent. */
+let uploads: string;
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-nested-record-remote-"));
+  uploads = await fs.mkdtemp(path.join(os.tmpdir(), "flow-nested-record-remote-uploads-"));
   flowsDir = path.join(root, ".argent", "flows");
   recordingPath = path.join(flowsDir, "rec.yaml");
   __resetRecordingsForTesting();
@@ -52,6 +58,7 @@ beforeEach(async () => {
 afterEach(async () => {
   __resetRecordingsForTesting();
   await fs.rm(root, { recursive: true, force: true });
+  await fs.rm(uploads, { recursive: true, force: true });
 });
 
 const flowText = (message: string): string =>
@@ -73,50 +80,52 @@ const PASSING_RUN = {
 };
 
 /**
- * The client side of the channel: `resolve-file` answers each flow in `flows`
- * (keyed by the client path it is spelled as, listed as written), and
- * `read-file` each file in `files`. Every other request is refused, as the
- * argent client refuses a file the recorded step does not name. Records every
- * request.
+ * What a current argent client sends with a flow-add-step call over a link,
+ * as the tool-server resolves it: each flow in `flows` (keyed by the client
+ * path it is spelled as, which is also its real path, listed as written)
+ * under the key the recorder looks it up by, its directory and basename, each
+ * path of `missing` as a flow the client does not have, and each file
+ * argument in `files` by its client path, its bytes written to this host as
+ * the resolver materializes them. Nothing else: a lookup of any other file is
+ * refused.
  */
-function fakeClient(
-  { flows = {}, files = {} }: { flows?: Record<string, string>; files?: Record<string, Buffer> },
-  ops: ClientServiceOp[] = ["resolve-file", "read-file"]
-): { services: ClientServices; requests: Array<{ op: string; args: Record<string, unknown> }> } {
-  const requests: Array<{ op: string; args: Record<string, unknown> }> = [];
-  const refuse = (op: string, subject: string): never => {
-    throw new Error(
-      `the client refused the ${op} request for "${subject}": ${subject} is not a file that ` +
-        `the step this call records names`
+async function clientFiles({
+  flows = {},
+  files = {},
+  missing = [],
+}: {
+  flows?: Record<string, string>;
+  files?: Record<string, Buffer>;
+  missing?: string[];
+}): Promise<Members> {
+  const members: Members = {};
+  const key = (spelled: string) => flowMemberKey(path.dirname(spelled), path.basename(spelled));
+  for (const spelled of missing) {
+    members[key(spelled)] = {
+      role: "flow",
+      state: "missing",
+      canonical: spelled,
+      spelling: { state: "absent" },
+    };
+  }
+  for (const [spelled, text] of Object.entries(flows)) {
+    members[key(spelled)] = {
+      role: "flow",
+      state: "present",
+      canonical: spelled,
+      spelling: { state: "listed" },
+      text,
+    };
+  }
+  for (const [clientPath, bytes] of Object.entries(files)) {
+    const hostPath = path.join(
+      uploads,
+      `${Object.keys(members).length}-${path.basename(clientPath)}`
     );
-  };
-  const services: ClientServices = {
-    ops,
-    roots: [root],
-    request: vi.fn(async (op: ClientServiceOp, args: Record<string, unknown>) => {
-      requests.push({ op, args });
-      if (op === "resolve-file") {
-        const spelled = path.join(String(args.anchorDir), String(args.target));
-        const text = flows[spelled];
-        if (text === undefined) return refuse(op, String(args.target));
-        return {
-          canonical: spelled,
-          spelling: { state: "listed" },
-          exists: true,
-          size: Buffer.byteLength(text),
-          mtimeMs: 1,
-          content: Buffer.from(text, "utf8").toString("base64"),
-        };
-      }
-      if (op === "read-file") {
-        const bytes = files[String(args.path)];
-        if (bytes === undefined) return refuse(op, String(args.path));
-        return { exists: true, size: bytes.length, mtimeMs: 1, content: bytes.toString("base64") };
-      }
-      return refuse(op, JSON.stringify(args));
-    }),
-  };
-  return { services, requests };
+    await fs.writeFile(hostPath, bytes);
+    members[clientPath] = { role: "tool", state: "present", hostPath };
+  }
+  return members;
 }
 
 /**
@@ -156,12 +165,18 @@ async function startHost(): Promise<void> {
   await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
 }
 
-function linkedCtx(services?: ClientServices): ToolContext {
+/** A call over a link: with `members`, from a current client; without, from one that sends no files. */
+function linkedCtx(members?: Members): ToolContext {
   return {
     artifacts: new ArtifactStore(),
     linked: true,
-    ...(services ? { clientServices: services } : {}),
+    ...(members ? { fileInputs: probeWith(members) } : {}),
   };
+}
+
+/** The resolved `project_root` probe of flow-add-step, carrying the files of its step. */
+function probeWith(members: Members): ToolContext["fileInputs"] {
+  return { project_root: { clientPath: root, presentOnHost: true, viaUpload: false, members } };
 }
 
 function addStep(
@@ -196,9 +211,9 @@ async function takeSteps(): Promise<FlowStep[] | undefined> {
 }
 
 describe("a nested flow-execute recorded over a link", () => {
-  it("records run: <name>.yaml from a client sibling served through resolve-file", async () => {
+  it("records run: <name>.yaml from a client sibling sent with the call", async () => {
     const basicPath = path.join(flowsDir, "basic.yaml");
-    const { services, requests } = fakeClient({
+    const members = await clientFiles({
       flows: { [recordingPath]: "steps: []\n", [basicPath]: flowText("basic") },
     });
     const registry = stubRegistry({ "flow-execute": () => PASSING_RUN });
@@ -208,22 +223,18 @@ describe("a nested flow-execute recorded over a link", () => {
       registry,
       "flow-execute",
       { name: "basic", project_root: root },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
     expect(result.recorded).toBe("1. run: basic.yaml");
     expect(directiveSteps(result.savedTo)).toEqual([{ kind: "run", flow: "basic.yaml" }]);
-    // Every answer came from the client: the recording itself and the sibling,
-    // which is also the flow the nested run executed.
-    expect(requests.map((r) => r.op)).toEqual(["resolve-file", "resolve-file"]);
-    expect(requests.map((r) => path.join(String(r.args.anchorDir), String(r.args.target)))).toEqual(
-      [basicPath, recordingPath]
-    );
+    expect(result).not.toHaveProperty("baselineWrites");
+    // Every file came from the client: nothing was written or read on this host.
     await expect(fs.stat(flowsDir)).rejects.toThrow();
   });
 
   it("keeps the raw step when the client sibling does not parse", async () => {
-    const { services } = fakeClient({
+    const members = await clientFiles({
       flows: {
         [recordingPath]: "steps: []\n",
         [path.join(flowsDir, "basic.yaml")]: "steps:\n  - nonsense: true\n",
@@ -236,7 +247,7 @@ describe("a nested flow-execute recorded over a link", () => {
       registry,
       "flow-execute",
       { name: "basic", project_root: root },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
     expect(result.message).toContain('could not resolve "basic" as a sibling fragment');
@@ -246,14 +257,41 @@ describe("a nested flow-execute recorded over a link", () => {
     ]);
   });
 
-  it("keeps the raw step when the client refuses the sibling", async () => {
-    // The nested run names a sub-project inside the client root, so the
-    // sibling in the recording's folder is another file than the flow that
-    // ran, and the client does not serve it. Distinct (anchor, target) pairs,
-    // so the client's answer for the flow that ran is not reused for it.
+  it("keeps the raw step when the client has no sibling", async () => {
+    // The nested run names a sub-project inside the client root, and the
+    // recording's folder has no basic.yaml: the client sends it as missing.
     const subRoot = path.join(root, "sub");
     const subBasic = path.join(subRoot, ".argent", "flows", "basic.yaml");
-    const { services, requests } = fakeClient({
+    const sibling = path.join(flowsDir, "basic.yaml");
+    const members = await clientFiles({
+      flows: { [recordingPath]: "steps: []\n", [subBasic]: flowText("sub basic") },
+      missing: [sibling],
+    });
+    const registry = stubRegistry({ "flow-execute": () => PASSING_RUN });
+    await startLinked();
+
+    const result = await addStep(
+      registry,
+      "flow-execute",
+      { name: "basic", project_root: subRoot },
+      linkedCtx(members)
+    );
+
+    expect(result.message).toContain(
+      `could not resolve "basic" as a sibling fragment (ENOENT: no such file or directory, ` +
+        `open '${sibling}')`
+    );
+    expect(result.message).toContain("kept the raw flow-execute step");
+    expect(directiveSteps(result.savedTo)).toEqual([
+      { kind: "tool", name: "flow-execute", args: { name: "basic", project_root: subRoot } },
+    ]);
+  });
+
+  it("keeps the raw step when the client did not send the sibling", async () => {
+    // A lookup of a file the call did not carry is the client's refusal.
+    const subRoot = path.join(root, "sub");
+    const subBasic = path.join(subRoot, ".argent", "flows", "basic.yaml");
+    const members = await clientFiles({
       flows: { [recordingPath]: "steps: []\n", [subBasic]: flowText("sub basic") },
     });
     const registry = stubRegistry({ "flow-execute": () => PASSING_RUN });
@@ -263,30 +301,25 @@ describe("a nested flow-execute recorded over a link", () => {
       registry,
       "flow-execute",
       { name: "basic", project_root: subRoot },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
-    expect(requests).toContainEqual({
-      op: "resolve-file",
-      args: { anchorDir: flowsDir, target: "basic.yaml", kind: "flow" },
-    });
     expect(result.message).toContain(
-      `could not resolve "basic" as a sibling fragment (the client refused the resolve-file ` +
-        `request for "basic.yaml"`
+      `could not resolve "basic" as a sibling fragment (the client refused to send ` +
+        `"basic.yaml": basic.yaml is not a run: target of a flow this client sent)`
     );
-    expect(result.message).toContain("kept the raw flow-execute step");
     expect(directiveSteps(result.savedTo)).toEqual([
       { kind: "tool", name: "flow-execute", args: { name: "basic", project_root: subRoot } },
     ]);
   });
 
-  it("keeps the raw step when the client serves a sibling that is another file than the flow that ran", async () => {
-    // A client that serves both: the sibling parses, but a `run:` of it would
-    // replay another flow than the one that just ran.
+  it("keeps the raw step when the client sends a sibling that is another file than the flow that ran", async () => {
+    // The sibling parses, but a `run:` of it would replay another flow than
+    // the one that just ran.
     const subRoot = path.join(root, "sub");
     const subBasic = path.join(subRoot, ".argent", "flows", "basic.yaml");
     const sibling = path.join(flowsDir, "basic.yaml");
-    const { services } = fakeClient({
+    const members = await clientFiles({
       flows: {
         [recordingPath]: "steps: []\n",
         [subBasic]: flowText("sub basic"),
@@ -300,7 +333,7 @@ describe("a nested flow-execute recorded over a link", () => {
       registry,
       "flow-execute",
       { name: "basic", project_root: subRoot },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
     expect(result.message).toContain(
@@ -319,7 +352,7 @@ describe("a nested flow-execute recorded over a link", () => {
     const clientText = flowText("from the client");
     await fs.mkdir(flowsDir, { recursive: true });
     await fs.writeFile(basicPath, hostText);
-    const { services } = fakeClient({
+    const members = await clientFiles({
       flows: { [recordingPath]: "steps: []\n", [basicPath]: clientText },
     });
     const seen: Array<{
@@ -339,7 +372,7 @@ describe("a nested flow-execute recorded over a link", () => {
       registry,
       "flow-execute",
       { name: "basic", project_root: root },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
     expect(seen).toHaveLength(1);
@@ -349,10 +382,14 @@ describe("a nested flow-execute recorded over a link", () => {
     expect(options?.fileInputs?.flow_file).toMatchObject({
       clientPath: basicPath,
       viaUpload: true,
+      canonical: basicPath,
+      spelling: { state: "listed" },
     });
     expect(text).toBe(clientText);
-    // The nested run resolves its own files through this call's channel.
-    expect(options?.clientServices).toBe(services);
+    // The nested run finds its own files among the same members, and runs as
+    // a nested run with no enclosing one.
+    expect(options?.fileInputs?.flow_file?.members).toBe(members);
+    expect(options?.flowStack).toEqual([]);
     // The upload lives for the invoke only, and the host file is untouched.
     await expect(fs.stat(String(args.flow_file))).rejects.toThrow();
     expect(await fs.readFile(basicPath, "utf8")).toBe(hostText);
@@ -363,8 +400,8 @@ describe("a nested flow-execute recorded over a link", () => {
     // The real tool on a real registry: it accepts the upload the recorder
     // hands it, runs the client's flow and not the host file at the same path,
     // and resolves that flow's `run:` fragment, which only the client has,
-    // through the forwarded channel. A `run:` step binds a device, so the call
-    // names one, which no step then acts on.
+    // among the members the recorder forwards. A `run:` step binds a device,
+    // so the call names one, which no step then acts on.
     const basicPath = path.join(flowsDir, "basic.yaml");
     const innerPath = path.join(flowsDir, "inner.yaml");
     await fs.mkdir(flowsDir, { recursive: true });
@@ -376,7 +413,7 @@ describe("a nested flow-execute recorded over a link", () => {
         { kind: "run", flow: "inner.yaml" },
       ],
     });
-    const { services, requests } = fakeClient({
+    const members = await clientFiles({
       flows: {
         [recordingPath]: "steps: []\n",
         [basicPath]: clientBasic,
@@ -391,7 +428,7 @@ describe("a nested flow-execute recorded over a link", () => {
       registry,
       "flow-execute",
       { name: "basic", project_root: root, device: "00000000-0000-0000-0000-0000000000ab" },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
     expect(result.toolResult).toMatchObject({ flow: "basic", ok: true, failed: 0, errored: 0 });
@@ -399,15 +436,50 @@ describe("a nested flow-execute recorded over a link", () => {
     expect(report).toContain("from the client");
     expect(report).toContain("inner on the client");
     expect(report).not.toContain("from the host");
-    // The recorder asks for the flow to run, the nested run for its own root
-    // and its fragment, and the recorder then for the recording itself.
-    expect(requests.map((r) => path.join(String(r.args.anchorDir), String(r.args.target)))).toEqual(
-      [basicPath, basicPath, innerPath, recordingPath]
-    );
     expect(directiveSteps(result.savedTo)).toEqual([{ kind: "run", flow: "basic.yaml" }]);
   });
 
-  it("refuses a nested flow-execute before the invoke when the call carries no client services", async () => {
+  it("returns the baselines the nested run wrote, for the client to write", async () => {
+    // The nested run writes into the overlay of the call's files; flow-add-step,
+    // the outermost run of the call, returns those writes as directives. The
+    // stub stands in for a nested run that wrote one baseline.
+    const basicPath = path.join(flowsDir, "basic.yaml");
+    const baseline = path.join(flowsDir, "__baselines__", "basic", "page__chromium-1x1.png");
+    const bytes = Buffer.from("new baseline bytes");
+    const members = await clientFiles({
+      flows: { [recordingPath]: "steps: []\n", [basicPath]: flowText("snap") },
+    });
+    const registry = stubRegistry({
+      "flow-execute": async (args, options) => {
+        const nested = new ClientProjectAccess(options!.fileInputs!.flow_file!.members!);
+        await nested.writeBaseline(baseline, bytes);
+        // A nested run returns none itself: the call's outermost run does.
+        expect(nested.baselineDirectives()).toHaveLength(1);
+        expect(args.updateBaselines).toBe(true);
+        return PASSING_RUN;
+      },
+    });
+    await startLinked();
+
+    const result = await addStep(
+      registry,
+      "flow-execute",
+      { name: "basic", project_root: root, updateBaselines: true },
+      linkedCtx(members)
+    );
+
+    expect(result.baselineWrites).toEqual([
+      {
+        __argentClientFile: true,
+        path: baseline,
+        content: bytes.toString("base64"),
+        encoding: "base64",
+      },
+    ]);
+    expect(result.recorded).toBe("1. run: basic.yaml");
+  });
+
+  it("refuses a nested flow-execute before the invoke when the call carries no files", async () => {
     const registry = stubRegistry({ "flow-execute": () => PASSING_RUN });
     await startLinked();
 
@@ -424,20 +496,62 @@ describe("a nested flow-execute recorded over a link", () => {
         "Nothing ran and no step was recorded."
     );
     expect(err.message).toContain(
-      "Over a link, a nested flow-execute runs only when the argent client serves the flow it names."
+      "Over a link, a nested flow-execute runs only when the argent client sends the flow it " +
+        "names with the call. Update the argent CLI or MCP adapter on the client."
     );
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await takeSteps()).toEqual([]);
   });
+
+  it("refuses a nested flow-execute whose flow_path is outside the recording folder", async () => {
+    const members = await clientFiles({ flows: { [recordingPath]: "steps: []\n" } });
+    const registry = stubRegistry({ "flow-execute": () => PASSING_RUN });
+    await startLinked();
+
+    const err = await rejection(
+      addStep(
+        registry,
+        "flow-execute",
+        { flow_path: path.join(root, "shared", "login.yaml"), project_root: root },
+        linkedCtx(members)
+      )
+    );
+
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_add_step_flow_path");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await takeSteps()).toEqual([]);
+  });
+
+  it("refuses a nested flow that the client does not have, and records nothing", async () => {
+    // The client sent the flow as missing; the recorder reads it before the
+    // nested run starts.
+    const missingPath = path.join(flowsDir, "nosuchflow.yaml");
+    const members = await clientFiles({
+      flows: { [recordingPath]: "steps: []\n" },
+      missing: [missingPath],
+    });
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry));
+    await startLinked();
+
+    const err = await rejection(
+      addStep(
+        registry,
+        "flow-execute",
+        { name: "nosuchflow", project_root: root },
+        linkedCtx(members)
+      )
+    );
+
+    expect(err.message).toBe(`ENOENT: no such file or directory, open '${missingPath}'`);
+    expect(await takeSteps()).toEqual([]);
+  });
 });
 
-describe("client services from a client that sends no link header", () => {
-  // An older argent client serves what the recording file names, not what the
-  // recorded step names, so the recorder does not ask it for files.
-  it("refuses a nested flow-execute in a client take, without a request to that client", async () => {
-    const { services, requests } = fakeClient({
-      flows: { [path.join(flowsDir, "basic.yaml")]: flowText("basic") },
-    });
+describe("a call from a client that sends no link header and no files", () => {
+  // An older argent client sends neither, so the recorder has no files of the
+  // step to read.
+  it("refuses a nested flow-execute in a client take", async () => {
     const registry = stubRegistry({ "flow-execute": () => PASSING_RUN });
     await startLinked();
 
@@ -446,13 +560,12 @@ describe("client services from a client that sends no link header", () => {
         registry,
         "flow-execute",
         { name: "basic", project_root: root },
-        { artifacts: new ArtifactStore(), clientServices: services }
+        { artifacts: new ArtifactStore() }
       )
     );
 
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
     expect(err.message).toContain("Update the argent CLI or MCP adapter on the client.");
-    expect(requests).toEqual([]);
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await takeSteps()).toEqual([]);
   });
@@ -460,7 +573,6 @@ describe("client services from a client that sends no link header", () => {
   it("records a nested flow-execute in a host take as without a link", async () => {
     await fs.mkdir(flowsDir, { recursive: true });
     await fs.writeFile(path.join(flowsDir, "basic.yaml"), flowText("basic"));
-    const { services, requests } = fakeClient({});
     const registry = stubRegistry({ "flow-execute": () => PASSING_RUN });
     await startHost();
 
@@ -468,26 +580,23 @@ describe("client services from a client that sends no link header", () => {
       registry,
       "flow-execute",
       { name: "basic", project_root: root },
-      { artifacts: new ArtifactStore(), clientServices: services }
+      { artifacts: new ArtifactStore() }
     );
 
     expect(result.recorded).toBe("1. run: basic.yaml");
-    expect(requests).toEqual([]);
-    // The nested run read this host's file: no upload, no client services.
+    // The nested run read this host's file: no upload.
     const options = vi.mocked(registry.invokeTool).mock.calls[0]?.[2];
     expect(options?.fileInputs).toBeUndefined();
-    expect(options?.clientServices).toBeUndefined();
   });
 });
 
 describe("a tool: step with file arguments recorded over a link", () => {
   it("refuses a tool step with a directory argument before the invoke", async () => {
-    const { services, requests } = fakeClient({});
     const registry = stubRegistry({ "gather-workspace-data": () => ({}) });
     await startLinked();
 
     const err = await rejection(
-      addStep(registry, "gather-workspace-data", { workspacePath: root }, linkedCtx(services))
+      addStep(registry, "gather-workspace-data", { workspacePath: root }, linkedCtx({}))
     );
 
     expect(getFailureSignal(err)).toMatchObject({
@@ -502,14 +611,35 @@ describe("a tool: step with file arguments recorded over a link", () => {
         "flow-finish-recording."
     );
     expect(registry.invokeTool).not.toHaveBeenCalled();
-    expect(requests).toEqual([]);
     expect(await takeSteps()).toEqual([]);
   });
 
-  it("records a screenshot-diff step with a client .png baseline read through read-file", async () => {
+  it("refuses a file argument from a client that sends no files, with the update hint", async () => {
+    const registry = stubRegistry({ "screenshot-diff": () => ({}) });
+    await startLinked();
+    const baselinePath = path.join(root, "shots", "base.png");
+
+    const err = await rejection(
+      addStep(
+        registry,
+        "screenshot-diff",
+        { udid: "DEVICE-1", baselinePath, captureCurrent: true },
+        linkedCtx()
+      )
+    );
+
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_tool_file_input");
+    expect(err.message).toContain(
+      "This tool-server runs tool: steps with file arguments for a client that sends them with " +
+        "the call. Update the argent CLI or MCP adapter on the client."
+    );
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("records a screenshot-diff step with a client .png baseline sent with the call", async () => {
     const baselinePath = path.join(root, "shots", "base.png");
     const clientBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7, 7]);
-    const { services, requests } = fakeClient({ files: { [baselinePath]: clientBytes } });
+    const members = await clientFiles({ files: { [baselinePath]: clientBytes } });
     const seen: Array<{
       args: Record<string, unknown>;
       options?: InvokeToolOptions;
@@ -527,10 +657,9 @@ describe("a tool: step with file arguments recorded over a link", () => {
       registry,
       "screenshot-diff",
       { udid: "DEVICE-1", baselinePath, captureCurrent: true },
-      linkedCtx(services)
+      linkedCtx(members)
     );
 
-    expect(requests).toEqual([{ op: "read-file", args: { path: baselinePath } }]);
     expect(seen).toHaveLength(1);
     const [{ args, options, bytes }] = seen;
     expect(args.baselinePath).not.toBe(baselinePath);
@@ -539,8 +668,8 @@ describe("a tool: step with file arguments recorded over a link", () => {
       clientPath: baselinePath,
       viaUpload: true,
     });
-    // Only a nested flow-execute gets the channel.
-    expect(options?.clientServices).toBeUndefined();
+    // A file argument gets a file input of its own, not the members of the call.
+    expect(options?.fileInputs?.baselinePath?.members).toBeUndefined();
     await expect(fs.stat(String(args.baselinePath))).rejects.toThrow();
     expect(directiveSteps(result.savedTo)).toEqual([
       {
@@ -549,6 +678,27 @@ describe("a tool: step with file arguments recorded over a link", () => {
         args: { baselinePath, captureCurrent: true },
       },
     ]);
+  });
+
+  it("fails a screenshot-diff step whose baseline the client does not have, and records nothing", async () => {
+    const baselinePath = path.join(root, "shots", "base.png");
+    const registry = stubRegistry({ "screenshot-diff": () => ({}) });
+    await startLinked();
+
+    const err = await rejection(
+      addStep(
+        registry,
+        "screenshot-diff",
+        { udid: "DEVICE-1", baselinePath, captureCurrent: true },
+        linkedCtx({ [baselinePath]: { role: "tool", state: "missing" } })
+      )
+    );
+
+    expect(err.message).toContain(
+      `the client has no file at "${baselinePath}" (argument baselinePath of screenshot-diff)`
+    );
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await takeSteps()).toEqual([]);
   });
 });
 
@@ -564,18 +714,21 @@ describe("a nested flow-execute that does not pass", () => {
     ],
   };
 
-  it("records nothing when the nested flow fails, and returns the failing step", async () => {
-    const { services } = fakeClient({
+  const basicMembers = () =>
+    clientFiles({
       flows: {
         [recordingPath]: "steps: []\n",
         [path.join(flowsDir, "basic.yaml")]: flowText("basic"),
       },
     });
+
+  it("records nothing when the nested flow fails, and returns the failing step", async () => {
+    const members = await basicMembers();
     const registry = stubRegistry({ "flow-execute": () => FAILED_RUN });
     await startLinked();
 
     const err = await rejection(
-      addStep(registry, "flow-execute", { name: "basic", project_root: root }, linkedCtx(services))
+      addStep(registry, "flow-execute", { name: "basic", project_root: root }, linkedCtx(members))
     );
 
     expect(getFailureSignal(err)).toMatchObject({
@@ -602,22 +755,12 @@ describe("a nested flow-execute that does not pass", () => {
   ])(
     "records nothing when the nested flow did not run, with the did-not-run message (%s)",
     async (_case, report, reason) => {
-      const { services } = fakeClient({
-        flows: {
-          [recordingPath]: "steps: []\n",
-          [path.join(flowsDir, "basic.yaml")]: flowText("basic"),
-        },
-      });
+      const members = await basicMembers();
       const registry = stubRegistry({ "flow-execute": () => report });
       await startLinked();
 
       const err = await rejection(
-        addStep(
-          registry,
-          "flow-execute",
-          { name: "basic", project_root: root },
-          linkedCtx(services)
-        )
+        addStep(registry, "flow-execute", { name: "basic", project_root: root }, linkedCtx(members))
       );
 
       expect(getFailureSignal(err)?.failure_stage).toBe("flow_add_step_nested_failed");

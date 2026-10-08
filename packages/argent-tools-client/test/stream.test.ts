@@ -283,8 +283,8 @@ describe("callTool NDJSON line split", () => {
   });
 
   it("reads one long line in time linear in its length", async () => {
-    // A write-file request line carries a baseline as base64, tens of MB in
-    // one line, and the time to read it counts against the server's 30 s.
+    // A result line carries the baselines a run wrote as base64, tens of MB
+    // in one line.
     const long = "A".repeat(8 * 1024 * 1024);
     const bytes = ndjson(
       `${JSON.stringify({ event: "progress", data: long })}\n`,

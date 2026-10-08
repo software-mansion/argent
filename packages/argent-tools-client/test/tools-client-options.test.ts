@@ -259,7 +259,7 @@ describe("createToolsClient options", () => {
       ["GET", "/tools", null],
       ["POST", "/tools/slow", null],
     ]);
-    // The call carries no client_services: the header does not depend on them.
+    // The calls carry no files: the header does not depend on them.
     expect(requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body))).toEqual([
       {},
       {},
