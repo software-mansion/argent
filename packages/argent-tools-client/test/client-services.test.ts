@@ -638,9 +638,12 @@ describe("read-file and write-file", () => {
 
   const outsideError = (file: string, roots = [projectDir]) =>
     `${file} is outside every root this client serves (${roots.join(", ")})`;
-  const notBaselineError = (file: string, verb = "writes") =>
+  const notBaselineError = (file: string) =>
     `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
-    `this client ${verb} baselines only`;
+    `this client writes baselines only`;
+  const notServedError = (file: string) =>
+    `${file} is neither a file argument of a tool: step in a flow this client served ` +
+    `nor a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png)`;
 
   async function exists(file: string): Promise<boolean> {
     return fs.lstat(file).then(
@@ -754,7 +757,7 @@ describe("read-file and write-file", () => {
       expect(await handler.handle(readLine(file))).toEqual({
         id: "req-1",
         ok: false,
-        error: notBaselineError(file, "serves"),
+        error: notServedError(file),
       });
     }
     expect(await exists(made)).toBe(false);
@@ -1016,7 +1019,8 @@ describe("read-file and write-file", () => {
     await fs.writeFile(screenshot, PNG);
     const handler = await snapshotHandlerFor([projectDir]);
 
-    // All exist inside the root: read-file serves baselines only.
+    // All exist inside the root, and no tool: step names them: read-file
+    // serves them neither as baselines nor as file arguments.
     for (const file of [
       path.join(flowsDir, "helper.mjs"),
       path.join(flowsDir, "frag.yaml"),
@@ -1027,7 +1031,7 @@ describe("read-file and write-file", () => {
       expect(await handler.handle(readLine(file))).toEqual({
         id: "req-1",
         ok: false,
-        error: notBaselineError(file, "serves"),
+        error: notServedError(file),
       });
     }
   });
@@ -1045,7 +1049,7 @@ describe("read-file and write-file", () => {
       expect(await handler.handle(readLine(file))).toEqual({
         id: "req-1",
         ok: false,
-        error: notBaselineError(file, "serves"),
+        error: notServedError(file),
       });
     }
     expect(await handler.handle(readLine(1))).toEqual({
@@ -1532,6 +1536,283 @@ describe("read-file and write-file", () => {
       error: "op write-file is not served by this client",
     });
     expect(await exists(other)).toBe(false);
+  });
+
+  describe("read-file for the file arguments of tool: steps", () => {
+    const kinds = ".png, .yaml";
+    const notToolFileError = (file: string) =>
+      `${file} is not a file this client serves for a tool: step (${kinds})`;
+
+    /** One `tool:` step per entry, as flow YAML: JSON args are a YAML flow mapping. */
+    const toolSteps = (...steps: [tool: string, args: Record<string, unknown>][]) =>
+      `steps:\n${steps.map(([tool, args]) => `  - tool: ${tool}\n    args: ${JSON.stringify(args)}\n`).join("")}`;
+
+    /** Make the root flow exactly these `tool:` steps. */
+    async function usesTools(...steps: Parameters<typeof toolSteps>): Promise<void> {
+      await fs.writeFile(path.join(flowsDir, "root.yaml"), toolSteps(...steps));
+    }
+
+    it("builds a handler for a root flow whose only file is a tool: argument, when read-file is offered", async () => {
+      const rootFlow = path.join(flowsDir, "root.yaml");
+      const handlerWith = async (args: Record<string, unknown>, advertised: ClientServiceOp[]) => {
+        await usesTools(["screenshot-diff", args]);
+        return createClientServicesHandler({
+          roots: [projectDir],
+          rootFlow,
+          advertised,
+          baselineDir: null,
+        });
+      };
+      const named = { baselinePath: path.join(projectDir, "home.png"), captureCurrent: true };
+
+      expect((await handlerWith(named, ["read-file"]))?.param).toEqual({
+        ops: ["read-file"],
+        roots: [projectDir],
+      });
+      // Only read-file carries a file argument.
+      expect(await handlerWith(named, ["resolve-file", "write-file"])).toBeNull();
+      // No absolute path among the args: the step reads no file of this client.
+      expect(await handlerWith({ x: 0.5, y: 0.5 }, ALL)).toBeNull();
+      // Text that looks like a path, as a keyboard step types it, is no file.
+      expect(await handlerWith({ text: "/start" }, ALL)).toBeNull();
+      expect(await handlerWith({ baselinePath: "img/home.png" }, ALL)).toBeNull();
+    });
+
+    it("serves a .png that a tool: step of the root flow names", async () => {
+      const image = path.join(projectDir, "shots", "home.png");
+      await fs.mkdir(path.dirname(image));
+      await fs.writeFile(image, PNG);
+      const st = await fs.stat(image);
+      await usesTools(["screenshot-diff", { baselinePath: image, captureCurrent: true }]);
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(readLine(image))).toEqual({
+        id: "req-1",
+        ok: true,
+        exists: true,
+        size: PNG.length,
+        mtimeMs: st.mtimeMs,
+        content: PNG.toString("base64"),
+      });
+    });
+
+    it("serves a named .yaml or .PNG and refuses a named .json, .sqlite or .mjs", async () => {
+      // The client reads no tool's schema: any absolute string argument counts.
+      const files = Object.fromEntries(
+        ["login.yaml", "home.PNG", "config.json", "app.sqlite", "helper.mjs"].map((name) => [
+          name,
+          path.join(projectDir, name),
+        ])
+      );
+      for (const file of Object.values(files)) await fs.writeFile(file, "{}\n");
+      await usesTools(["some-tool", files]);
+      const handler = await handlerFor([projectDir]);
+
+      // The extension is matched in any case, as a case-insensitive disk may
+      // name the file the flow spells `.png`.
+      for (const name of ["login.yaml", "home.PNG"]) {
+        expect(await handler.handle(readLine(files[name]))).toMatchObject({
+          ok: true,
+          exists: true,
+          content: Buffer.from("{}\n").toString("base64"),
+        });
+      }
+      for (const name of ["config.json", "app.sqlite", "helper.mjs"]) {
+        expect(await handler.handle(readLine(files[name]))).toEqual({
+          id: "req-1",
+          ok: false,
+          error: notToolFileError(files[name]!),
+        });
+      }
+    });
+
+    it("refuses a file no tool: step names, even a .png under the root or a respelling of a named one", async () => {
+      const named = path.join(projectDir, "named.png");
+      const other = path.join(projectDir, "other.png");
+      await fs.writeFile(named, PNG);
+      await fs.writeFile(other, PNG);
+      await usesTools(["screenshot-diff", { baselinePath: named, captureCurrent: true }]);
+      const handler = await handlerFor([projectDir]);
+
+      // The runner asks by the step's spelling, so another one names nothing.
+      // (path.join would fold the `..` away.)
+      const respelled = [projectDir, "shots", "..", "named.png"].join(path.sep);
+      for (const file of [other, respelled]) {
+        expect(await handler.handle(readLine(file))).toEqual({
+          id: "req-1",
+          ok: false,
+          error: notServedError(file),
+        });
+      }
+    });
+
+    it("refuses a named file outside the roots the same way whether or not it exists, before looking there", async () => {
+      const outside = path.join(tmpDir, "outside");
+      await fs.mkdir(outside);
+      const there = path.join(outside, "there.png");
+      const gone = path.join(outside, "gone.png");
+      await fs.writeFile(there, PNG);
+      await usesTools(["screenshot-diff", { baselinePath: there, currentPath: gone }]);
+      const handler = await handlerFor([projectDir]);
+      const spies = (["lstat", "stat", "realpath", "readlink", "readFile", "open"] as const).map(
+        (name) => vi.spyOn(fsCjs, name)
+      );
+      syncBuiltinESMExports();
+
+      const answers = [await handler.handle(readLine(there)), await handler.handle(readLine(gone))];
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+
+      expect(answers).toEqual([
+        { id: "req-1", ok: false, error: outsideError(there) },
+        { id: "req-1", ok: false, error: outsideError(gone) },
+      ]);
+      const touched = spies.flatMap((spy) => spy.mock.calls.map((call) => String(call[0])));
+      // The spies are live: the walk looked at the way to the root.
+      expect(touched).toContain(tmpDir);
+      expect(touched.filter((p) => p.startsWith(outside))).toEqual([]);
+    });
+
+    it("refuses a named file that the flow spells through a link above the roots", async () => {
+      // The flow may be one the tool-server wrote back to this client, so its
+      // paths are walked as spelled, as a request's are: a link outside the
+      // roots is not followed, even to a file inside them.
+      const alias = path.join(tmpDir, "alias");
+      await fs.symlink(projectDir, alias);
+      const image = path.join(alias, "home.png");
+      await fs.writeFile(path.join(projectDir, "home.png"), PNG);
+      await usesTools(["screenshot-diff", { baselinePath: image, captureCurrent: true }]);
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(readLine(image))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: outsideError(image),
+      });
+    });
+
+    it("refuses a named .png that links to a .env in the roots, or out of the roots", async () => {
+      await fs.writeFile(path.join(projectDir, ".env"), "SECRET=1\n");
+      const toEnv = path.join(projectDir, "x.png");
+      await fs.symlink(path.join(projectDir, ".env"), toEnv);
+      const elsewhere = path.join(tmpDir, "elsewhere");
+      await fs.mkdir(elsewhere);
+      await fs.writeFile(path.join(elsewhere, "real.png"), PNG);
+      const toOutside = path.join(projectDir, "y.png");
+      await fs.symlink(path.join(elsewhere, "real.png"), toOutside);
+      await usesTools(["screenshot-diff", { baselinePath: toEnv, currentPath: toOutside }]);
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(readLine(toEnv))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: `${toEnv} links to a file that is not one of ${kinds}`,
+      });
+      const answer = await handler.handle(readLine(toOutside));
+      expect(answer).toEqual({ id: "req-1", ok: false, error: outsideError(toOutside) });
+      // Where it points is the client's business: the server only learns "outside".
+      expect((answer as { error: string }).error).not.toContain(elsewhere);
+    });
+
+    it("answers exists: false for a named file that is not there, also behind a regular file", async () => {
+      const missing = path.join(projectDir, "missing.png");
+      const inMissingDir = path.join(projectDir, "gone", "x.png");
+      // frag.yaml is a regular file: the kernel answers ENOTDIR below it.
+      const behindFile = path.join(flowsDir, "frag.yaml", "x.png");
+      await usesTools(
+        ["screenshot-diff", { baselinePath: missing, currentPath: inMissingDir }],
+        ["screenshot-diff", { baselinePath: behindFile, captureCurrent: true }]
+      );
+      const handler = await handlerFor([projectDir]);
+
+      for (const file of [missing, inMissingDir, behindFile]) {
+        expect(await handler.handle(readLine(file))).toEqual({
+          id: "req-1",
+          ok: true,
+          exists: false,
+        });
+      }
+    });
+
+    it("serves a fragment's tool: argument only once that fragment was served", async () => {
+      // root.yaml runs frag.yaml; only frag.yaml names the image.
+      const image = path.join(projectDir, "frag.png");
+      await fs.writeFile(image, PNG);
+      await fs.writeFile(
+        path.join(flowsDir, "frag.yaml"),
+        toolSteps(["screenshot-diff", { baselinePath: image, captureCurrent: true }])
+      );
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(readLine(image))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: notServedError(image),
+      });
+      expect(await handler.handle(resolveLine(flowsDir, "frag.yaml"))).toMatchObject({
+        ok: true,
+        exists: true,
+      });
+      expect(await handler.handle(readLine(image))).toMatchObject({
+        ok: true,
+        exists: true,
+        content: PNG.toString("base64"),
+      });
+    });
+
+    it("serves a tool: argument named inside a when: block", async () => {
+      const image = path.join(projectDir, "home.png");
+      await fs.writeFile(image, PNG);
+      await fs.writeFile(
+        path.join(flowsDir, "root.yaml"),
+        "steps:\n  - when: { visible: Home }\n    steps:\n      - tool: screenshot-diff\n" +
+          `        args: ${JSON.stringify({ baselinePath: image, captureCurrent: true })}\n`
+      );
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(readLine(image))).toMatchObject({
+        ok: true,
+        exists: true,
+        content: PNG.toString("base64"),
+      });
+    });
+
+    it("serves a baseline-shaped path that a tool: step names as that step's argument", async () => {
+      // As a baseline it is another flow's, which this run may not read.
+      const theirs = path.join(flowsDir, "__baselines__", "other", "home.png");
+      await fs.mkdir(path.dirname(theirs), { recursive: true });
+      await fs.writeFile(theirs, PNG);
+      await usesTools(["screenshot-diff", { baselinePath: theirs, captureCurrent: true }]);
+      const handler = await handlerFor([projectDir]);
+
+      expect(await handler.handle(readLine(theirs))).toMatchObject({
+        ok: true,
+        exists: true,
+        content: PNG.toString("base64"),
+      });
+    });
+
+    it("logs a tool: argument by the path the server sent under ARGENT_CLIENT_SERVICES_LOG=1", async () => {
+      // Spelled through a linked directory, so the real path is another one.
+      await fs.mkdir(path.join(projectDir, "store"));
+      await fs.writeFile(path.join(projectDir, "store", "home.png"), PNG);
+      await fs.symlink(path.join(projectDir, "store"), path.join(projectDir, "shots"));
+      const image = path.join(projectDir, "shots", "home.png");
+      const outside = path.join(tmpDir, "outside.png");
+      await usesTools(["screenshot-diff", { baselinePath: image, currentPath: outside }]);
+      const handler = await handlerFor([projectDir]);
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      vi.stubEnv("ARGENT_CLIENT_SERVICES_LOG", "1");
+
+      await handler.handle(readLine(image));
+      await handler.handle(readLine(outside));
+
+      expect(write.mock.calls.map((c) => String(c[0]))).toEqual([
+        `[client-services] read-file ${image}: served\n`,
+        `[client-services] read-file ${outside}: refused (${outsideError(outside)})\n`,
+      ]);
+      expect(write.mock.calls.join("\n")).not.toContain(PNG.toString("base64"));
+    });
   });
 });
 

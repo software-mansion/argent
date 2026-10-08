@@ -27,6 +27,8 @@ import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-devi
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
 import { reinstallAppTool } from "../../src/tools/reinstall-app";
 import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
+import { gatherWorkspaceDataTool } from "../../src/tools/workspace/gather-workspace-data";
+import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 
 // Stub the snapshot differ: the baseline-anchoring test asserts only WHERE the
 // runner points it (root flowsDir + root flow name), not the diffing itself.
@@ -122,7 +124,9 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
 /**
  * A client-services channel as the HTTP layer hands it to the runner: serves
  * `files` (keyed by client path) for `resolve-file` and records every request.
- * `ops` narrows what the client claims to serve.
+ * `ops` narrows what the client claims to serve. With `bytes`, it also answers
+ * `read-file` from that map (keyed by client path), as the client reads a file
+ * argument of a `tool:` step.
  */
 function fakeClientServices(
   files: Record<string, string>,
@@ -132,6 +136,8 @@ function fakeClientServices(
     realpaths?: Record<string, string>;
     /** How the client finds a spelled path's basename in its directory, when not as written. */
     spellings?: Record<string, OnDiskSpelling>;
+    /** The files `read-file` serves, keyed by client path. */
+    bytes?: Record<string, Buffer>;
   } = {}
 ): {
   services: NonNullable<ToolContext["clientServices"]>;
@@ -158,6 +164,16 @@ function fakeClientServices(
           content: Buffer.from(text, "utf8").toString("base64"),
         };
       }
+      if (op === "read-file" && opts.bytes) {
+        const content = opts.bytes[String(args.path)];
+        if (content === undefined) return { exists: false };
+        return {
+          exists: true,
+          size: content.length,
+          mtimeMs: 1,
+          content: content.toString("base64"),
+        };
+      }
       throw new Error(`unexpected op ${op}`);
     }),
   };
@@ -176,6 +192,60 @@ const BASELINE_OPS: ClientServiceOp[] = ["resolve-file", "read-file", "write-fil
 const SNAPSHOT_UPDATE_HINT =
   " This tool-server serves snapshot: steps for a client that offers the resolve-file, " +
   "read-file and write-file client services. Update the argent CLI or MCP adapter on the client.";
+
+/** The end of an upload refusal whose tool: step file arguments a newer client would get served. */
+const TOOL_FILE_UPDATE_HINT =
+  " This tool-server serves the file arguments of tool: steps for a client that offers the " +
+  "read-file client service. Update the argent CLI or MCP adapter on the client.";
+
+/** The end of an upload refusal that lists a relative file argument of a tool: step. */
+const RELATIVE_TOOL_FILE_HINT = " Over a link, a tool: step must name a file by an absolute path.";
+
+/** What a current client offers for a compare run: `run:` fragments, baselines and file arguments. */
+const READ_OPS: ClientServiceOp[] = ["resolve-file", "read-file"];
+
+/**
+ * A step registry whose `getTool` reports the real file-input declarations of
+ * the tools that take files (each declaring `udid`, so the run binds its
+ * device), and whose `screenshot-diff` reads the two files it is handed, as the
+ * real tool does, recording their paths, bytes and the call's file inputs.
+ */
+function fileToolRegistry(): {
+  registry: Registry;
+  diffs: Array<{
+    args: Record<string, unknown>;
+    baseline: Buffer;
+    current: Buffer;
+    fileInputs: unknown;
+  }>;
+} {
+  const tools: Record<string, { fileInputs?: unknown }> = {
+    "screenshot-diff": screenshotDiffTool,
+    "reinstall-app": reinstallAppTool,
+    "gather-workspace-data": gatherWorkspaceDataTool,
+    "flow-read-prerequisite": flowReadPrerequisiteTool,
+  };
+  const diffs: ReturnType<typeof fileToolRegistry>["diffs"] = [];
+  const registry = mockRegistry();
+  vi.mocked(registry.getTool).mockImplementation((id: string) =>
+    tools[id] ? ({ ...tools[id], inputSchema: { properties: { udid: {} } } } as never) : undefined
+  );
+  (registry.invokeTool as ReturnType<typeof vi.fn>).mockImplementation(
+    async (id: string, params?: unknown, options?: { fileInputs?: unknown }) => {
+      if (id === "list-devices") return { devices: [] };
+      if (id !== "screenshot-diff") return { ok: true };
+      const args = params as Record<string, unknown>;
+      diffs.push({
+        args,
+        baseline: await fs.readFile(String(args.baselinePath)),
+        current: await fs.readFile(String(args.currentPath)),
+        fileInputs: options?.fileInputs,
+      });
+      return { summary: "stubbed diff" };
+    }
+  );
+  return { registry, diffs };
+}
 
 const fragmentYaml = (message: string): string =>
   serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message }] });
@@ -2016,6 +2086,112 @@ describe("flow composition (run:)", () => {
       );
     });
 
+    it("runs a screenshot-diff step of a client-served fragment with files served by the client", async () => {
+      // The fragment passes the same gate as the root, and its tool step's
+      // file arguments come from the client like the root's would.
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({ executionPrerequisite: "", steps: [{ kind: "run", flow: "frag.yaml" }] }),
+        "utf8"
+      );
+      const baseBytes = Buffer.from("client baseline bytes");
+      const nowBytes = Buffer.from("client current bytes");
+      const { services, calls } = fakeClientServices(
+        {
+          "/client/.argent/flows/frag.yaml": serializeFlow({
+            executionPrerequisite: "",
+            steps: [
+              {
+                kind: "tool",
+                name: "screenshot-diff",
+                args: {
+                  baselinePath: "/client/shots/base.png",
+                  currentPath: "/client/shots/now.png",
+                },
+              },
+            ],
+          }),
+        },
+        {
+          ops: READ_OPS,
+          bytes: { "/client/shots/base.png": baseBytes, "/client/shots/now.png": nowBytes },
+        }
+      );
+      const { registry, diffs } = fileToolRegistry();
+
+      const result = asRun(await runUploaded(services, {}, registry));
+
+      expect(result.ok).toBe(true);
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "tool:pass"]);
+      expect(result.steps[1]).toMatchObject({
+        flow: "frag",
+        args: { baselinePath: "/client/shots/base.png", currentPath: "/client/shots/now.png" },
+      });
+      expect(calls.map((c) => [c.op, c.args.target ?? c.args.path])).toEqual([
+        ["resolve-file", "main.yaml"],
+        ["resolve-file", "frag.yaml"],
+        ["read-file", "/client/shots/base.png"],
+        ["read-file", "/client/shots/now.png"],
+      ]);
+      expect(diffs).toHaveLength(1);
+      expect(diffs[0]!.baseline.equals(baseBytes)).toBe(true);
+      expect(diffs[0]!.current.equals(nowBytes)).toBe(true);
+      expect(diffs[0]!.fileInputs).toMatchObject({
+        baselinePath: { clientPath: "/client/shots/base.png", viaUpload: true },
+        currentPath: { clientPath: "/client/shots/now.png", viaUpload: true },
+      });
+      await expect(fs.access(String(diffs[0]!.args.baselinePath))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+
+    it("refuses a client-served fragment whose tool step fills outputDir at the run: step, with read-file offered", async () => {
+      // read-file would serve the two PNGs, but no op carries the directory
+      // the diffs are written to, so the fragment is refused before it runs.
+      await fs.writeFile(
+        uploadedPath,
+        serializeFlow({ executionPrerequisite: "", steps: [{ kind: "run", flow: "frag.yaml" }] }),
+        "utf8"
+      );
+      const { services, calls } = fakeClientServices(
+        {
+          "/client/.argent/flows/frag.yaml": serializeFlow({
+            executionPrerequisite: "",
+            steps: [
+              { kind: "echo", message: "fragment start" },
+              {
+                kind: "tool",
+                name: "screenshot-diff",
+                args: {
+                  baselinePath: "/client/base.png",
+                  currentPath: "/client/now.png",
+                  outputDir: "/client/diffs",
+                },
+              },
+            ],
+          }),
+        },
+        { ops: READ_OPS, bytes: { "/client/base.png": Buffer.from("b") } }
+      );
+      const { registry, diffs } = fileToolRegistry();
+
+      const result = asRun(await runUploaded(services, {}, registry));
+
+      expect(result.ok).toBe(false);
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
+      const reason = result.steps[0]?.reason ?? "";
+      expect(reason).toContain('The fragment "frag.yaml" is not self-contained');
+      expect(reason).toContain(
+        "which stay on the client:\n  - step 2: tool: screenshot-diff (/client/diffs)\nRun the flow"
+      );
+      expect(reason).not.toContain("Update the argent CLI");
+      expect(reason).not.toContain(RELATIVE_TOOL_FILE_HINT);
+      // Nothing of the fragment ran, and none of its files was asked for.
+      expect(result.steps.map((s) => s.message)).not.toContain("fragment start");
+      expect(calls.map((c) => c.op)).toEqual(["resolve-file", "resolve-file"]);
+      expect(diffs).toEqual([]);
+    });
+
     describe("a served fragment's load-time gates, in the root flow's order", () => {
       // Every tool id reports this schema (see mockRegistry), so a recorded
       // swipe's `settle` reads as the retired key it is.
@@ -3389,6 +3565,30 @@ describe("flow composition (run:)", () => {
     });
     // Preflight, not mid-run: neither the tap nor the nested run was dispatched.
     expect(registry.invokeTool).not.toHaveBeenCalled();
+
+    // read-file serves the file arguments of a tool: step, not a nested flow:
+    // a client that offers it (and not resolve-file) is refused the same way.
+    const { services, calls } = fakeClientServices({}, { ops: ["read-file"], bytes: {} });
+    const withReadFile = mockRegistry();
+    const refused = await rejectUpload(
+      [
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { name: "login", project_root: "/client", prerequisiteAcknowledged: true },
+        },
+      ],
+      withReadFile,
+      services
+    );
+    expect((refused as Error).message).toContain(
+      "which stay on the client:\n  - step 2: tool: flow-execute (name: login)\nRun the flow"
+    );
+    expect((refused as Error).message).not.toContain("Update the argent CLI");
+    expect(getFailureSignal(refused)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect(withReadFile.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   /** Run an uploaded flow with these steps and return what it threw. */
@@ -3439,6 +3639,36 @@ describe("flow composition (run:)", () => {
     );
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
     expect(registry.invokeTool).not.toHaveBeenCalled();
+
+    // flow-execute declares flow_path a `file` input at an absolute path, the
+    // shape read-file serves for any other tool. A nested flow is still refused:
+    // its own run: steps and snapshots would resolve on this host.
+    const withReadFile = mockRegistry();
+    const flowExecute = createRunFlowTool(withReadFile);
+    vi.mocked(withReadFile.getTool).mockImplementation((id: string) =>
+      id === "flow-execute" ? (flowExecute as never) : undefined
+    );
+    const { services, calls } = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+    const refused = await rejectUpload(
+      [
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { flow_path: "/client/.argent/flows/login.yaml", project_root: "/client" },
+        },
+      ],
+      withReadFile,
+      services
+    );
+    expect((refused as Error).message).toContain(
+      "which stay on the client:\n" +
+        "  - step 2: tool: flow-execute (flow_path: /client/.argent/flows/login.yaml)\n" +
+        "Run the flow"
+    );
+    expect(getFailureSignal(refused)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect(withReadFile.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
   it("files an upload whose first offending step records a flow under the recording stage", async () => {
@@ -3471,11 +3701,11 @@ describe("flow composition (run:)", () => {
     });
   });
 
-  it("rejects an uploaded flow whose tool: steps take files or record a flow", async () => {
-    // A tool: step gets its arguments as plain strings, so a file argument
-    // names a client path that this host opens on its own disk: ENOENT after
-    // the earlier steps drove the device, or the server's own file reported
-    // as a pass. reinstall-app uninstalls the app before it fails.
+  it("rejects an uploaded flow whose tool: steps take files or record a flow from a client without client services", async () => {
+    // Without the client to read it from, a file argument names a client path
+    // that this host would open on its own disk: ENOENT after the earlier
+    // steps drove the device, or the server's own file reported as a pass.
+    // reinstall-app uninstalls the app before it fails.
     const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
     await fs.writeFile(
       uploadedPath,
@@ -3535,11 +3765,484 @@ describe("flow composition (run:)", () => {
         "  - step 5: tool: flow-add-step (records a flow)\n"
     );
     expect(message).not.toContain("step 3");
+    // A client that sent no client_services would get the screenshot-diff
+    // step's files served after the update; nothing serves the app bundle.
+    expect(message.slice(-TOOL_FILE_UPDATE_HINT.length)).toBe(TOOL_FILE_UPDATE_HINT);
+    expect(message).not.toContain(RELATIVE_TOOL_FILE_HINT);
     expect(getFailureSignal(err)).toMatchObject({
       failure_stage: "flow_upload_tool_file_input",
       error_kind: "validation",
     });
     expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("drops a served file argument from the upload refusal when the client offers read-file", async () => {
+    // The same flow from a current client: the screenshot-diff step's two
+    // absolute file arguments come over the channel, so its line drops out.
+    // The app bundle and the recording have no op that carries them.
+    const { registry } = fileToolRegistry();
+    const { services, calls } = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+    const err = await rejectUpload(
+      [
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+        {
+          kind: "tool",
+          name: "screenshot-diff",
+          args: { baselinePath: "/client/base.png", currentPath: "/client/now.png" },
+        },
+        { kind: "tool", name: "reinstall-app", args: { appPath: "/client/app.apk" } },
+        { kind: "tool", name: "flow-add-step", args: { name: "rec", command: "tap" } },
+      ],
+      registry,
+      services
+    );
+
+    expect(err).toBeInstanceOf(FailureError);
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "which stay on the client:\n" +
+        "  - step 3: tool: reinstall-app (/client/app.apk)\n" +
+        "  - step 4: tool: flow-add-step (records a flow)\n" +
+        "Run the flow"
+    );
+    expect(message).not.toContain("screenshot-diff");
+    expect(message).not.toContain("Update the argent CLI");
+    expect(message).not.toContain(RELATIVE_TOOL_FILE_HINT);
+    // The stage is the first offender's: the app bundle.
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_upload_tool_file_input",
+      error_kind: "validation",
+    });
+    // Preflight: no step ran, and the client was asked nothing.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects an uploaded flow whose tool step names a directory input even when the client offers read-file", async () => {
+    // read-file carries one file; a directory tree has no op that carries it.
+    const { registry } = fileToolRegistry();
+    const { services, calls } = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+    const err = await rejectUpload(
+      [{ kind: "tool", name: "gather-workspace-data", args: { workspacePath: "/client/app" } }],
+      registry,
+      services
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "which stay on the client:\n  - step 1: tool: gather-workspace-data (/client/app)\nRun the flow"
+    );
+    // No update and no other spelling would serve it.
+    expect(message).not.toContain("Update the argent CLI");
+    expect(message).not.toContain(RELATIVE_TOOL_FILE_HINT);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_tool_file_input");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects an uploaded flow whose tool step reads a flow file it derives from its arguments even when the client offers read-file", async () => {
+    // flow-read-prerequisite's `name` + `project_root` build the path of the
+    // flow it reads: not one argument of the step as written, so the client
+    // does not send it.
+    const { registry } = fileToolRegistry();
+    const { services, calls } = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+    const err = await rejectUpload(
+      [
+        {
+          kind: "tool",
+          name: "flow-read-prerequisite",
+          args: { name: "login", project_root: "/client" },
+        },
+      ],
+      registry,
+      services
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "  - step 1: tool: flow-read-prerequisite (/client/.argent/flows/login.yaml)\nRun the flow"
+    );
+    expect(message).not.toContain("Update the argent CLI");
+    expect(message).not.toContain(RELATIVE_TOOL_FILE_HINT);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_tool_file_input");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects an uploaded flow whose tool step fills outputDir even when the client offers read-file", async () => {
+    // The two PNGs would be served; the directory the diffs are written to
+    // would not, so only it is listed.
+    const { registry } = fileToolRegistry();
+    const { services, calls } = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+    const err = await rejectUpload(
+      [
+        {
+          kind: "tool",
+          name: "screenshot-diff",
+          args: {
+            baselinePath: "/client/base.png",
+            currentPath: "/client/now.png",
+            outputDir: "/client/diffs",
+          },
+        },
+      ],
+      registry,
+      services
+    );
+
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "which stay on the client:\n  - step 1: tool: screenshot-diff (/client/diffs)\nRun the flow"
+    );
+    expect(message).not.toContain("Update the argent CLI");
+    expect(message).not.toContain(RELATIVE_TOOL_FILE_HINT);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_tool_file_input");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects a relative file argument with the absolute-path hint", async () => {
+    // A relative path names no one file on the client, so even a client that
+    // offers read-file is not sent it; the absolute one beside it is served.
+    const steps: FlowStep[] = [
+      {
+        kind: "tool",
+        name: "screenshot-diff",
+        args: { baselinePath: "shots/base.png", currentPath: "/client/now.png" },
+      },
+    ];
+    const { registry } = fileToolRegistry();
+    const { services, calls } = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+    const err = await rejectUpload(steps, registry, services);
+
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "which stay on the client:\n  - step 1: tool: screenshot-diff (shots/base.png)\nRun the flow"
+    );
+    expect(message).not.toContain("Update the argent CLI");
+    expect(message.slice(-RELATIVE_TOOL_FILE_HINT.length)).toBe(RELATIVE_TOOL_FILE_HINT);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_tool_file_input");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+
+    // From a client that sent no client_services, both arguments are listed,
+    // and each gets its way out: the update for the absolute one, then the
+    // absolute path for the relative one.
+    const older = fileToolRegistry().registry;
+    const olderErr = await rejectUpload(steps, older);
+    const olderMessage = (olderErr as Error).message;
+    expect(olderMessage).toContain(
+      "  - step 1: tool: screenshot-diff (shots/base.png, /client/now.png)\n"
+    );
+    const bothHints = TOOL_FILE_UPDATE_HINT + RELATIVE_TOOL_FILE_HINT;
+    expect(olderMessage.slice(-bothHints.length)).toBe(bothHints);
+    expect(older.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("rejects a file argument whose name the client never serves, with the extension hint", async () => {
+    // The client serves .png and .yaml files only, so a step that names
+    // another file is refused before it runs, not when it asks for the file.
+    const steps: FlowStep[] = [
+      {
+        kind: "tool",
+        name: "screenshot-diff",
+        args: { baselinePath: "/client/base.webp", currentPath: "/client/now.PNG" },
+      },
+    ];
+    const { registry } = fileToolRegistry();
+    const { services, calls } = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+    const err = await rejectUpload(steps, registry, services);
+
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "  - step 1: tool: screenshot-diff (/client/base.webp)\nRun the flow"
+    );
+    expect(message).not.toContain("Update the argent CLI");
+    const hint = " Over a link, a tool: step can name only a .png or .yaml file.";
+    expect(message.slice(-hint.length)).toBe(hint);
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_tool_file_input");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  it("allows an uploaded flow whose tool step names a file input when the client offers read-file", async () => {
+    // The file boundary of an HTTP call, run for the step: each file argument
+    // is read from the client, written to a temp file on this host, and the
+    // tool gets that path with the same `fileInputs` a direct call carries.
+    // The report keeps the client paths the flow names.
+    const baseBytes = Buffer.from("client baseline bytes");
+    const nowBytes = Buffer.from("client current bytes");
+    const { registry, diffs } = fileToolRegistry();
+    const { services, calls } = fakeClientServices(
+      {},
+      {
+        ops: READ_OPS,
+        bytes: { "/client/shots/base.png": baseBytes, "/client/shots/now.png": nowBytes },
+      }
+    );
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { baselinePath: "/client/shots/base.png", currentPath: "/client/shots/now.png" },
+          },
+          { kind: "echo", message: "after" },
+        ],
+      }),
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { artifacts: new ArtifactStore(), fileInputs: uploadedFlowFile(), clientServices: services }
+      )
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tool:pass", "echo:pass"]);
+    expect(result.steps[0]).toMatchObject({
+      tool: "screenshot-diff",
+      result: { summary: "stubbed diff" },
+      args: {
+        baselinePath: "/client/shots/base.png",
+        currentPath: "/client/shots/now.png",
+        udid: DEVICE,
+      },
+    });
+    // Exactly the two file arguments were asked for, in the tool's order.
+    expect(calls).toEqual([
+      { op: "read-file", args: { path: "/client/shots/base.png" } },
+      { op: "read-file", args: { path: "/client/shots/now.png" } },
+    ]);
+    expect(diffs).toHaveLength(1);
+    const diff = diffs[0]!;
+    // The tool read the client's bytes from files on this host.
+    expect(diff.baseline.equals(baseBytes)).toBe(true);
+    expect(diff.current.equals(nowBytes)).toBe(true);
+    const hostBase = String(diff.args.baselinePath);
+    const hostNow = String(diff.args.currentPath);
+    expect(hostBase).not.toBe("/client/shots/base.png");
+    expect(hostNow).not.toBe("/client/shots/now.png");
+    expect(diff.args.udid).toBe(DEVICE);
+    expect(diff.fileInputs).toEqual({
+      baselinePath: {
+        clientPath: "/client/shots/base.png",
+        presentOnHost: false,
+        viaUpload: true,
+      },
+      currentPath: {
+        clientPath: "/client/shots/now.png",
+        presentOnHost: false,
+        viaUpload: true,
+      },
+    });
+    // The temp files, and the directories that held them, are gone after the step.
+    for (const written of [hostBase, hostNow]) {
+      await expect(fs.access(written)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(path.dirname(written))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
+  it("fails a tool step whose file the client does not have", async () => {
+    // The current PNG exists at the same path on THIS host, with other bytes:
+    // a file the client does not have must fail the step, never be read here.
+    const hostNow = path.join(tmpDir, "now.png");
+    await fs.writeFile(hostNow, "server-local file");
+    const { registry, diffs } = fileToolRegistry();
+    const { services, calls } = fakeClientServices(
+      {},
+      { ops: READ_OPS, bytes: { "/client/base.png": Buffer.from("client baseline") } }
+    );
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { baselinePath: "/client/base.png", currentPath: hostNow },
+          },
+          { kind: "echo", message: "after" },
+        ],
+      }),
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { artifacts: new ArtifactStore(), fileInputs: uploadedFlowFile(), clientServices: services }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.aborted).toBeUndefined();
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tool:error", "echo:skip"]);
+    expect(result.steps[0]?.reason).toBe(
+      `the client has no file at "${hostNow}" (argument currentPath of screenshot-diff)`
+    );
+    expect(calls.map((c) => c.args.path)).toEqual(["/client/base.png", hostNow]);
+    // The tool never ran: not on the server's same-path file, not at all.
+    expect(diffs).toEqual([]);
+    expect(vi.mocked(registry.invokeTool)).not.toHaveBeenCalledWith(
+      "screenshot-diff",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("skips a tool step whose file read ends in a client disconnect", async () => {
+    // The broker rejects a pending request with an AbortError when the call's
+    // response closes: the run's own cancellation, not a failed step.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { baselinePath: "/client/base.png", currentPath: "/client/now.png" },
+          },
+          { kind: "echo", message: "after" },
+        ],
+      }),
+      "utf8"
+    );
+    const disconnected = (abort?: AbortController) => {
+      const client = fakeClientServices({}, { ops: READ_OPS, bytes: {} });
+      (client.services.request as ReturnType<typeof vi.fn>).mockImplementation(
+        async (op: ClientServiceOp) => {
+          abort?.abort();
+          // What the broker rejects a pending request with on close.
+          const err = new Error(`the client disconnected before answering the ${op} request`);
+          err.name = "AbortError";
+          throw err;
+        }
+      );
+      return client.services;
+    };
+    const run = (
+      registry: Registry,
+      services: ReturnType<typeof disconnected>,
+      signal?: AbortSignal
+    ) =>
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: uploadedFlowFile(),
+          clientServices: services,
+          ...(signal ? { signal } : {}),
+        }
+      );
+
+    // As the HTTP layer closes a call: the signal aborts, and the read rejects.
+    const controller = new AbortController();
+    const { registry, diffs } = fileToolRegistry();
+    const result = asRun(await run(registry, disconnected(controller), controller.signal));
+    expect(result.ok).toBe(false);
+    expect(result.aborted).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.reason ?? ""}`)).toEqual([
+      "tool:skip:run aborted",
+      "echo:skip:run aborted",
+    ]);
+    expect(diffs).toEqual([]);
+
+    // The rejection alone is the disconnect too, whatever the signal says.
+    const quiet = fileToolRegistry();
+    const alone = asRun(await run(quiet.registry, disconnected()));
+    expect(alone.steps[0]).toMatchObject({
+      kind: "tool",
+      status: "skip",
+      tool: "screenshot-diff",
+      reason: "run aborted",
+    });
+    expect(quiet.diffs).toEqual([]);
+  });
+
+  it("reports what a tool with client files throws as an error that names the client paths", async () => {
+    // Only a read from the client ends in the run's cancellation: a tool's own
+    // AbortError is a failed step. A reason the tool wrote about its temp file
+    // names the file the flow names instead.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { baselinePath: "/client/base.png", currentPath: "/client/now.png" },
+          },
+          { kind: "echo", message: "after" },
+        ],
+      }),
+      "utf8"
+    );
+    const runThrowing = async (thrown: (args: Record<string, unknown>) => Error) => {
+      const { services } = fakeClientServices(
+        {},
+        {
+          ops: READ_OPS,
+          bytes: { "/client/base.png": Buffer.from("base"), "/client/now.png": Buffer.from("now") },
+        }
+      );
+      const { registry } = fileToolRegistry();
+      (registry.invokeTool as ReturnType<typeof vi.fn>).mockImplementation(
+        async (id: string, params?: unknown) => {
+          if (id === "list-devices") return { devices: [] };
+          throw thrown(params as Record<string, unknown>);
+        }
+      );
+      return asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+          {
+            artifacts: new ArtifactStore(),
+            fileInputs: uploadedFlowFile(),
+            clientServices: services,
+          }
+        )
+      );
+    };
+
+    const aborted = await runThrowing(() => {
+      const err = new Error("internal request aborted");
+      err.name = "AbortError";
+      return err;
+    });
+    expect(aborted.ok).toBe(false);
+    expect(aborted.steps.map((s) => `${s.kind}:${s.status}:${s.reason ?? ""}`)).toEqual([
+      "tool:error:internal request aborted",
+      "echo:skip:",
+    ]);
+
+    let tempPath = "";
+    const unreadable = await runThrowing((args) => {
+      tempPath = String(args.currentPath);
+      return new Error(`Could not read PNG at ${tempPath}: bad signature`);
+    });
+    expect(tempPath).not.toBe("/client/now.png");
+    expect(unreadable.steps[0]).toMatchObject({
+      status: "error",
+      reason: "Could not read PNG at /client/now.png: bad signature",
+    });
   });
 
   it("allows a snapshot step for a flow_file resolved in place", async () => {

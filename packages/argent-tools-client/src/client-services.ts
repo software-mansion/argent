@@ -8,13 +8,14 @@
  * The handler decides what leaves and enters this machine. It serves the
  * files the user's own flows compose and nothing else: the call's root flow,
  * each `run:` target named by a file it has already served, resolved beside
- * that file as the runner resolves it, and the snapshot baselines in the run's
+ * that file as the runner resolves it, each absolute path that a `tool:` step
+ * of such a file names as an argument, and the snapshot baselines in the run's
  * own `__baselines__/<flow>/` directory beside the root flow's real file,
  * which is also the only place it writes. A request for any other file is
  * refused before it is read, the same way whether or not the file exists. It
  * reads and writes nothing outside the roots the client itself sent, serves
- * `.yaml` names of YAML files and `.png` names of PNG files only, refuses a
- * file above the 32 MiB cap, and refuses an op it did not offer. A requested
+ * `.yaml` and `.png` names only, refuses a file above the 32 MiB cap, and
+ * refuses an op it did not offer. A requested
  * path is resolved here as the kernel resolves it,
  * one component at a time ({@link walk}), and each place the walk would look
  * at is checked against the roots before anything there is looked at, so an
@@ -33,8 +34,10 @@ import {
   CLIENT_CONTENT_CAP_BYTES,
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
+  TOOL_FILE_EXTENSIONS,
   classifyOnDiskSpelling,
   completeRunExtension,
+  hasToolFileExtension,
   type ClientRequestLine,
   type ClientResponseBody,
   type ClientServiceOp,
@@ -115,19 +118,26 @@ function mayVisit(fence: Fence, position: string): boolean {
  * `run` in its `steps`, and in the `steps` of a block directive (`when`), with
  * the runner's extension completion. A value the runner refuses (a backslash,
  * an absolute or drive-prefixed path) names nothing. `snapshots`: whether one
- * of those steps is a `snapshot`, which reads or writes a baseline. A file
- * that does not parse names nothing.
+ * of those steps is a `snapshot`, which reads or writes a baseline.
+ * `toolFiles`: every absolute path that one of those steps, a `tool:` step,
+ * names as an argument, as written; the runner asks for a file argument by
+ * that spelling. A file that does not parse names nothing.
  */
-function flowRequests(content: string): { runTargets: string[]; snapshots: boolean } {
+function flowRequests(content: string): {
+  runTargets: string[];
+  snapshots: boolean;
+  toolFiles: string[];
+} {
   let doc: unknown;
   try {
     // The runner's parse; its warnings belong to the run, not to this terminal.
     doc = parseYaml(content.trim(), { logLevel: "error" });
   } catch {
-    return { runTargets: [], snapshots: false };
+    return { runTargets: [], snapshots: false, toolFiles: [] };
   }
   const targets: string[] = [];
   let snapshots = false;
+  const toolFiles: string[] = [];
   const seen = new Set<unknown>();
   const visit = (steps: unknown, depth: number): void => {
     if (!Array.isArray(steps) || depth > MAX_STEP_DEPTH || seen.has(steps)) return;
@@ -135,6 +145,11 @@ function flowRequests(content: string): { runTargets: string[]; snapshots: boole
     for (const step of steps) {
       if (!isRecord(step)) continue;
       if ("snapshot" in step) snapshots = true;
+      if (typeof step.tool === "string" && isRecord(step.args)) {
+        for (const value of Object.values(step.args)) {
+          if (typeof value === "string" && path.isAbsolute(value)) toolFiles.push(value);
+        }
+      }
       const run = step.run;
       if (
         typeof run === "string" &&
@@ -148,7 +163,7 @@ function flowRequests(content: string): { runTargets: string[]; snapshots: boole
     }
   };
   if (isRecord(doc)) visit(doc.steps, 0);
-  return { runTargets: targets, snapshots };
+  return { runTargets: targets, snapshots, toolFiles };
 }
 
 function components(p: string): string[] {
@@ -333,10 +348,10 @@ async function replaceFile(target: string, bytes: Buffer, mode: number | undefin
   }
 }
 
-function notBaseline(file: string, verb: "serves" | "writes"): string {
+function notBaseline(file: string): string {
   return (
     `${file} is not a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png); ` +
-    `this client ${verb} baselines only`
+    `this client writes baselines only`
   );
 }
 
@@ -344,11 +359,16 @@ function notBaseline(file: string, verb: "serves" | "writes"): string {
  * Build the handler for one call, or null when there is nothing to serve:
  * no root exists on this machine, the server advertised no op this client
  * implements, or the root flow asks for nothing (or cannot be read or parsed
- * here): it names no `run:` target, and has no `snapshot` step or the server
- * advertised no baseline op. The runner asks for files only to resolve `run:`
- * targets and to read and write baselines, so any other flow goes out without
- * client services, as it did before they existed, and keeps running through a
- * proxy that rewrites `Accept`. `ops` keeps the implemented order; `roots` are
+ * here): it names no `run:` target, has no `snapshot` step or the server
+ * advertised no baseline op, and has no `tool:` step that names a file (an
+ * absolute path with a {@link TOOL_FILE_EXTENSIONS} ending) or the server did
+ * not advertise `read-file`. Text such as `/start` typed by a `keyboard` step
+ * is not a file. A file outside the roots counts: the step that names it
+ * then fails with the refusal that says so, not with a hint to update. The runner asks for files
+ * only to resolve `run:` targets, to read and write baselines and to read the
+ * file arguments of `tool:` steps, so any other flow goes out without client
+ * services, as it did before they existed, and keeps running through a proxy
+ * that rewrites `Accept`. `ops` keeps the implemented order; `roots` are
  * realpaths. `rootFlow` is the call's root flow file as the client sent it;
  * the server asks for it in the directory it is spelled in. `baselineDir` is
  * the one directory read-file and write-file may reach: the run's
@@ -395,8 +415,15 @@ export async function createClientServicesHandler(opts: {
   // The real paths this call may serve: the root flow, and the run: targets
   // of each file served, resolved beside that file as the runner anchors them.
   const servable = new Set<string>();
-  async function addRunTargets(canonical: string, targets: string[]): Promise<void> {
-    for (const target of targets) {
+  // The file arguments the tool: steps of each file served name, as written:
+  // the runner asks for one by that spelling, and the walk resolves it.
+  const toolFiles = new Set<string>();
+  async function addRequests(
+    canonical: string,
+    requests: ReturnType<typeof flowRequests>
+  ): Promise<void> {
+    for (const file of requests.toolFiles) toolFiles.add(file);
+    for (const target of requests.runTargets) {
       const walked = await walk(path.dirname(canonical) + path.sep + target, fence);
       if (walked.kind !== "outside") servable.add(walked.canonical);
     }
@@ -407,11 +434,15 @@ export async function createClientServicesHandler(opts: {
   if (rootText === null) return null;
   const rootRequests = flowRequests(rootText);
   const servesBaselines = ops.includes("read-file") || ops.includes("write-file");
-  if (rootRequests.runTargets.length === 0 && !(rootRequests.snapshots && servesBaselines)) {
+  if (
+    rootRequests.runTargets.length === 0 &&
+    !(rootRequests.snapshots && servesBaselines) &&
+    !(rootRequests.toolFiles.some(hasToolFileExtension) && ops.includes("read-file"))
+  ) {
     return null;
   }
   servable.add(root.canonical);
-  await addRunTargets(root.canonical, rootRequests.runTargets);
+  await addRequests(root.canonical, rootRequests);
 
   const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
 
@@ -471,7 +502,7 @@ export async function createClientServicesHandler(opts: {
     if ("refusal" in read) return refuse(id, read.refusal);
     if (read.answer.content !== undefined) {
       const text = Buffer.from(read.answer.content, "base64").toString("utf8");
-      await addRunTargets(canonical, flowRequests(text).runTargets);
+      await addRequests(canonical, flowRequests(text));
     }
     const answer: ResolveFileAnswer = { canonical, spelling, ...read.answer };
     return { id, ok: true, ...answer };
@@ -487,8 +518,41 @@ export async function createClientServicesHandler(opts: {
   }
 
   /**
-   * A snapshot baseline of this run, read as the server names it: the path
-   * lies in the run's baseline directory, so there is nothing to resolve.
+   * A file argument of a `tool:` step in a flow this call served, read as the
+   * step spells it and resolved by the walk. Its name and the name of the
+   * file it really is must both have a {@link TOOL_FILE_EXTENSIONS} ending, so
+   * a link named like an image cannot send a `.env`. A path behind a regular
+   * file is not there, as for a baseline. The path is walked as the flow
+   * spells it: the flow may be one the server wrote back to this client, so
+   * its paths get no more trust than a request does.
+   */
+  async function readToolFile(id: string, file: string): Promise<ClientResponseBody> {
+    const kinds = TOOL_FILE_EXTENSIONS.join(", ");
+    if (!hasToolFileExtension(file)) {
+      return refuse(id, `${file} is not a file this client serves for a tool: step (${kinds})`);
+    }
+    const walked = await walk(file, fence);
+    if (walked.kind === "outside") return refuse(id, outsideRoots(file));
+    if (walked.kind === "failed") {
+      if (walked.code !== "ENOTDIR") return refuse(id, walked.error);
+      const answer: ReadFileAnswer = { exists: false };
+      return { id, ok: true, ...answer };
+    }
+    if (!hasToolFileExtension(walked.canonical)) {
+      return refuse(id, `${file} links to a file that is not one of ${kinds}`);
+    }
+    const read: { refusal: string } | { answer: ReadFileAnswer } =
+      walked.kind === "missing"
+        ? { answer: { exists: false } }
+        : await readAdmitted(walked.canonical);
+    if ("refusal" in read) return refuse(id, read.refusal);
+    return { id, ok: true, ...read.answer };
+  }
+
+  /**
+   * A file argument of a `tool:` step ({@link readToolFile}), or else a
+   * snapshot baseline of this run, read as the server names it: the path lies
+   * in the run's baseline directory, so there is nothing to resolve.
    * `named.path` is set to it once it is known to be one.
    */
   async function readFile(
@@ -498,7 +562,14 @@ export async function createClientServicesHandler(opts: {
   ): Promise<ClientResponseBody> {
     const file = args.path;
     if (typeof file !== "string") return refuse(id, "read-file needs a string path");
-    if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "serves"));
+    if (toolFiles.has(file)) return readToolFile(id, file);
+    if (!isBaselinePath(file)) {
+      return refuse(
+        id,
+        `${file} is neither a file argument of a tool: step in a flow this client served ` +
+          `nor a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png)`
+      );
+    }
     const otherRun = notOfThisRun(file);
     if (otherRun !== null) return refuse(id, otherRun);
     named.path = file;
@@ -538,7 +609,7 @@ export async function createClientServicesHandler(opts: {
     if (typeof file !== "string" || typeof content !== "string") {
       return refuse(id, "write-file needs string path and content");
     }
-    if (!isBaselinePath(file)) return refuse(id, notBaseline(file, "writes"));
+    if (!isBaselinePath(file)) return refuse(id, notBaseline(file));
     const otherRun = notOfThisRun(file);
     if (otherRun !== null) return refuse(id, otherRun);
     named.path = file;

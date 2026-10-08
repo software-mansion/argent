@@ -6,7 +6,8 @@
  * server-readable string *before* zod validation, so tools always execute
  * against a local path:
  *
- * - `kind: "file"`: inlined content (sent only by a linked client) is
+ * - `kind: "file"`: inlined content (sent only by a linked client, or built
+ *   by the flow runner from the bytes a client served for a `tool:` step) is
  *   materialized into a temp file, even when the path also matches on this
  *   host; without content, a path that matches on this host's own filesystem
  *   is used in place — zero copies.

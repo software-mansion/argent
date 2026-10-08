@@ -8,7 +8,6 @@ import {
   FailureError,
   FLOW_NAME_PATTERN,
   getFailureSignal,
-  interpolateFileInputPath,
   isLiveServiceState,
   wrapFailure,
 } from "@argent/registry";
@@ -44,6 +43,14 @@ import {
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
+import {
+  prepareToolStepInputs,
+  refusedToolInputFix,
+  servedToolInput,
+  toolStepFilePaths,
+  withClientPaths,
+  type PreparedToolStep,
+} from "./flow-tool-inputs";
 import {
   isClientRequestAbort,
   isClientRequestRefusal,
@@ -120,7 +127,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, the tool-server runs the uploaded copy, and the client serves each run: fragment during the run. The client also serves and stores the snapshot baselines. An uploaded flow must not have script: steps, or tool: steps that take a file or record a flow. Without a link, the tool-server reads the file in place and all step kinds run."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, the tool-server runs the uploaded copy, and the client serves each run: fragment during the run. The client also serves and stores the snapshot baselines, and serves the .png and .yaml files that tool: steps name by an absolute path, under the project or beside the flow file. An uploaded flow must not have script: steps, or tool: steps that run or record a flow, take a directory, an app or an output directory, build a file path from several arguments, or name a relative path or a file other than .png or .yaml. Without a link, the tool-server reads the file in place and all step kinds run."
       ),
     device: z
       .string()
@@ -1270,37 +1277,23 @@ function nestedFlowRef(args: Record<string, unknown>): string {
 }
 
 /**
- * The paths a `tool:` step's args fill in for the file inputs its tool
- * declares: a spec applies when every `${param}` it names is a non-empty
- * string and no superseding source is set, as when the client wraps a call.
- */
-function toolStepFilePaths(registry: Registry, tool: string, args: Record<string, unknown>) {
-  const paths: string[] = [];
-  for (const spec of registry.getTool(tool)?.fileInputs ?? []) {
-    if (spec.skipWhenSet !== undefined && args[spec.skipWhenSet] !== undefined) continue;
-    const filled = interpolateFileInputPath(spec.path, args);
-    if (filled !== null) paths.push(filled);
-  }
-  return paths;
-}
-
-/**
  * Reject an uploaded root flow whose steps use files the client did not offer
  * to serve — a `run:`, `script:` or `snapshot` step, or a `tool:` step that
- * takes a file or records a flow, at any depth — before anything executes, so
- * a mid-run or guard-gated error cannot execute half the flow first. All of
- * them read or write project files, which stay on the client: a run: step's
- * referenced files, a script step's `.mjs` (and whatever it imports), a
+ * takes a file the client does not serve or records a flow, at any depth —
+ * before anything executes, so a mid-run or guard-gated error cannot execute
+ * half the flow first. All of them read or write project files, which stay on
+ * the client: a run: step's referenced files, a script step's `.mjs` (and
+ * whatever it imports), a
  * snapshot's baselines (against a per-call temp materialization a plain
  * snapshot can only fail, while updateBaselines writes PNGs no later run can
  * find), the flow a nested `flow-execute` names under the client's
  * project_root, the file arguments of any other tool, and the flow a recording
  * tool writes. A nested `flow-execute` is the raw step the recorder keeps for
  * every nested flow in a remote recording (see captureRunTarget).
- * {@link invokeSubTool} forwards no file inputs, so a `tool:` step opens the
- * client's path on THIS host — ENOENT after the earlier steps drove the device,
- * or, when the same path exists here, the server's own file reported as a pass
- * (and reinstall-app uninstalls the app before its install fails).
+ * A `tool:` step's file argument is a client path: a tool that opens it on
+ * THIS host gets ENOENT after the earlier steps drove the device, or, when the
+ * same path exists here, the server's own file reported as a pass (and
+ * reinstall-app uninstalls the app before its install fails).
  *
  * Each kind is lifted on its own once the channel carries what it reads:
  * `offeredOps` is what the client's `client_services` listed. A `run:` step
@@ -1308,16 +1301,23 @@ function toolStepFilePaths(registry: Registry, tool: string, args: Record<string
  * fragment on the client ({@link ClientProjectAccess}) — and a `snapshot` step
  * when it also holds the op that carries the baseline: `write-file` for a run
  * that updates baselines, `read-file` for one that compares. The client
- * offers `write-file` only for a call that updates baselines.
- * The other kinds have no op yet and are refused for every client. A caller
- * whose client could not serve a refused `run:` or `snapshot` step is told
- * that this tool-server would serve it for a client that can, so the way out
- * is the update, not the co-location the refusal otherwise names.
+ * offers `write-file` only for a call that updates baselines. A `tool:` step
+ * passes when each file input it fills is one {@link servedToolInput} serves:
+ * a file argument at an absolute path, with `read-file`. The runner then reads
+ * the file from the client before the invoke ({@link prepareToolStepInputs}).
+ * Only the client can tell whether it has that file, under its roots and of a
+ * kind it serves, so a read it refuses fails that step during the run.
+ * A directory, an app bundle and `screenshot-diff`'s `outputDir` have no op
+ * that carries them, and the other kinds have no op yet, so they are refused
+ * for every client. A caller whose client could not serve a refused `run:`,
+ * `snapshot` or file argument is told that this tool-server would serve it for
+ * a client that can, so the way out is the update, not the co-location the
+ * refusal otherwise names; a relative file argument is told to be absolute.
  *
  * The same gate guards every fragment the client serves, charged to the
  * `run:` step that loads it ({@link execRunStep}): a fragment's steps are not
  * known before that step, and letting one through would run its script, or
- * read its baseline, against a server path that is at best missing and at
+ * read its baseline or a file argument, against a server path that is at best missing and at
  * worst a same-named copy that reports a pass. `origin` words the refusal for
  * the file it is about.
  *
@@ -1342,6 +1342,7 @@ function assertUploadSelfContained(
   const servesBaselines =
     serves.has("resolve-file") && serves.has(updateBaselines ? "write-file" : "read-file");
   const offending: { kind: keyof typeof UPLOAD_STAGE_BY_KIND; line: string }[] = [];
+  const toolFileFixes = new Set<NonNullable<ReturnType<typeof refusedToolInputFix>>>();
   for (const { step, where } of walkSteps(flow.steps)) {
     if (step.kind === "run") {
       if (serves.has("resolve-file")) continue;
@@ -1362,12 +1363,18 @@ function assertUploadSelfContained(
         line: `${where}: tool: ${step.name} (records a flow)`,
       });
     } else if (step.kind === "tool") {
-      const paths = toolStepFilePaths(registry, step.name, step.args);
-      if (paths.length > 0) {
+      const refused = toolStepFilePaths(registry, step.name, step.args).filter(
+        (file) => !servedToolInput(file, offeredOps)
+      );
+      if (refused.length > 0) {
         offending.push({
           kind: "toolFile",
-          line: `${where}: tool: ${step.name} (${paths.join(", ")})`,
+          line: `${where}: tool: ${step.name} (${refused.map((file) => file.path).join(", ")})`,
         });
+        for (const file of refused) {
+          const fix = refusedToolInputFix(file);
+          if (fix !== undefined) toolFileFixes.add(fix);
+        }
       }
     }
   }
@@ -1381,17 +1388,28 @@ function assertUploadSelfContained(
           "snapshot: steps for a client that offers the resolve-file, read-file and write-file client services",
         ]
       : []),
+    ...(toolFileFixes.has("update")
+      ? ["the file arguments of tool: steps for a client that offers the read-file client service"]
+      : []),
   ];
   const updateHint =
     servable.length > 0
       ? ` This tool-server serves ${servable.join(", and ")}. Update the argent CLI or MCP adapter on the client.`
       : "";
+  const pathHints = [
+    ...(toolFileFixes.has("relative")
+      ? [" Over a link, a tool: step must name a file by an absolute path."]
+      : []),
+    ...(toolFileFixes.has("extension")
+      ? [" Over a link, a tool: step can name only a .png or .yaml file."]
+      : []),
+  ].join("");
   throw new FailureError(
     `${origin.subject} is not self-contained, and ${origin.arrival}. The steps below read ` +
       `or write project files, which stay on the client:\n` +
       offending.map((o) => `  - ${o.line}`).join("\n") +
       `\nRun the flow on the computer that runs the tool-server, with no link and no ` +
-      `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.${updateHint}`,
+      `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.${updateHint}${pathHints}`,
     {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: UPLOAD_STAGE_BY_KIND[offending[0]!.kind],
@@ -2878,8 +2896,18 @@ async function execLeafStep(
       if (UI_TURNING_TOOLS.has(step.name) && state.lastRead) {
         state.lastRead.uiOrientation = undefined;
       }
+      // A file argument the client serves becomes a file on this host for
+      // the invoke only; the report keeps the client path the flow names.
+      let prepared: PreparedToolStep | undefined;
       try {
-        const result = await invokeSubTool(registry, ctx, step.name, args);
+        prepared = await prepareToolStepInputs(registry, state.project, step.name, args);
+        const result = await invokeSubTool(
+          registry,
+          ctx,
+          step.name,
+          prepared.args,
+          prepared.fileInputs ? { fileInputs: prepared.fileInputs } : undefined
+        );
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {
@@ -2954,11 +2982,27 @@ async function execLeafStep(
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
         // step failure carrying the tool's own "aborted after N frames".
-        if (signal?.aborted) {
+        // A client that disconnected while it served a file argument is the
+        // run's own cancellation too; a tool's own AbortError is not.
+        if (signal?.aborted || (prepared === undefined && isClientRequestAbort(err))) {
           return { ...base, status: "skip", tool: step.name, reason: ABORTED_OUTCOME.reason };
         }
-        const reframed = describeNestedParamError(registry, err, step.name, args, step.args ?? {});
-        return { ...base, status: "error", tool: step.name, reason: reframed ?? errMsg(err) };
+        const reframed = describeNestedParamError(
+          registry,
+          err,
+          step.name,
+          prepared?.args ?? args,
+          step.args ?? {}
+        );
+        const reason = reframed ?? errMsg(err);
+        return {
+          ...base,
+          status: "error",
+          tool: step.name,
+          reason: prepared ? withClientPaths(prepared, reason) : reason,
+        };
+      } finally {
+        await prepared?.cleanup();
       }
     }
 

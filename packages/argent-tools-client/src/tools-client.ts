@@ -140,7 +140,7 @@ interface ClientServicesLink {
 
 /**
  * A request line as the tool-server's own messages name it: its op and its
- * target, or the path of a baseline.
+ * target, or the path of the file it reads or writes.
  */
 function describeRequest(msg: ClientRequestLine): string {
   const { op, args } = msg as { op?: unknown; args?: unknown };
@@ -221,7 +221,7 @@ const BODY_LIMIT_ADVICE =
 /**
  * Post a short refusal for request `id` in place of an answer that a proxy
  * refused with 413: the proxy limits the size of a request body, and an
- * answer to `read-file` carries the whole baseline. The waiting step then
+ * answer to `read-file` carries the whole file. The waiting step then
  * fails at once and names the cause. True when the request is settled on the
  * tool-server: it took the refusal, or its own route answered for the id (one
  * it no longer waits for, or one with an answer), as for any other answer, or
@@ -291,7 +291,7 @@ async function refuseOversizedAnswer(
  * So a post that gets no reply in its 30 s does not fail the call: the
  * tool-server settled the request as a timeout, and the call goes on to the
  * report that says so. A slow connection that takes longer than that to move
- * a baseline must not lose the report. `callOpen` tells whether the call
+ * a file must not lose the report. `callOpen` tells whether the call
  * still waits for that report, and only then is the post's timeout worth a
  * diagnostic.
  */

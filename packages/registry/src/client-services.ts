@@ -105,6 +105,19 @@ export interface WriteFileAnswer {
   replaced: boolean;
 }
 
+/**
+ * The names a file argument of a `tool:` step may have to travel over a link,
+ * in any case of letters: the files the tools take (`screenshot-diff` PNGs, a
+ * `flow_path`). The tool-server refuses another one before the first step,
+ * and the client serves no other one.
+ */
+export const TOOL_FILE_EXTENSIONS = [".png", ".yaml"] as const;
+
+export function hasToolFileExtension(file: string): boolean {
+  const name = file.toLowerCase();
+  return TOOL_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
 /** How long the server waits for the answer to a file op. */
 export const CLIENT_FILE_OP_TIMEOUT_MS = 30_000;
 /** The decoded size cap of a file carried in an answer or a write; mirrors the file-input cap. */

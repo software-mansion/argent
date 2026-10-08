@@ -55,7 +55,9 @@ export {
   CLIENT_REQUEST_EVENT,
   CLIENT_FILE_OP_TIMEOUT_MS,
   CLIENT_CONTENT_CAP_BYTES,
+  TOOL_FILE_EXTENSIONS,
   clientServicesParamSchema,
+  hasToolFileExtension,
 } from "./client-services";
 export type {
   ClientServiceOp,

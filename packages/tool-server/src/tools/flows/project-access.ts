@@ -39,8 +39,9 @@ export interface ResolvedFlowFile {
  * files.
  *
  * In client mode every path is a CLIENT path: `canonical` serves the runner as
- * a key (the `run:` cycle guard) and for display, and the snapshot baselines
- * are read and written there through the client, never on this host.
+ * a key (the `run:` cycle guard) and for display, the snapshot baselines are
+ * read and written there, and the file arguments of `tool:` steps are read
+ * there, always through the client, never on this host.
  */
 export interface ProjectAccess {
   readonly mode: "host" | "client";

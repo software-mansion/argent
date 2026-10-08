@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { FAILURE_CODES, describeParamIssues, getFailureSignal } from "@argent/registry";
-import type { Registry, ToolContext } from "@argent/registry";
+import type { Registry, ResolvedFileInput, ToolContext } from "@argent/registry";
 
 /**
  * Dispatch a tool as a child of the current orchestrator invocation.
@@ -16,19 +16,24 @@ import type { Registry, ToolContext } from "@argent/registry";
  * to propagate this is a pass-through.
  *
  * The abort `signal` is forwarded on both paths so a client disconnect cancels a
- * sub-tool that would otherwise poll on to its own timeout.
+ * sub-tool that would otherwise poll on to its own timeout. `extra.fileInputs`
+ * is the outcome of the file boundary a dispatcher applied to `args` itself
+ * (a `tool:` step whose files are on the client), forwarded as an HTTP call
+ * forwards it.
  */
 export async function invokeSubTool<T = unknown>(
   registry: Registry,
   ctx: ToolContext | undefined,
   toolId: string,
-  args: unknown
+  args: unknown,
+  extra?: { fileInputs?: Record<string, ResolvedFileInput> }
 ): Promise<T> {
   const signal = ctx?.signal;
   const recordChildInvocation = ctx?.recordChildInvocation;
+  const fileInputs = extra?.fileInputs ? { fileInputs: extra.fileInputs } : {};
   if (!recordChildInvocation) {
-    return signal
-      ? registry.invokeTool<T>(toolId, args, { signal })
+    return signal || extra?.fileInputs
+      ? registry.invokeTool<T>(toolId, args, { ...(signal ? { signal } : {}), ...fileInputs })
       : registry.invokeTool<T>(toolId, args);
   }
 
@@ -39,6 +44,7 @@ export async function invokeSubTool<T = unknown>(
       signal,
       toolInvocationId,
       recordChildInvocation,
+      ...fileInputs,
     });
   } finally {
     release();
