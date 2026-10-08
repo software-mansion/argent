@@ -9,9 +9,8 @@ import type { Registry } from "@argent/registry";
 // takes `ios`. So the runner reads the map by the AUTHORING platform, and a
 // cross-platform flow starts its app in the cloud with no file edit.
 //
-// No tree stub: a launch-only flow reads no UI tree. `runLaunch` goes
-// restart-app → treeSourceGate, and the gate resolves a service rather than
-// reading a tree.
+// `runLaunch` goes restart-app → treeSourceGate, and the gate reads the
+// accessibility tree until it names the launched app as the foreground app.
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, type FlowFile } from "../../src/tools/flows/flow-utils";
@@ -23,7 +22,7 @@ let tmpDir: string;
 /** Records every `restart-app` the run issued — the tool `runLaunch` starts an app with. */
 function mockRegistry(
   launched: string[],
-  resolveService?: Registry["resolveService"],
+  foregroundApp: string,
   restartArgs: Record<string, unknown>[] = []
 ): Registry {
   return {
@@ -37,13 +36,17 @@ function mockRegistry(
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-    // Both iOS platforms gate the launch on a native-devtools connection.
-    resolveService:
-      resolveService ??
-      vi.fn(async () => ({
-        isConnected: () => true,
-        listConnectedBundleIds: () => ["com.acme.app"],
-      })),
+    // Both iOS platforms gate the launch on the accessibility tree naming the app.
+    resolveService: vi.fn(async () => ({
+      degraded: false,
+      tree: async () => ({
+        alertVisible: false,
+        nodes: [],
+        truncated: false,
+        foregroundApp,
+        treeVersion: 2,
+      }),
+    })),
   } as unknown as Registry;
 }
 
@@ -56,12 +59,12 @@ async function writeFlow(name: string, flow: FlowFile): Promise<void> {
 async function run(
   name: string,
   device: string,
-  resolveService?: Registry["resolveService"]
+  foregroundApp = "com.acme.app"
 ): Promise<FlowRunResult & { launched: string[]; restartArgs: Record<string, unknown>[] }> {
   const launched: string[] = [];
   const restartArgs: Record<string, unknown>[] = [];
   const result = await createRunFlowTool(
-    mockRegistry(launched, resolveService, restartArgs)
+    mockRegistry(launched, foregroundApp, restartArgs)
   ).execute({}, { name, project_root: tmpDir, device });
   if (!("steps" in result))
     throw new Error(`expected a run result, got: ${JSON.stringify(result)}`);
@@ -168,19 +171,40 @@ describe("launch args from an ios { app, args } entry", () => {
 // start - which is how four taps 50ms apart went out into a still-launching app
 // and every one of them reported `pass`.
 describe("a remote launch waits for the tree source, exactly as a local one does", () => {
-  /** A native-devtools service that never resolves for this device. */
-  const unavailable = vi.fn(async () => {
-    throw new Error("no sim-remote tunnel");
-  }) as unknown as Registry["resolveService"];
+  /**
+   * Run with another app in front for good, the clock faked through the
+   * launch's settle and the gate's whole wait. Each pump is a real event-loop
+   * turn, so the run's disk I/O settles between advances.
+   */
+  async function runBehindSpringboard(device: string) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const pending = run("cross", device, "com.apple.springboard");
+      let settled = false;
+      void pending.then(
+        () => (settled = true),
+        () => (settled = true)
+      );
+      for (let i = 0; i < 1000 && !settled; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      return await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
 
-  it("fails the launch when native devtools never comes up", async () => {
+  it("fails the launch when the tree never names the app as the foreground app", async () => {
     await writeFlow("cross", CROSS_PLATFORM);
 
-    const result = await run("cross", REMOTE, unavailable);
+    const result = await runBehindSpringboard(REMOTE);
 
+    // `restart-app` succeeded: the failure is the gate, not the launch.
+    expect(result.launched).toEqual(["com.acme.app"]);
     expect(result.steps[0].status).toBe("error");
-    expect(result.steps[0].reason).toContain("could not connect to native devtools");
-    expect(result.steps[0].reason).toContain("com.acme.app");
+    expect(result.steps[0].reason).toContain("com.acme.app did not become the foreground app");
+    expect(result.steps[0].reason).toContain("com.apple.springboard is in the foreground");
     expect(result.ok).toBe(false);
   });
 
@@ -189,20 +213,9 @@ describe("a remote launch waits for the tree source, exactly as a local one does
     // own advice, which the author cannot act on differently anyway.
     await writeFlow("cross", CROSS_PLATFORM);
 
-    const remote = await run("cross", REMOTE, unavailable);
-    const local = await run("cross", LOCAL, unavailable);
+    const remote = await runBehindSpringboard(REMOTE);
+    const local = await runBehindSpringboard(LOCAL);
 
     expect(remote.steps[0].reason).toBe(local.steps[0].reason);
-  });
-
-  it("still gates the launch when the app itself was started fine", async () => {
-    // `restart-app` succeeded: the failure is the gate, not the launch, so the
-    // app id it started is on record and the reason names the wait.
-    await writeFlow("cross", CROSS_PLATFORM);
-
-    const result = await run("cross", REMOTE, unavailable);
-
-    expect(result.launched).toEqual(["com.acme.app"]);
-    expect(result.steps[0].reason).toContain("the native-devtools service is unavailable");
   });
 });

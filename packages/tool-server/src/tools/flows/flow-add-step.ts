@@ -45,8 +45,7 @@ import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
-  selectorToFrame,
-  frameContains,
+  deriveUniqueSelector,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -83,9 +82,8 @@ const zodSchema = z.object({
 // Replay gates on the platform's full-hierarchy source (`treeSourceGate` in
 // flow-run.ts) and refuses to degrade to the fallback tree, so a selector
 // derived from the fallback deserves a caveat even when it derives cleanly.
-// Chromium/Vega have a single source — no caveat.
+// iOS, Chromium and Vega have a single source — no caveat.
 const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
-  ios: "native-devtools",
   android: "android-devtools",
 };
 
@@ -104,8 +102,6 @@ function recordedLaunchedApp(session: RecordingSession, platform: string): strin
 }
 
 function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
-  // Keyed by authoring platform: a remote simulator reads the same iOS full
-  // hierarchy a local one does, so it earns the same caveat.
   const expected = REPLAY_TREE_SOURCES[authoringPlatform(platform)];
   if (!expected || source === expected) return undefined;
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
@@ -144,35 +140,24 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
     );
   }
   return (
-    `so retarget the DIRECTIVE at ${idKind} the full hierarchy carries and prove it with ` +
+    `so retarget the DIRECTIVE at ${idKind} the flow tree carries and prove it with ` +
     "`flow-execute`, or keep the step raw"
   );
 }
 
 /**
- * How to read the tree the runner resolves against — or, on iOS, Android and
- * Chromium, that no read-only tool reports it. `describe` and the native
- * readers each show a different projection, so naming one of them would point
- * the author at the wrong tree.
- *
- * On an iOS SIMULATOR the near miss is also SHALLOWER: `native-full-hierarchy`
- * defaults to `maxDepth: 8` where the runner's read asks for 100, so absent
- * from it does not mean absent from the runner's tree until the depth is
- * raised. A physical device is not covered: `platformOf` reports `ios` for one
- * too, but its runner reads the XCUITest snapshot, which takes no depth at all,
- * and `native-full-hierarchy` is simulator-only.
+ * How to read the tree the runner resolves against — or, on Android and
+ * Chromium, that no read-only tool reports it. On iOS `describe` shows it:
+ * the runner reads the same accessibility tree, minus what is scrolled or
+ * clipped out of view and what a system alert covers.
  */
 function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);
   if (platform === "ios") {
     return (
-      "No read-only tool reports the runner's projection on iOS — `native-find-views` and " +
-      "`native-full-hierarchy` return the RAW view tree, keeping the hidden, transparent, " +
-      "scroll-clipped and unlabelled container views the runner drops, and neither answers the " +
-      "question a selector asks: `native-find-views` matches `identifier`/`label`/`className` " +
-      "EXACTLY and takes no substring `text` or `role`, and `native-full-hierarchy` takes no " +
-      "matcher at all — it dumps the tree for you to read — " +
-      retargetRemedy("an `id`", condition)
+      "`describe` shows the tree the runner reads on iOS (the runner also drops elements " +
+      "scrolled or clipped out of view and anything a system alert covers), " +
+      retargetRemedy("an `id` or text", condition)
     );
   }
   if (platform === "android") {
@@ -236,8 +221,9 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);
   if (platform === "ios") {
     return (
-      "The recorder reads the accessibility tree and the runner reads the full native view " +
-      "hierarchy; they overlap but neither contains the other." +
+      "Both read the accessibility tree. The runner drops what is scrolled or clipped out of " +
+      "view and what a system alert covers, and keeps unlabelled scrolling containers " +
+      "`describe` does not print." +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -317,13 +303,10 @@ function awaitStillNeeds(condition: WaitCondition): string {
  * node its own tree listed first.
  *
  */
-function textTieClause(udid: unknown): string {
+function textTieClause(): string {
   const order =
-    platformOf(udid) === "ios"
-      ? "and the two are flat lists built from different sources — the accessibility element " +
-        "order and the view-hierarchy walk — so neither order follows from the other"
-      : "and the recorder's lists a container before its children where the runner's lists " +
-        "children before their container";
+    "and the recorder's lists a container before its children where the runner's lists " +
+    "children before their container";
   return (
     " Check FIRST whether the selector matches more than one element, because a `text` check " +
     "reads only one of them — the first visible match in reading order — and the two sides can " +
@@ -392,10 +375,9 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 }
 
 // The indeterminate reason is quoted verbatim, and it carries whatever recovery
-// fits: on iOS `queryFullHierarchyTree` writes one per failure branch, having
-// dropped the shared native-target error's "provide bundleId explicitly" line
-// that a flow selector step cannot act on. So name no remedy here — a second one
-// would contradict it. Add only what the reason cannot see: this step.
+// fits: on iOS `queryIosSimulatorFlowTree` writes one per failure. So name no
+// remedy here — a second one would contradict it. Add only what the reason
+// cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
   // This caveat rides on a reason whose remedy repairs a source that is DOWN,
@@ -585,7 +567,7 @@ async function probeAgainstRunnerTree(
       `it.` +
       // Ahead of the tree stories: when it applies it makes all of them
       // inapplicable.
-      (condition === "text" ? textTieClause(args.udid) : "") +
+      (condition === "text" ? textTieClause() : "") +
       " " +
       SPELLING_CLAUSE +
       " " +
@@ -595,19 +577,18 @@ async function probeAgainstRunnerTree(
 }
 
 /**
- * `deriveSelector`'s last resort: the tapped node has no identifier and no
+ * The derivation's last resort: the tapped node has no identifier and no
  * visible text, so the step replays on role alone. It holds only while that
- * element keeps winning `selectorToFrame`'s ranking. The re-resolve guard below
- * proves that for the recording screen, never for the screen replay meets, so
- * the warning says so instead of leaving it silent.
- *
- * The raised iOS depth cap makes this more common. An unlabeled icon that the
- * device used to truncate away, which left `nodeAtPoint` to pick its `testID`
- * container, is now present and is the smaller frame under the tap.
+ * element keeps winning `selectorToFrame`'s ranking, which the derivation
+ * proved for the recording screen, never for the screen replay meets, so the
+ * warning says so instead of leaving it silent. An unlabeled icon is the usual
+ * case: it is the smaller frame under the tap, over its `testID` container.
  */
 function roleOnlySelectorWarning(selector: Selector): string | undefined {
   if (selector.role === undefined || selector.identifier !== undefined) return undefined;
   if (selector.text !== undefined || selector.textMatches !== undefined) return undefined;
+  // A scope singled the element out on this screen.
+  if (selector.within || selector.next || selector.after) return undefined;
   return (
     `selector ${describeSelector(selector)} matches by role alone (the tapped element has no id ` +
     `or visible text) — replay takes whichever element of that role ranks first, so re-record ` +
@@ -632,18 +613,14 @@ function innermostTreeReason(message: string): string {
  * describing why coordinates were kept.
  *
  * Reads `fetchFlowTree`, the tree the runner resolves selectors against at
- * replay — NOT the agent-facing describe tree, which collapses an iOS
- * `accessible` container into one merged-label leaf that exists on no single
- * view in the replay hierarchy, and trims Android's testID-only containers the
- * replay tree keeps. A describe-derived selector could fail — or hit a
- * different element — at replay while recording reported success.
+ * replay — on Android NOT the agent-facing describe tree, which trims the
+ * testID-only containers the replay tree keeps. The selector comes from
+ * `deriveUniqueSelector`, which checks every candidate through the replay
+ * engine: an id, text or role alone when that resolves to the tapped element,
+ * else scoped `within` a container or `next`/`after` an anchor.
  *
  * The launched app is passed — unpinned, unlike replay, since recording has no
- * run state vouching for the foreground app — because a recording relaunches
- * the app AFTER this tool-server bound its listener: the first tap reads during
- * the connect window, where that id is the only one the iOS tree source can
- * measure, and it yields a measured reason instead of auto-targeting's "Launch
- * or restart the app first".
+ * run state vouching for the foreground app.
  */
 async function captureTapSelector(
   registry: Registry,
@@ -657,31 +634,20 @@ async function captureTapSelector(
     const { tree, source, uiOrientation } = await fetchFlowTree(
       registry,
       device,
-      launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
+      launched ? { bundleId: launched, pinned: false } : undefined
     );
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
-    const selector = deriveSelector(node);
-    if (!selector)
-      return { warning: "tapped element has no stable text/id; kept coordinates (brittle)" };
-    // Replay resolves through selectorToFrame, whose ranking (exact match →
-    // smallest frame → reading order) is free to elect a DIFFERENT element than
-    // the tapped one — e.g. the same label on an earlier row. Require the
-    // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer. Ranked in the reading order
-    // replay will rank in: the UI's, on a landscape UI.
-    const resolved = selectorToFrame(tree, selector, uiOrientation);
-    if (!resolved) {
-      // Defensive: a selector derived from a visible node matches that node
-      // under matchNode's semantics, so this should be unreachable. Kept in
-      // case derivation and matching drift apart again.
+    // Ranked in the reading order replay will rank in: the UI's, on a
+    // landscape UI.
+    const selector = deriveUniqueSelector(tree, node, point, uiOrientation);
+    if (!selector) {
+      const plain = deriveSelector(node);
       return {
-        warning: `selector ${describeSelector(selector)} matches no element on this screen; kept coordinates (brittle)`,
-      };
-    }
-    if (!frameContains(resolved, point.x, point.y)) {
-      return {
-        warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
+        warning: plain
+          ? `selector ${describeSelector(plain)} also matches other elements on this screen and no ` +
+            "`within`/`next` scope singles out the tapped one; kept coordinates (brittle)"
+          : "tapped element has no stable text/id; kept coordinates (brittle)",
       };
     }
     const warnings = [
@@ -1191,8 +1157,8 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute one MCP tool and record its flow step, in the flow named by \`name\` + \`project_root\`. Use when recording a flow and you want each action run and captured; the recording must already be open.
-A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
+    description: `Execute one MCP tool and record its flow step, in the flow named by \`name\` + \`project_root\`. Use when recording a flow; the recording must already be open.
+A coordinate \`gesture-tap\` records as a \`tap\` selector step (id, text or role, scoped \`within\`/\`next\` when repeated); \`restart-app\` as a \`launch\`.
 Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`flow-add-script\`, directly.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the

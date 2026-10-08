@@ -152,6 +152,6 @@ describe("ax-service tree", () => {
     const api = await attach();
     const err = await api.tree().catch((e: unknown) => e);
     expect((err as Error).message).toBe("ax-service predates `tree`; update argent");
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_QUERY_FAILED);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_TREE_UNSUPPORTED);
   });
 });

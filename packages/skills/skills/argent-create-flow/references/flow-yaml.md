@@ -5,7 +5,7 @@ Read this reference when polishing, composing, or manually reviewing a flow.
 - [Flow YAML](#flow-yaml)
   - [File shape and flow type](#file-shape-and-flow-type)
   - [Selectors](#selectors)
-    - [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree)
+    - [The flow tree and `describe`](#the-flow-tree-and-describe)
     - [Relational scopes](#relational-scopes)
   - [Directives](#directives)
     - [`swipe`](#swipe)
@@ -53,7 +53,7 @@ Use values that meet the [stable-selector definition](../SKILL.md#stable-selecto
 { id: settings-row, text: Notifications }
 ```
 
-All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
+All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings. A run of whitespace in a label, including a no-break space, matches one space in `text`. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
 
 Use single quotes for anchored, case-sensitive regexes:
 
@@ -61,28 +61,24 @@ Use single quotes for anchored, case-sensitive regexes:
 { text: { matches: '^Order #\d+$' } }
 ```
 
-### The runner tree is not the discovery tree
+### The flow tree and `describe`
 
-Flow selectors and live discovery use different screen projections:
+Flow selectors resolve against the flow tree. On some platforms, live discovery shows a different view of the screen:
 
-| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
-| -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
-| iOS      | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes    |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                         |
+| Platform | Flow tree                                                 | `describe` / `await-ui-element` | Important difference                                                                                        |
+| -------- | --------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| iOS      | accessibility tree                                        | same tree                       | The flow tree drops elements out of view or under a system alert, and keeps unlabelled scrolling containers |
+| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes                                                         |
+| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)                                                       |
+| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                                                              |
 
-On iOS, Android, and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
+On iOS, find selectors with `describe`. An `id`, `text`, or `role` that `describe` shows resolves at replay. Never use `native-full-hierarchy`, `native-find-views`, or `native-describe-screen` to find or verify a flow selector.
 
-The recorder rechecks each successful `await-ui-element` against the runner tree. Follow any `message` warning and replay each conversion. On Vega, a mismatch usually means the screen changed. A `text` check can also select different elements from the same source. See [Live waits and checks](live-authoring.md#live-waits-and-checks).
+On Android and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
-**On iOS, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later runner-tree reads to that app, so a read probes only that app instead of fanning out over every connected one to find the frontmost. A pinned read still refuses, naming the reason, when the app has no foreground presence left, when it stops answering after an earlier read got through, when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app.
+The recorder rechecks each successful `await-ui-element` against the flow tree. Follow any `message` warning and replay each conversion. On iOS and Vega, a mismatch usually means the screen changed. A `text` check can also select different elements from the same source. See [Live waits and checks](live-authoring.md#live-waits-and-checks).
 
-Any raw `tool:` step ends the pin, because its effect on the screen is opaque to the runner, and reads auto-detect the frontmost app again until the next `launch:` re-pins. A tool that cannot change the foreground app leaves the launched id as an unpinned fallback, which takes the read only when auto-detection times out and the launched app vouches for itself with a probe of its own. `launch-app`, `restart-app`, `reinstall-app`, `open-url`, and `button` drop even that; `launch-app` and `restart-app` replace it with the app they just started, still unpinned. Nested `run:` fragments inherit both the pin and its clearing.
-
-So on iOS recording and replay can read different apps, not only different projections: recording has no run state and always auto-detects the frontmost connected app, while a replay read between a `launch:` and the next raw `tool:` step reads the launched app.
-
-**On iOS, never copy a `role` from `describe` into a flow selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
+On iOS, each tree read after a `launch:` expects the launched app in the foreground. If another app is in front, the step fails and names it. When the switch is intended, add a `launch:` or `tool: launch-app` step before that step.
 
 When several nodes match, the directive decides:
 
@@ -107,6 +103,8 @@ Flow selectors support frame-based `within`, `after`, and `next` in every select
 
 Scopes can combine and nest, with at most six scope keys. Use strict selectors for anchors. Scope through a trusted container when a missing control must fail instead of reaching another row.
 
+`any: true` selects any element and needs a scope. It takes no `id`, `text`, or `role`. For example, `{ any: true, within: { id: results-list } }` selects the first element in reading order inside that container.
+
 ## Directives
 
 Directives stop the flow on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `fold`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
@@ -118,7 +116,7 @@ Directives stop the flow on failure and skip later steps. The available directiv
 - Unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
 - A fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
-Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
+Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, `launch:` waits up to 15 s until the app is in the foreground. A permission prompt at launch does not fail it. On timeout, the step fails and names the app that was in front. See [The flow tree and `describe`](#the-flow-tree-and-describe).
 
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
@@ -158,7 +156,7 @@ On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`,
 
 `type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
-A **selector-less gesture** — a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:` — resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
+A **selector-less gesture** — a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:` — resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source. The quoted error names the fix. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
 
 ## Verification conditions
 

@@ -490,7 +490,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           // A daemon that predates `tree` answers an envelope-level error.
           if (!(err instanceof Error) || err.message !== "unknown_command") throw err;
           throw new FailureError("ax-service predates `tree`; update argent", {
-            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            error_code: FAILURE_CODES.AX_TREE_UNSUPPORTED,
             failure_stage: "ax_service_tree",
             failure_area: "tool_server",
             error_kind: "unknown",

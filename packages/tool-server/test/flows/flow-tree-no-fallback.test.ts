@@ -5,10 +5,11 @@ import * as path from "node:path";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { DescribeTreeData } from "../../src/tools/describe/contract";
 
-// Spy on the trimmed AX describe path: if fetchFlowTree ever fell back to it,
-// the same flow would pass or fail with devtools availability instead of with
-// what's on screen (the trimmed tree lacks testID nodes and hoisted
-// subtreeText). These tests pin the contract that it hard-fails instead.
+// Spy on the describe path: if fetchFlowTree ever fell back to it, the same
+// flow would pass or fail with the flow tree source's availability instead of
+// with what's on screen (describe drops the hidden nodes and unlabelled
+// containers flows resolve against, and hoists no subtreeText). These tests pin
+// the contract that it hard-fails instead.
 const describeIos = vi.fn(async (): Promise<DescribeTreeData> => {
   throw new Error("describeIos must not be reached by a flow tree fetch");
 });
@@ -27,8 +28,8 @@ function device(platform: string): DeviceInfo {
   return { platform, id: IOS_DEVICE, udid: IOS_DEVICE } as unknown as DeviceInfo;
 }
 
-// Registry whose service layer is down — the shape a run sees when native
-// devtools never connected or dropped mid-run.
+// Registry whose service layer is down — the shape a run sees when the
+// accessibility service never started or dropped mid-run.
 function deadRegistry(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
@@ -55,10 +56,10 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("fetchFlowTree without a full-hierarchy source", () => {
-  it("throws on iOS instead of degrading to the AX tree", async () => {
+describe("fetchFlowTree without its tree source", () => {
+  it("throws on iOS instead of degrading to the describe tree", async () => {
     await expect(fetchFlowTree(deadRegistry(), device("ios"))).rejects.toThrow(
-      /native devtools is unavailable/
+      /accessibility tree of .* could not be read: service unavailable/
     );
     expect(describeIos).not.toHaveBeenCalled();
   });
@@ -91,8 +92,9 @@ describe("fetchFlowTree without a full-hierarchy source", () => {
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:fail"]);
     // The report names the outage — not a misleading "no element matched".
-    expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
-    expect(result.steps[0].reason).toMatch(/native devtools is unavailable/);
+    expect(result.steps[0].reason).toMatch(
+      /could not read the UI tree: the accessibility tree of .* could not be read/
+    );
     expect(describeIos).not.toHaveBeenCalled();
   });
 });

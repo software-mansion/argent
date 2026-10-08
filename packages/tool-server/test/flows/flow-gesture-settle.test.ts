@@ -77,8 +77,17 @@ function mockRegistry(): Registry {
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-    // A `launch` gates on the native-devtools connection before it can pass.
-    resolveService: vi.fn(async () => ({ isConnected: () => true })),
+    // A `launch` passes once the accessibility tree names the app as the foreground app.
+    resolveService: vi.fn(async () => ({
+      degraded: false,
+      tree: async () => ({
+        alertVisible: false,
+        nodes: [],
+        truncated: false,
+        foregroundApp: "com.acme.app",
+        treeVersion: 2,
+      }),
+    })),
   } as unknown as Registry;
 }
 
@@ -714,9 +723,9 @@ describe("a remote simulator settles like a local one", () => {
   }, 20_000);
 });
 
-// A relaunch is the repair the tree source names when it refuses an app that
-// loaded no instrumentation, so a `launch` spends the verdict proven before it
-// - no read falls between it and the next gesture to clear it instead.
+// A relaunch is the repair the tree source names when an app serves an empty
+// tree, so a `launch` spends the verdict proven before it - no read falls
+// between it and the next gesture to clear it instead.
 describe("a launch clears a proven outage", () => {
   it("makes the gesture after it pay for a settle of its own", async () => {
     currentTree = outage;

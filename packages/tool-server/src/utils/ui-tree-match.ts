@@ -126,12 +126,19 @@ export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
 
+// Case-insensitive, with every run of whitespace read as one space: a label
+// joined with a no-break space ("Hubert\u00A0Gancarczyk") prints as a plain
+// space in `describe`, and a selector typed from that print must still match.
+function foldText(text: string): string {
+  return text.replace(/\s+/g, " ").toLowerCase();
+}
+
 function includesCI(haystack: string | undefined, needle: string): boolean {
-  return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
+  return Boolean(haystack) && foldText(haystack!).includes(foldText(needle));
 }
 
 function equalsCI(actual: string | undefined, expected: string): boolean {
-  return (actual ?? "").toLowerCase() === expected.toLowerCase();
+  return foldText(actual ?? "") === foldText(expected);
 }
 
 /**
@@ -765,15 +772,146 @@ const GENERIC_ROLES = new Set([
  * on — the caller then keeps coordinates.
  */
 export function deriveSelector(node: DescribeNode): Selector | null {
-  if (node.identifier && node.identifier.trim()) return { identifier: node.identifier };
-  // Label OR value individually — never nodeText's joined form: matchNode
-  // compares a text selector against label and value separately, so a joined
-  // "Volume 50%" would match nothing, not even the node it came from. Label
-  // first: a value like "50%" is the volatile part of a control. Icon-font
-  // labels are invisible in YAML (see hasVisibleText), so a node carrying only
-  // those falls through to role/coordinates.
-  const text = [node.label, node.value].map((t) => t?.trim()).find((t) => t && hasVisibleText(t));
-  if (text) return { text };
-  if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) return { role: node.role };
+  return ownSelectors(node)[0] ?? null;
+}
+
+// The own fields the recorder tries for a node, most stable first: an id,
+// then visible text (whitespace folded, so the YAML holds plain spaces), then
+// a non-generic role — each one alone. Label OR value individually — never
+// nodeText's joined form: matchNode compares a text selector against label
+// and value separately, so a joined "Volume 50%" would match nothing, not
+// even the node it came from. Label first: a value like "50%" is the volatile
+// part of a control. Icon-font labels are invisible in YAML (see
+// hasVisibleText), so a node carrying only those falls through to role.
+function ownSelectors(node: DescribeNode): Selector[] {
+  const out: Selector[] = [];
+  if (node.identifier && node.identifier.trim()) out.push({ identifier: node.identifier });
+  const text = [node.label, node.value]
+    .map((t) => t?.replace(/\s+/g, " ").trim())
+    .find((t) => t && hasVisibleText(t));
+  if (text) out.push({ text });
+  if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) out.push({ role: node.role });
+  return out;
+}
+
+/**
+ * Every visible match of `selector` sits over `point`: the matches are one
+ * nested stack around the tapped element (a labelled container and the leaf
+ * inside it rendering the same text), so whichever of them `selectorToFrame`
+ * ranks first at replay, the tap lands on the element recorded. A match
+ * elsewhere on the screen — the same label on another row — fails it.
+ */
+function resolvesAt(
+  root: DescribeNode,
+  selector: Selector,
+  point: { x: number; y: number },
+  orientation: UiOrientation | undefined
+): boolean {
+  const visible = findAll(root, selector, orientation).filter(isVisible);
+  return visible.length > 0 && visible.every((n) => frameContains(n.frame, point.x, point.y));
+}
+
+// How many preceding elements the recorder tries as `next` anchors.
+const MAX_ANCHORS = 12;
+
+/**
+ * The selector the recorder writes for a tapped node: the first of
+ * {@link ownSelectors} that {@link resolvesAt} the tapped point on its own;
+ * else that own selector scoped `within` the smallest labelled or identified
+ * container holding the node; else `next` the nearest preceding element with
+ * an id or label that is itself unique on screen. Null when no form resolves
+ * to the tapped element — the caller then keeps coordinates.
+ *
+ * `after` is never emitted: with a unique anchor it keeps every candidate that
+ * follows it, a superset of what `next` keeps, so it cannot single out what
+ * `next` could not.
+ *
+ * Scopes are geometric, exactly as replay resolves them, and each candidate is
+ * checked through the replay engine, so a selector returned here is one the
+ * runner resolves to the tapped element on this screen.
+ */
+export function deriveUniqueSelector(
+  root: DescribeNode,
+  node: DescribeNode,
+  point: { x: number; y: number },
+  orientation?: UiOrientation
+): Selector | null {
+  const own = ownSelectors(node);
+  if (own.length === 0) return null;
+  const unique = (s: Selector): boolean => resolvesAt(root, s, point, orientation);
+  for (const s of own) if (unique(s)) return s;
+
+  const others: DescribeNode[] = [];
+  const collect = (n: DescribeNode): void => {
+    if (n !== node && isVisible(n) && ownSelectors(n).length > 0) others.push(n);
+    for (const child of n.children) collect(child);
+  };
+  for (const child of root.children) collect(child);
+  // An anchor or container is named by its id or text, never by role alone.
+  const nameOf = (n: DescribeNode): Selector | undefined =>
+    ownSelectors(n).find((s) => s.role === undefined);
+
+  // Containers, tightest first; a container with the node's own frame is the
+  // node again, not a scope.
+  const containers = others
+    .filter((c) => frameWithin(node.frame, c.frame) && !sameFrame(node.frame, c.frame))
+    .sort((a, b) => frameArea(a.frame) - frameArea(b.frame));
+  for (const c of containers) {
+    const within = nameOf(c);
+    if (!within) continue;
+    for (const s of own) {
+      const scoped = { ...s, within };
+      if (unique(scoped)) return scoped;
+    }
+  }
+
+  // Anchors: elements the node follows in reading order, nearest first, whose
+  // own name resolves to exactly one place on screen. Labelled elements come
+  // before id-only containers: a reader finds the anchor in `describe`, which
+  // prints the first and not the second.
+  const reading = readingFrames(orientation);
+  const nf = reading(node);
+  const unlabelled = (n: DescribeNode): number => (ownSelectors(n).some((s) => s.text) ? 0 : 1);
+  const anchors = others
+    .filter((a) => followKind(nf, reading(a)) !== "no")
+    .map((a) => ({ a, d: distance(nf, reading(a)), u: unlabelled(a) }))
+    .sort((p, q) => p.u - q.u || p.d - q.d)
+    .slice(0, MAX_ANCHORS)
+    .map(({ a }) => a);
+  for (const a of anchors) {
+    const next = nameOf(a);
+    if (!next || !uniqueOnScreen(root, next, a, orientation)) continue;
+    for (const s of own) {
+      const scoped = { ...s, next };
+      if (unique(scoped)) return scoped;
+    }
+  }
   return null;
+}
+
+function sameFrame(a: DescribeFrame, b: DescribeFrame): boolean {
+  return (
+    Math.abs(a.x - b.x) <= WITHIN_EPS &&
+    Math.abs(a.y - b.y) <= WITHIN_EPS &&
+    Math.abs(a.width - b.width) <= WITHIN_EPS &&
+    Math.abs(a.height - b.height) <= WITHIN_EPS
+  );
+}
+
+// Reading-order distance between two frames: rows apart first, then columns.
+function distance(a: DescribeFrame, b: DescribeFrame): number {
+  const dy = Math.max(0, a.y - (b.y + b.height), b.y - (a.y + a.height));
+  const dx = Math.max(0, a.x - (b.x + b.width), b.x - (a.x + a.width));
+  return dy * 4 + dx;
+}
+
+// Does `selector` match `node` and nothing else visible on screen?
+function uniqueOnScreen(
+  root: DescribeNode,
+  selector: Selector,
+  node: DescribeNode,
+  orientation: UiOrientation | undefined
+): boolean {
+  const visible = findAll(root, selector, orientation).filter(isVisible);
+  return visible.length === 1 && visible[0] === node;
 }

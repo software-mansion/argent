@@ -5,11 +5,7 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError, ToolExecutionError } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
-import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
-import {
-  __resetDeviceSetCacheForTesting,
-  rememberDeviceSet,
-} from "../../src/utils/ios-device-sets";
+import type { AXTreeNode } from "../../src/blueprints/ax-service";
 
 // `await-ui-element` reads the agent-facing describe tree; the `await:`/`assert:`
 // directive polish converts the step into reads `fetchFlowTree`'s. Neither tree
@@ -46,9 +42,10 @@ import { assertSupported } from "../../src/utils/capability";
 import { resolveDevice } from "../../src/utils/device-info";
 import { findAll, type Selector } from "../../src/utils/ui-tree-match";
 import {
-  adaptFullHierarchyToDescribeResult,
-  queryFullHierarchyTree,
+  adaptIosUiTreeForFlows,
+  queryIosSimulatorFlowTree,
 } from "../../src/tools/flows/flow-ios-tree";
+import { adaptAxTree } from "../../src/tools/ui-tree/ios";
 import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
@@ -80,43 +77,31 @@ const ROW: DescribeNode["frame"] = { x: 0.1, y: 0.1, width: 0.5, height: 0.05 };
 
 let tmpDir: string;
 
-const IOS_SCREEN = { x: 0, y: 0, width: 390, height: 844 };
-const IOS_ROW = { x: 0, y: 100, width: 390, height: 40 };
+// Normalized, as the ax-service reports frames.
+const IOS_ROW = { x: 0, y: 0.11, width: 1, height: 0.05 };
 
-interface RawIosView {
-  className?: string;
-  label?: string;
-  identifier?: string;
-  alpha?: number;
-  hidden?: boolean;
-  frame?: typeof IOS_ROW;
-  windowFrame?: typeof IOS_ROW;
-  children?: RawIosView[];
+type IosElement = Omit<AXTreeNode, "index" | "parentIndex">;
+
+/** One ax-service `tree` reply under an app root, through the iOS flow adapter. */
+function iosRunnerTree(elements: IosElement[]): DescribeNode {
+  const nodes: AXTreeNode[] = [
+    { index: 0, label: "App", bundleId: "com.acme.app" },
+    ...elements.map((e, i) => ({ ...e, index: i + 1, parentIndex: 0 })),
+  ];
+  return adaptIosUiTreeForFlows(
+    adaptAxTree({
+      alertVisible: false,
+      screenFrame: { width: 402, height: 874 },
+      nodes,
+      truncated: false,
+      foregroundApp: "com.acme.app",
+      treeVersion: 2,
+    })
+  );
 }
 
-/** `ViewHierarchy.getFullHierarchy`'s payload shape, through the iOS adapter. */
-function iosRunnerTree(views: RawIosView[]): DescribeNode {
-  return adaptFullHierarchyToDescribeResult({
-    windows: [
-      {
-        className: "UIWindow",
-        frame: IOS_SCREEN,
-        windowFrame: IOS_SCREEN,
-        children: views,
-      },
-    ],
-  });
-}
-
-function iosLabel(label: string, extra: Partial<RawIosView> = {}): RawIosView {
-  return {
-    className: "UILabel",
-    label,
-    frame: IOS_ROW,
-    windowFrame: IOS_ROW,
-    children: [],
-    ...extra,
-  };
+function iosLabel(label: string, extra: Partial<IosElement> = {}): IosElement {
+  return { label, traits: ["staticText"], frame: IOS_ROW, ...extra };
 }
 
 const ANDROID_W = 1080;
@@ -281,16 +266,13 @@ beforeEach(async () => {
   probeRejection = undefined;
   fetchRunnerTree = async () => ({
     tree: iosRunnerTree([iosLabel("Continue")]),
-    source: "native-devtools",
-    screen: { width: 390, height: 844 },
+    source: "ax-service",
+    screen: { width: 402, height: 874 },
   });
 });
 
 afterEach(async () => {
   __resetRecordingsForTesting();
-  // The udid to device-set memo is module state; a seeded entry would outlive
-  // the case that seeded it.
-  __resetDeviceSetCacheForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
   vi.clearAllMocks();
 });
@@ -299,7 +281,7 @@ afterEach(async () => {
  * Serve one runner-tree read. `source` is a label only: the platform arm comes
  * from the UDID shape alone, so a fixture exercises the SHAPE, not the source.
  */
-const serveTree = (tree: DescribeNode, source: DescribeTreeData["source"] = "native-devtools") => {
+const serveTree = (tree: DescribeNode, source: DescribeTreeData["source"] = "ax-service") => {
   fetchRunnerTree = async () => ({ tree, source });
 };
 
@@ -691,33 +673,15 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   // ── Per-platform divergences, each produced by that platform's adapter ────
 
-  // iOS: an `accessible` container. The AX tree merges it into ONE leaf whose
-  // label aggregates its children, so the author records a merged string. The
-  // flow projection hoists that text into `subtreeText`, which `findAll` skips.
-  const IOS_ACCESSIBLE_CONTAINER = [
-    {
-      className: "UIView",
-      identifier: "total-row",
-      frame: IOS_ROW,
-      windowFrame: IOS_ROW,
-      children: [
-        iosLabel("Total", { frame: { x: 0, y: 100, width: 100, height: 40 } }),
-        iosLabel("$5.00", { frame: { x: 120, y: 100, width: 100, height: 40 } }),
-      ],
-    },
-  ];
-
-  it("iOS: warns when the AX tree's merged label exists on no single view", async () => {
-    const tree = iosRunnerTree(IOS_ACCESSIBLE_CONTAINER);
-    expect(findAll(tree, { text: "Total $5.00" })).toHaveLength(0);
-    expect(findAll(tree, { identifier: "total-row" })[0]?.subtreeText).toBe("Total $5.00");
-
-    serveTree(tree);
+  // iOS: both sides read the accessibility tree, so the story names what the
+  // runner's projection drops rather than a second tree.
+  it("iOS: explains a divergence with what the runner's projection drops", async () => {
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await startRecording("ios");
 
     const result = await recordWait("ios", {
       condition: "visible",
-      selector: { text: "Total $5.00" },
+      selector: { text: "Continue" },
     });
     const warning = warningOf(result, "ios");
 
@@ -732,26 +696,26 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       "if the SCREEN simply moved on since the live wait, this verdict is no evidence"
     );
     expect(warning).not.toContain("WILL fail");
-    // Elsewhere this text is pinned only by its ABSENCE, so the arm could ship "".
     expect(warning).toContain(
-      "The recorder reads the accessibility tree and the runner reads the full native view " +
-        "hierarchy; they overlap but neither contains the other."
+      "Both read the accessibility tree. The runner drops what is scrolled or clipped out of " +
+        "view and what a system alert covers, and keeps unlabelled scrolling containers " +
+        "`describe` does not print."
     );
     // The admission no tree story rules out, appended per arm.
-    expect(warning).toContain("changed between the live wait and this re-probe");
-    // iOS must NOT be told a tool "reads the runner's side". The Apple-only
-    // readers match identifier/label/className exactly; `text`/`role` are substrings.
     expect(warning).toContain(
-      "rule that out first. No read-only tool reports the runner's projection on iOS"
+      "changed between the live wait and this re-probe reads the same way, so rule that out " +
+        "first. `describe` " +
+        "shows the tree the runner reads on iOS (the runner also drops elements scrolled or " +
+        "clipped out of view and anything a system alert covers)"
     );
-    // `native-full-hierarchy` takes no matcher; only `native-find-views` matches exactly.
     expect(warning).toContain(
-      "`native-find-views` matches `identifier`/`label`/`className` EXACTLY"
+      "retarget the DIRECTIVE at an `id` or text the flow tree carries and prove it with " +
+        "`flow-execute`, or keep the step raw"
     );
-    expect(warning).toContain("`native-full-hierarchy` takes no matcher at all");
+    expect(warning).not.toContain("native-find-views");
+    expect(warning).not.toContain("native-full-hierarchy");
     // The skill gates on visible text and retargets at polish, which PRODUCES this.
     expect(warning).not.toContain("re-record");
-    expect(warning).toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
     expect(await recordedSteps("ios")).toHaveLength(1);
   });
 
@@ -760,32 +724,21 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // iOS ones — so the prose is the iOS prose. Read raw, "ios-remote" matches
     // no clause and the author gets UNSUPPORTED_PLATFORM, which says no tool on
     // this platform is known.
-    serveTree(iosRunnerTree(IOS_ACCESSIBLE_CONTAINER));
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await startRecording("iosremote");
 
     const result = await recordWait("iosremote", {
       udid: IOS_REMOTE,
       condition: "visible",
-      selector: { text: "Total $5.00" },
+      selector: { text: "Continue" },
     });
     const warning = warningOf(result, "iosremote");
 
-    expect(warning).toContain(
-      "The recorder reads the accessibility tree and the runner reads the full native view " +
-        "hierarchy; they overlap but neither contains the other."
-    );
-    expect(warning).toContain("No read-only tool reports the runner's projection on iOS");
-    expect(warning).toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
+    expect(warning).toContain("Both read the accessibility tree.");
+    expect(warning).toContain("`describe` shows the tree the runner reads on iOS");
+    expect(warning).toContain("retarget the DIRECTIVE at an `id` or text the flow tree carries");
     // The fallback the fold exists to keep the author out of.
     expect(warning).not.toContain("No read-only tool is known to report");
-  });
-
-  // Whether the AX tree reports an `alpha: 0` view is a device question; this is not.
-  it("iOS: the runner's projection drops a transparent view", () => {
-    expect(findAll(iosRunnerTree([iosLabel("Continue")]), { text: "Continue" })).toHaveLength(1);
-    expect(
-      findAll(iosRunnerTree([iosLabel("Continue", { alpha: 0 })]), { text: "Continue" })
-    ).toHaveLength(0);
   });
 
   // On `hidden` the longer `await:` waits for the element to LEAVE, not to arrive.
@@ -804,8 +757,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("the element reaches that tree");
     // A `hidden` verdict fires because the tree still HAS the element; retarget inverts.
     expect(warning).toContain("this verdict says that tree still HAS the element");
+    expect(warning).toContain("retargeting at an `id` or text it definitely carries");
     expect(warning).toContain("narrow the selector until it matches only what you expect to leave");
-    expect(warning).not.toContain("retarget the DIRECTIVE at an `id` the full hierarchy carries");
+    expect(warning).not.toContain("retarget the DIRECTIVE");
   });
 
   it("Android: inverts the retarget remedy for `hidden` too", async () => {
@@ -822,7 +776,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     expect(warning).toContain("this verdict says that tree still HAS the element");
     expect(warning).toContain("retargeting at a `resource-id` it definitely carries");
-    expect(warning).not.toContain("retarget the DIRECTIVE at a `resource-id` the full hierarchy");
+    expect(warning).not.toContain("retarget the DIRECTIVE");
   });
 
   // Android: an RN `Pressable testID` wrapping a `Text testID`. The TRIM makes
@@ -993,27 +947,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
     expect(warning).not.toContain("that element's text comes to match");
     expect(warning).not.toContain("the element reaches that tree");
-    // The MECHANISM: nested pre-order against flattened post-order. Not on iOS.
+    // The MECHANISM: nested pre-order against flattened post-order.
     expect(warning).toContain("lists a container before its children");
-  });
-
-  it("iOS: explains the `text` tie without a container neither of its trees has", async () => {
-    // On iOS both sides are FLAT, so the container-over-child story names a
-    // shape the platform does not have.
-    serveTree(iosRunnerTree([iosLabel("Total: $5.00")]));
-    await startRecording("iostie");
-
-    const result = await recordWait("iostie", {
-      condition: "text",
-      selector: { text: "Total" },
-      expectedText: "Total",
-      textMatch: "equals",
-    });
-    const warning = warningOf(result, "iostie") ?? "";
-
-    expect(warning).toContain("elect DIFFERENT ones from the very same nodes");
-    expect(warning).toContain("flat lists built from different sources");
-    expect(warning).not.toContain("lists a container before its children");
   });
 
   it("does not raise the multi-match cause on a condition that cannot have it", async () => {
@@ -1195,7 +1130,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   it("records with a warning when the runner's tree cannot be read at all", async () => {
     // Indeterminate is not a verdict, so refusing here would block a sanctioned form.
     fetchRunnerTree = async () => {
-      throw new Error("native devtools is unavailable");
+      throw new Error("the accessibility tree could not be read");
     };
     await startRecording("blind");
 
@@ -1238,16 +1173,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
    * build that reason with the real function. A hand-copied one is what let the
    * caveat go on describing a message production had stopped emitting.
    */
-  async function realIosTargetingFailure(udid = IOS): Promise<Error> {
-    // Seed the device set so `terminateCommand` answers from the memo instead of
-    // probing simctl.
-    rememberDeviceSet(udid, null);
-    const api = {
-      listConnectedBundleIds: () => [] as string[],
-      getAppState: vi.fn(),
-    } as unknown as NativeDevtoolsApi;
-    const registry = { resolveService: vi.fn(async () => api) } as unknown as Registry;
-    return (await queryFullHierarchyTree(registry, resolveDevice(udid)).catch(
+  async function realIosTreeFailure(udid = IOS): Promise<Error> {
+    const registry = {
+      resolveService: vi.fn(async () => {
+        throw new Error("connect ENOENT /tmp/ax-00000000.sock");
+      }),
+    } as unknown as Registry;
+    return (await queryIosSimulatorFlowTree(registry, resolveDevice(udid)).catch(
       (err: unknown) => err
     )) as Error;
   }
@@ -1255,7 +1187,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // That reason carries its own remedy, so the caveat must not answer it with a
   // second one.
   it("iOS: adds no remedy of its own to the reason the runner's source wrote", async () => {
-    const failure = await realIosTargetingFailure();
+    const failure = await realIosTreeFailure();
+    expect(failure.message).toContain(`the accessibility tree of ${IOS} could not be read`);
     fetchRunnerTree = async () => {
       throw failure;
     };
@@ -1269,13 +1202,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     // The reason arrives whole, its own recovery included.
     expect(warning).toContain(failure.message);
-    expect(warning).toContain("Relaunch with restart-app");
-    // launch-app does not terminate, so it cannot instrument a process that is
-    // already running — the opposite move to the one just quoted.
-    expect(warning).not.toContain("relaunch it with `launch-app`");
-    // And no advice attributed to the reason that it does not carry.
-    expect(warning).not.toContain("provide bundleId explicitly");
-    expect(warning).not.toContain("quoted from the shared native-target");
+    expect(warning).toContain("Boot the simulator with `boot-device`");
     // The reason is not always the iOS tree source's: a blind-but-not-throwing
     // read is described by the poll loop instead, and names no recovery at all.
     // So the caveat asserts nothing about where the reason came from.
@@ -1285,7 +1212,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   it("iOS: the caveat holds when the step DID carry a bundleId", async () => {
-    const failure = await realIosTargetingFailure();
+    const failure = await realIosTreeFailure();
     fetchRunnerTree = async () => {
       throw failure;
     };
@@ -1315,10 +1242,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   it("offers the iOS repair on a remote simulator, whose source is real", async () => {
     // `ios-remote` folds to iOS for the PROSE above, and the repair is a machine
-    // question — but the machine reads the iOS full hierarchy too, over the
+    // question — but the machine reads the iOS accessibility tree too, over the
     // sim-remote tunnel. So a silent read there is an outage like any other, and
     // the iOS remedy is the one that repairs it.
-    const failure = await realIosTargetingFailure(IOS_REMOTE);
+    const failure = await realIosTreeFailure(IOS_REMOTE);
     fetchRunnerTree = async () => {
       throw failure;
     };
@@ -1337,7 +1264,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // An outage, so the author is told to wait for the source to come back.
     expect(warning).toContain("re-probe once that tree source is back");
     expect(warning).toContain(failure.message);
-    expect(warning).toContain("Relaunch with restart-app");
+    expect(warning).toContain("Boot the simulator with `boot-device`");
     expect(warning).toContain("no directive takes a bundleId");
     expect(await recordedSteps("remoteblind")).toHaveLength(1);
   });
@@ -1360,7 +1287,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       if ((reads += 1) > 1) sawSecondRead();
       await readLanded;
       // A tree that does NOT satisfy the condition, or the loop would end here.
-      return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "native-devtools" };
+      return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "ax-service" };
     };
     await startRecording("slow");
 
@@ -1399,7 +1326,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // Load only pushes that UP: above the 3500ms ceiling, under the 6000ms budget.
     fetchRunnerTree = async () => {
       await new Promise((resolve) => setTimeout(resolve, 1900));
-      return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "native-devtools" };
+      return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "ax-service" };
     };
     await startRecording("slowdeterminate");
 
@@ -1470,8 +1397,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // poll. That tail is inside CONDITION_DARK_TAIL_TOLERANCE_MS, so it stays firm.
     const probeStartedAt = Date.now();
     fetchRunnerTree = async () => {
-      if (Date.now() - probeStartedAt > 900) throw new Error("native devtools went away");
-      return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
+      if (Date.now() - probeStartedAt > 900) throw new Error("the ax-service went away");
+      return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "ax-service" };
     };
     await startRecording("tail");
 
@@ -1491,7 +1418,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("Lorem ipsum");
     expect(warning).toContain("more chars)");
     // The note the head-only cap threw away.
-    expect(warning).toContain("native devtools went away");
+    expect(warning).toContain("the ax-service went away");
   });
 
   it("reports a probe that threw outright as indeterminate, not as a verdict", async () => {
@@ -1569,9 +1496,9 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   it("does not truncate the reason when the runner's tree cannot be read", async () => {
     // An environment error carries no screen content, and its TAIL is the fix.
     const advice =
-      "native devtools is unavailable on this device — the app was not launched through " +
-      "argent, so the injected helper never attached; relaunch it with `launch-app` (or " +
-      "`restart-app`) and re-record the step, or use screenshot to inspect visible Home/Settings";
+      `the accessibility tree of ${IOS} could not be read: connect ENOENT ` +
+      "/tmp/ax-00000000.sock. Boot the simulator with `boot-device` (`force: true` when it is " +
+      "already booted), then run the flow again.";
     expect(advice.length).toBeGreaterThan(200);
     fetchRunnerTree = async () => {
       throw new Error(advice);
@@ -2142,12 +2069,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
   // The wait tool itself accepts a remote sim: it polls the same AX tree through
   // describeIos, which the ax-service blueprint routes over the sim-remote
-  // tunnel. The re-probe reaches the recorder's tables too — the flow tools
-  // declare no capability at all, so nothing gates a remote udid out — and both
-  // tables answer for one: REPLAY_TREE_SOURCES through the authoring fold, and
-  // FLOW_TREE_SOURCES with its own `ios-remote` arm onto the iOS full
-  // hierarchy. This file stubs that fetch, so the determinate verdict the arm
-  // buys is pinned in flow-remote-tree.test.ts, which reads the real table.
+  // tunnel. The re-probe reaches the recorder's table too — the flow tools
+  // declare no capability at all, so nothing gates a remote udid out — and
+  // FLOW_TREE_SOURCES answers for one with its own `ios-remote` arm onto the
+  // iOS accessibility tree. This file stubs that fetch, so the determinate
+  // verdict the arm buys is pinned in flow-remote-tree.test.ts, which reads the
+  // real table.
   it("is reachable on ios-remote: await-ui-element accepts the device", () => {
     const tool = createAwaitUiElementTool(registryWhereWaitSucceeds());
     expect(tool.capability?.appleRemote).toEqual({ simulator: true });

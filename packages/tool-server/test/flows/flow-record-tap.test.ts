@@ -41,7 +41,7 @@ function screen(children: DescribeNode[]): DescribeNode {
   return n({ role: "AXGroup", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
 }
 
-function setTree(children: DescribeNode[], source: DescribeTreeData["source"] = "native-devtools") {
+function setTree(children: DescribeNode[], source: DescribeTreeData["source"] = "ax-service") {
   currentTreeData = () => ({ tree: screen(children), source });
 }
 
@@ -150,11 +150,7 @@ describe("flow-add-step tap capture targets the recorded launch", () => {
       }
     );
 
-    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toEqual({
-      bundleId: BUNDLE,
-      pinned: false,
-      probeAnswered: false,
-    });
+    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toEqual({ bundleId: BUNDLE, pinned: false });
   });
 
   it("passes nothing when the recording has captured no launch", async () => {
@@ -230,16 +226,15 @@ describe("flow-add-step tap selector capture", () => {
   it("records a text selector for a labelled control that also exposes a value", async () => {
     // The label+value join ("Volume 50%") exists on no single node — matchNode
     // compares a text selector against label and value individually — so the
-    // derived selector must use the label alone and still pass the re-resolve
-    // check instead of degrading to coordinates.
+    // derived selector must use the label alone instead of degrading to
+    // coordinates.
     setTree([
       n({ label: "Volume", value: "50%", frame: { x: 0.2, y: 0.4, width: 0.6, height: 0.08 } }),
     ]);
 
     const result = await recordTap({ x: 0.5, y: 0.44 });
 
-    expect(result.message).not.toContain("resolves to a different element");
-    expect(result.message).not.toContain("matches no element");
+    expect(result.message).not.toContain("—");
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Volume" } }]);
   });
 
@@ -261,10 +256,9 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Photo" }, times: 2 }]);
   });
 
-  it("keeps coordinates when the selector would retarget to another element", async () => {
-    // Two "Add" labels: replay's selectorToFrame ranking (exact → smallest
-    // frame) elects the smaller node at the top, not the tapped one — so the
-    // selector must be rejected in favor of coordinates.
+  it("keeps coordinates when nothing on screen singles out a repeated label", async () => {
+    // Two "Add" labels in two rows, with no container or unique neighbour to
+    // scope by: replay could land on either, so coordinates are kept.
     setTree([
       n({ label: "Add", frame: { x: 0.1, y: 0.1, width: 0.1, height: 0.03 } }),
       n({ label: "Add", frame: { x: 0.1, y: 0.5, width: 0.3, height: 0.05 } }),
@@ -272,8 +266,43 @@ describe("flow-add-step tap selector capture", () => {
 
     const result = await recordTap({ x: 0.2, y: 0.52 });
 
-    expect(result.message).toContain("resolves to a different element");
+    expect(result.message).toContain(
+      'selector text="Add" also matches other elements on this screen and no ' +
+        "`within`/`next` scope singles out the tapped one; kept coordinates (brittle)"
+    );
     expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.2, y: 0.52 }]);
+  });
+
+  it("scopes a repeated label within the row that holds it", async () => {
+    setTree([
+      n({ identifier: "row-1", frame: { x: 0, y: 0.1, width: 1, height: 0.1 } }),
+      n({ role: "AXButton", label: "Add", frame: { x: 0.7, y: 0.12, width: 0.2, height: 0.05 } }),
+      n({ identifier: "row-2", frame: { x: 0, y: 0.3, width: 1, height: 0.1 } }),
+      n({ role: "AXButton", label: "Add", frame: { x: 0.7, y: 0.32, width: 0.2, height: 0.05 } }),
+    ]);
+
+    const result = await recordTap({ x: 0.8, y: 0.34 });
+
+    expect(result.message).not.toContain("—");
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", selector: { text: "Add", within: { identifier: "row-2" } } },
+    ]);
+  });
+
+  it("anchors a repeated label next to the nearest unique element before it", async () => {
+    setTree([
+      n({ label: "Wi-Fi", frame: { x: 0.05, y: 0.12, width: 0.3, height: 0.05 } }),
+      n({ role: "AXButton", label: "On", frame: { x: 0.8, y: 0.12, width: 0.15, height: 0.05 } }),
+      n({ label: "Bluetooth", frame: { x: 0.05, y: 0.22, width: 0.3, height: 0.05 } }),
+      n({ role: "AXButton", label: "On", frame: { x: 0.8, y: 0.22, width: 0.15, height: 0.05 } }),
+    ]);
+
+    const result = await recordTap({ x: 0.85, y: 0.24 });
+
+    expect(result.message).not.toContain("—");
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", selector: { text: "On", next: { text: "Bluetooth" } } },
+    ]);
   });
 
   it("flags a role-only selector rather than recording the downgrade silently", async () => {
@@ -318,22 +347,19 @@ describe("flow-add-step tap selector capture", () => {
     expect(result.message).not.toContain("matches by role alone");
   });
 
-  it("records the selector with a caveat when captured from the fallback tree source", async () => {
-    setTree(
-      [n({ label: "Settings", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })],
-      "ax-service"
-    );
+  it("adds no fallback-source caveat on iOS, whose flows read the ax-service tree only", async () => {
+    setTree([n({ label: "Settings", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);
 
     const result = await recordTap({ x: 0.5, y: 0.52 });
 
-    expect(result.message).toContain("fallback ax-service tree");
+    expect(result.message).not.toContain("fallback");
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
-  it("reports both caveats when a role-only selector comes off the fallback tree", async () => {
+  it("reports both caveats when a role-only selector comes off Android's fallback tree", async () => {
     // The two warnings are independent and can fire on one capture. A
     // fallback-source read is the most likely to return an unlabeled node. Other
-    // tests cover each warning alone, so only this test holds the pair.
+    // tests cover the role-only warning alone, so only this test holds the pair.
     setTree(
       [
         n({
@@ -344,13 +370,15 @@ describe("flow-add-step tap selector capture", () => {
           ],
         }),
       ],
-      "ax-service"
+      "uiautomator"
     );
 
-    const result = await recordTap({ x: 0.5, y: 0.5 });
+    const result = await recordTapOn(ANDROID, { x: 0.5, y: 0.5 });
 
     expect(result.message).toContain("matches by role alone");
-    expect(result.message).toContain("fallback ax-service tree");
+    expect(result.message).toContain(
+      "selector captured from the fallback uiautomator tree (android-devtools unavailable)"
+    );
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXImage" } }]);
   });
 

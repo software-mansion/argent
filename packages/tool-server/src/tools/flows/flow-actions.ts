@@ -65,8 +65,8 @@ import {
 } from "./flow-utils";
 
 /**
- * The app an iOS tree read should describe, and how far the runner will vouch
- * for it (see `queryFullHierarchyTree` for what each level buys).
+ * The app an iOS simulator tree read expects in the foreground, and whether the
+ * runner vouches for it (see `queryIosSimulatorFlowTree`).
  */
 export interface FlowTreeTarget {
   /**
@@ -76,24 +76,10 @@ export interface FlowTreeTarget {
   bundleId: string;
   /**
    * Whether the runner still vouches that `bundleId` is what is on screen. A
-   * pinned read targets it directly, skipping the auto-resolve fan-out that
-   * probes every connected app. Unpinned, it is only a hint: auto-resolve
-   * decides the target, and `bundleId` breaks the tie solely when that
-   * resolution times out.
+   * pinned read fails when the tree names another foreground app (the app
+   * crashed, or a step opened another one). Unpinned, the id is only a hint.
    */
   pinned: boolean;
-  /**
-   * Whether a pinned read's `Application.getState` probe has ever answered for
-   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
-   * after construction) so every read of the same pin sees it — `deviceEnv`
-   * shallow-spreads the run state, so they all reach the same object.
-   *
-   * It is the only evidence the runner has that the app's main queue was ever
-   * serviced, which tells the two causes of a timed-out probe apart. A later
-   * `launch` builds a fresh target, since a re-pinned app cold-starts again;
-   * an unpinned target neither consults nor arms it.
-   */
-  probeAnswered: boolean;
 }
 
 /** Everything a directive needs to act on the run's device. */
@@ -248,6 +234,7 @@ const TYPE_FOCUS_TIMEOUT_MS = 3000;
 //   the whole timeout on every type step.
 // - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
+  "ax-service",
   "native-devtools",
   "android-devtools",
   "cdp-dom",

@@ -43,6 +43,20 @@ const root = node({
   ],
 });
 
+describe("whitespace folding", () => {
+  const node = {
+    role: "AXStaticText",
+    frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    children: [],
+    label: "Hubert\u00A0Gancarczyk",
+  };
+  it("matches a label joined with a no-break space from a plain-space selector", () => {
+    expect(matchNode(node, { text: "Hubert Gancarczyk" })).toBe(true);
+    expect(textMatches(node.label, "hubert gancarczyk", "equals")).toBe(true);
+    expect(textMatches(node.label, "Hubert  Gancarczyk", "contains")).toBe(true);
+  });
+});
+
 describe("ui-tree-match", () => {
   it("nodeAtPoint returns the smallest element under a point", () => {
     // (0.2, 0.15) sits inside both the button and the surrounding group; the
