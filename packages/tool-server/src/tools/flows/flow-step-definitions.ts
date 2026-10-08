@@ -286,7 +286,13 @@ const POINT_GESTURE_STEP: FlowStepDefinition<Extract<FlowStep, { kind: "tap" | "
       step.kind === "tap" && step.times !== undefined && step.times > 1 ? ` ×${step.times}` : "";
     const held =
       step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
-    return `${target}${times}${held}`;
+    // x and y beside a selector move the tap inside the element, so a summary
+    // without them would misdescribe where the replay lands.
+    const at =
+      step.kind === "tap" && step.selector !== undefined && step.x !== undefined
+        ? ` at ${step.x},${step.y}`
+        : "";
+    return `${target}${times}${held}${at}`;
   },
   target: (step) => {
     if (step.selector) return selectorLabel(step.selector);

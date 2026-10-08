@@ -134,25 +134,20 @@ describe("hidden timeout diagnostics", () => {
   });
 
   it("does not pass a hidden assert when the element was NEVER seen and the tree source is dark", async () => {
-    // The runner's half of the no-windows fix: a `hidden` assert whose element
-    // is NEVER seen, so `everMatched` never flips and the blind-read guard's
-    // everMatched-only backstop can't catch it — the only defense is the tree
-    // source refusing the read. The rejecting fetch is SCRIPTED here (this
-    // file mocks fetchFlowTree wholesale; the message just mirrors
-    // flow-ios-tree's no-windows guard, which flow-ios-tree-no-windows.test.ts
-    // exercises at the unit level and flow-hidden-no-windows-e2e.test.ts
-    // end-to-end). What this case locks in is the caller's contract with that
-    // upstream throw: when every fetch rejects, the assert fails with the
-    // outage — the /no window attached/ check pins the fetch error's text
-    // landing in the step reason — instead of treating an unreadable screen as
-    // a no-match that satisfies `hidden`. The scripted bundle id is a system
-    // app because this flow has no `launch:` step, so its reads are unpinned -
-    // the one path on which auto-resolve can still hand a connected
-    // `com.apple.*` process to the read.
+    // The runner's half of the dark-source contract: a `hidden` assert whose
+    // element is NEVER seen, so `everMatched` never flips and the blind-read
+    // guard's everMatched-only backstop can't catch it — the only defense is
+    // the tree source refusing the read. The rejecting fetch is SCRIPTED here
+    // (this file mocks fetchFlowTree wholesale; the message mirrors what the
+    // iOS simulator source throws when the accessibility daemon cannot answer
+    // `tree`, which flow-hidden-no-windows-e2e.test.ts exercises end-to-end).
+    // What this case locks in is the caller's contract with that upstream
+    // throw: when every fetch rejects, the assert fails with the outage — the
+    // /tree read timed out/ check pins the fetch error's text landing in the
+    // step reason — instead of treating an unreadable screen as a no-match
+    // that satisfies `hidden`.
     currentFetch = () => {
-      throw new Error(
-        "getFullHierarchy returned no windows for com.apple.Preferences - it has no window attached to read"
-      );
+      throw new Error("ax-service: tree read timed out for 00000000-0000-0000-0000-0000000000ab");
     };
 
     await writeFlow("never-seen-hidden", {
@@ -165,7 +160,7 @@ describe("hidden timeout diagnostics", () => {
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
-    expect(result.steps[0].reason).toMatch(/no window attached to read/);
+    expect(result.steps[0].reason).toMatch(/tree read timed out/);
     // Must NOT read as a confirmed-hidden pass.
     expect(result.steps[0].reason).not.toMatch(/still visible/);
   });

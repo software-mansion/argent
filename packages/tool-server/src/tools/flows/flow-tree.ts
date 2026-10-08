@@ -1,16 +1,18 @@
 import type { DeviceInfo, Platform, Registry } from "@argent/registry";
 import type { FlowTreeTarget } from "./flow-actions";
-import { queryFullHierarchyTree, queryIosDeviceFlowTree } from "./flow-ios-tree";
+import { queryIosDeviceFlowTree } from "./flow-ios-tree";
+import { queryIosSimulatorFlowTree } from "./flow-ax-tree";
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
 import { queryVegaTree } from "./flow-vega-tree";
 import type { DescribeTreeData } from "../describe/contract";
 
 /**
- * Fetch the tree a flow resolves selectors against: on iOS/Android the full
- * view hierarchy rather than the trimmed tree `describe` walks, on
- * Chromium/Vega that same describe tree re-shaped into the flow contract (flat
- * leaves, hoisted `subtreeText`).
+ * Fetch the tree a flow resolves selectors against: on an iOS simulator the
+ * accessibility daemon's `tree` (the source `describe` reads, kept whole), on
+ * Android the full view hierarchy rather than the trimmed tree `describe`
+ * walks, on Chromium/Vega that same describe tree re-shaped into the flow
+ * contract (flat leaves, hoisted `subtreeText`).
  *
  * There is deliberately NO fallback to the trimmed AX/uiautomator tree: it
  * lacks the testID nodes and hoisted `subtreeText` flows resolve against, so a
@@ -41,18 +43,20 @@ const FLOW_TREE_SOURCES: Record<
   Platform,
   (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
 > = {
-  // Simulator iOS uses the injected hierarchy and an optional target.
-  // Physical devices use the XCUITest runner tree.
+  // Simulator iOS reads the accessibility daemon's `tree`: the source
+  // `describe` reads, with the id-only containers and the covered-content flag
+  // flows need. It reads whatever is in front, so the launch target is only
+  // consulted by the fallback: when the daemon cannot read, the UIView
+  // hierarchy over native-devtools (see `queryIosSimulatorFlowTree`). Physical
+  // devices use the XCUITest runner tree.
   "ios": (registry, device, target) =>
     device.kind === "device"
       ? queryIosDeviceFlowTree(registry, device)
-      : queryFullHierarchyTree(registry, device, target),
-  // A remote sim is an iOS simulator reached over the sim-remote tunnel, and
-  // the native-devtools blueprint routes `getFullHierarchy` over TCP for one.
-  // So it is the local simulator source with no `kind === "device"` arm:
-  // `ios-remote` is always kind "simulator" (utils/device-info.ts) and has no
-  // physical-device variant.
-  "ios-remote": (registry, device, target) => queryFullHierarchyTree(registry, device, target),
+      : queryIosSimulatorFlowTree(registry, device, target),
+  // A remote sim is an iOS simulator reached over the sim-remote tunnel; the
+  // ax-service blueprint serves it over TCP. `ios-remote` is always kind
+  // "simulator" (utils/device-info.ts) and has no physical-device variant.
+  "ios-remote": (registry, device, target) => queryIosSimulatorFlowTree(registry, device, target),
   "android": (registry, device) => queryAndroidFullHierarchy(registry, device),
   "chromium": (registry, device) => queryChromiumTree(registry, device),
   "vega": (_registry, device) => queryVegaTree(device),

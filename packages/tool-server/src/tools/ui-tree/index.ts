@@ -33,6 +33,8 @@ export type UiTreeNode = Pick<
   editable?: boolean;
   heading?: boolean;
   covered?: boolean;
+  /** A VoiceOver target (`isAccessibleElement`), what a finger lands on; containers are not. */
+  accessible?: boolean;
   children: UiTreeNode[];
 };
 

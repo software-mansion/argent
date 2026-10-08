@@ -154,15 +154,16 @@ describe("tap times: parse/serialize", () => {
   it("rejects malformed options forms", () => {
     expect(() => parseFlow("steps:\n  - tap: { times: 2 }\n")).toThrow(/needs a target/i);
     expect(() => parseFlow("steps:\n  - tap: { on: A, foo: 1 }\n")).toThrow(
-      /accepts only \{ on, times \}/i
+      /accepts only \{ on, times, x, y \}/i
     );
-    // Coordinates never sit next to option keys — the old mixed spelling and
-    // stray x/y both get the nested-point hint.
-    for (const mixed of ["{ on: A, x: 0.5, y: 0.5 }", "{ x: 0.5, y: 0.5, times: 2 }"]) {
-      expect(() => parseFlow(`steps:\n  - tap: ${mixed}\n`)).toThrow(
-        /options form takes a nested point/i
-      );
-    }
+    // x and y beside `on` place the tap inside the selector's element; a
+    // point with option keys but no `on` is told where the target goes.
+    expect(parseFlow("steps:\n  - tap: { on: A, x: 0.5, y: 0.5 }\n").steps).toEqual([
+      { kind: "tap", selector: { text: "A", loose: true }, x: 0.5, y: 0.5 },
+    ]);
+    expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, times: 2 }\n")).toThrow(
+      /needs a target under on/i
+    );
   });
 
   it("validates the times value on both target kinds", () => {
@@ -250,6 +251,25 @@ describe("tap times: execution", () => {
 
     expect(result.ok).toBe(true);
     expect(result.calls[0]!.args).not.toHaveProperty("clickCount");
+  });
+
+  it("taps at the `at` fraction of the resolved element's frame", async () => {
+    // The recorder keeps where inside the element the author tapped when that
+    // was not its centre; replay lands there rather than at the centre.
+    currentTree = () =>
+      screen([n({ label: "Photo", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } })]);
+    await writeFlow("at", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Photo", loose: true }, x: 0.75, y: 0.25 }],
+    });
+
+    const result = await run("at");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0]!.tool).toBe("gesture-tap");
+    expect(result.calls[0]!.args.x).toBeCloseTo(0.55, 9);
+    expect(result.calls[0]!.args.y).toBeCloseTo(0.45, 9);
   });
 
   it("dispatches clickCount on a coordinate multi-tap", async () => {

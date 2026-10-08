@@ -26,12 +26,12 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 Work this gate as soon as capture warns that it kept a raw point — and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
 
-1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no flow selector exists.
+1. **iOS:** read `describe` again after the screen settles. A raw point means the element has no id and no text, or no scope made it unique; the recorder's `message` says which.
 2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
 3. Test each candidate in a scratch fragment with `assert: { visible: <candidate> }` on the valid screen. Inspect every failure before trying a better id, label, app, or container.
 4. If source is available, inspect its `testID`, `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
 
-An unavailable tree makes the candidate test void. It proves the tree was absent, not that the selector failed, so it never authorizes coordinates. Relevant failures include `native devtools is unavailable` or `No native-devtools-connected apps are available` on iOS, an unreachable Android helper, an unreachable Chromium CDP session, or missing Vega page source. The recorder quotes the same reason back in its `selector capture failed` warning, so read that warning before treating it as a verdict about the element. Restore the tree and repeat the test.
+An unavailable tree makes the candidate test void. It proves the tree was absent, not that the selector failed, so it never authorizes coordinates. Relevant failures include an unavailable accessibility daemon (`ax-service`) on iOS, an unreachable Android helper, an unreachable Chromium CDP session, or missing Vega page source. The recorder quotes the same reason back in its `selector capture failed` warning, so read that warning before treating it as a verdict about the element. Restore the tree and repeat the test.
 
 Keep coordinates only for a genuinely unlabeled target or after all plausible labeled candidates fail against a working flow tree. Add an echo naming the target and a hard check on the action's outcome. Report the point, discovery results, and candidate failures. Re-record every uncleared point.
 
@@ -39,36 +39,17 @@ QA flows are stricter. They can keep a coordinate only for a genuinely unlabeled
 
 ## iOS selector recovery
 
-The full iOS flow tree exists only for an app launched by Argent with instrumentation.
+When a launch step or a recorder `message` says the run used the UIView hierarchy, the accessibility daemon could not read the screen. Restore the daemon with the steps below, then record the step again. A `within` scope on an id-only container does not resolve on that tree.
 
-1. If Metro, Expo, Xcode, an icon, or a prior process launched the app, call `restart-app`. Restore the source screen and retry capture. `launch-app` can only foreground the existing process.
-2. Tap capture does **not** wait for that connection. It makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so the first tap after a restart can warn transiently. Re-record that tap once before escalating; only a warning that survives the retry is evidence of a real fault.
-3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id and follow its `message`, which names the one action that helps and says when to stop. `requiresRestart` covers only the states a fresh process fixes: an `unregistered` or `connecting` app reports it false, because it already launched under the terms a restart would recreate.
-4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. One tool-server serves every agent on this Argent install, so an unscoped call tears down their devices too. This does not change app or account data. Then restart and check status again.
-5. If it still fails, report an instrumentation blocker. Do not replace selectors with coordinates in a QA flow.
+1. Read the exact error. `describe`, the recorder and the runner quote the daemon's reason. An empty tree alone is not an outage: the screen can be blank or mid-transition. Call `await-screen-idle`, then read `describe` again, as the `argent-device-interact` skill says under "If `describe` fails".
+2. If the reason says the simulator was not booted through Argent, call `boot-device` with this simulator's udid and `force: true`, then `restart-app`.
+3. If `describe` keeps answering an error that names `ax-service`, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. One tool-server serves every agent on this Argent install, so an unscoped call tears down their devices too. This does not change app or account data. Then `restart-app` and read `describe` again.
+4. If tap capture kept a raw point, read the `message`. It names the cause: no element under the point, an element without id and text, or an element that no scope makes unique. Only the last one is a verdict about the screen.
+5. If it still fails, report the blocker. Do not replace selectors with coordinates in a QA flow.
 
-Use the same explicit UDID throughout. Multiple booted simulators are not an injection fault. Pass `--device <udid>` when standalone selection is ambiguous.
+Use the same explicit UDID throughout. Multiple booted simulators are not a fault. Pass `--device <udid>` when standalone selection is ambiguous.
 
-### Terminally non-injectable iOS apps
-
-This fallback applies only to `com.apple.*` system apps. A connection failure in another app never authorizes it.
-
-Argent refuses `com.apple.*` bundle ids at every native-devtools read that names one, because a system app is never the app under test. The instrumentation has been seen both loading and not loading into one, depending on the simulator runtime — either way it is no basis for a selector. `restart-app`, `launch-app`, and `describe` still work on one; it just never gets a flow tree.
-
-Give the flow a `launch:` step as usual. On iOS the launch waits the full devtools budget out, then passes for one of these bundle ids: starting the app is all that step is for, and a coordinate-driven flow needs nothing more. The flow stays e2e; it just pays roughly sixteen seconds at the launch. Where the refusal bites is selector resolution, and the first selector step reports it there — terminally, naming the coordinate remedy — rather than as a launch failure. The rest of the tree-free form:
-
-- Raw `tool: await-ui-element` accessibility checks.
-- Point taps or long-presses derived from `describe`, each named by an echo.
-- A point focus tap plus a raw text-only `keyboard` with `delayMs: 500`, and a second raw `keyboard` with `key: "enter"` to submit.
-- Raw swipes with `momentum: false` because `scroll-to` needs the missing flow tree. Momentum-free scrolling keeps later coordinate taps valid. `momentum: false` needs `durationMs` of at least 150 and is rejected below it, so keep the 300 default or raise it.
-
-Every point tap, long-press or coordinate swipe in such a flow passes **carrying a warning** for as long as the app serves no tree: each [selector-less gesture](flow-yaml.md#directives) dispatches unsettled. Nothing here repairs it. Accept the warnings, read each green as "the gesture was sent, not that it landed", and put an explicit `wait:` or a raw `tool: await-ui-element` before a gesture that follows a transition. Raw `tool:` steps take no settle, so they never carry that warning.
-
-A recorded wait carries a different warning: it adds about one second and reports that the runner tree is unavailable. That warning is expected too. Keep the wait as a raw `tool:` step.
-
-Report that the flow has no flow tree and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.
-
-A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id argent refuses outright. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first step that is neither `echo:` nor `script:` is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
+System apps (`com.apple.*`) have a flow tree like any other app. A `launch:` of a system app starts it and reads its tree; no coordinate-only form is needed.
 
 ## Tree source recovery on Android, Chromium, and Vega
 
@@ -107,15 +88,15 @@ Keep a dismissal swipe only when the UI supports it. Pass it through the coordin
 
 Classify before editing:
 
-| Outcome            | Meaning                                        | Response                                                                                                                                                |
-| ------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hard failure       | A step fails and later steps skip              | Inspect that step and actual state                                                                                                                      |
-| Environment error  | The reason says the check could not run        | Repair the environment and rerun; it is no verdict about the app. A failed `launch:` is `errored` too but **is** a verdict — treat it as a hard failure |
-| Silent misfire     | The run passes but final state is wrong        | Restore the first wrong screen and record a stronger gate                                                                                               |
-| Partial divergence | An intermediate result disagrees with its echo | Find the first divergent transition                                                                                                                     |
-| Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                             |
-| Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                      |
-| Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source, usually by relaunching the app; the green says [only that the gesture was sent](flow-yaml.md#directives)                       |
+| Outcome            | Meaning                                        | Response                                                                                                                                                                                                 |
+| ------------------ | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hard failure       | A step fails and later steps skip              | Inspect that step and actual state                                                                                                                                                                       |
+| Environment error  | The reason says the check could not run        | Repair the environment and rerun; it is no verdict about the app. A failed `launch:` is `errored` too but **is** a verdict — treat it as a hard failure                                                  |
+| Silent misfire     | The run passes but final state is wrong        | Restore the first wrong screen and record a stronger gate                                                                                                                                                |
+| Partial divergence | An intermediate result disagrees with its echo | Find the first divergent transition                                                                                                                                                                      |
+| Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                                                                              |
+| Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                                                                       |
+| Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source ([iOS](#ios-selector-recovery), [other platforms](#tree-source-recovery-on-android-chromium-and-vega)); the green says [only that the gesture was sent](flow-yaml.md#directives) |
 
 Then:
 

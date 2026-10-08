@@ -16,6 +16,9 @@ import type { Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow, type FlowFile } from "../../src/tools/flows/flow-utils";
 
+/** The app element every daemon tree starts with: a launch gate probe needs one node to count as a read. */
+const APP_NODE = { index: 0, label: "App", frame: { x: 0, y: 0, width: 1, height: 1 } };
+
 const REMOTE = "remote:00000000-0000-0000-0000-0000000000ab"; // → platform "ios-remote"
 const LOCAL = "00000000-0000-0000-0000-0000000000ab"; // → platform "ios"
 let tmpDir: string;
@@ -37,12 +40,12 @@ function mockRegistry(
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-    // Both iOS platforms gate the launch on a native-devtools connection.
+    // Both iOS platforms gate the launch on the accessibility daemon resolving;
+    // a launch-only flow never reads its tree.
     resolveService:
       resolveService ??
       vi.fn(async () => ({
-        isConnected: () => true,
-        listConnectedBundleIds: () => ["com.acme.app"],
+        tree: async () => ({ alertVisible: false, nodes: [APP_NODE], truncated: false }),
       })),
   } as unknown as Registry;
 }
@@ -168,41 +171,49 @@ describe("launch args from an ios { app, args } entry", () => {
 // start - which is how four taps 50ms apart went out into a still-launching app
 // and every one of them reported `pass`.
 describe("a remote launch waits for the tree source, exactly as a local one does", () => {
-  /** A native-devtools service that never resolves for this device. */
+  /** An accessibility daemon that never resolves for this device. */
   const unavailable = vi.fn(async () => {
     throw new Error("no sim-remote tunnel");
   }) as unknown as Registry["resolveService"];
 
-  it("fails the launch when native devtools never comes up", async () => {
+  it("fails the launch when the accessibility daemon never comes up", async () => {
     await writeFlow("cross", CROSS_PLATFORM);
 
     const result = await run("cross", REMOTE, unavailable);
 
     expect(result.steps[0].status).toBe("error");
-    expect(result.steps[0].reason).toContain("could not connect to native devtools");
-    expect(result.steps[0].reason).toContain("com.acme.app");
+    expect(result.steps[0].reason).toContain(
+      `the accessibility daemon (ax-service) is not available for ${REMOTE}`
+    );
+    // The resolution error is the only place the cause surfaces.
+    expect(result.steps[0].reason).toContain("no sim-remote tunnel");
     expect(result.ok).toBe(false);
   });
 
   it("reports it in the same words a local simulator reports", async () => {
     // One gate, two hosts. A divergence here means the remote arm has grown its
-    // own advice, which the author cannot act on differently anyway.
+    // own advice, which the author cannot act on differently anyway. Only the
+    // device id the reason names differs.
     await writeFlow("cross", CROSS_PLATFORM);
 
     const remote = await run("cross", REMOTE, unavailable);
     const local = await run("cross", LOCAL, unavailable);
 
-    expect(remote.steps[0].reason).toBe(local.steps[0].reason);
+    expect(remote.steps[0].reason?.replace(REMOTE, "<device>")).toBe(
+      local.steps[0].reason?.replace(LOCAL, "<device>")
+    );
   });
 
   it("still gates the launch when the app itself was started fine", async () => {
     // `restart-app` succeeded: the failure is the gate, not the launch, so the
-    // app id it started is on record and the reason names the wait.
+    // app id it started is on record and the reason says why the daemon matters.
     await writeFlow("cross", CROSS_PLATFORM);
 
     const result = await run("cross", REMOTE, unavailable);
 
     expect(result.launched).toEqual(["com.acme.app"]);
-    expect(result.steps[0].reason).toContain("the native-devtools service is unavailable");
+    expect(result.steps[0].reason).toContain(
+      "UIView hierarchy fallback could not connect to native devtools"
+    );
   });
 });

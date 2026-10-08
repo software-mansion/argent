@@ -6,9 +6,10 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import type { DescribeTreeData } from "../../src/tools/describe/contract";
 
 // Spy on the trimmed AX describe path: if fetchFlowTree ever fell back to it,
-// the same flow would pass or fail with devtools availability instead of with
-// what's on screen (the trimmed tree lacks testID nodes and hoisted
-// subtreeText). These tests pin the contract that it hard-fails instead.
+// the same flow would pass or fail with the daemon's availability instead of
+// with what's on screen (the trimmed tree lacks the id-only containers and the
+// hoisted subtreeText flows resolve against). These tests pin the contract
+// that it hard-fails instead.
 const describeIos = vi.fn(async (): Promise<DescribeTreeData> => {
   throw new Error("describeIos must not be reached by a flow tree fetch");
 });
@@ -27,8 +28,8 @@ function device(platform: string): DeviceInfo {
   return { platform, id: IOS_DEVICE, udid: IOS_DEVICE } as unknown as DeviceInfo;
 }
 
-// Registry whose service layer is down — the shape a run sees when native
-// devtools never connected or dropped mid-run.
+// Registry whose service layer is down - the shape a run sees when the
+// accessibility daemon never came up or died mid-run.
 function deadRegistry(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
@@ -39,6 +40,18 @@ function deadRegistry(): Registry {
     resolveService: vi.fn(async () => {
       throw new Error("service unavailable");
     }),
+  } as unknown as Registry;
+}
+
+// Registry whose daemon resolves but cannot answer a `tree` read.
+function blindRegistry(): Registry {
+  return {
+    ...deadRegistry(),
+    resolveService: vi.fn(async () => ({
+      tree: async () => {
+        throw new Error("ax-service: tree read timed out");
+      },
+    })),
   } as unknown as Registry;
 }
 
@@ -55,10 +68,17 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("fetchFlowTree without a full-hierarchy source", () => {
-  it("throws on iOS instead of degrading to the AX tree", async () => {
+describe("fetchFlowTree without its full-hierarchy source", () => {
+  it("throws on an iOS simulator when the accessibility daemon cannot be resolved", async () => {
     await expect(fetchFlowTree(deadRegistry(), device("ios"))).rejects.toThrow(
-      /native devtools is unavailable/
+      /service unavailable/
+    );
+    expect(describeIos).not.toHaveBeenCalled();
+  });
+
+  it("throws when the daemon's tree read fails, instead of degrading to the AX describe tree", async () => {
+    await expect(fetchFlowTree(blindRegistry(), device("ios"))).rejects.toThrow(
+      /tree read timed out/
     );
     expect(describeIos).not.toHaveBeenCalled();
   });
@@ -90,9 +110,9 @@ describe("fetchFlowTree without a full-hierarchy source", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:fail"]);
-    // The report names the outage — not a misleading "no element matched".
+    // The report names the outage - not a misleading "no element matched".
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
-    expect(result.steps[0].reason).toMatch(/native devtools is unavailable/);
+    expect(result.steps[0].reason).toMatch(/service unavailable/);
     expect(describeIos).not.toHaveBeenCalled();
   });
 });

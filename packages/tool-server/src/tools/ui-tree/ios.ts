@@ -41,6 +41,7 @@ export function adaptAxTree(response: AXTreeResponse): UiTree {
       node.checked = raw.value === "1";
     }
     if (raw.covered) node.covered = true;
+    if (raw.accessible) node.accessible = true;
     const parent = raw.parentIndex === undefined ? undefined : byIndex.get(raw.parentIndex);
     byIndex.set(raw.index, node);
     (parent ? parent.children : roots).push(node);

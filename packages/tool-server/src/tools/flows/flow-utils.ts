@@ -681,7 +681,13 @@ export type FlowStep =
   // `flow` is the as-written YAML path, resolved against the containing file's directory.
   | { kind: "run"; flow: string }
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
-  | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
+  | {
+      kind: "tap";
+      selector?: FlowSelector;
+      x?: number;
+      y?: number;
+      times?: number;
+    }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
   | {
       kind: "swipe";
@@ -1503,8 +1509,18 @@ function toYamlStep(step: FlowStep): YamlStep {
       // The options form appears only when an option is present (`times` is
       // never stored as 1 — see parseTapTimes), so a plain tap round-trips to
       // the plain selector/point body.
-      const target = targetToYaml(step);
-      return { tap: step.times !== undefined ? { on: target, times: step.times } : target };
+      // A selector with x and y is a tap placed inside the element: the options
+      // form carries the fractions beside `on`.
+      const inside = step.selector !== undefined && step.x !== undefined && step.y !== undefined;
+      const target = inside ? selectorToYaml(step.selector!) : targetToYaml(step);
+      if (step.times === undefined && !inside) return { tap: target };
+      return {
+        tap: {
+          on: target,
+          ...(step.times !== undefined ? { times: step.times } : {}),
+          ...(inside ? { x: step.x, y: step.y } : {}),
+        },
+      };
     }
     case "long-press": {
       const target = targetToYaml(step);
@@ -2519,9 +2535,10 @@ function parseTarget(raw: unknown, where: string): GestureTarget {
 
 /**
  * Parse a `tap` body: a bare target (selector or raw point `{ x, y }`) or the
- * options form `{ on: <target>, times? }`, which nests the target under `on` so
- * an option key can never be mistaken for — or silently stripped from — a
- * target field.
+ * options form `{ on: <target>, times?, x?, y? }`, which nests the target under
+ * `on` so an option key can never be mistaken for — or silently stripped from —
+ * a target field. With `on` naming a selector, `x` and `y` place the tap inside
+ * the resolved element as 0–1 fractions of its frame (the centre when absent).
  */
 function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -2533,21 +2550,35 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
         'the tap options form takes a nested selector — e.g. tap: { on: { text: "Photo" }, times: 2 }'
       );
     }
-    if (obj.x !== undefined || obj.y !== undefined) {
-      badEntry(
-        entry,
-        "the tap options form takes a nested point — e.g. tap: { on: { x: 0.5, y: 0.5 }, times: 2 }"
-      );
-    }
-    if (!Object.keys(obj).every((k) => k === "on" || k === "times")) {
-      badEntry(entry, "the tap options form accepts only { on, times }");
+    if (!Object.keys(obj).every((k) => k === "on" || k === "times" || k === "x" || k === "y")) {
+      badEntry(entry, "the tap options form accepts only { on, times, x, y }");
     }
     if (obj.on === undefined) {
-      badEntry(entry, 'tap with times needs a target — e.g. tap: { on: "Photo", times: 2 }');
+      badEntry(
+        entry,
+        'tap with times, x or y needs a target under on — e.g. tap: { on: "Photo", times: 2 }'
+      );
     }
     const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
     const times = parseTapTimes(obj.times, entry);
     if (times !== undefined) step.times = times;
+    if (obj.x !== undefined || obj.y !== undefined) {
+      const fraction = (v: unknown): v is number => typeof v === "number" && v >= 0 && v <= 1;
+      if (!fraction(obj.x) || !fraction(obj.y)) {
+        badEntry(
+          entry,
+          "tap x and y beside on are 0–1 fractions of the resolved element's frame; give both"
+        );
+      }
+      if (step.selector === undefined) {
+        badEntry(
+          entry,
+          "tap x and y beside on place the tap inside a selector target; a coordinate target is already a point"
+        );
+      }
+      step.x = obj.x;
+      step.y = obj.y;
+    }
     return step;
   }
 

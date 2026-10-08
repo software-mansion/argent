@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceInfo, Registry } from "@argent/registry";
+import type { AXTreeResponse } from "../../src/blueprints/ax-service";
 
 // The flow tree on a remote (cloud) simulator. A remote sim is an iOS simulator
-// reached over the sim-remote tunnel, and the native-devtools blueprint routes
-// `ViewHierarchy.getFullHierarchy` to it over TCP - so a flow reads the same
-// full view hierarchy there that it reads on a local simulator.
+// reached over the sim-remote tunnel, and the ax-service blueprint serves it
+// over TCP - so a flow reads the same accessibility daemon tree there that it
+// reads on a local simulator.
 //
 // Nothing here stubs `fetchFlowTree`: the point is which SOURCE it dispatches
 // to. Before this, `ios-remote` had no entry in the source table and every read
@@ -24,76 +25,55 @@ import { resolveDevice } from "../../src/utils/device-info";
 
 const IOS = "00000000-0000-0000-0000-0000000000ab";
 const REMOTE = `remote:${IOS}`;
-const APP = "com.acme.app";
 
-const WINDOW_FRAME = { x: 0, y: 0, width: 390, height: 844 };
-const ROW_FRAME = { x: 0, y: 100, width: 390, height: 40 };
+const ROW_FRAME = { x: 0, y: 0.1, width: 1, height: 0.05 };
 
-/** One `ViewHierarchy.getFullHierarchy` payload, the shape the iOS adapter takes. */
-const HIERARCHY = {
-  windows: [
+/** One daemon `tree` payload: the app element over one labelled button. */
+const TREE: AXTreeResponse = {
+  alertVisible: false,
+  screenFrame: { width: 390, height: 844 },
+  nodes: [
+    { index: 0, label: "Acme", frame: { x: 0, y: 0, width: 1, height: 1 } },
     {
-      className: "UIWindow",
-      frame: WINDOW_FRAME,
-      windowFrame: WINDOW_FRAME,
-      children: [
-        {
-          className: "RCTParagraphComponentView",
-          label: "Log In",
-          frame: ROW_FRAME,
-          windowFrame: ROW_FRAME,
-          children: [],
-        },
-      ],
+      index: 1,
+      parentIndex: 0,
+      label: "Log In",
+      traits: ["button"],
+      accessible: true,
+      frame: ROW_FRAME,
     },
   ],
+  truncated: false,
 };
 
-type Query = [string, string, Record<string, unknown>];
-
-/** Records every hierarchy query, so a test can assert WHICH read was issued. */
-function nativeDevtools(queries: Query[]) {
+/** Records the URN of every daemon read, so a test can assert WHICH service was asked. */
+function registryServing(reads: string[]): Registry {
   return {
-    isConnected: () => true,
-    listConnectedBundleIds: () => [APP],
-    getAppState: async () => ({
-      bundleId: APP,
-      applicationState: "active" as const,
-      foregroundActiveSceneCount: 1,
-      foregroundInactiveSceneCount: 0,
-      backgroundSceneCount: 0,
-      unattachedSceneCount: 0,
-      isFrontmostCandidate: true,
+    invokeTool: vi.fn(async (id: string) => {
+      if (id === "gesture-tap") return { tapped: true };
+      if (id === "await-ui-element") return { success: true, elapsed: 120 };
+      throw new Error(`Tool "${id}" not found`);
     }),
-    queryViewHierarchy: vi.fn(
-      async (bundleId: string, method: string, params: Record<string, unknown>) => {
-        queries.push([bundleId, method, params]);
-        return HIERARCHY;
-      }
-    ),
-  };
-}
-
-function registryServing(queries: Query[]): Registry {
-  return {
-    resolveService: vi.fn(async () => nativeDevtools(queries)),
+    getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    resolveService: vi.fn(async (urn: string) => ({
+      tree: async () => {
+        reads.push(urn);
+        return TREE;
+      },
+    })),
   } as unknown as Registry;
 }
 
-/** The tree a flow reads on `device`, with the launched app pinned. */
-async function readTree(device: DeviceInfo, queries: Query[]) {
-  return fetchFlowTree(registryServing(queries), device, {
-    bundleId: APP,
-    pinned: true,
-    probeAnswered: false,
-  });
+/** The tree a flow reads on `device`. */
+async function readTree(device: DeviceInfo, reads: string[]) {
+  return fetchFlowTree(registryServing(reads), device);
 }
 
-let queries: Query[];
+let reads: string[];
 let tmpDir: string;
 
 beforeEach(async () => {
-  queries = [];
+  reads = [];
   vi.clearAllMocks();
   __resetRecordingsForTesting();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-remote-tree-"));
@@ -104,37 +84,24 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("a flow reads the full view hierarchy on a remote simulator", () => {
+describe("a flow reads the accessibility daemon's tree on a remote simulator", () => {
   it("resolves a remote udid to its own platform, which the source table keys on", () => {
     expect(resolveDevice(REMOTE).platform).toBe("ios-remote");
   });
 
-  it("asks native devtools for the full hierarchy, not the trimmed describe tree", async () => {
-    const tree = await readTree(resolveDevice(REMOTE), queries);
+  it("asks the remote device's ax-service for its tree, not the trimmed describe tree", async () => {
+    const tree = await readTree(resolveDevice(REMOTE), reads);
 
     // Before this platform had a source of its own, every read threw before
-    // issuing any query at all.
-    expect(queries).toEqual([[APP, "ViewHierarchy.getFullHierarchy", expect.any(Object)]]);
-    expect(tree.source).toBe("native-devtools");
+    // issuing any read at all. The service asked is the remote device's own.
+    expect(reads).toEqual([`AXService:${REMOTE}`]);
+    expect(tree.source).toBe("ax-service");
     expect(JSON.stringify(tree.tree)).toContain("Log In");
   });
 
-  it("asks for the same depth and fields a local simulator asks for", async () => {
-    // The read itself must not diverge either: 100 is the depth cap a deeply
-    // nested React Native screen needs, and the fields carry the label and
-    // identifier a selector resolves against.
-    const localQueries: Query[] = [];
-    await readTree(resolveDevice(IOS), localQueries);
-    await readTree(resolveDevice(REMOTE), queries);
-
-    expect(queries).toEqual(localQueries);
-    expect(queries[0][2]).toMatchObject({ maxDepth: 100 });
-    expect(queries[0][2].fields).toEqual(expect.arrayContaining(["label", "identifier"]));
-  });
-
   it("returns the tree a local simulator returns from the same payload", async () => {
-    // One control for the whole feature: same source, same adapter, same tree.
-    // If these ever diverge, the remote arm has stopped being the iOS arm.
+    // One control for the whole feature: same source, same projection, same
+    // tree. If these ever diverge, the remote arm has stopped being the iOS arm.
     const local = await readTree(resolveDevice(IOS), []);
     const remote = await readTree(resolveDevice(REMOTE), []);
 
@@ -148,23 +115,10 @@ describe("a flow reads the full view hierarchy on a remote simulator", () => {
 // supported on platform "ios-remote")`, and a wait it records is re-probed
 // against that tree rather than left with an UNKNOWN verdict.
 describe("the recorder reads the runner's tree on a remote simulator", () => {
-  /** Serves the hierarchy AND runs the recorded tool - what recording one step needs. */
-  function recordingRegistry(): Registry {
-    return {
-      invokeTool: vi.fn(async (id: string) => {
-        if (id === "gesture-tap") return { tapped: true };
-        if (id === "await-ui-element") return { success: true, elapsed: 120 };
-        throw new Error(`Tool "${id}" not found`);
-      }),
-      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-      resolveService: vi.fn(async () => nativeDevtools(queries)),
-    } as unknown as Registry;
-  }
-
-  /** The centre of the one labelled row the fixture hierarchy carries. */
+  /** The centre of the one labelled button the fixture tree carries. */
   const ON_THE_ROW = {
-    x: (ROW_FRAME.x + ROW_FRAME.width / 2) / WINDOW_FRAME.width,
-    y: (ROW_FRAME.y + ROW_FRAME.height / 2) / WINDOW_FRAME.height,
+    x: ROW_FRAME.x + ROW_FRAME.width / 2,
+    y: ROW_FRAME.y + ROW_FRAME.height / 2,
   };
 
   async function recordTapOn(device: string) {
@@ -172,7 +126,7 @@ describe("the recorder reads the runner's tree on a remote simulator", () => {
       {},
       { name: "rec", project_root: tmpDir, executionPrerequisite: "on the login screen" }
     );
-    const result = await createFlowAddStepTool(recordingRegistry()).execute(
+    const result = await createFlowAddStepTool(registryServing(reads)).execute(
       {},
       {
         name: "rec",
@@ -188,8 +142,10 @@ describe("the recorder reads the runner's tree on a remote simulator", () => {
   it("writes a selector, not the coordinates it tapped", async () => {
     const { result, steps } = await recordTapOn(REMOTE);
 
-    expect(steps).toEqual([{ kind: "tap", selector: { text: "Log In" } }]);
+    expect(steps).toEqual([{ kind: "tap", selector: { text: "Log In", role: "AXButton" } }]);
     expect(result.message).not.toContain("kept coordinates");
+    expect(reads.length).toBeGreaterThan(0);
+    expect(new Set(reads)).toEqual(new Set([`AXService:${REMOTE}`]));
   });
 
   it("writes what a local simulator writes for the same tap", async () => {
@@ -201,14 +157,14 @@ describe("the recorder reads the runner's tree on a remote simulator", () => {
     expect(remote.steps).toEqual(local.steps);
   });
 
-  it("re-probes a recorded wait against the full hierarchy, with a determinate verdict", async () => {
+  it("re-probes a recorded wait against the daemon tree, with a determinate verdict", async () => {
     // The fixture has no "Continue", so the verdict is known-bad. Before this
     // platform had a source the read threw, and the same wait came back UNKNOWN.
     await flowStartRecordingTool.execute(
       {},
       { name: "wait", project_root: tmpDir, executionPrerequisite: "on the login screen" }
     );
-    const result = await createFlowAddStepTool(recordingRegistry()).execute(
+    const result = await createFlowAddStepTool(registryServing(reads)).execute(
       {},
       {
         name: "wait",
@@ -222,7 +178,7 @@ describe("the recorder reads the runner's tree on a remote simulator", () => {
       }
     );
 
-    expect(queries.map(([, method]) => method)).toContain("ViewHierarchy.getFullHierarchy");
+    expect(reads).toContain(`AXService:${REMOTE}`);
     expect(result.message).toContain("does NOT hold against the tree the runner resolves");
     expect(result.message).not.toContain("is UNKNOWN, not known-bad");
   });

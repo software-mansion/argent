@@ -88,7 +88,7 @@ const FLOW_WALK_LIMITS: ChromiumWalkLimits = { maxDepth: 96, maxNodes: 12_000 };
 
 /**
  * Fetch the CDP DOM walker's tree with flow-sized limits and adapt it into the
- * flow contract — the chromium counterpart to `queryFullHierarchyTree` (iOS)
+ * flow contract — the chromium counterpart to `queryAxFlowTree` (iOS)
  * and `queryAndroidFullHierarchy` (Android).
  */
 export async function queryChromiumTree(

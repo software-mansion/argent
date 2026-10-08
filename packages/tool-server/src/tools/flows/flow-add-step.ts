@@ -41,6 +41,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
+import { readSettledIosFlowTree, deriveScopedSelector, deriveRoleInScope } from "./flow-ax-tree";
 import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
@@ -80,12 +81,14 @@ const zodSchema = z.object({
     .describe("Milliseconds to sleep before executing this step during replay."),
 });
 
-// Replay gates on the platform's full-hierarchy source (`treeSourceGate` in
-// flow-run.ts) and refuses to degrade to the fallback tree, so a selector
-// derived from the fallback deserves a caveat even when it derives cleanly.
-// Chromium/Vega have a single source — no caveat.
+// Replay on Android gates on the devtools helper (`treeSourceGate` in
+// flow-run.ts) and refuses to degrade to the `uiautomator` fallback, so a
+// selector derived from that fallback deserves a caveat even when it derives
+// cleanly. An iOS simulator never reaches this check: its capture derives on
+// the daemon tree (see `captureTapSelector`). A physical iPhone reads the
+// XCUITest runner, its only source, and Chromium/Vega have a single source — no
+// caveat for any of them.
 const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
-  ios: "native-devtools",
   android: "android-devtools",
 };
 
@@ -103,10 +106,17 @@ function recordedLaunchedApp(session: RecordingSession, platform: string): strin
   return undefined;
 }
 
-function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
-  // Keyed by authoring platform: a remote simulator reads the same iOS full
-  // hierarchy a local one does, so it earns the same caveat.
-  const expected = REPLAY_TREE_SOURCES[authoringPlatform(platform)];
+function fallbackSourceWarning(
+  source: DescribeSource,
+  platform: string,
+  kind?: string
+): string | undefined {
+  // A physical iPhone's one source is the XCUITest runner; everything else is
+  // keyed by authoring platform.
+  const expected =
+    kind === "device" && authoringPlatform(platform) === "ios"
+      ? "xcuitest-runner"
+      : REPLAY_TREE_SOURCES[authoringPlatform(platform)];
   if (!expected || source === expected) return undefined;
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
 }
@@ -144,7 +154,7 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
     );
   }
   return (
-    `so retarget the DIRECTIVE at ${idKind} the full hierarchy carries and prove it with ` +
+    `so retarget the DIRECTIVE at ${idKind} the runner tree carries and prove it with ` +
     "`flow-execute`, or keep the step raw"
   );
 }
@@ -155,23 +165,21 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
  * readers each show a different projection, so naming one of them would point
  * the author at the wrong tree.
  *
- * On an iOS SIMULATOR the near miss is also SHALLOWER: `native-full-hierarchy`
- * defaults to `maxDepth: 8` where the runner's read asks for 100, so absent
- * from it does not mean absent from the runner's tree until the depth is
- * raised. A physical device is not covered: `platformOf` reports `ios` for one
- * too, but its runner reads the XCUITest snapshot, which takes no depth at all,
- * and `native-full-hierarchy` is simulator-only.
+ * On an iOS SIMULATOR the runner reads the accessibility daemon's tree, the
+ * source `describe` reads, so the clause points back at `describe`. A physical
+ * device is not covered: `platformOf` reports `ios` for one too, but its runner
+ * reads the XCUITest snapshot.
  */
 function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);
   if (platform === "ios") {
     return (
-      "No read-only tool reports the runner's projection on iOS — `native-find-views` and " +
-      "`native-full-hierarchy` return the RAW view tree, keeping the hidden, transparent, " +
-      "scroll-clipped and unlabelled container views the runner drops, and neither answers the " +
-      "question a selector asks: `native-find-views` matches `identifier`/`label`/`className` " +
-      "EXACTLY and takes no substring `text` or `role`, and `native-full-hierarchy` takes no " +
-      "matcher at all — it dumps the tree for you to read — " +
+      "On an iOS simulator the runner reads the same accessibility tree `describe` reads, kept " +
+      "whole: `describe` lists the touchable targets, the runner also keeps the containers that " +
+      "carry only an id (a list row, a card, a screen root) and drops what a sheet or alert " +
+      "covers. An element `describe` shows is in the runner's tree with the same label, id and " +
+      "frame, so re-read `describe` after the screen settles rather than assuming a different " +
+      "tree — " +
       retargetRemedy("an `id`", condition)
     );
   }
@@ -236,8 +244,9 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);
   if (platform === "ios") {
     return (
-      "The recorder reads the accessibility tree and the runner reads the full native view " +
-      "hierarchy; they overlap but neither contains the other." +
+      "The recorder and the runner read the same accessibility tree; the runner keeps the " +
+      "containers that carry only an id and drops what a sheet or alert covers, so the two " +
+      "differ only there." +
       SCREEN_MAY_HAVE_MOVED
     );
   }
@@ -320,8 +329,8 @@ function awaitStillNeeds(condition: WaitCondition): string {
 function textTieClause(udid: unknown): string {
   const order =
     platformOf(udid) === "ios"
-      ? "and the two are flat lists built from different sources — the accessibility element " +
-        "order and the view-hierarchy walk — so neither order follows from the other"
+      ? "and the two are flat lists over the same accessibility tree, the runner's with the " +
+        "id-only containers in it, so the first match can differ"
       : "and the recorder's lists a container before its children where the runner's lists " +
         "children before their container";
   return (
@@ -392,10 +401,8 @@ function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
 }
 
 // The indeterminate reason is quoted verbatim, and it carries whatever recovery
-// fits: on iOS `queryFullHierarchyTree` writes one per failure branch, having
-// dropped the shared native-target error's "provide bundleId explicitly" line
-// that a flow selector step cannot act on. So name no remedy here — a second one
-// would contradict it. Add only what the reason cannot see: this step.
+// fits (the tree source's own failure message). So name no remedy here — a
+// second one would contradict it. Add only what the reason cannot see: this step.
 function indeterminateReasonCaveat(udid: unknown): string {
   if (platformOf(udid) !== "ios") return "";
   // This caveat rides on a reason whose remedy repairs a source that is DOWN,
@@ -631,12 +638,13 @@ function innermostTreeReason(message: string): string {
  * Returns the selector (possibly with a caveat warning), or a warning
  * describing why coordinates were kept.
  *
- * Reads `fetchFlowTree`, the tree the runner resolves selectors against at
- * replay — NOT the agent-facing describe tree, which collapses an iOS
- * `accessible` container into one merged-label leaf that exists on no single
- * view in the replay hierarchy, and trims Android's testID-only containers the
- * replay tree keeps. A describe-derived selector could fail — or hit a
- * different element — at replay while recording reported success.
+ * Reads the tree the runner resolves selectors against at replay: on an iOS
+ * simulator the accessibility daemon's tree (the source `describe` reads, kept
+ * whole, so a container with only a testID can scope the selector), elsewhere
+ * `fetchFlowTree` — NOT the agent-facing describe tree, which trims Android's
+ * testID-only containers the replay tree keeps. A describe-derived selector
+ * could fail — or hit a different element — at replay while recording reported
+ * success.
  *
  * The launched app is passed — unpinned, unlike replay, since recording has no
  * run state vouching for the foreground app — because a recording relaunches
@@ -650,9 +658,43 @@ async function captureTapSelector(
   session: RecordingSession,
   udid: string,
   point: { x: number; y: number }
-): Promise<{ selector?: Selector; warning?: string }> {
+): Promise<{ selector?: Selector; x?: number; y?: number; warning?: string }> {
   try {
     const device = resolveDevice(udid);
+    if (
+      (device.platform === "ios" || device.platform === "ios-remote") &&
+      device.kind !== "device"
+    ) {
+      // The simulator source is the accessibility daemon's tree, which keeps
+      // the id-only containers: derive the selector there, scoped (`within`,
+      // `next`, `after`) when the element is not unique, and keep the tap's
+      // position inside the element when it was not the centre. When the
+      // daemon cannot read the screen the read falls back to the UIView
+      // hierarchy, and the step says so.
+      const { tree, source, hint } = await readSettledIosFlowTree(registry, device);
+      let derived = deriveScopedSelector(tree, point);
+      if ("warning" in derived && /no stable text\/id/.test(derived.warning)) {
+        derived = deriveRoleInScope(tree, point) ?? derived;
+      }
+      if ("warning" in derived) return { warning: derived.warning };
+      const notes: string[] = [];
+      if (
+        derived.strategy === "within" ||
+        derived.strategy === "next" ||
+        derived.strategy === "after"
+      ) {
+        notes.push(`scoped by ${derived.strategy} ${derived.scope}`);
+      }
+      if (derived.offset)
+        notes.push(`tap kept at ${derived.offset.x},${derived.offset.y} of the element's frame`);
+      if (derived.notes) notes.push(derived.notes);
+      if (source !== "ax-service" && hint) notes.push(hint);
+      return {
+        selector: derived.selector,
+        ...(derived.offset ? { x: derived.offset.x, y: derived.offset.y } : {}),
+        ...(notes.length > 0 ? { warning: notes.join("; ") } : {}),
+      };
+    }
     const launched = recordedLaunchedApp(session, device.platform);
     const { tree, source, uiOrientation } = await fetchFlowTree(
       registry,
@@ -686,7 +728,7 @@ async function captureTapSelector(
     }
     const warnings = [
       roleOnlySelectorWarning(selector),
-      fallbackSourceWarning(source, device.platform),
+      fallbackSourceWarning(source, device.platform, device.kind),
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {
@@ -1246,7 +1288,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof args.x === "number" &&
         typeof args.y === "number";
 
-      let captured: { selector?: Selector; warning?: string } | undefined;
+      let captured: { selector?: Selector; x?: number; y?: number; warning?: string } | undefined;
       if (isTap) {
         captured = await captureTapSelector(registry, session, args.udid as string, {
           x: args.x as number,
@@ -1371,7 +1413,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       let step: FlowStep;
       let warning: string | undefined;
       if (captured?.selector) {
-        step = { kind: "tap", selector: captured.selector, ...tapTimes };
+        step = {
+          kind: "tap",
+          selector: captured.selector,
+          ...tapTimes,
+          ...(captured.x !== undefined ? { x: captured.x, y: captured.y } : {}),
+        };
         warning = captured.warning;
       } else if (isTap) {
         // No stable selector — keep a coordinate tap, but still as a `tap:`

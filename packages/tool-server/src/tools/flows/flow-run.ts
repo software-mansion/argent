@@ -39,6 +39,7 @@ import {
   type Launch,
   SELECTABLE_PLATFORMS,
 } from "./flow-utils";
+import { axServiceUnavailableReason } from "./flow-ax-tree";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import { canonicalFlowPath, resolveFlowRelativeFile } from "./flow-file-refs";
 import { runFlowScriptStep } from "./flow-script-step";
@@ -299,12 +300,15 @@ export const MAX_RUN_DEPTH = 20;
 const POST_LAUNCH_SETTLE_MS = 1500;
 
 /**
- * Flows resolve selectors against the native UIView tree, served over the
- * native-devtools connection the injected dylib opens asynchronously after
- * launch. `fetchFlowTree` treats a missing connection as a hard per-read error
- * (it never degrades to the collapsing AX tree — see flow-tree.ts), so without
- * this gate a slow cold start would fail the first directive with a raw
- * tree-source error instead of reporting it on the launch step.
+ * Why a launch step gates on a tree source before its verdict.
+ *
+ * Simulator flows resolve selectors against the accessibility daemon's tree,
+ * which needs no injection: when the daemon resolves, the first read can go
+ * ahead. When it does not, `fetchFlowTree` falls back to the UIView hierarchy
+ * served over the native-devtools connection the injected dylib opens
+ * asynchronously after launch, so the gate falls back to waiting for that
+ * connection: without it a slow cold start would fail the first directive with
+ * a raw tree-source error instead of reporting it on the launch step.
  *
  * Deliberately the same constant as the budget the measurement allows a dial: a
  * gate that waited longer would time out onto `unregistered`, whose remedy is a
@@ -320,10 +324,9 @@ const NATIVE_READY_POLL_MS = 250;
  * How long the launch step has spent on the app by the time the gate takes its
  * verdict: the post-launch settle plus the whole connect wait. The gate's own
  * timeout is only the second half, so quoting it alone understates the age of a
- * process the step launched — the fact the remedies below rest on. Exported so
- * they can be pinned against it.
+ * process the step launched — the fact the remedies below rest on.
  */
-export const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
+const LAUNCH_TO_VERDICT_MS = POST_LAUNCH_SETTLE_MS + NATIVE_READY_TIMEOUT_MS;
 
 /**
  * `tool:` steps that can change or relaunch the foreground app — running one
@@ -410,7 +413,7 @@ async function waitForNativeDevtools(
  * state added later cannot inherit a remedy written for a reader who never
  * launched.
  */
-export function flowLaunchGateReason(
+function flowLaunchGateReason(
   bundleId: string,
   state: Exclude<NativeDevtoolsAppState, "connected">
 ): string {
@@ -546,55 +549,80 @@ async function androidDevtoolsReady(
  * `com.apple.*` process satisfy, and the first selector read refuses that pin
  * anyway (see `queryFullHierarchyTree`).
  */
+/** The gate's verdict: a reason the launch failed, or ready, with a warning worth carrying on the step. */
+type TreeSourceGate = { reason: string } | { warning?: string };
+
 async function treeSourceGate(
   registry: Registry,
   device: DeviceInfo,
   bundleId: string,
   signal?: AbortSignal
-): Promise<string | null> {
+): Promise<TreeSourceGate> {
   if (isIosPhysicalDevice(device) && !signal?.aborted) {
     // Physical devices read the XCUITest runner, not native devtools.
     // Resolve it here. Cold start must not eat the next step's auto-wait.
     try {
       const ref = iosDeviceRunnerRef(device);
       await registry.resolveService(ref.urn, ref.options);
-      return null;
+      return {};
     } catch (err) {
-      return (
-        `the on-device XCUITest runner did not become ready for ${device.id}: ` +
-        `${err instanceof Error ? err.message : String(err)}`
-      );
+      return {
+        reason:
+          `the on-device XCUITest runner did not become ready for ${device.id}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
-  // Both iOS simulator platforms gate the same way: `waitForNativeDevtools`
-  // resolves the service through `nativeDevtoolsRef(device)`, which the
-  // blueprint serves over TCP for a remote sim.
+  // Both iOS simulator platforms read the accessibility daemon's tree first,
+  // which needs no injection: once the daemon resolves, the launch is ready.
+  // When it does not, reads fall back to the UIView hierarchy over
+  // native-devtools, so the gate falls back to that connection's wait
+  // (`waitForNativeDevtools` resolves it through `nativeDevtoolsRef(device)`,
+  // which the blueprint serves over TCP for a remote sim).
   if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
-    const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
-    if (reason !== null && !signal?.aborted) {
-      // Every reason names the bundle id, so the prefix must not: doubled, it
-      // reads as two failures reported back to back.
-      return `could not connect to native devtools. ${reason}`;
+    const axReason = await axServiceUnavailableReason(registry, device);
+    if (axReason !== null && !signal?.aborted) {
+      const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
+      if (reason !== null && !signal?.aborted) {
+        // Every reason names the bundle id, so the prefix must not: doubled, it
+        // reads as two failures reported back to back.
+        return {
+          reason:
+            `the accessibility daemon (ax-service) is not available for ${device.id} (${axReason}), ` +
+            `and the UIView hierarchy fallback could not connect to native devtools. ${reason}`,
+        };
+      }
+      // Ready on the fallback. Said once, on the launch step, so a report whose
+      // selectors behave differently from the recording has its cause in view.
+      return {
+        warning:
+          `the accessibility daemon (ax-service) is not available for ${device.id} (${axReason}); ` +
+          `this run reads the UIView hierarchy over native-devtools, which lists views by class ` +
+          `and has no id-only containers`,
+      };
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
     const { ready, reason } = await androidDevtoolsReady(registry, device);
     if (!ready && !signal?.aborted) {
-      return reason
-        ? `the argent android helper is unavailable: ${reason}`
-        : `the argent android helper is unavailable (full-hierarchy source for testID selectors).`;
+      return {
+        reason: reason
+          ? `the argent android helper is unavailable: ${reason}`
+          : `the argent android helper is unavailable (full-hierarchy source for testID selectors).`,
+      };
     }
   }
   if (device.platform === "vega" && !signal?.aborted) {
     const ready = await waitForVegaAutomation(device, signal);
     if (!ready && !signal?.aborted) {
-      return (
-        `the Vega automation toolkit never served a page source for ${bundleId} (the flow tree source). ` +
-        `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`
-      );
+      return {
+        reason:
+          `the Vega automation toolkit never served a page source for ${bundleId} (the flow tree source). ` +
+          `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`,
+      };
     }
   }
-  return null;
+  return {};
 }
 
 /**
@@ -654,14 +682,14 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   }
   if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
   const gate = await treeSourceGate(registry, device, bundleId, signal);
-  // The gate returns null (ready) on abort — check the signal before trusting
-  // it, or a cancelled gate would read as a launch that verified readiness.
+  // The gate reports ready on abort — check the signal before trusting it, or
+  // a cancelled gate would read as a launch that verified readiness.
   if (signal?.aborted) return ABORTED_OUTCOME;
-  if (gate) return { ok: false, reason: gate };
+  if ("reason" in gate) return { ok: false, reason: gate.reason };
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
-  return { ok: true };
+  return { ok: true, ...(gate.warning ? { warning: gate.warning } : {}) };
 }
 
 /**
@@ -2428,7 +2456,12 @@ async function execLeafStep(
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
       if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-      return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "error",
+        reason: r.reason,
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
     }
 
     case "tap":

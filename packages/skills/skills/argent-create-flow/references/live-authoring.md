@@ -56,7 +56,7 @@ Extra restart arguments prevent `launch:` conversion. An Android `activity`, for
 
 Do not use splash content as a selector or landmark. Wait for the first real screen.
 
-On iOS, only `restart-app` guarantees an instrumented launch. `launch-app` can foreground an uninstrumented process. Use [iOS selector recovery](reliability-and-recovery.md#ios-selector-recovery) when the tree is missing.
+On iOS, the flow tree needs no instrumentation of the app, so `launch-app` and `restart-app` both give a usable screen. Record `restart-app` for the `launch:` conversion. Use [iOS selector recovery](reliability-and-recovery.md#ios-selector-recovery) when the tree is missing.
 
 ### Chromium e2e flows
 
@@ -115,7 +115,7 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 `flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order — `id`, then `text`, then `role` — giving three outcomes. Read the `recorded` line after every tap, because only two of them warn. It names the derived form — a selector map, or the kept point:
 
 1. **`tap: { id: ... }` or `tap: { text: ... }`** — the good case.
-2. **`tap: { role: ... }`, appended with no warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.
+2. **`tap: { role: ... }`, appended with no warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](flow-yaml.md#selectors-from-describe) and the tap reports a pass on the wrong control.
 3. **A kept raw point**, with a warning naming the reason and the retarget.
 
 Treat outcomes 2 and 3 alike. Restore the source screen with direct MCP calls, record a corrected tap, then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate).
@@ -156,7 +156,7 @@ A stale `hidden` whose selector matches nothing replays as a silent pass — the
 
 A wait inside `run-sequence` gets no recorder warning. Inspect the nested result. Any `success: false` fails the sequence during replay.
 
-The live tool and flow runner use [different trees](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree:
+After a successful wait, the recorder checks the same condition on the flow tree:
 
 - No warning: The condition holds on both trees.
 - Mismatch: For `text`, first rule out a selector that matches more than one element. Then rule out a changed screen. If the trees really differ, use a runner-tree selector and replay.
@@ -272,6 +272,6 @@ Manual rescue invalidates the pass. An `errored` step was never evaluated: an `i
 
 **A passing step that carries a `warning` is a finding, not noise.** `await: { idle: true }` raises [six different warnings](flow-yaml.md#idle-readiness) and they do not share one meaning. Two say the screen was moving; one says the wait ran out mid-hold and is repaired by raising the step's `timeout:`; one says the tree stayed empty; one says the tree did hold still and only the screenshot pairs were missing, so the capture path is what to check; one says the step ended with no evidence either way. No report separates intended motion from a load that never finished. Read which one it is, look at that screen, disclose what you found, and confirm the following step targets a stable element rather than stillness.
 
-A [selector-less gesture](flow-yaml.md#directives) raises a warning of a different shape, not one of those six: a tree-source outage left it unsettled, so it dispatched blind and the green says only that the gesture was sent. Restore the source, usually by relaunching the app so the instrumentation loads. Accept it only where the app serves no tree at all, such as the [injection-free iOS form](reliability-and-recovery.md#terminally-non-injectable-ios-apps).
+A [selector-less gesture](flow-yaml.md#directives) raises a warning of a different shape, not one of those six: a tree-source outage left it unsettled, so it dispatched blind and the green says only that the gesture was sent. Restore the source with the platform's [recovery steps](reliability-and-recovery.md#ios-selector-recovery). Accept it only where the app serves no tree at all.
 
 One uninterrupted full pass completes a normal flow. `argent-qa-flows` requires two consecutive passes of unchanged YAML. For CI, use `argent flow run <name> [--platform ...]`; it exits non-zero on failure.

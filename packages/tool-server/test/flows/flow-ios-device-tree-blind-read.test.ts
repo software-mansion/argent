@@ -6,8 +6,9 @@ import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
 import { describeIosDevice } from "../../src/tools/describe/platforms/ios-device";
 import { queryIosDeviceFlowTree } from "../../src/tools/flows/flow-ios-tree";
 
-// The physical-device half of the no-windows contract (see
-// flow-ios-tree-no-windows.test.ts for the simulator half): on a childless
+// The physical-device half of the blind-read contract (the simulator reads the
+// accessibility daemon's tree instead; flow-hidden-no-windows-e2e.test.ts
+// covers its unreadable-daemon path): on a childless
 // runner snapshot (zero nodes, or still root-only after the settle-and-retry)
 // describeIosDevice returns a childless Application root plus a hint: the
 // right shape for describe/await, which surface the hint. The flow tree

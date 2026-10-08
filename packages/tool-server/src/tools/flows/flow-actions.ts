@@ -66,7 +66,7 @@ import {
 
 /**
  * The app an iOS tree read should describe, and how far the runner will vouch
- * for it (see `queryFullHierarchyTree` for what each level buys).
+ * for it (the iOS simulator source reads the front app and ignores it).
  */
 export interface FlowTreeTarget {
   /**
@@ -84,7 +84,7 @@ export interface FlowTreeTarget {
   pinned: boolean;
   /**
    * Whether a pinned read's `Application.getState` probe has ever answered for
-   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
+   * THIS target. MUTATED IN PLACE by the tree source that honours it (its only writer
    * after construction) so every read of the same pin sees it — `deviceEnv`
    * shallow-spreads the run state, so they all reach the same object.
    *
@@ -1056,6 +1056,17 @@ async function resolveTargetPoint(
     if (frame === "aborted") return { fail: ABORTED_OUTCOME };
     if (!frame) {
       return { fail: { ok: false, reason: offscreenHint(target.selector) } };
+    }
+    if (target.x !== undefined && target.y !== undefined) {
+      // Beside a selector, x and y are fractions of the element's frame: the
+      // recorder keeps where inside the element the author tapped when that
+      // was not its centre (the right half of a merged row, a card's padding).
+      return {
+        point: {
+          x: clamp01(frame.x + target.x * frame.width),
+          y: clamp01(frame.y + target.y * frame.height),
+        },
+      };
     }
     return { point: getDescribeTapPoint(frame) };
   }

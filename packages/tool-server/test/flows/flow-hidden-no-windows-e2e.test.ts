@@ -1,58 +1,43 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
-import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
-// End-to-end companion to flow-ios-tree-no-windows.test.ts: that file pins the
-// guard at the unit level (queryFullHierarchyTree throws on a no-windows read);
-// this one proves the guard is what stands between an unreadable target and
-// a false green flow. Nothing on the tree path is mocked — the runner goes
-// through the REAL fetchFlowTree → queryFullHierarchyTree against a
-// native-devtools API whose getFullHierarchy returns `{ windows: [] }` (the
-// no-attached-window shape). Without the guard,
-// that payload adapts to an empty tree the poll loop treats as TRUSTED — the
-// element was never seen, so the blind-read guard's everMatched backstop
-// doesn't engage — and a `hidden` assert evaluates true against it: the exact
-// false pass the guard exists to prevent. Revert the guard and this test
-// fails; the unit file and this one gate the fix from both ends.
+// End-to-end companion to flow-tree-no-fallback.test.ts: that file pins the
+// contract at the fetch level (an iOS simulator read throws when the
+// accessibility daemon cannot be resolved or cannot answer `tree`); this one
+// proves that throw is what stands between an unreadable screen and a false
+// green flow. Nothing on the tree path is mocked - the runner goes through the
+// REAL fetchFlowTree -> queryAxFlowTree against an ax-service whose `tree`
+// rejects, the shape of a daemon gone mid-run or a read that timed out.
+//
+// A `hidden` assert is the step that matters: its element is never seen, so
+// `everMatched` never flips and the blind-read guard's backstop cannot engage.
+// If the read degraded to an empty tree instead of throwing, the poll loop
+// would treat that tree as TRUSTED and `hidden` would evaluate true against it:
+// the exact false pass this file guards.
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
-const APP = "com.example.app";
 let tmpDir: string;
 
-function appState(bundleId: string): NativeAppState {
+/** The ax-service resolves, but every `tree` read rejects. `reads` counts the attempts. */
+function blindAxService(reads: { count: number }) {
   return {
-    bundleId,
-    applicationState: "active",
-    foregroundActiveSceneCount: 1,
-    foregroundInactiveSceneCount: 0,
-    backgroundSceneCount: 0,
-    unattachedSceneCount: 0,
-    isFrontmostCandidate: true,
+    tree: async () => {
+      reads.count += 1;
+      throw new Error(`ax-service: tree read timed out for ${DEVICE}`);
+    },
   };
 }
 
-/**
- * Minimal NativeDevtoolsApi: one connected, foreground app whose
- * `queryViewHierarchy` always reports no windows — the read the guard refuses.
- */
-function nativeApi(): NativeDevtoolsApi {
+// The ax-service resolution is the only seam faked here; the registry's tool
+// surface is inert (the flow has no launch or tool steps).
+function mockRegistry(resolveService: () => Promise<unknown>): Registry {
   return {
-    listConnectedBundleIds: () => [APP],
-    getAppState: async (id: string) => appState(id),
-    queryViewHierarchy: async () => ({ windows: [] }),
-  } as unknown as NativeDevtoolsApi;
-}
-
-// The native-devtools service resolution is the only seam faked here; the
-// registry's tool surface is inert (the flow has no launch or tool steps).
-function mockRegistry(api: NativeDevtoolsApi): Registry {
-  return {
-    resolveService: async () => api,
+    resolveService,
     invokeTool: async () => ({ ok: true }),
     getTool: () => undefined,
   } as unknown as Registry;
@@ -69,33 +54,55 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
+async function runHiddenAssert(registry: Registry): Promise<FlowRunResult> {
+  await writeFlow("never-seen-hidden", {
+    executionPrerequisite: "",
+    steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "General" } }],
+  });
+  return asRun(
+    await createRunFlowTool(registry).execute(
+      {},
+      { name: "never-seen-hidden", project_root: tmpDir, device: DEVICE }
+    )
+  );
+}
+
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-no-windows-"));
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-blind-daemon-"));
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("hidden assert against a no-windows target (end-to-end)", () => {
-  it("fails with the guard's no-windows reason instead of false-passing", async () => {
-    await writeFlow("no-windows-hidden", {
-      executionPrerequisite: "",
-      steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "General" } }],
-    });
+describe("hidden assert against an unreadable daemon tree (end-to-end)", () => {
+  it("fails with the daemon's reason when every tree read rejects", async () => {
+    const reads = { count: 0 };
 
-    const result = asRun(
-      await createRunFlowTool(mockRegistry(nativeApi())).execute(
-        {},
-        { name: "no-windows-hidden", project_root: tmpDir, device: DEVICE }
-      )
-    );
+    const result = await runHiddenAssert(mockRegistry(vi.fn(async () => blindAxService(reads))));
 
-    // Every poll's fetch rejects with the guard's message, so the assert never
-    // gets a trusted read and must report the outage, quoting the guard.
+    // Every poll's fetch rejects, so the assert never gets a trusted read and
+    // must report the outage, quoting the daemon's error.
     expect(result.ok).toBe(false);
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
-    expect(result.steps[0].reason).toMatch(/returned no windows for com\.example\.app/);
-    expect(result.steps[0].reason).toMatch(/no window attached to read/);
+    expect(result.steps[0].reason).toMatch(
+      /tree read timed out for 00000000-0000-0000-0000-0000000000ab/
+    );
+    expect(reads.count).toBeGreaterThan(0);
+  });
+
+  it("fails the same way when the daemon cannot be resolved at all", async () => {
+    const result = await runHiddenAssert(
+      mockRegistry(
+        vi.fn(async () => {
+          throw new Error("ax-service exited with code 1 before connecting");
+        })
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
+    expect(result.steps[0].reason).toMatch(/exited with code 1 before connecting/);
   });
 });

@@ -69,6 +69,8 @@ export interface AXTreeNode extends AXDescribeElement {
   parentIndex?: number;
   roleDescription?: string;
   covered?: boolean;
+  /** A VoiceOver target (`isAccessibleElement`), as opposed to a container that only groups them. */
+  accessible?: boolean;
 }
 
 export interface AXTreeResponse {
