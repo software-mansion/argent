@@ -6,233 +6,156 @@ sidebar_custom_props:
   icon: plug
 ---
 
-This page documents client services: the exchange between the argent client and the tool-server. Through this exchange, the tool-server asks the client for project files during a flow run. The argent CLI and the MCP adapter are clients. The runner stays on the tool-server. The project stays on the client. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
+This page documents how the argent client sends the files of a flow run to a tool-server over a link. The argent CLI and the MCP adapter are clients. The runner stays on the tool-server. The project stays on the client. The client sends the flow file and its `run:` fragments with the call, through the file inputs of the call. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
 
-The exchange has four messages:
+## Advertisement: `collect` in `GET /tools`
 
-| Message       | Direction             | Carrier                                            |
-| ------------- | --------------------- | -------------------------------------------------- |
-| Advertisement | Tool-server to client | The `clientServices` field of a `GET /tools` entry |
-| Opt-in        | Client to tool-server | The `client_services` parameter of the call        |
-| Request       | Tool-server to client | A `client-request` line on the NDJSON stream       |
-| Answer        | Client to tool-server | `POST /invocations/<invocation>/client-responses`  |
-
-Only the `flow-execute` tool advertises client services. Each side uses an op only when the other side lists the op.
-
-## Advertisement: `clientServices` in `GET /tools`
-
-The `GET /tools` listing holds one entry per tool. The entry of a tool that can use client services carries a `clientServices` field:
+The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `flow_path` and `flow_file` inputs of `flow-execute` carry `"collect": "flow"`:
 
 ```json
 {
   "name": "flow-execute",
-  "clientServices": { "ops": ["resolve-file"] }
+  "fileInputs": [
+    {
+      "target": "flow_path",
+      "path": "${flow_path}",
+      "kind": "file",
+      "optional": true,
+      "unwrapWhenSet": "name",
+      "collect": "flow"
+    },
+    {
+      "target": "flow_file",
+      "path": "${project_root}/.argent/flows/${name}.yaml",
+      "kind": "file",
+      "skipWhenSet": "flow_path",
+      "collect": "flow"
+    }
+  ]
 }
 ```
 
-| Field | Value                                         |
-| ----- | --------------------------------------------- |
-| `ops` | The ops the tool-server can send requests for |
+`"collect": "flow"` tells the client that the file is a flow. Over a link, the client then also sends each flow file that the `run:` steps of the flow reach. A client that does not know the field sends the flow file alone.
 
-An entry without the field belongs to a tool that does not use client services, or to a tool-server without client services.
+## The flow file input
 
-## Opt-in: the `client_services` parameter
-
-The client adds a `client_services` parameter to the arguments of a call when all these conditions hold:
-
-1. A link routes the call to a tool-server (`argent link` or `ARGENT_TOOLS_URL`). A link to a tool-server on the same computer counts.
-2. The `GET /tools` entry of the tool carries `clientServices`, and its `ops` hold an op that the client serves.
-3. `project_root` is an absolute path without a `..` segment.
-4. The arguments carry exactly one flow source: a `name` that is a valid flow name, or a `flow_path` that is an absolute path without a `..` segment to a valid flow file name.
-5. The root flow file is on the client, under the roots, and has at least one `run:` step.
+Over a link, the client replaces the file argument with a file-input object. A link to a tool-server on the same computer counts. For an input with `collect`, the object has three more fields:
 
 ```json
 {
-  "name": "withrun",
-  "project_root": "/work/proj",
-  "device": "chromium-cdp-9471",
-  "client_services": {
-    "ops": ["resolve-file"],
-    "roots": ["/work/proj"]
-  }
-}
-```
-
-| Field   | Value                                                                                                                                                                                                                                                                                                                             |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ops`   | The ops the client serves: the ops that the tool-server advertised and that the client implements                                                                                                                                                                                                                                 |
-| `roots` | Absolute client directories, by their real location: `project_root`, its `.argent/flows` directory, the directory of the root flow file, and the directory of the real file behind the root flow. When the root flow file is under `<P>/.argent/flows/`, the project `<P>` is also a root. A root inside another root is not sent |
-
-The client also sends `Accept: application/x-ndjson`, because the requests travel on the NDJSON stream of the call. The tool-server answers 400 with `HTTP_ZOD_VALIDATION_FAILED` and the error kind `validation` to a call that carries `client_services` without that header, or with a malformed `client_services`. A proxy that rewrites `Accept` therefore gets this 400 for a flow with a `run:` step. A directory run of `argent flow run` reports that flow as rejected and continues with the next flow. The tool-server takes `client_services` off the arguments before it validates them, so the input schema of `flow-execute` does not list the parameter. The tool-server sends a request for an op only when the client listed the op in `ops`.
-
-Each request line must reach the client at once, because the run waits for the answer. For this reason, the client sends `Accept-Encoding: identity` with the call, and the tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. Each reverse proxy between the client and the tool-server must:
-
-- pass the stream through as the tool-server writes it, without compression or buffering
-- forward `POST /invocations/<invocation>/client-responses` while the stream of the call is open
-
-`X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. nginx does not forward the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream keeps the request line from the client. The tool-server then reports a timeout after 30 s. A flow without `run:` steps carries no `client_services` and sends no request, so such a proxy does not stop it.
-
-When one condition does not hold, the client sends no `client_services`, and the call is not a stream for client services. The tool-server then keeps the behavior of a call without client services.
-
-## Request: the `client-request` line
-
-The tool-server writes one line on the NDJSON stream of the call for each request:
-
-```json
-{
-  "event": "client-request",
-  "invocation": "4f4a1c1e-2b0e-4b7f-9d2a-8c3e0b1f6a21",
-  "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13",
-  "op": "resolve-file",
-  "args": { "anchorDir": "/work/proj/.argent/flows", "target": "frag.yaml", "kind": "flow" }
-}
-```
-
-| Field        | Value                                                 |
-| ------------ | ----------------------------------------------------- |
-| `event`      | `client-request`                                      |
-| `invocation` | The id of the tool call. It names the answer endpoint |
-| `id`         | The id of the request. The answer carries the same id |
-| `op`         | One of the ops the client listed                      |
-| `args`       | The arguments of the op. See [Ops](#ops)              |
-
-The line sits between the step progress lines. When the flow has a `run:` step, the first request comes before the first step and asks for the root flow itself. For a flow `[echo, run: frag.yaml]` with a `device`, in order:
-
-```text
-{"event":"client-request","invocation":"...","id":"...","op":"resolve-file","args":{"target":"withrun.yaml",...}}
-{"event":"progress","data":{"kind":"echo","status":"pass",...}}
-{"event":"client-request","invocation":"...","id":"...","op":"resolve-file","args":{"target":"frag.yaml",...}}
-{"event":"progress","data":{"kind":"run","status":"pass",...}}
-{"event":"result","data":{...}}
-```
-
-The tool-server asks once for each `run:` target in a call, and every later read of that target in the call uses the same answer. Without a `device`, the tool-server reads a leading `run:` chain before the first step to find its launch. Then the request for `frag.yaml` comes before the first progress line.
-
-A client that sent no `client_services` never receives the line.
-
-## Answer: `POST /invocations/<invocation>/client-responses`
-
-The client answers each request with a separate HTTP request. `<invocation>` is the `invocation` of the request line.
-
-```text
-POST /invocations/<invocation>/client-responses
-Host: 127.0.0.1:4731
-Authorization: Bearer <token>
-Content-Type: application/json
-```
-
-The body has one of two shapes. When the client serves the request, the body carries the answer fields of the op. For `resolve-file`, see [the answer fields](#resolve-file):
-
-```json
-{
-  "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13",
-  "ok": true,
-  "canonical": "/work/proj/.argent/flows/frag.yaml",
-  "spelling": { "state": "listed" },
-  "exists": true,
-  "size": 20,
+  "__argentFileInput": true,
+  "path": "/work/proj/.argent/flows/withrun.yaml",
+  "size": 64,
   "mtimeMs": 1791300000000,
-  "content": "c3RlcHM6CiAgLSBlY2hvOiBoaQo="
+  "content": "<base64>",
+  "canonical": "/work/proj/.argent/flows/withrun.yaml",
+  "spelling": { "state": "listed" },
+  "members": [
+    {
+      "role": "flow",
+      "key": "/work/proj/.argent/flows\u0000frag-echo.yaml",
+      "path": "/work/proj/.argent/flows/frag-echo.yaml",
+      "canonical": "/work/proj/.argent/flows/frag-echo.yaml",
+      "spelling": { "state": "listed" },
+      "size": 33,
+      "mtimeMs": 1791300000000,
+      "content": "<base64>"
+    }
+  ]
 }
 ```
 
-When the client refuses the request, the body carries the reason:
+| Field       | Value                                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------- |
+| `canonical` | The real path of `path` on the client. The `run:` targets of the flow resolve beside this file       |
+| `spelling`  | How the directory of `path` on the client lists the basename of `path`. See [Spelling](#spelling)    |
+| `members`   | One entry for each `run:` resolution of the flow. The list is empty for a flow without a `run:` step |
 
-```json
-{ "id": "9b2d7c0a-6f1e-4d3b-a5c8-0e7f2b4d9a13", "ok": false, "error": "<text>" }
-```
+The client sends these fields only when the call goes over a link and the client can read the flow file.
 
-| Status | Body                    | Meaning                                                 |
-| ------ | ----------------------- | ------------------------------------------------------- |
-| 200    | `{ "accepted": true }`  | The tool-server delivered the answer to the waiting run |
-| 404    | `{ "error": "<text>" }` | Unknown invocation, or unknown or expired request id    |
-| 409    | `{ "error": "<text>" }` | The request already has an answer                       |
-| 413    | `{ "error": "<text>" }` | `content` decodes to more than 32 MiB                   |
+## Members
 
-The endpoint sits behind the same bearer-token check and Host check as `/tools/<name>`. The JSON body limit of 48 MB applies.
+The client collects the members before the call:
 
-## Ops
+1. The client reads the `run:` targets of the flow file, in all steps and in all `when:` blocks.
+2. The client resolves each target beside the real file that names it, as the runner does.
+3. The client reads the `run:` targets of each fragment that it found, and continues the same way.
 
-### `resolve-file`
+The client resolves each pair of directory and target once. It stops at the depth where the runner stops a `run:` chain (20 levels). A cycle ends when the pair repeats.
 
-The tool-server sends `resolve-file` once for each `run:` target of a call. The client resolves the target on its own disk and returns the file. When the flow has a `run:` step, the tool-server also sends `resolve-file` for the root flow itself before the first step, to learn the real location of the file. The `run:` targets of the root flow resolve beside that location, as they do on one computer. A refusal of that request fails the run before the first step.
+| Field         | Value                                                                                                                                   |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`        | `flow`                                                                                                                                  |
+| `key`         | The real directory of the file that names the target, a NUL character, and the target as written. The runner looks up this pair         |
+| `path`        | The directory and the target, as written                                                                                                |
+| `canonical`   | The real path of the target on the client. For a missing file, the real path of the nearest existing directory and the rest of the path |
+| `spelling`    | How the directory of `path` lists the basename of the target                                                                            |
+| `content`     | The file as base64, for a small file                                                                                                    |
+| `uploadId`    | The id that `POST /upload` returned, for a larger file. Set together with `contentHash`                                                 |
+| `contentHash` | The SHA-256 digest of the uploaded archive                                                                                              |
+| `size`        | The size of the file in bytes                                                                                                           |
+| `mtimeMs`     | The modification time of the file in epoch milliseconds                                                                                 |
+| `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. Absent when the member has its bytes        |
+| `error`       | The reason, when `state` is `refused`                                                                                                   |
 
-Request `args`:
+The client puts the bytes of the members in the call body up to 256 KiB in total. The client sends each other member to `POST /upload`, one gzipped tar for each file, as for an input of kind `tar-upload`. A body limit of a reverse proxy therefore sees at most the flow file and 256 KiB of members.
 
-| Field       | Value                                                                           |
-| ----------- | ------------------------------------------------------------------------------- |
-| `anchorDir` | Absolute client path of the directory of the flow file that contains the step   |
-| `target`    | The `run:` target as written, for example `frag.yaml` or `../shared/login.yaml` |
-| `kind`      | `flow`. The protocol also defines `script`, which the client does not serve yet |
-
-Answer:
-
-| Field       | Required                                     | Value                                                                              |
-| ----------- | -------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `canonical` | Yes                                          | The realpath of `anchorDir` + `/` + `target` on the client                         |
-| `spelling`  | Yes                                          | How the directory on the client lists the basename of `target`. See the next table |
-| `exists`    | Yes                                          | `true` when the client can stat `canonical` as a file                              |
-| `content`   | When `exists` is `true` and `kind` is `flow` | The file as base64                                                                 |
-| `size`      | No                                           | The size of the file in bytes                                                      |
-| `mtimeMs`   | No                                           | The modification time of the file in epoch milliseconds                            |
-
-The tool-server accepts the answer with 200 before the runner reads it. When a required field is missing, the runner fails the request: the step or the run reports that the client answered with an invalid payload.
+### Spelling
 
 `spelling` has one of three shapes:
 
 | Shape                                                                   | Meaning                                                                                                                                          |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `{ "state": "listed" }`                                                 | The directory lists the basename as written. The client also answers `listed` when it cannot read the directory                                  |
+| `{ "state": "listed" }`                                                 | The directory lists the basename as written. The client also sends `listed` when it cannot read the directory                                    |
 | `{ "state": "case_folded", "actual": "<name>", "addressable": <bool> }` | The directory lists the name with a different case. `actual` is the listed name. `addressable` is `true` when `actual` is a valid flow file name |
 | `{ "state": "absent" }`                                                 | The directory lists no name that matches, in any case                                                                                            |
 
-The runner applies the same rules to the answer as to a file on its own disk: the cycle guard, the depth limit and the refusal of a `case_folded` spelling. The runner never opens `canonical`. It uses the path as a key and in messages.
+### Client policy
 
-### Reserved op names
+The client sends a member only when its real path is under one of these directories, by their real location:
 
-The protocol defines the op names `read-file`, `write-file` and `run-script`. The client serves none of them yet. The client lists only the ops it serves, so the tool-server never sends a request for them.
+- `project_root` and its `.argent/flows` directory
+- the directory of the flow file and the directory of its real file
+- the project `<P>` of a flow file under `<P>/.argent/flows/`, by its path or by its real path
 
-## Timeouts and failures
+The client marks a member `refused` in these cases:
 
-The tool-server waits 30 s for each answer.
+| Case                                               | `error`                                                                       |
+| -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The real path is outside every directory above     | `<target> is outside every root this client serves (<directories>)`           |
+| A `.yaml` name links to a file that is not YAML    | `<target> links to a file that is not a YAML file`                            |
+| The path is a directory                            | `EISDIR: illegal operation on a directory, read`                              |
+| The file is larger than 32 MiB                     | `<canonical> is larger than the 32 MiB cap on a file sent to the tool-server` |
+| The client cannot read the file, or resolve a link | The error of the operating system, for example `EACCES` or `ELOOP`            |
 
-| Event                                     | Effect on the run                                                                                                                                                                                                                               |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No answer within 30 s                     | Before the first step, the call fails with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `timeout`. At a `run:` step, the step reports `error` and the later steps report `skip`. Every later request of the same call then fails at once      |
-| An answer with `ok: false`                | The step reports `error`. The reason starts with `could not load fragment "<target>":` and quotes the `error` text of the client. The later steps report `skip`. A refusal of the request for the root flow fails the run before the first step |
-| The HTTP response of the call closes      | The tool-server rejects every pending request and aborts the run. Each step that did not run reports `skip` with the reason `run aborted`                                                                                                       |
-| The client closes before the call starts  | The tool-server does not run the call                                                                                                                                                                                                           |
-| The answer does not reach the tool-server | The client stops the call at once with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `network`, and closes the response. The tool-server then aborts the run                                                                                   |
-| The client cannot read a file within 30 s | The client sends no answer, and the tool-server reports the timeout                                                                                                                                                                             |
+When the environment of the client has `ARGENT_FLOW_FILES_LOG=1`, the client prints one line for each member before the call: `[flow-files] flow <canonical>: inline <bytes>`, `: upload <bytes>`, `: missing` or `: refused (<reason>)`. The client never prints the content. Under `argent flow run --json`, each line is a warning object on stderr.
 
-The reason of a timeout names the op and the target. It also names the usual causes:
+## The call
 
-- a paused or sleeping client
-- a proxy that buffers the stream
-- a proxy that does not forward the answer
+A call with at least one member is a stream. The client sends `Accept: application/x-ndjson` and `Accept-Encoding: identity` also when no progress consumer waits for the lines. The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines. The result does not change.
 
-The answer does not reach the tool-server when the answer request fails, when it gets no reply within 30 s, or when its reply is not one that the tool-server sends. An example is a 502 from a proxy. The replies of the tool-server in the status table above do not stop the call.
+The MCP adapter does not send a call with members a second time, and it sets no timeout for that call.
 
-## Client policy
+## What the tool-server does with the members
 
-The client enforces these rules. The tool-server checks only the shape of each answer and the 32 MiB cap. The tool-server already holds the bearer token, so the rules protect the files of the project, not the token.
+The tool-server reads the members before it validates the arguments. A member never fails the call:
 
-1. The client serves only the files that the flows of the call compose: the root flow, and each `run:` target that a served file names, resolved beside that file. The client refuses any other request before it reads the file. The refusal is the same whether the file exists or not.
-2. The client reads nothing outside the roots it sent. It resolves a requested path one segment at a time, as the operating system does. Before it looks at a place on the disk, it checks that the place is in a root or on the way to a root. It refuses a symlink that points outside a root. It refuses a target that passes through a place outside the roots, also when the target ends in a root.
-3. The refusal of a path outside the roots does not tell where the path leads or whether it exists.
-4. `resolve-file` serves `.yaml` names only. The client refuses a `.yaml` name that links to a file that is not a YAML file (`.yaml` or `.yml`).
-5. The client refuses a file above 32 MiB. The error names the cap.
-6. The client refuses an op that it did not list in `ops`, and a `kind` it does not know.
-7. The client answers a directory with the `EISDIR` error, and an unreadable file with the error of the read, for example `EACCES`. It answers a file that a path uses as a directory with `ENOTDIR`, and a loop of symlinks with `ELOOP`. It answers a target in a directory that does not exist as a missing file.
-8. By default, the client prints nothing for a request. When the environment of the client has `ARGENT_CLIENT_SERVICES_LOG=1`, the client prints one line for each request after it decides the answer: `[client-services] <op> <path>: served`, `: missing` or `: refused (<reason>)`. For a request that the client refuses before it resolves the file, the path is the target that the tool-server sent. The client never prints the content. Under `argent flow run --json`, each line is a warning object on stderr.
+- The tool-server keeps the text of each member with bytes. It applies the 32 MiB cap and the size check of a file input. It reads an upload as for a `tar-upload` input.
+- A member that fails a check, or that has no bytes and no `state`, becomes `refused` with the reason.
+- The tool-server ignores a member with an unknown `role`, and a member whose `key` repeats.
 
-## A client or tool-server without client services
+The runner then uses the members as the files of the client:
 
-| Client                  | Tool-server             | Result for a `run:` step over a link                                                                                                                                                                                                  |
-| ----------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| With client services    | With client services    | The tool-server reads the fragment through client services                                                                                                                                                                            |
-| With client services    | Without client services | The listing has no `clientServices`. The client sends nothing. The tool-server rejects the flow before the first step                                                                                                                 |
-| Without client services | With client services    | The call has no `client_services`. The tool-server rejects the flow before the first step and adds: "This tool-server serves run: steps for a client that sends client services. Update the argent CLI or MCP adapter on the client." |
-| Without client services | Without client services | The tool-server rejects the flow before the first step                                                                                                                                                                                |
+1. Before the first step, the runner checks the flow and each member that it can reach, as deep as a `run:` chain can go. A `script:` or `snapshot:` step, a `tool:` step that takes a file or records a flow, and a `refused` member each reject the run. The error lists each such step, for example `step 1 in /work/proj/.argent/flows/inner-script.yaml: script: { path: ../../scripts/hello.mjs }`. The error code is `FLOW_FILE_INVALID`.
+2. When the flow has a `run:` step, the `run:` targets of the flow resolve beside `canonical` of the flow file. A `case_folded` spelling of the flow file rejects the run, as on one computer.
+3. A `run:` step looks up its member by `key`. The runner applies the cycle guard, the depth limit and the refusal of a `case_folded` spelling. The runner never opens `canonical`. It uses the path as a key and in messages.
+4. A `missing` member makes its `run:` step report `could not load fragment "<target>": ENOENT: no such file or directory, open '<canonical>'`. A `run:` step in a `when:` block that does not run needs no file.
 
-`script:` and `snapshot:` steps, and `tool:` steps that take a file or record a flow, need a run without a link in every row. In the root flow, the tool-server rejects them before the first step and lists each one. In a fragment that the client serves, the tool-server rejects them when the `run:` step loads the fragment: that step reports `error` with the same list, and no step of the fragment runs.
+## Older clients and tool-servers
+
+| Client                | Tool-server           | Result for a `run:` step over a link                                                                                                                                                                           |
+| --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sends members         | Reads members         | The runner reads the fragments from the members                                                                                                                                                                |
+| Sends members         | Does not read members | The listing has no `collect`. The client sends the flow file alone. The tool-server rejects the flow before the first step                                                                                     |
+| Does not send members | Reads members         | The tool-server rejects the flow before the first step and adds: "This tool-server runs run: steps for a client that sends their fragments with the call. Update the argent CLI or MCP adapter on the client." |
+| Does not send members | Does not read members | The tool-server rejects the flow before the first step                                                                                                                                                         |

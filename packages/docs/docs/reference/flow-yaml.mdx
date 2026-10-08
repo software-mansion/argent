@@ -428,38 +428,42 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 - a flow in a directory run that failed without a report
 - a usage error, such as an unknown flag
 
-A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text. Over a link, the CLI also writes a warning object on stderr for a message about a file request of the tool-server: `{ "event": "warning", "warning": <text> }`.
+A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text. With `ARGENT_FLOW_FILES_LOG=1`, the CLI writes each `[flow-files]` line as a warning object on stderr: `{ "event": "warning", "warning": <text> }`.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
 ### Flows over a link
 
-`argent link` and the `ARGENT_TOOLS_URL` variable route the CLI to a tool-server. In this section, both are a link. Over a link, `argent flow run` uploads the flow file with the call. The upload holds only that file. The files beside the flow file stay on the client.
+`argent link` and the `ARGENT_TOOLS_URL` variable route the CLI to a tool-server. In this section, both are a link. Over a link, `argent flow run` uploads the flow file with the call. The upload also holds each `run:` fragment that the flow reaches. The other files beside the flow file stay on the client.
 
-| Flow content                                                                                                           | Over a link                                                                                                             |
-| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Directives that drive the device, `echo`, `when`                                                                       | Runs                                                                                                                    |
-| `run:`                                                                                                                 | Runs. When the client or the tool-server has no client services, the tool-server rejects the flow before the first step |
-| `script:`, `snapshot:`                                                                                                 | The tool-server rejects the flow before the first step                                                                  |
-| A `tool:` step that takes a file, for example `screenshot-diff` with `baselinePath`, `reinstall-app` or `flow-execute` | The tool-server rejects the flow before the first step                                                                  |
-| A `tool:` step that records a flow, for example `flow-add-step`                                                        | The tool-server rejects the flow before the first step                                                                  |
-| A relative `launch: { chromium: <path> }`                                                                              | The launch fails. Use an absolute path on the tool-server                                                               |
+| Flow content                                                                                                           | Over a link                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Directives that drive the device, `echo`, `when`                                                                       | Runs                                                                                                              |
+| `run:`                                                                                                                 | Runs. When the CLI or the tool-server is an older version, the tool-server rejects the flow before the first step |
+| `script:`, `snapshot:`                                                                                                 | The tool-server rejects the flow before the first step                                                            |
+| A `tool:` step that takes a file, for example `screenshot-diff` with `baselinePath`, `reinstall-app` or `flow-execute` | The tool-server rejects the flow before the first step                                                            |
+| A `tool:` step that records a flow, for example `flow-add-step`                                                        | The tool-server rejects the flow before the first step                                                            |
+| A relative `launch: { chromium: <path> }`                                                                              | The launch fails. Use an absolute path on the tool-server                                                         |
 
-The tool-server asks the client for each `run:` fragment during the run. The exchange is documented in the [Tool-server API reference](/docs/reference/tool-server-api). The client serves only the flow file and the fragments that its `run:` steps name, at any depth. Each fragment must be under one of these directories:
+The CLI uploads each fragment that a `run:` step names, at any depth and in each `when:` block. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload. The CLI uploads a fragment only when its real location is under one of these directories:
 
 - the project root, which is the working directory of the CLI
 - the project of a flow saved under `<project>/.argent/flows/`
 - the `.argent/flows` directory of the project root
 - the directory of the flow file, and the directory of its real file when the flow file is a symlink
 
-The CLI must keep running until the run ends, because the tool-server stops a run when the CLI disconnects. A flow with a `run:` step also needs these conditions:
+The CLI does not upload these fragments:
 
-- The CLI answers each request within 30 s. A paused or sleeping CLI fails the run.
-- Each reverse proxy between the CLI and the tool-server passes the response stream through without compression or buffering.
-- Each reverse proxy forwards `POST /invocations/<invocation>/client-responses` to the tool-server while the run continues. The CLI sends its answers on this route.
-- Each reverse proxy keeps the `Accept` header of the call.
+- a fragment outside these directories
+- a `.yaml` name that links to a file that is not a YAML file
+- a directory, or a file that the CLI cannot read
+- a file larger than 32 MiB
 
-The other rows of the table still need a run without a link. In the root flow, the tool-server rejects such a step before the first step. In a fragment, the `run:` step that loads the fragment reports an error and no step of the fragment runs.
+The tool-server then rejects the flow before the first step, and the error gives the reason for each such fragment. A fragment that does not exist does not stop the flow before the first step. Its `run:` step reports `error` when the step runs. A `when:` block that does not run does not need its fragments.
+
+The other rows of the table still need a run without a link. The tool-server rejects such a step before the first step, in the flow file and in each fragment that the CLI uploads.
+
+The CLI puts small fragments in the call, up to 256 KiB in total. The CLI sends each other fragment in its own request to `POST /upload`. A body limit of a reverse proxy therefore applies to one fragment at a time. With `ARGENT_FLOW_FILES_LOG=1`, the CLI prints one line for each fragment before the call.
 
 For each rejection in the table, the error lists the steps that caused it.
 
@@ -467,26 +471,11 @@ The tool-server runs the uploaded copy even when it has a file at the same path.
 
 A rejected flow gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected flow on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next flow and keeps the rejected flow in its `flows` array.
 
-When the CLI does not answer a request of the tool-server within 30 s, the effect depends on the request:
-
-- A request before the first step fails the flow with `FLOW_CLIENT_NOT_ANSWERING` and the error kind `timeout`. A directory run stops at that flow and marks the flows after it as skipped.
-- A request at a `run:` step makes that step report `error`. The flow fails, and a directory run continues with the next flow.
-
-When an answer of the CLI does not reach the tool-server, the CLI stops the flow at once. For example, a proxy answers 502 for the answer route, or the connection fails. The JSON object holds `"error_code": "FLOW_CLIENT_NOT_ANSWERING"` and `"error_kind": "network"`. A directory run stops at that flow and marks the flows after it as skipped.
-
-When a proxy changes the `Accept` header of the call, the tool-server rejects a flow with a `run:` step. The JSON object holds `"error_code": "HTTP_ZOD_VALIDATION_FAILED"` and `"error_kind": "validation"`. A directory run continues with the next flow. A flow without a `run:` step is not affected.
-
-The reason names the usual causes:
-
-- a paused or sleeping CLI
-- a proxy that buffers the stream
-- a proxy that does not forward the answer
-
 When the CLI cannot connect to the tool-server that a link names, the flow does not run. The CLI prints the address of that tool-server, the setting that names it and the reason, for example `connection refused`. The exit code is 2. The JSON object holds `"error_code": "TOOL_SERVER_UNREACHABLE"` and `"error_kind": "network"`. A directory run stops at that flow and marks the flows after it as skipped.
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send only that one file, and the tool-server runs that copy. Argent checks that file before it runs the first step, and each fragment when its `run:` step loads the fragment. The tool-server asks the client for each `run:` fragment during the run, through the exchange that the [Tool-server API reference](/docs/reference/tool-server-api) documents. The client serves only the flow file and the fragments that its `run:` steps name. Each fragment must be under `project_root`, under the project of a flow saved under `<project>/.argent/flows/`, under the `.argent/flows` directory of `project_root`, or beside the flow file or its real file. At any depth, Argent rejects a `script:` or `snapshot:` step, and a `tool:` step that takes a file or records a flow. The error lists each such step. In a fragment that the client serves, the `run:` step reports the same error when it loads the fragment. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send that file and each `run:` fragment that it reaches, and the tool-server runs those copies. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload. The client uploads a fragment only when it is under `project_root`, under the project of a flow saved under `<project>/.argent/flows/`, under the `.argent/flows` directory of `project_root`, or beside the flow file or its real file. Argent checks the flow and each uploaded fragment before it runs the first step. At any depth, it rejects a `script:` or `snapshot:` step, a `tool:` step that takes a file or records a flow, and a fragment that the client did not upload for a reason. The error lists each such step. A fragment that does not exist fails its `run:` step when that step runs. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 
