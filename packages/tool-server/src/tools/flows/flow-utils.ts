@@ -2279,6 +2279,20 @@ export function authoringPlatform(platform: string): string {
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 
 /**
+ * YAML reads an unquoted `5` or `true` as a number or boolean, not a string.
+ * Name that launch arg and say to quote it instead of the generic launch error.
+ */
+function rejectUnquotedLaunchArg(raw: unknown, args: unknown[], where: string): void {
+  const i = args.findIndex((a) => typeof a === "number" || typeof a === "boolean");
+  if (i === -1) return;
+  const v = String(args[i]);
+  badEntry(
+    raw,
+    `${where}.args[${i}] is a ${typeof args[i]} (${v}); quote it so it stays a string: "${v}"`
+  );
+}
+
+/**
  * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
  * Returns null when the shape is invalid (caller reports the launch error).
  */
@@ -2289,6 +2303,8 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
     rejectUnknownKeys({ launch: { chromium: raw } }, b, ["path", "args"], "launch.chromium");
     if (typeof b.path !== "string" || b.path.length === 0) return null;
     if (b.args === undefined) return { path: b.path };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { chromium: raw } }, b.args, "launch.chromium");
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
     return { path: b.path, args: b.args as string[] };
   }
@@ -2306,6 +2322,8 @@ function parseIosLaunch(raw: unknown): IosLaunch | null {
     rejectUnknownKeys({ launch: { ios: raw } }, b, ["app", "args"], "launch.ios");
     if (typeof b.app !== "string" || b.app.length === 0) return null;
     if (b.args === undefined) return { app: b.app };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { ios: raw } }, b.args, "launch.ios");
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
     return { app: b.app, args: b.args as string[] };
   }
