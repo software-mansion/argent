@@ -11,6 +11,7 @@ const LEGACY_UNSUPPORTED_FIELDS = [
   "password",
   "placeholder",
   "hintShowing",
+  "bundleId",
   "foregroundApp",
 ];
 

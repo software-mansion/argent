@@ -97,6 +97,7 @@ describe("ui-tree iOS adapter", () => {
       "password",
       "placeholder",
       "hintShowing",
+      "bundleId",
       "foregroundApp",
     ]);
     expect(adaptAxTree(reply([{ index: 0 }], { treeVersion: 2 })).unsupportedFields).toEqual([]);
