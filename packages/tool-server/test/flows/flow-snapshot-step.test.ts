@@ -58,3 +58,85 @@ describe("snapshot step wiring", () => {
     );
   });
 });
+
+// The other join: runSnapshot's hint, expected and actual must reach the step
+// report. The flow-visual suite pins those values on runSnapshot's own return,
+// which says nothing about what the run reports. Each mock below returns the
+// shape runSnapshot builds for that failure.
+describe("snapshot step report", () => {
+  const ADOPT_HINT =
+    "run with updateBaselines (--update-baselines) to adopt the current screen, then review and commit it";
+
+  it("reports the adopt hint for a missing baseline, and no expected or actual", async () => {
+    vi.mocked(runSnapshot).mockResolvedValue({
+      status: "fail",
+      reason: 'no baseline for "home" on this device class, nothing was compared',
+      hint: ADOPT_HINT,
+      snapshotKey: "home__ios-390x844",
+    });
+    await writeFlow("missing", {
+      executionPrerequisite: "",
+      steps: [{ kind: "snapshot", name: "home" }],
+    });
+
+    const result = await run("missing");
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]).toMatchObject({ kind: "snapshot", status: "fail", hint: ADOPT_HINT });
+    expect(result.steps[0].expected).toBeUndefined();
+    expect(result.steps[0].actual).toBeUndefined();
+    expect(result.steps[0].indeterminate).toBeUndefined();
+  });
+
+  it("reports the tolerance and the measured diff of a diff over maxMismatch", async () => {
+    vi.mocked(runSnapshot).mockResolvedValue({
+      status: "fail",
+      reason: "diff 3.10% > 1.5% (home__ios-390x844.png)",
+      expected: "≤ 1.5%",
+      actual: "3.10%",
+      snapshotKey: "home__ios-390x844",
+    });
+    await writeFlow("over", {
+      executionPrerequisite: "",
+      steps: [{ kind: "snapshot", name: "home", maxMismatch: 1.5 }],
+    });
+
+    const result = await run("over");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "snapshot",
+      status: "fail",
+      expected: "≤ 1.5%",
+      actual: "3.10%",
+    });
+    expect(result.steps[0].hint).toBeUndefined();
+  });
+
+  it("reports both sizes and the drift hint of a cropOn size mismatch", async () => {
+    const hint =
+      "the element's size drifted; crop a fixed-size container, or re-adopt with updateBaselines";
+    vi.mocked(runSnapshot).mockResolvedValue({
+      status: "fail",
+      reason:
+        "baseline is 50x60 but the cropOn region is 50x50 (row__ios-390x844-crop-1a2b3c4d.png)",
+      expected: "50x60",
+      actual: "50x50",
+      hint,
+      snapshotKey: "row__ios-390x844-crop-1a2b3c4d",
+    });
+    await writeFlow("size", {
+      executionPrerequisite: "",
+      steps: [{ kind: "snapshot", name: "row", cropOn: { identifier: "hdr" } }],
+    });
+
+    const result = await run("size");
+
+    expect(result.steps[0]).toMatchObject({
+      kind: "snapshot",
+      status: "fail",
+      expected: "50x60",
+      actual: "50x50",
+      hint,
+    });
+  });
+});
