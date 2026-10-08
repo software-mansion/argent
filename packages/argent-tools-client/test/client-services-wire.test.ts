@@ -76,7 +76,10 @@ let onInvoke: (body: unknown, res: ServerResponse) => void | Promise<void>;
  * goes out as HTML, as a proxy's own error page would.
  */
 let answerReply: { status: number; body: unknown };
-/** Per test: the replies to the first answer POSTs, in order; `answerReply` answers the rest. */
+/**
+ * Per test: the replies to the first answer POSTs, in order; `answerReply`
+ * answers the rest. A status of 0 leaves that POST without a reply.
+ */
 let answerReplies: { status: number; body: unknown }[];
 /** Per test: the answer route reads the POST and never answers it. */
 let answerHangs: boolean;
@@ -166,6 +169,7 @@ beforeEach(async () => {
         return;
       }
       const reply = answerReplies.shift() ?? answerReply;
+      if (reply.status === 0) return;
       const html = typeof reply.body === "string";
       res.writeHead(reply.status, {
         "Content-Type": html ? "text/html" : "application/json",
@@ -265,6 +269,37 @@ function streamUntilHangUp(): { hungUp: () => boolean } {
     }
   };
   return { hungUp: () => hungUp };
+}
+
+/**
+ * A request line, then the stream stays open until the test calls `report`:
+ * the tool-server timed the request out and reports only after the run's
+ * teardown (a status bar to restore, an app to stop), as an answer still on
+ * its way over a slow connection sees it. The report is a failed run.
+ */
+function streamUntilReported(): { report: () => void; hungUp: () => boolean } {
+  let report!: () => void;
+  const reported = new Promise<void>((resolve) => {
+    report = resolve;
+  });
+  let hungUp = false;
+  onInvoke = async (_body, res) => {
+    res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+    res.once("close", () => {
+      hungUp = !res.writableFinished;
+    });
+    res.write(
+      `${JSON.stringify({
+        event: "client-request",
+        invocation: "inv-1",
+        ...FRAG_REQUEST,
+        args: { ...FRAG_REQUEST.args, anchorDir: flowsDir },
+      })}\n`
+    );
+    await reported;
+    res.end(`${JSON.stringify({ event: "result", data: { ok: false, step: "error" } })}\n`);
+  };
+  return { report: () => report(), hungUp: () => hungUp };
 }
 
 /** What a call fails with, and how long it took to fail. */
@@ -892,6 +927,42 @@ describe("callTool client services", () => {
     await vi.waitFor(() => expect(stream.hungUp()).toBe(true));
   });
 
+  it("keeps the call going when the refusal that follows a proxy's 413 gets no reply", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    answerReplies = [
+      { status: 413, body: "<html>413 Request Entity Too Large</html>" },
+      { status: 0, body: null },
+    ];
+    const giveUp = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(giveUp.signal);
+    const stream = streamUntilReported();
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+
+    const pending = callTool("flow-execute", { project_root: projectDir, name: "root" });
+    await vi.waitFor(() => expect(answerRequests()).toHaveLength(2));
+    giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    await vi.waitFor(() => expect(diagnostics).toHaveLength(1));
+    stream.report();
+
+    expect((await pending).data).toEqual({ ok: false, step: "error" });
+    expect(stream.hungUp()).toBe(false);
+    expect(answerRequests().map((r) => r.body)).toEqual([
+      expect.objectContaining({ id: FRAG_REQUEST.id, ok: true }),
+      expect.objectContaining({ id: FRAG_REQUEST.id, ok: false }),
+    ]);
+    expect(diagnostics).toEqual([
+      `[client-services] a proxy refused the answer to the resolve-file request for ` +
+        `"frag.yaml" (413 Payload Too Large), and the refusal got no reply within 30 s. A ` +
+        `proxy between the client and the tool-server limits the size of a request body. The ` +
+        `proxy must accept a body of up to 48 MB on POST ` +
+        `/invocations/<invocation>/client-responses, for example client_max_body_size 48m in ` +
+        `nginx`,
+    ]);
+  });
+
   it("keeps the call going when the tool-server's own route answers the refusal that follows a proxy's 413", async () => {
     // The request expired on the tool-server while the answer was on its way:
     // the route was reached and the step already has its outcome there.
@@ -1198,24 +1269,31 @@ describe("callTool client services", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("fails the call once its answer POST gets no reply in the time the tool-server waits", async () => {
+  it("keeps the call going when its answer POST gets no reply, for the report the tool-server sends", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", url);
     answerHangs = true;
     const giveUp = new AbortController();
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(giveUp.signal);
-    streamUntilHangUp();
-    const { callTool } = createToolsClient({ onDiagnostic: () => {} });
+    const stream = streamUntilReported();
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
 
-    const failed = failureOf(callTool("flow-execute", { project_root: projectDir, name: "root" }));
+    const pending = callTool("flow-execute", { project_root: projectDir, name: "root" });
     await vi.waitFor(() => expect(answerRequests()).toHaveLength(1));
     expect(timeout).toHaveBeenCalledWith(30_000);
     giveUp.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
-    const { err } = await failed;
+    await vi.waitFor(() => expect(diagnostics).toHaveLength(1));
+    stream.report();
 
-    expect(err).toMatchObject({ errorCode: "FLOW_CLIENT_NOT_ANSWERING", errorKind: "network" });
-    expect((err as Error).message).toContain(
-      `POST ${url}/invocations/inv-1/client-responses got no reply within 30 s.`
-    );
+    expect((await pending).data).toEqual({ ok: false, step: "error" });
+    expect(stream.hungUp()).toBe(false);
+    expect(diagnostics).toEqual([
+      `[client-services] the answer to the resolve-file request for "frag.yaml" got no reply ` +
+        `within 30 s (POST ${url}/invocations/inv-1/client-responses). The tool-server has ` +
+        `stopped waiting for it, and the report of the call says what became of the request`,
+    ]);
   });
 
   it("keeps the result of a call whose answer fails after the stream delivered it", async () => {

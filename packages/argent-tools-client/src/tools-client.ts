@@ -224,21 +224,25 @@ const BODY_LIMIT_ADVICE =
  * answer to `read-file` carries the whole baseline. The waiting step then
  * fails at once and names the cause. True when the request is settled on the
  * tool-server: it took the refusal, or its own route answered for the id (one
- * it no longer waits for, or one with an answer), as for any other answer.
- * Each outcome is one diagnostic.
+ * it no longer waits for, or one with an answer), as for any other answer, or
+ * the refusal got no reply in 30 s, when the tool-server has stopped waiting
+ * ({@link answerClientRequest}). Each outcome is at most one diagnostic, and
+ * the last one only while the call is open.
  */
 async function refuseOversizedAnswer(
   link: ClientServicesLink,
   url: string,
   request: string,
   id: string,
-  status: string
+  status: string,
+  callOpen: () => boolean
 ): Promise<boolean> {
   const refusal: ClientResponseBody = {
     id,
     ok: false,
     error: `the answer did not reach the tool-server (${status}). ${BODY_LIMIT_ADVICE}`,
   };
+  const proxied = `[client-services] a proxy refused the answer to ${request} (${status})`;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -247,11 +251,17 @@ async function refuseOversizedAnswer(
       body: JSON.stringify(refusal),
       signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
     });
-  } catch {
-    return false;
+  } catch (err) {
+    if (!(err instanceof Error && err.name === "TimeoutError")) return false;
+    if (callOpen()) {
+      link.diagnose(
+        `${proxied}, and the refusal got no reply within ` +
+          `${Math.round(CLIENT_FILE_OP_TIMEOUT_MS / 1000)} s. ${BODY_LIMIT_ADVICE}`
+      );
+    }
+    return true;
   }
   const text = await res.text().catch(() => "");
-  const proxied = `[client-services] a proxy refused the answer to ${request} (${status})`;
   if (res.ok) {
     link.diagnose(`${proxied}; the request was refused instead`);
     return true;
@@ -274,12 +284,21 @@ async function refuseOversizedAnswer(
  * tool-server either does the call fail. Anything else is at most one
  * diagnostic, and the server settles the request on its side: a line without
  * a string id or invocation names no answer to post, so it is dropped. The
- * handler and the post each give up when the server would have stopped
- * waiting.
+ * handler and the post each wait 30 s, the time the tool-server waits for the
+ * answer. The tool-server starts its wait before the line leaves it, so it
+ * has stopped waiting by the time either of them gives up.
+ *
+ * So a post that gets no reply in its 30 s does not fail the call: the
+ * tool-server settled the request as a timeout, and the call goes on to the
+ * report that says so. A slow connection that takes longer than that to move
+ * a baseline must not lose the report. `callOpen` tells whether the call
+ * still waits for that report, and only then is the post's timeout worth a
+ * diagnostic.
  */
 async function answerClientRequest(
   link: ClientServicesLink,
-  msg: ClientRequestLine
+  msg: ClientRequestLine,
+  callOpen: () => boolean
 ): Promise<ToolInvocationError | undefined> {
   const { id, invocation } = msg as { id?: unknown; invocation?: unknown };
   if (typeof id !== "string" || typeof invocation !== "string") {
@@ -314,12 +333,17 @@ async function answerClientRequest(
       signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
     });
   } catch (err) {
-    const timedOut = err instanceof Error && err.name === "TimeoutError";
-    return undeliveredAnswer(
-      request,
-      url,
-      timedOut ? `got no reply within ${seconds} s` : `failed: ${errorText(err)}`
-    );
+    if (!(err instanceof Error && err.name === "TimeoutError")) {
+      return undeliveredAnswer(request, url, `failed: ${errorText(err)}`);
+    }
+    if (callOpen()) {
+      link.diagnose(
+        `[client-services] the answer to ${request} got no reply within ${seconds} s ` +
+          `(POST ${url}). The tool-server has stopped waiting for it, and the report of the ` +
+          `call says what became of the request`
+      );
+    }
+    return undefined;
   }
   // Read whole, which also releases the connection: a refusal names its reason.
   const text = await res.text().catch(() => "");
@@ -328,7 +352,7 @@ async function answerClientRequest(
   if (refusal === undefined) {
     const status = [res.status, res.statusText].filter(Boolean).join(" ");
     if (res.status !== 413) return undeliveredAnswer(request, url, `answered ${status}`);
-    if (await refuseOversizedAnswer(link, url, request, id, status)) return undefined;
+    if (await refuseOversizedAnswer(link, url, request, id, status, callOpen)) return undefined;
     return undeliveredAnswer(request, url, `answered ${status}. ${BODY_LIMIT_ADVICE}`);
   }
   link.diagnose(
@@ -367,6 +391,9 @@ async function consumeToolStream(
   // The first answer that could not reach the tool-server. It fails the call
   // unless the stream delivered its result first.
   let undelivered: ToolInvocationError | undefined;
+  // Whether the stream is still being read: an answer still in flight after
+  // it ended settles nothing, and its diagnostics would land in a later call.
+  let open = true;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
@@ -387,7 +414,7 @@ async function consumeToolStream(
       // line only once every request was answered or timed out, so an answer
       // still in flight when the stream ends settles nothing.
       if (!services) return;
-      void answerClientRequest(services, msg as ClientRequestLine).then((failure) => {
+      void answerClientRequest(services, msg as ClientRequestLine, () => open).then((failure) => {
         if (failure === undefined || undelivered) return;
         // Rather than wait out the server's timeout for an answer that will
         // not come, hang up: the server then stops the call, and the read
@@ -447,6 +474,8 @@ async function consumeToolStream(
     // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
     throw err;
+  } finally {
+    open = false;
   }
 
   if (!final) {
