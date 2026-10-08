@@ -22,6 +22,8 @@
  * the client-side destination path, and the client writes it.
  */
 
+import type { OnDiskSpelling } from "./flow-file-refs";
+
 /** Discriminant key identifying a client-file wrapper inside tool args. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
 
@@ -65,6 +67,44 @@ export interface FileInputWire {
    * `POST /upload` and rejects a mismatch before extraction.
    */
   contentHash?: string;
+  /**
+   * The client's real path of `path`, sent with `members` (a `collect` spec
+   * routed to a remote tool-server): the runner anchors the flow's `run:`
+   * targets beside it, as a co-located run anchors them beside its realpath.
+   */
+  canonical?: string;
+  /** How `path`'s basename is spelled in its directory on the client, sent with {@link canonical}. */
+  spelling?: OnDiskSpelling;
+  /**
+   * The project files the file at `path` makes the tool-server read, collected
+   * by the client for a `collect` spec, and sent only when the call is routed
+   * to a remote tool-server. Absent from an older client, and from every call
+   * without a link.
+   */
+  members?: FileInputMember[];
+}
+
+/**
+ * One project file sent with a `collect` wire: its bytes travel like a
+ * file input's (inline `content`, or `uploadId` + `contentHash` through
+ * `POST /upload`), or `state` says why it carries none.
+ */
+export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_MARKER | "members"> {
+  role: "flow" | "baseline";
+  /**
+   * How the tool-server looks the member up. For `flow`: the directory of the
+   * file that names the target, a NUL, and the target as written, which is
+   * exactly the pair the runner resolves. For `baseline`: the absolute client
+   * path `<dir>/__baselines__/<key>/<name>.png`.
+   */
+  key: string;
+  /**
+   * No bytes: `missing` = nothing at `canonical`; `refused` = the client does
+   * not send it (`error` says why); `listed` = a baseline sent by name only,
+   * for a run that updates baselines and never reads them.
+   */
+  state?: "missing" | "refused" | "listed";
+  error?: string;
 }
 
 /**
@@ -125,6 +165,28 @@ export interface FileInputSpec {
    * field.
    */
   unwrapWhenSet?: string;
+  /**
+   * `"flow"`: the file is a flow, and over a link the client also sends, on
+   * the same wire, every flow file its `run:` steps reach and the snapshot
+   * baselines of its run ({@link FileInputWire.members}). The call's
+   * `project_root` bounds what the client sends. Clients that do not know the
+   * field send the file alone.
+   */
+  collect?: "flow";
+}
+
+/** A {@link FileInputMember} as the tool-server resolved it. */
+export interface ResolvedMember {
+  role: FileInputMember["role"];
+  /** `present`: the bytes arrived (`text` for a flow, `hostPath` for a baseline). */
+  state: "present" | "missing" | "refused" | "listed";
+  /** Set for a flow: its real path and spelling on the client. */
+  canonical?: string;
+  spelling?: OnDiskSpelling;
+  text?: string;
+  /** A baseline's bytes, materialized on this host. */
+  hostPath?: string;
+  error?: string;
 }
 
 /** Per-target resolution outcome, passed to the tool via `ctx.fileInputs`. */
@@ -142,6 +204,11 @@ export interface ResolvedFileInput {
    * (which `presentOnHost` deliberately still accepts).
    */
   statVerified?: boolean;
+  /** From a `collect` wire: the client's real path and spelling of `clientPath`. */
+  canonical?: string;
+  spelling?: OnDiskSpelling;
+  /** From a `collect` wire: each member by its key. Present (possibly empty) only when the wire had members. */
+  members?: Record<string, ResolvedMember>;
 }
 
 /** Path-safe flow-name charset: no separators, no "..", no spaces. */
@@ -181,6 +248,8 @@ export interface ClientFileDirective {
   /** Absolute CLIENT-side destination path (the client validates it before writing). */
   path: string;
   content: string;
+  /** `base64`: `content` is binary (a snapshot baseline); absent: UTF-8 text. */
+  encoding?: "base64";
 }
 
 export function isFileInputWire(value: unknown): value is FileInputWire {

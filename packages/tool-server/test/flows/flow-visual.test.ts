@@ -1133,27 +1133,18 @@ describe("runSnapshot with a client project", () => {
     await expect(baselineCopyDirs()).resolves.toEqual([]);
   });
 
-  it("passes a client's read error through as it is", async () => {
+  it("propagates a client read failure as it is", async () => {
     const project = clientProject(null);
-    // The run's own abort must stay an AbortError, which the runner reports as
-    // a skip; the client names every other failure itself.
-    const abort = Object.assign(
-      new Error("the client disconnected before answering the read-file request"),
-      { name: "AbortError" }
+    // The client's refusal names the file itself.
+    const failure = new FailureError(
+      `the client refused to send "${clientBaseline}": it links to a file that is not a PNG file`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "client_member_refused",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
-    project.readFile.mockRejectedValueOnce(abort);
-
-    await expect(runSnapshot(env, clientOpts(project))).rejects.toBe(abort);
-  });
-
-  it("propagates a client read failure", async () => {
-    const project = clientProject(null);
-    const failure = new FailureError("the client did not answer the read-file request", {
-      error_code: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING,
-      failure_stage: "client_request_timeout",
-      failure_area: "tool_server",
-      error_kind: "timeout",
-    });
     project.readFile.mockRejectedValueOnce(failure);
 
     await expect(runSnapshot(env, clientOpts(project))).rejects.toBe(failure);

@@ -133,13 +133,11 @@ counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
-either, the CLI uploads the flow file, and the tool-server reads each run:
-fragment from the CLI during the run. The CLI also serves the snapshot
-baselines and stores each new baseline, so the CLI must keep running until
-the run ends. The tool-server rejects a flow with script: steps, or with tool:
-steps that take a file or record a flow: in the flow file before the first
-step, in a fragment at the run: step that loads it. With neither, all step
-kinds run.
+either, the CLI uploads the flow file, the run: fragments it reaches and the
+run's snapshot baselines, and writes the new baselines the run returns. The
+tool-server rejects a flow before the first step when the flow or one of those
+fragments has script: steps, or tool: steps that take a file or record a flow.
+With neither, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
@@ -1217,6 +1215,21 @@ function isFlowReport(data: unknown): data is FlowReport {
 }
 
 /**
+ * The baselines a run over a link returned that this client could not write,
+ * as `<path>: <reason>`: the tools client leaves `{ path, error }` in place of
+ * each one. They fail the run, whose report passed on baselines that are not
+ * on disk.
+ */
+function unwrittenBaselines(report: FlowReport): string[] {
+  const writes = (report as { baselineWrites?: unknown }).baselineWrites;
+  if (!Array.isArray(writes)) return [];
+  return writes.flatMap((write: unknown) => {
+    const { path: file, error } = (write ?? {}) as { path?: unknown; error?: unknown };
+    return typeof file === "string" && typeof error === "string" ? [`${file}: ${error}`] : [];
+  });
+}
+
+/**
  * One flow's outcome in a directory run — also the --json aggregate entry. The
  * failure signal keeps --json-stream's spelling, so one consumer reads both;
  * `error` is prose assembled per failure, never a classification.
@@ -1340,8 +1353,17 @@ async function runFlowDirectory(
       flowPath,
       baseUrl
     );
-    results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
+    const unwritten = unwrittenBaselines(report);
+    results.push({ path: rel, status: report.ok && !unwritten.length ? "pass" : "fail", report });
     if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
+    else if (unwritten.length) {
+      failures.push({
+        path: rel,
+        headline: "baselines not written",
+        detail: unwritten.join("\n"),
+        rerun,
+      });
+    }
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
@@ -1750,5 +1772,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     console.log(renderReport(report));
   }
 
-  return exitAfterFlush(report.ok ? 0 : 1);
+  const unwritten = unwrittenBaselines(report);
+  if (!args.json && !args.jsonStream) {
+    for (const line of unwritten)
+      console.log(`  ${STATUS_GLYPH.error} baseline not written: ${line}`);
+  }
+  return exitAfterFlush(report.ok && unwritten.length === 0 ? 0 : 1);
 }

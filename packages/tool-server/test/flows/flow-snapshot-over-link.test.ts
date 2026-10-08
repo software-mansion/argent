@@ -14,9 +14,10 @@ import { redirectTmpdir } from "../helpers/tmpdir-env";
 /**
  * A `snapshot:` step of a flow uploaded over a link, end to end through the
  * HTTP layer: the REAL flow-execute and runSnapshot, with a fake client that
- * reads the NDJSON stream and answers each client-request over the real answer
- * route, keeping the baselines on its own disk. Only the device edges are
- * stubbed: the settle, and the `screenshot` tool the step registry serves.
+ * sends the run's baselines as members of the flow's file input, keeps them on
+ * its own "disk", and writes back the baselines the result returns. Only the
+ * device edges are stubbed: the settle, and the `screenshot` tool the step
+ * registry serves.
  */
 
 vi.mock("../../src/utils/update-checker", () => ({
@@ -62,7 +63,6 @@ const FLOW_TEXT = serializeFlow({
   executionPrerequisite: "",
   steps: [{ kind: "snapshot", name: "title" }],
 });
-const ALL_OPS = ["resolve-file", "read-file", "write-file"];
 
 let workDir = "";
 let capture: string;
@@ -145,68 +145,60 @@ async function* ndjsonLines(
   }
 }
 
-interface ClientRequest {
-  op: string;
-  args: Record<string, unknown>;
+interface Directive {
+  __argentClientFile: true;
+  path: string;
+  content: string;
+  encoding?: string;
 }
 
 /**
- * The client's side of the channel, over a map of its files: it resolves the
- * root flow (through `links`, as a symlinked spelling would), reads a baseline,
- * and stores what it is asked to write. `refuse` turns an op into a refusal.
+ * The client's side, over a map of its files: `links` maps a spelled root
+ * flow to its real file, `refused` turns a baseline into a refused member.
  */
-function fakeClient(opts: { links?: Record<string, string>; refuse?: Record<string, string> }) {
+function fakeClient(opts: { links?: Record<string, string>; refused?: Record<string, string> }) {
   const disk = new Map<string, Buffer>();
-  const answer = (req: ClientRequest): Record<string, unknown> => {
-    const refusal = opts.refuse?.[req.op];
-    if (refusal !== undefined) return { ok: false, error: refusal };
-    if (req.op === "resolve-file") {
-      const spelled = path.posix.join(req.args.anchorDir as string, req.args.target as string);
-      const canonical = opts.links?.[spelled] ?? spelled;
-      const content = disk.get(canonical);
-      return content === undefined
-        ? { ok: true, canonical, spelling: { state: "absent" }, exists: false }
-        : {
-            ok: true,
-            canonical,
-            spelling: { state: "listed" },
-            exists: true,
-            content: content.toString("base64"),
-          };
-    }
-    if (req.op === "read-file") {
-      const content = disk.get(req.args.path as string);
-      return content === undefined
-        ? { ok: true, exists: false }
-        : {
-            ok: true,
-            exists: true,
-            size: content.length,
-            mtimeMs: 1,
-            content: content.toString("base64"),
-          };
-    }
-    if (req.op === "write-file") {
-      const replaced = disk.has(req.args.path as string);
-      disk.set(req.args.path as string, Buffer.from(req.args.content as string, "base64"));
-      return { ok: true, written: req.args.path, replaced };
-    }
-    return { ok: false, error: `no such op ${req.op}` };
+  /** The baselines a call sends: every file in the run's directory, by name or with bytes. */
+  const members = (dir: string, update: boolean) =>
+    [...disk.keys()]
+      .filter((file) => path.posix.dirname(file) === dir && file.endsWith(".png"))
+      .map((file) => {
+        const refusal = opts.refused?.[file];
+        const base = { role: "baseline", key: file, path: file };
+        if (refusal !== undefined) return { ...base, state: "refused", error: refusal };
+        if (update) return { ...base, state: "listed" };
+        const bytes = disk.get(file)!;
+        return { ...base, size: bytes.length, mtimeMs: 1, content: bytes.toString("base64") };
+      });
+  /** Writes what the result returns, as the argent client does. */
+  const writeBack = (data: unknown): Directive[] => {
+    const writes = ((data as { baselineWrites?: Directive[] }).baselineWrites ?? []).filter(
+      (d) => d.encoding === "base64"
+    );
+    for (const d of writes) disk.set(d.path, Buffer.from(d.content, "base64"));
+    return writes;
   };
-  return { disk, answer };
+  return { disk, links: opts.links ?? {}, members, writeBack };
 }
 
 /**
  * One flow-execute call over the stream, as the argent client makes it for an
- * uploaded flow: every client-request line is answered over the real route.
- * Resolves with the requests in order and the terminal line.
+ * uploaded flow: the flow's file input carries its real path and the run's
+ * baselines (`members: false` sends none, as an older client does). Resolves
+ * with the terminal line, after writing back the baselines it returned.
  */
 async function runOverLink(
   base: string,
   client: ReturnType<typeof fakeClient>,
-  opts: { clientPath?: string; ops?: string[]; updateBaselines?: boolean } = {}
-): Promise<{ requests: ClientRequest[]; terminal: Record<string, unknown> }> {
+  opts: { clientPath?: string; updateBaselines?: boolean; members?: false } = {}
+): Promise<{ terminal: Record<string, unknown>; written: Directive[] }> {
   const clientPath = opts.clientPath ?? ROOT_FLOW;
+  const canonical = client.links[clientPath] ?? clientPath;
+  const dir = path.posix.join(
+    path.posix.dirname(canonical),
+    "__baselines__",
+    path.posix.basename(canonical, ".yaml")
+  );
   const res = await fetch(`${base}/tools/flow-execute`, {
     method: "POST",
     headers: { "content-type": "application/json", "accept": "application/x-ndjson" },
@@ -219,33 +211,26 @@ async function runOverLink(
         size: Buffer.byteLength(FLOW_TEXT),
         mtimeMs: 1,
         content: Buffer.from(FLOW_TEXT).toString("base64"),
+        ...(opts.members === false
+          ? {}
+          : {
+              canonical,
+              spelling: { state: "listed" },
+              members: client.members(dir, opts.updateBaselines === true),
+            }),
       },
       ...(opts.updateBaselines ? { updateBaselines: true } : {}),
-      client_services: { ops: opts.ops ?? ALL_OPS, roots: ["/client"] },
     }),
   });
   expect(res.headers.get("content-type")).toContain("application/x-ndjson");
 
-  const requests: ClientRequest[] = [];
   let terminal: Record<string, unknown> | undefined;
   for await (const line of ndjsonLines(res.body!)) {
-    if (line.event === "client-request") {
-      const req = { op: line.op as string, args: line.args as Record<string, unknown> };
-      requests.push(req);
-      const posted = await fetch(
-        `${base}/invocations/${line.invocation as string}/client-responses`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ id: line.id, ...client.answer(req) }),
-        }
-      );
-      expect(posted.status).toBe(200);
-    } else if (line.event === "result" || line.event === "error") {
-      terminal = line;
-    }
+    expect(line.event).not.toBe("client-request");
+    if (line.event === "result" || line.event === "error") terminal = line;
   }
-  return { requests, terminal: terminal! };
+  const written = terminal?.event === "result" ? client.writeBack(terminal.data) : [];
+  return { terminal: terminal!, written };
 }
 
 /** The server's tmpdir as listed at the call's cleanup (see the file-inputs mock). */
@@ -255,27 +240,19 @@ async function serverFilesAtCleanup(): Promise<string[]> {
 }
 
 describe("snapshot: steps over a link", () => {
-  it("writes the baseline on the client under updateBaselines, and nothing on the server", async () => {
+  it("returns the baseline for the client to write under updateBaselines, and writes nothing on the server", async () => {
     const steps = stepRegistry();
     handle = createHttpApp(httpRegistry(steps));
     const base = await listen(handle.app);
     const client = fakeClient({});
-    client.disk.set(ROOT_FLOW, Buffer.from(FLOW_TEXT));
 
-    const { requests, terminal } = await runOverLink(base, client, { updateBaselines: true });
+    const { terminal, written } = await runOverLink(base, client, { updateBaselines: true });
 
-    expect(requests).toEqual([
-      {
-        op: "resolve-file",
-        args: { anchorDir: "/client/flows", target: "withsnap.yaml", kind: "flow" },
-      },
-      // The write itself says whether a baseline was there: nothing is read.
-      { op: "write-file", args: { path: BASELINE, content: expect.any(String) } },
-    ]);
-    // The capture itself landed on the client, a PNG of the device's size.
-    const written = client.disk.get(BASELINE)!;
-    expect(written.equals(captureBytes)).toBe(true);
-    expect(PNG.sync.read(written)).toMatchObject({ width: 30, height: 60 });
+    // The capture itself goes back to the client, a PNG of the device's size.
+    expect(written.map((d) => d.path)).toEqual([BASELINE]);
+    const bytes = client.disk.get(BASELINE)!;
+    expect(bytes.equals(captureBytes)).toBe(true);
+    expect(PNG.sync.read(bytes)).toMatchObject({ width: 30, height: 60 });
 
     expect(terminal.event).toBe("result");
     const data = terminal.data as {
@@ -283,7 +260,7 @@ describe("snapshot: steps over a link", () => {
       steps: { kind: string; status: string; reason: string }[];
     };
     expect(data.ok).toBe(true);
-    // The reason names the file the client wrote; no artifact names a server
+    // The reason names the file the client writes; no artifact names a server
     // file as the baseline.
     expect(data.steps).toEqual([
       expect.objectContaining({
@@ -306,25 +283,36 @@ describe("snapshot: steps over a link", () => {
     expect(serverFiles.filter((f) => f.includes("__baselines__"))).toEqual([]);
   });
 
+  it("says a baseline the client listed by name was updated", async () => {
+    handle = createHttpApp(httpRegistry(stepRegistry()));
+    const base = await listen(handle.app);
+    const client = fakeClient({});
+    client.disk.set(BASELINE, Buffer.from("old"));
+
+    const { terminal, written } = await runOverLink(base, client, { updateBaselines: true });
+
+    expect(written.map((d) => d.path)).toEqual([BASELINE]);
+    expect(terminal.data).toMatchObject({
+      ok: true,
+      steps: [expect.objectContaining({ reason: `baseline updated (${BASELINE})` })],
+    });
+  });
+
   it("compares against the baseline the client stored in an earlier run", async () => {
     handle = createHttpApp(httpRegistry(stepRegistry()));
     const base = await listen(handle.app);
     const client = fakeClient({});
-    client.disk.set(ROOT_FLOW, Buffer.from(FLOW_TEXT));
 
     await runOverLink(base, client, { updateBaselines: true });
     expect(client.disk.has(BASELINE)).toBe(true);
-    // A client offers write-file only for a call that updates baselines.
-    const { requests, terminal } = await runOverLink(base, client, {
-      ops: ["resolve-file", "read-file"],
-    });
+    const { terminal, written } = await runOverLink(base, client);
 
-    // No write: a plain run only reads the baseline.
-    expect(requests.map((r) => r.op)).toEqual(["resolve-file", "read-file"]);
-    expect(requests[1]!.args).toEqual({ path: BASELINE });
+    // A plain run returns nothing to write.
+    expect(written).toEqual([]);
     expect(terminal.event).toBe("result");
     const data = terminal.data as { ok: boolean; steps: { status: string; reason: string }[] };
     expect(data.ok).toBe(true);
+    expect(data).not.toHaveProperty("baselineWrites");
     expect(data.steps).toEqual([
       expect.objectContaining({
         status: "pass",
@@ -333,23 +321,31 @@ describe("snapshot: steps over a link", () => {
     ]);
   });
 
+  it("fails a compare with no baseline, as a co-located run does", async () => {
+    handle = createHttpApp(httpRegistry(stepRegistry()));
+    const base = await listen(handle.app);
+
+    const { terminal } = await runOverLink(base, fakeClient({}));
+
+    const data = terminal.data as { ok: boolean; steps: { status: string; reason: string }[] };
+    expect(data.ok).toBe(false);
+    expect(data.steps[0]!.status).toBe("fail");
+    expect(data.steps[0]!.reason).toContain("no baseline");
+  });
+
   it("keys the baselines beside the root flow's real file when the client path is a symlink", async () => {
     handle = createHttpApp(httpRegistry(stepRegistry()));
     const base = await listen(handle.app);
     const real = "/client/real/withsnap.yaml";
     const client = fakeClient({ links: { "/client/flows/alias.yaml": real } });
-    client.disk.set(real, Buffer.from(FLOW_TEXT));
 
-    const { requests, terminal } = await runOverLink(base, client, {
+    const { terminal, written } = await runOverLink(base, client, {
       clientPath: "/client/flows/alias.yaml",
       updateBaselines: true,
     });
 
     const realBaseline = "/client/real/__baselines__/withsnap/title__ios-30x60.png";
-    expect(requests.map((r) => [r.op, r.args.path ?? r.args.target])).toEqual([
-      ["resolve-file", "alias.yaml"],
-      ["write-file", realBaseline],
-    ]);
+    expect(written.map((d) => d.path)).toEqual([realBaseline]);
     // The report keeps the name the caller used.
     expect(terminal.data).toMatchObject({
       flow: "alias",
@@ -358,30 +354,26 @@ describe("snapshot: steps over a link", () => {
     });
   });
 
-  it.each([[["resolve-file"]], [["resolve-file", "read-file"]]])(
-    "refuses an update before step 1 for a client that offers only %j",
-    async (ops) => {
+  it.each([false, true])(
+    "refuses a snapshot before step 1 for a client that sends no files with the flow (updateBaselines %s)",
+    async (updateBaselines) => {
       const steps = stepRegistry();
       handle = createHttpApp(httpRegistry(steps));
       const base = await listen(handle.app);
-      const client = fakeClient({});
-      client.disk.set(ROOT_FLOW, Buffer.from(FLOW_TEXT));
 
-      const { requests, terminal } = await runOverLink(base, client, {
-        ops,
-        updateBaselines: true,
+      const { terminal } = await runOverLink(base, fakeClient({}), {
+        members: false,
+        updateBaselines,
       });
 
-      expect(requests).toEqual([]);
       expect(terminal).toMatchObject({
         event: "error",
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       });
       expect(terminal.error).toContain("step 1: snapshot: title");
       expect(terminal.error).toContain(
-        "This tool-server serves snapshot: steps for a client that offers the resolve-file, " +
-          "read-file and write-file client services. Update the argent CLI or MCP adapter on " +
-          "the client."
+        "This tool-server runs snapshot: steps for a client that sends their baselines with " +
+          "the call. Update the argent CLI or MCP adapter on the client."
       );
       expect(vi.mocked(steps.invokeTool)).not.toHaveBeenCalled();
     }
@@ -401,40 +393,42 @@ describe("snapshot: steps over a link", () => {
     handle = createHttpApp(httpRegistry(stepRegistry()));
     const base = await listen(handle.app);
     const client = fakeClient({});
-    client.disk.set(ROOT_FLOW, Buffer.from(FLOW_TEXT));
     client.disk.set(BASELINE, bytes());
 
-    const { requests, terminal } = await runOverLink(base, client, {
-      ops: ["resolve-file", "read-file"],
-    });
+    const { terminal } = await runOverLink(base, client);
 
-    expect(requests.map((r) => r.op)).toEqual(["resolve-file", "read-file"]);
     const data = terminal.data as { ok: boolean; steps: { status: string; reason: string }[] };
     expect(data.ok).toBe(false);
     expect(data.steps).toHaveLength(1);
     expect(data.steps[0]!.status).toBe("error");
-    // The client's file, not the server's scratch copy of it, which is gone.
+    // The client's file, not the server's copies of it.
     const prefix = `Could not read PNG at ${BASELINE}: `;
     expect(data.steps[0]!.reason.slice(0, prefix.length)).toBe(prefix);
     expect(data.steps[0]!.reason).not.toContain("argent-flow-baseline-");
+    expect(data.steps[0]!.reason).not.toContain("argent-file-input-");
   });
 
-  it("reports the step as an error with the client's text when the client refuses the read", async () => {
-    handle = createHttpApp(httpRegistry(stepRegistry()));
-    const base = await listen(handle.app);
-    const client = fakeClient({ refuse: { "read-file": "the path is outside the served roots" } });
-    client.disk.set(ROOT_FLOW, Buffer.from(FLOW_TEXT));
+  it.each([false, true])(
+    "reports the step as an error with the client's text when the client refused the baseline (updateBaselines %s)",
+    async (updateBaselines) => {
+      handle = createHttpApp(httpRegistry(stepRegistry()));
+      const base = await listen(handle.app);
+      const client = fakeClient({
+        refused: { [BASELINE]: `${BASELINE} links to a file that is not a PNG file` },
+      });
+      client.disk.set(BASELINE, Buffer.from("x"));
 
-    const { requests, terminal } = await runOverLink(base, client);
+      const { terminal, written } = await runOverLink(base, client, { updateBaselines });
 
-    expect(requests.map((r) => r.op)).toEqual(["resolve-file", "read-file"]);
-    const data = terminal.data as { ok: boolean; steps: { status: string; reason: string }[] };
-    expect(data.ok).toBe(false);
-    expect(data.steps).toHaveLength(1);
-    expect(data.steps[0]!.status).toBe("error");
-    expect(data.steps[0]!.reason).toBe(
-      `the client refused the read-file request for "${BASELINE}": ` +
-        "the path is outside the served roots"
-    );
-  });
+      const data = terminal.data as { ok: boolean; steps: { status: string; reason: string }[] };
+      expect(data.ok).toBe(false);
+      expect(data.steps).toHaveLength(1);
+      expect(data.steps[0]!.status).toBe("error");
+      expect(data.steps[0]!.reason).toBe(
+        `the client refused to ${updateBaselines ? "write" : "send"} "${BASELINE}": ` +
+          `${BASELINE} links to a file that is not a PNG file`
+      );
+      expect(written).toEqual([]);
+    }
+  );
 });

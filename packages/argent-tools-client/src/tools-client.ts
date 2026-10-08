@@ -1,18 +1,4 @@
-import { realpath, stat } from "node:fs/promises";
-import * as path from "node:path";
-
-import {
-  CLIENT_FILE_OP_TIMEOUT_MS,
-  CLIENT_REQUEST_EVENT,
-  FAILURE_CODES,
-  FLOW_FILE_NAME_PATTERN,
-  FLOW_NAME_PATTERN,
-  describeParamIssues,
-  type ClientRequestLine,
-  type ClientResponseBody,
-  type ClientServicesAdvert,
-} from "@argent/registry";
-
+import { describeParamIssues } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
@@ -22,7 +8,6 @@ import {
   type FileInputSpec,
   type FileInputWire,
 } from "./file-inputs.js";
-import { createClientServicesHandler, type ClientServicesHandler } from "./client-services.js";
 
 export interface ToolMeta {
   name: string;
@@ -31,8 +16,6 @@ export interface ToolMeta {
   outputHint?: string;
   /** Args that name files on the CALLER's machine — see file-inputs.ts. */
   fileInputs?: FileInputSpec[];
-  /** Set when the tool can ask the caller for project files — see client-services.ts. */
-  clientServices?: ClientServicesAdvert;
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
@@ -79,8 +62,7 @@ export interface CreateToolsClientOptions {
    * /tools), so the caller can disable its timeout. `meta.carriesUpload` is true
    * when the body names an upload: the tool-server consumes an upload on the
    * first request that reaches it, so the caller must not abort or resend that
-   * request. POST /upload and the client-services answer POSTs keep the global
-   * fetch.
+   * request. POST /upload keeps the global fetch.
    */
   fetchImpl?: (
     url: string,
@@ -88,10 +70,9 @@ export interface CreateToolsClientOptions {
     meta: { longRunning: boolean; carriesUpload: boolean }
   ) => Promise<Response>;
   /**
-   * Receives each diagnostic line of client services (a request line it had to
-   * drop, a request it gave up, an answer the tool-server did not take, and
-   * the request log that `ARGENT_CLIENT_SERVICES_LOG=1` turns on), without a
-   * trailing newline.
+   * Receives each diagnostic line of the client, without a trailing newline:
+   * the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on, and each
+   * snapshot baseline a run returned that could not be written here.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
    */
@@ -128,241 +109,6 @@ function authHeaders(token: string | undefined): Record<string, string> {
 }
 
 /**
- * How a stream's `client-request` lines are answered: the handler, where to
- * post, and where a diagnostic goes.
- */
-interface ClientServicesLink {
-  handler: ClientServicesHandler;
-  answerUrl: (invocation: string) => string;
-  headers: Record<string, string>;
-  diagnose: (message: string) => void;
-}
-
-/**
- * A request line as the tool-server's own messages name it: its op and its
- * target, or the path of a baseline.
- */
-function describeRequest(msg: ClientRequestLine): string {
-  const { op, args } = msg as { op?: unknown; args?: unknown };
-  const named = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
-  const target = named.target ?? named.path;
-  return (
-    `the ${typeof op === "string" ? op : "unknown"} request` +
-    (typeof target === "string" ? ` for "${target}"` : "")
-  );
-}
-
-/**
- * The handler's answer, or undefined once the tool-server has stopped waiting
- * for it: a local read can hang (a file on an unresponsive network mount), and
- * an answer after that settles nothing.
- */
-async function answerInTime(
-  link: ClientServicesLink,
-  msg: ClientRequestLine
-): Promise<ClientResponseBody | undefined> {
-  let timer: NodeJS.Timeout | undefined;
-  const expired = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), CLIENT_FILE_OP_TIMEOUT_MS);
-    // The timer alone must not keep the process up after the call ended.
-    timer.unref();
-  });
-  try {
-    return await Promise.race([link.handler.handle(msg), expired]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** An error's message, with its cause's: fetch says only "fetch failed" itself. */
-function errorText(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  return err.cause instanceof Error ? `${err.message} (${err.cause.message})` : err.message;
-}
-
-/**
- * The `error` of the tool-server's own refusal of an answer, or undefined when
- * the reply is not one. Its answer route sends, each as a JSON object with
- * `error` as its only field: 400 for a malformed answer, 404 for one after its
- * timeout or after the call ended, 409 for a second one, 413 for one above the
- * size cap (which it turns into a refusal of the request). The route was
- * reached and the request is settled there, so the run goes on and its report
- * says what became of it. A proxy's JSON error page carries more fields
- * (a status, a path, a time), so it is not taken for one.
- */
-function answerRouteRefusal(status: number, text: string): string | undefined {
-  if (![400, 404, 409, 413].includes(status)) return undefined;
-  try {
-    const body = JSON.parse(text) as unknown;
-    if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
-    const { error, ...rest } = body as { error?: unknown };
-    return typeof error === "string" && Object.keys(rest).length === 0 ? error : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The failure of a call whose answer to `request` did not reach the tool-server. */
-function undeliveredAnswer(request: string, url: string, reason: string): ToolInvocationError {
-  return new ToolInvocationError(
-    `The answer to ${request} did not reach the tool-server: POST ${url} ${reason}. The call ` +
-      `was stopped. A reverse proxy between the client and the tool-server must forward that ` +
-      `route while the call's stream is open.`,
-    { errorCode: FAILURE_CODES.FLOW_CLIENT_NOT_ANSWERING, errorKind: "network" }
-  );
-}
-
-/** What a proxy that refuses an answer with 413 must change. */
-const BODY_LIMIT_ADVICE =
-  "A proxy between the client and the tool-server limits the size of a request body. The " +
-  "proxy must accept a body of up to 48 MB on POST /invocations/<invocation>/client-responses, " +
-  "for example client_max_body_size 48m in nginx";
-
-/**
- * Post a short refusal for request `id` in place of an answer that a proxy
- * refused with 413: the proxy limits the size of a request body, and an
- * answer to `read-file` carries the whole baseline. The waiting step then
- * fails at once and names the cause. True when the request is settled on the
- * tool-server: it took the refusal, or its own route answered for the id (one
- * it no longer waits for, or one with an answer), as for any other answer, or
- * the refusal got no reply in 30 s, when the tool-server has stopped waiting
- * ({@link answerClientRequest}). Each outcome is at most one diagnostic, and
- * the last one only while the call is open.
- */
-async function refuseOversizedAnswer(
-  link: ClientServicesLink,
-  url: string,
-  request: string,
-  id: string,
-  status: string,
-  callOpen: () => boolean
-): Promise<boolean> {
-  const refusal: ClientResponseBody = {
-    id,
-    ok: false,
-    error: `the answer did not reach the tool-server (${status}). ${BODY_LIMIT_ADVICE}`,
-  };
-  const proxied = `[client-services] a proxy refused the answer to ${request} (${status})`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...link.headers },
-      body: JSON.stringify(refusal),
-      signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
-    });
-  } catch (err) {
-    if (!(err instanceof Error && err.name === "TimeoutError")) return false;
-    if (callOpen()) {
-      link.diagnose(
-        `${proxied}, and the refusal got no reply within ` +
-          `${Math.round(CLIENT_FILE_OP_TIMEOUT_MS / 1000)} s. ${BODY_LIMIT_ADVICE}`
-      );
-    }
-    return true;
-  }
-  const text = await res.text().catch(() => "");
-  if (res.ok) {
-    link.diagnose(`${proxied}; the request was refused instead`);
-    return true;
-  }
-  const settled = answerRouteRefusal(res.status, text);
-  if (settled === undefined) return false;
-  link.diagnose(
-    `${proxied}, and the tool-server did not take the refusal either: ${res.status} ${settled}`
-  );
-  return true;
-}
-
-/**
- * Answer one request line and post the answer. Never rejects. Resolves to the
- * failure of the call when the answer cannot reach the tool-server: the post
- * failed, or got a reply the tool-server's answer route does not send, which
- * comes from a proxy in between. A proxy's 413 is the one such reply that
- * leaves the route open: the request is refused in a short answer instead
- * ({@link refuseOversizedAnswer}), and only when that one does not reach the
- * tool-server either does the call fail. Anything else is at most one
- * diagnostic, and the server settles the request on its side: a line without
- * a string id or invocation names no answer to post, so it is dropped. The
- * handler and the post each wait 30 s, the time the tool-server waits for the
- * answer. The tool-server starts its wait before the line leaves it, so it
- * has stopped waiting by the time either of them gives up.
- *
- * So a post that gets no reply in its 30 s does not fail the call: the
- * tool-server settled the request as a timeout, and the call goes on to the
- * report that says so. A slow connection that takes longer than that to move
- * a baseline must not lose the report. `callOpen` tells whether the call
- * still waits for that report, and only then is the post's timeout worth a
- * diagnostic.
- */
-async function answerClientRequest(
-  link: ClientServicesLink,
-  msg: ClientRequestLine,
-  callOpen: () => boolean
-): Promise<ToolInvocationError | undefined> {
-  const { id, invocation } = msg as { id?: unknown; invocation?: unknown };
-  if (typeof id !== "string" || typeof invocation !== "string") {
-    link.diagnose("[client-services] ignored a request line without a string id");
-    return undefined;
-  }
-  const request = describeRequest(msg);
-  const seconds = Math.round(CLIENT_FILE_OP_TIMEOUT_MS / 1000);
-  let body: ClientResponseBody | undefined;
-  try {
-    body = await answerInTime(link, msg);
-  } catch (err) {
-    // The handler is built never to throw; should it, the request goes
-    // unanswered like one it gave up.
-    link.diagnose(`[client-services] ${request} failed on this client: ${errorText(err)}`);
-    return undefined;
-  }
-  if (body === undefined) {
-    link.diagnose(
-      `[client-services] ${request} did not finish on this client within ${seconds} s, the ` +
-        `time the tool-server waits for it; no answer was sent`
-    );
-    return undefined;
-  }
-  const url = link.answerUrl(invocation);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...link.headers },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(CLIENT_FILE_OP_TIMEOUT_MS),
-    });
-  } catch (err) {
-    if (!(err instanceof Error && err.name === "TimeoutError")) {
-      return undeliveredAnswer(request, url, `failed: ${errorText(err)}`);
-    }
-    if (callOpen()) {
-      link.diagnose(
-        `[client-services] the answer to ${request} got no reply within ${seconds} s ` +
-          `(POST ${url}). The tool-server has stopped waiting for it, and the report of the ` +
-          `call says what became of the request`
-      );
-    }
-    return undefined;
-  }
-  // Read whole, which also releases the connection: a refusal names its reason.
-  const text = await res.text().catch(() => "");
-  if (res.ok) return undefined;
-  const refusal = answerRouteRefusal(res.status, text);
-  if (refusal === undefined) {
-    const status = [res.status, res.statusText].filter(Boolean).join(" ");
-    if (res.status !== 413) return undeliveredAnswer(request, url, `answered ${status}`);
-    if (await refuseOversizedAnswer(link, url, request, id, status, callOpen)) return undefined;
-    return undeliveredAnswer(request, url, `answered ${status}. ${BODY_LIMIT_ADVICE}`);
-  }
-  link.diagnose(
-    `[client-services] the tool-server did not take the answer to ${request}: ` +
-      `${res.status} ${refusal}`
-  );
-  return undefined;
-}
-
-/**
  * The stream of a call ended before its result line: the tool may have acted
  * already, which a caller must know before it runs the tool again.
  */
@@ -383,17 +129,10 @@ function brokenStream(name: string, reason: string, progress: number, cause?: un
 async function consumeToolStream(
   name: string,
   body: ReadableStream<Uint8Array>,
-  onProgress: (event: unknown) => void,
-  services?: ClientServicesLink
+  onProgress: (event: unknown) => void
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
   let progress = 0;
-  // The first answer that could not reach the tool-server. It fails the call
-  // unless the stream delivered its result first.
-  let undelivered: ToolInvocationError | undefined;
-  // Whether the stream is still being read: an answer still in flight after
-  // it ended settles nothing, and its diagnostics would land in a later call.
-  let open = true;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
@@ -408,20 +147,6 @@ async function consumeToolStream(
     if (msg.event === "progress") {
       progress++;
       onProgress(msg.data);
-    } else if (msg.event === CLIENT_REQUEST_EVENT) {
-      // Without a handler the line is ignored, as any unknown event is. An
-      // answer is never awaited: the tool-server sends the result or error
-      // line only once every request was answered or timed out, so an answer
-      // still in flight when the stream ends settles nothing.
-      if (!services) return;
-      void answerClientRequest(services, msg as ClientRequestLine, () => open).then((failure) => {
-        if (failure === undefined || undelivered) return;
-        // Rather than wait out the server's timeout for an answer that will
-        // not come, hang up: the server then stops the call, and the read
-        // loop ends with this failure.
-        undelivered = failure;
-        void reader.cancel().catch(() => {});
-      });
     } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
     else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -433,9 +158,9 @@ async function consumeToolStream(
 
   const decoder = new TextDecoder();
   // The pieces of the line that has not ended yet, joined once its newline
-  // arrives. A request line can carry a baseline as base64, tens of MB: adding
-  // each chunk to one string and searching that string again would copy and
-  // scan the whole line once per chunk.
+  // arrives. The result line can carry baselines as base64, tens of MB:
+  // adding each chunk to one string and searching that string again would
+  // copy and scan the whole line once per chunk.
   let pieces: string[] = [];
   const take = (text: string): void => {
     let start = 0;
@@ -455,35 +180,25 @@ async function consumeToolStream(
       try {
         chunk = await reader.read();
       } catch (err) {
-        throw (
-          undelivered ??
-          brokenStream(name, err instanceof Error ? err.message : String(err), progress, err)
-        );
+        throw brokenStream(name, err instanceof Error ? err.message : String(err), progress, err);
       }
       const { done, value } = chunk;
       if (done) break;
       take(decoder.decode(value, { stream: true }));
     }
-    // A hang-up leaves at most a cut line behind.
-    if (!undelivered) {
-      take(decoder.decode());
-      const last = pieces.join("");
-      if (last.trim()) handleLine(last);
-    }
+    take(decoder.decode());
+    const last = pieces.join("");
+    if (last.trim()) handleLine(last);
   } catch (err) {
     // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
     throw err;
-  } finally {
-    open = false;
   }
 
   if (!final) {
-    throw undelivered ?? brokenStream(name, "the stream ended without a result", progress);
+    throw brokenStream(name, "the stream ended without a result", progress);
   }
-  // File boundary, inbound: same directive handling as the buffered path.
-  const { result: data } = await applyClientFileDirectives(final.data);
-  return { data, note: final.note };
+  return { data: final.data, note: final.note };
 }
 
 /**
@@ -498,108 +213,6 @@ export function errorBodyMessage(body: {
 }): string | undefined {
   if (Array.isArray(body.issues) && typeof body.message === "string") return body.message;
   return body.error ?? body.message;
-}
-
-/**
- * The handler for one call, or null; then the call carries no
- * `client_services` and is not made a stream for them. Null when the root
- * flow composes nothing ({@link createClientServicesHandler}), and for
- * arguments the tool-server refuses before it asks for anything: a
- * `project_root` or `flow_path` that is not absolute or has a `..` segment, a
- * `flow_path` not named `<flow-name>.yaml`, a `name` outside the flow-name
- * pattern, or not exactly one of `flow_path` and `name`. Roots taken from
- * those would reach a server that does not refuse them.
- *
- * The handler serves the root flow and what it composes, inside these roots:
- * the project, its `.argent/flows` directory (a project may keep that one as
- * a symlink to a tree outside the project, and the flows there are still the
- * project's own), the directory of `flow_path` when given, so a flow
- * addressed outside the project can still reach its own fragments, and the
- * directory the root flow file REALLY lives in: a `run:` target resolves
- * beside the real file, as it does on one computer, so a root flow that is a
- * symlink serves the fragments next to its target. A root flow saved under
- * `<P>/.argent/flows/`, by its spelling or by its real path, also serves the
- * project `<P>` it belongs to: the CLI sends its working directory as
- * `project_root`, and the flow's fragments in its own project must not depend
- * on where the shell stands. Every root is served by its real location; one
- * that does not exist is dropped.
- */
-async function clientServicesHandlerFor(
-  advert: ClientServicesAdvert,
-  args: unknown,
-  log: (line: string) => void
-): Promise<ClientServicesHandler | null> {
-  if (typeof args !== "object" || args === null) return null;
-  const { project_root, flow_path, name } = args as Record<string, unknown>;
-  if (!isResolvedAbsolute(project_root)) return null;
-  const flowsDir = path.join(project_root, ".argent", "flows");
-  let rootFlow: string;
-  if (flow_path !== undefined && name === undefined) {
-    if (!isResolvedAbsolute(flow_path)) return null;
-    if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flow_path))) return null;
-    rootFlow = flow_path;
-  } else if (name !== undefined && flow_path === undefined) {
-    if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return null;
-    rootFlow = path.join(flowsDir, `${name}.yaml`);
-  } else {
-    return null;
-  }
-  const roots = [project_root, flowsDir, path.dirname(rootFlow)];
-  // Only the real file of a YAML flow adds its directory, the rule
-  // resolve-file applies: a committed link to a directory or another kind of
-  // file must not widen what this client serves.
-  const resolved = await realpath(rootFlow).catch(() => null);
-  const real =
-    resolved !== null &&
-    /\.ya?ml$/i.test(resolved) &&
-    (await stat(resolved).then(
-      (st) => st.isFile(),
-      () => false
-    ))
-      ? resolved
-      : null;
-  let baselineDir: string | null = null;
-  if (real !== null) {
-    roots.push(path.dirname(real));
-    // Where the tool-server keys this run's baselines: beside the root flow's
-    // real file (the canonical that resolve-file answers for it), under that
-    // file's stem, or under the flow name when the stem is not a flow name (a
-    // `.yml` file, a name with a space). The flow name is `name`, or the
-    // basename of `flow_path`.
-    const stem = path.basename(real, ".yaml");
-    const key = FLOW_NAME_PATTERN.test(stem) ? stem : path.basename(rootFlow, ".yaml");
-    baselineDir = path.join(path.dirname(real), "__baselines__", key);
-  }
-  for (const file of real === null ? [rootFlow] : [rootFlow, real]) {
-    const project = savedFlowProject(file);
-    if (project !== null) roots.push(project);
-  }
-  const updatesBaselines = (args as Record<string, unknown>).updateBaselines === true;
-  return createClientServicesHandler({
-    roots,
-    rootFlow,
-    advertised: advert.ops.filter((op) => op !== "write-file" || updatesBaselines),
-    baselineDir,
-    log,
-  });
-}
-
-/** An absolute path with no `..` segment, as the tool-server requires. */
-function isResolvedAbsolute(value: unknown): value is string {
-  return (
-    typeof value === "string" && path.isAbsolute(value) && !value.split(/[\\/]+/).includes("..")
-  );
-}
-
-/** `<P>` for a file under `<P>/.argent/flows/`, the innermost such `<P>`. */
-function savedFlowProject(file: string): string | null {
-  const parts = file.split(path.sep);
-  for (let i = parts.length - 3; i >= 0; i--) {
-    if (parts[i] === ".argent" && parts[i + 1] === "flows") {
-      return parts.slice(0, i).join(path.sep) || path.sep;
-    }
-  }
-  return null;
 }
 
 /**
@@ -641,13 +254,26 @@ function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   );
 }
 
-/** True when a prepared argument names an upload that the tool-server will consume. */
+function wiresOf(args: unknown): Partial<FileInputWire>[] {
+  if (typeof args !== "object" || args === null) return [];
+  return Object.values(args).filter(
+    (value): value is Partial<FileInputWire> =>
+      (value as Partial<FileInputWire> | null)?.[FILE_INPUT_MARKER] === true
+  );
+}
+
+/** True when a prepared argument carries members (see file-inputs.ts `collect`). */
+function carriesMembers(args: unknown): boolean {
+  return wiresOf(args).some((wire) => (wire.members?.length ?? 0) > 0);
+}
+
+/**
+ * True when a prepared argument names an upload that the tool-server will
+ * consume, or carries members: a call that sends a flow's closure is never
+ * sent twice, so a run's steps never act on the device twice.
+ */
 function carriesUpload(args: unknown): boolean {
-  if (typeof args !== "object" || args === null) return false;
-  return Object.values(args).some((value) => {
-    const wire = value as Partial<FileInputWire> | null;
-    return wire?.[FILE_INPUT_MARKER] === true && typeof wire.uploadId === "string";
-  });
+  return carriesMembers(args) || wiresOf(args).some((wire) => typeof wire.uploadId === "string");
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -709,36 +335,37 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
-    // Client services, outbound: offer to serve project files during the call
-    // when the tool can ask for them and the call is routed.
     let finalArgs = args;
-    let services: ClientServicesLink | undefined;
     const meta = await fetchTool(name);
-    if (meta?.fileInputs?.length || meta?.clientServices) {
-      if (meta.fileInputs?.length) {
-        if (remote) assertRequiredPresent(meta, args);
-        finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
-          includeContent: remote,
-          uploadEndpoint: remote ? { url, token } : undefined,
-        });
-      }
-      if (remote && meta.clientServices) {
-        const handler = await clientServicesHandlerFor(meta.clientServices, args, diagnose);
-        if (handler) {
-          finalArgs = { ...(finalArgs as Record<string, unknown>), client_services: handler.param };
-          services = {
-            handler,
-            answerUrl: (invocation) =>
-              `${url}/invocations/${encodeURIComponent(invocation)}/client-responses`,
-            headers: authHeaders(token),
-            diagnose,
-          };
-        }
-      }
+    // Where a baseline the result returns may be written (see file-inputs.ts).
+    const baselineDirs: string[] = [];
+    if (meta?.fileInputs?.length) {
+      if (remote) assertRequiredPresent(meta, args);
+      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
+        includeContent: remote,
+        uploadEndpoint: remote ? { url, token } : undefined,
+        log: diagnose,
+        baselineDirs,
+      });
     }
+    // File boundary, inbound: persist client-write directives (recorded flow
+    // YAMLs, a run's new baselines) and rewrite them to the written paths. A
+    // baseline that could not be written is said here, and stays in the
+    // result as `{ path, error }`.
+    const settle = async (data: unknown): Promise<unknown> => {
+      const applied = await applyClientFileDirectives(data, { allowedDirs: baselineDirs });
+      for (const { path: file, error } of applied.failed) {
+        diagnose(`The baseline ${file} was not written on this client: ${error}`);
+      }
+      if (process.env.ARGENT_FLOW_FILES_LOG === "1") {
+        for (const file of applied.written) diagnose(`[flow-files] baseline ${file}: written`);
+      }
+      return applied.result;
+    };
 
-    // A handler needs the stream: its requests travel on it.
-    const stream = opts?.onProgress !== undefined || services !== undefined;
+    // A call that sends a flow's closure runs that flow over a link, and its
+    // progress lines keep the connection busy through a proxy's idle timeout.
+    const stream = opts?.onProgress !== undefined || carriesMembers(finalArgs);
     const res = await doFetch(
       `${url}/tools/${encodeURIComponent(name)}`,
       {
@@ -746,8 +373,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         headers: {
           "Content-Type": "application/json",
           // A proxy that compresses the stream holds each line until its buffer
-          // fills, so a request line never gets its answer. `identity` keeps the
-          // stream uncompressed end to end.
+          // fills. `identity` keeps the stream uncompressed end to end.
           ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
           ...authHeaders(token),
         },
@@ -760,13 +386,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
     if (stream && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      const streamed = await consumeToolStream(
-        name,
-        res.body,
-        opts?.onProgress ?? (() => {}),
-        services
-      );
-      return { ...streamed, outputHint: meta?.outputHint };
+      const streamed = await consumeToolStream(name, res.body, opts?.onProgress ?? (() => {}));
+      return {
+        data: await settle(streamed.data),
+        note: streamed.note,
+        outputHint: meta?.outputHint,
+      };
     }
     let json: {
       data?: unknown;
@@ -800,10 +425,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         issues: Array.isArray(json.issues) ? json.issues : undefined,
       });
     }
-    // File boundary, inbound: persist client-write directives (e.g. recorded
-    // flow YAMLs) and rewrite them to the written paths.
-    const { result: data } = await applyClientFileDirectives(json.data);
-    return { data, note: json.note, outputHint: meta?.outputHint };
+    return { data: await settle(json.data), note: json.note, outputHint: meta?.outputHint };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };
