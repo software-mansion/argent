@@ -211,6 +211,42 @@ describe("ui-tree-match", () => {
     expect(textMatches("Saved", optionalSaved, "matches")).toBe(true);
   });
 
+  it("a regex text condition reads an element with no text as an empty string", () => {
+    const field = node({
+      identifier: "email",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^(?!.*@)", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "@", [field], "matches")).toBe(false);
+    // contains and equals keep their behavior.
+    expect(evaluateCondition("text", "x", [field], "contains")).toBe(false);
+  });
+
+  it("a regex text condition does not read an iOS text field with no text as empty", () => {
+    // The simulator's view tree has no typed text: a field holding "Rex" reads "".
+    const field = node({
+      role: "AXTextField",
+      identifier: "name",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(false);
+  });
+
+  it("a regex text condition does not read a container with hoisted text as empty", () => {
+    const container = node({
+      identifier: "status",
+      subtreeText: "user@example.com",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
+    expect(evaluateCondition("text", "^$", [container], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*@)", [container], "matches")).toBe(false);
+  });
+
   it("regex text conditions retain non-empty own and hoisted text as additive evidence", () => {
     const ownOnly = node({
       label: "Saved",

@@ -574,6 +574,19 @@ export function evaluateCondition(
         firstInReadingOrder(matches.filter(isVisible), orientation) ??
         firstInReadingOrder(matches, orientation);
       if (first === undefined || expectedText === undefined) return false;
+      // An element with no text at all reads as "", so `matches: '^$'` or a
+      // negative lookahead can check an empty field. Selector matching still
+      // skips empty text, or `.*` would select every unlabeled view. Not an
+      // iOS text field: the simulator's view tree carries no typed text, so a
+      // filled field reads "" there (an empty one reads its placeholder).
+      if (
+        textMatch === "matches" &&
+        first.role !== "AXTextField" &&
+        !assertText(first) &&
+        !nodeText(first)
+      ) {
+        return uiTreeMatchInternals.createRegExp(expectedText).test("");
+      }
       // Hoisted subtree text is ADDITIVE: a check the element's own
       // label/value satisfies on a plain describe tree must not start failing
       // because the flow adapters stamped a compound `subtreeText` on the node.
