@@ -2094,6 +2094,351 @@ describe("what the handler serves", () => {
   });
 });
 
+describe("nested flows", () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const notComposed = (target: string) => ({
+    id: "req-1",
+    ok: false,
+    error: `${target} is not a run: target of a flow this client served`,
+  });
+  const fileLine = (op: "read-file" | "write-file", args: Record<string, unknown>) =>
+    ({ event: "client-request", invocation: "inv-1", id: "req-1", op, args }) as ClientRequestLine;
+  const readLine = (file: string) => fileLine("read-file", { path: file });
+  const writeLine = (file: string, bytes: Buffer) =>
+    fileLine("write-file", { path: file, content: bytes.toString("base64") });
+
+  /** One `tool: flow-execute` step per entry, as flow YAML. */
+  const nestedSteps = (...args: Record<string, unknown>[]) =>
+    args.map((a) => `  - tool: flow-execute\n    args: ${JSON.stringify(a)}\n`).join("");
+
+  /** Make the root flow exactly these `tool: flow-execute` steps. */
+  async function nests(...args: Record<string, unknown>[]): Promise<void> {
+    await fs.writeFile(path.join(flowsDir, "root.yaml"), `steps:\n${nestedSteps(...args)}`);
+  }
+
+  const handlerWith = (
+    advertised: ClientServiceOp[],
+    { baselineDir = null as string | null, roots = [projectDir] } = {}
+  ) =>
+    createClientServicesHandler({
+      roots,
+      rootFlow: path.join(flowsDir, "root.yaml"),
+      advertised,
+      baselineDir,
+    });
+
+  it("builds a handler for a root flow whose only nesting is a flow-execute step by name, and serves that flow and what it composes", async () => {
+    await fs.writeFile(path.join(flowsDir, "child.yaml"), "steps:\n  - run: inner.yaml\n");
+    await fs.writeFile(path.join(flowsDir, "inner.yaml"), "steps:\n  - echo: inner\n");
+    await nests({ name: "child", project_root: projectDir });
+
+    // resolve-file serves a nested flow; the baseline ops alone serve it nothing.
+    expect(await handlerWith(["read-file", "write-file"])).toBeNull();
+    const handler = await handlerWith(["resolve-file"]);
+    expect(handler?.param).toEqual({ ops: ["resolve-file"], roots: [projectDir] });
+
+    // Only child.yaml names inner.yaml, and child.yaml has not been served yet.
+    expect(await handler!.handle(resolveLine(flowsDir, "inner.yaml"))).toEqual(
+      notComposed("inner.yaml")
+    );
+    // Asked for in the project's .argent/flows, and again by the nested run.
+    for (let asked = 0; asked < 2; asked++) {
+      expect(await handler!.handle(resolveLine(flowsDir, "child.yaml"))).toMatchObject({
+        ok: true,
+        exists: true,
+        canonical: path.join(flowsDir, "child.yaml"),
+      });
+    }
+    expect(await handler!.handle(resolveLine(flowsDir, "inner.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(flowsDir, "inner.yaml"),
+    });
+  });
+
+  it("serves a nested flow named inside a when: block, and one a served nested flow names", async () => {
+    await fs.writeFile(
+      path.join(flowsDir, "root.yaml"),
+      "steps:\n  - when: { visible: Home }\n    steps:\n" +
+        nestedSteps({ name: "child", project_root: projectDir }).replace(/^/gm, "    ")
+    );
+    await fs.writeFile(
+      path.join(flowsDir, "child.yaml"),
+      `steps:\n${nestedSteps({ name: "grandchild", project_root: projectDir })}`
+    );
+    await fs.writeFile(path.join(flowsDir, "grandchild.yaml"), "steps:\n  - echo: deep\n");
+    const handler = await handlerWith(["resolve-file"]);
+
+    expect(await handler!.handle(resolveLine(flowsDir, "grandchild.yaml"))).toEqual(
+      notComposed("grandchild.yaml")
+    );
+    expect(await handler!.handle(resolveLine(flowsDir, "child.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+    });
+    expect(await handler!.handle(resolveLine(flowsDir, "grandchild.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+      canonical: path.join(flowsDir, "grandchild.yaml"),
+    });
+  });
+
+  it("takes no flow from a nested step with a relative project_root, an invalid name or a .. segment", async () => {
+    await fs.writeFile(path.join(flowsDir, "child.yaml"), "steps: []\n");
+    for (const args of [
+      { name: "child", project_root: "proj" },
+      { name: "child", project_root: `${projectDir}/x/..` },
+      { name: "../child", project_root: projectDir },
+      { name: "child.yaml", project_root: projectDir },
+      { name: "child" },
+    ]) {
+      await nests(args);
+      expect(await handlerWith(ALL)).toBeNull();
+    }
+  });
+
+  it("takes no flow from a nested step by flow_path, whose .yaml path stays a tool: argument", async () => {
+    const child = path.join(flowsDir, "child.yaml");
+    await fs.writeFile(child, "steps:\n  - echo: child\n");
+    await nests({ flow_path: child });
+
+    // The runner runs no such step over a link, so it asks resolve-file for nothing.
+    expect(await handlerWith(["resolve-file"])).toBeNull();
+    const handler = await handlerWith(["resolve-file", "read-file"]);
+    expect(await handler!.handle(resolveLine(flowsDir, "child.yaml"))).toEqual(
+      notComposed("child.yaml")
+    );
+    expect(await handler!.handle(readLine(child))).toMatchObject({ ok: true, exists: true });
+  });
+
+  it("counts a nested flow of a project outside the roots, and refuses it as outside", async () => {
+    const otherFlows = path.join(tmpDir, "other", ".argent", "flows");
+    await fs.mkdir(otherFlows, { recursive: true });
+    await fs.writeFile(path.join(otherFlows, "child.yaml"), "steps: []\n");
+    await nests({ name: "child", project_root: path.join(tmpDir, "other") });
+    const handler = await handlerWith(["resolve-file"]);
+
+    expect(await handler!.handle(resolveLine(otherFlows, "child.yaml"))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: `child.yaml is outside every root this client serves (${projectDir})`,
+    });
+  });
+
+  it("serves what a recording file names once the recorded step runs that file as a nested flow", async () => {
+    const recording = path.join(flowsDir, "rec.yaml");
+    await fs.writeFile(recording, "steps:\n  - run: frag.yaml\n");
+    const handler = await createClientServicesHandler({
+      roots: [projectDir],
+      rootFlow: recording,
+      advertised: ["resolve-file"],
+      baselineDir: null,
+      step: { tool: "flow-execute", args: { name: "rec", project_root: projectDir } },
+    });
+
+    expect(await handler!.handle(resolveLine(flowsDir, "frag.yaml"))).toEqual({
+      id: "req-1",
+      ok: false,
+      error: "frag.yaml is not a flow that the recorded step runs",
+    });
+    expect(await handler!.handle(resolveLine(flowsDir, "rec.yaml"))).toMatchObject({ ok: true });
+    expect(await handler!.handle(resolveLine(flowsDir, "frag.yaml"))).toMatchObject({
+      ok: true,
+      exists: true,
+    });
+  });
+
+  describe("baselines", () => {
+    let rootKeyDir: string;
+    let childKeyDir: string;
+    beforeEach(async () => {
+      rootKeyDir = path.join(flowsDir, "__baselines__", "root");
+      childKeyDir = path.join(flowsDir, "__baselines__", "child");
+      await fs.writeFile(path.join(flowsDir, "child.yaml"), "steps:\n  - snapshot: home\n");
+      await nests({ name: "child", project_root: projectDir });
+    });
+
+    async function exists(file: string): Promise<boolean> {
+      return fs.lstat(file).then(
+        () => true,
+        () => false
+      );
+    }
+
+    it("reaches a nested flow's baseline directory only once resolve-file served that flow", async () => {
+      const handler = await handlerWith(ALL, { baselineDir: rootKeyDir });
+      const file = path.join(childKeyDir, "home.png");
+      const before = {
+        id: "req-1",
+        ok: false,
+        error: `${file} is not a baseline of this run (${rootKeyDir}/<name>.png)`,
+      };
+
+      expect(await handler!.handle(readLine(file))).toEqual(before);
+      expect(await handler!.handle(writeLine(file, PNG))).toEqual(before);
+      expect(await exists(path.join(flowsDir, "__baselines__"))).toBe(false);
+
+      expect(await handler!.handle(resolveLine(flowsDir, "child.yaml"))).toMatchObject({
+        ok: true,
+        exists: true,
+      });
+
+      expect(await handler!.handle(readLine(file))).toEqual({
+        id: "req-1",
+        ok: true,
+        exists: false,
+      });
+      expect(await handler!.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: true,
+        written: file,
+        replaced: false,
+      });
+      expect(await handler!.handle(readLine(file))).toMatchObject({
+        ok: true,
+        exists: true,
+        size: PNG.length,
+        content: PNG.toString("base64"),
+      });
+      // The run's own directory stays reachable.
+      expect(await handler!.handle(readLine(path.join(rootKeyDir, "home.png")))).toEqual({
+        id: "req-1",
+        ok: true,
+        exists: false,
+      });
+      // Another flow's baselines stay out of reach; the refusal names both directories.
+      const other = path.join(flowsDir, "__baselines__", "other", "home.png");
+      const refusal = {
+        id: "req-1",
+        ok: false,
+        error:
+          `${other} is not a baseline of this run ` +
+          `(${rootKeyDir}/<name>.png, ${childKeyDir}/<name>.png)`,
+      };
+      expect(await handler!.handle(readLine(other))).toEqual(refusal);
+      expect(await handler!.handle(writeLine(other, PNG))).toEqual(refusal);
+      expect(await exists(path.dirname(other))).toBe(false);
+    });
+
+    it("keeps a nested flow's baselines read-only when every step that names it sets updateBaselines: false", async () => {
+      await nests({ name: "child", project_root: projectDir, updateBaselines: false });
+      const handler = await handlerWith(ALL, { baselineDir: rootKeyDir });
+      const file = path.join(childKeyDir, "home.png");
+      await handler!.handle(resolveLine(flowsDir, "child.yaml"));
+
+      expect(await handler!.handle(readLine(file))).toEqual({
+        id: "req-1",
+        ok: true,
+        exists: false,
+      });
+      expect(await handler!.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: `${file} is not a baseline of this run (${rootKeyDir}/<name>.png)`,
+      });
+      expect(await exists(childKeyDir)).toBe(false);
+
+      // A second step that runs the same flow without opting out lets its run write.
+      await nests(
+        { name: "child", project_root: projectDir, updateBaselines: false },
+        { name: "child", project_root: projectDir }
+      );
+      const both = await handlerWith(ALL, { baselineDir: rootKeyDir });
+      await both!.handle(resolveLine(flowsDir, "child.yaml"));
+      expect(await both!.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: true,
+        written: file,
+        replaced: false,
+      });
+    });
+
+    it("writes no nested flow's baseline when write-file was not offered", async () => {
+      const handler = await handlerWith(["resolve-file", "read-file"], { baselineDir: rootKeyDir });
+      const file = path.join(childKeyDir, "home.png");
+      await handler!.handle(resolveLine(flowsDir, "child.yaml"));
+
+      expect(await handler!.handle(readLine(file))).toEqual({
+        id: "req-1",
+        ok: true,
+        exists: false,
+      });
+      expect(await handler!.handle(writeLine(file, PNG))).toEqual({
+        id: "req-1",
+        ok: false,
+        error: "op write-file is not served by this client",
+      });
+      expect(await exists(childKeyDir)).toBe(false);
+    });
+
+    it("opens no baseline directory for a run: target or for a nested flow it did not serve", async () => {
+      // frag.yaml is a run: target, whose snapshots are the root run's; missing.yaml is not there.
+      await fs.writeFile(path.join(flowsDir, "frag.yaml"), "steps:\n  - snapshot: home\n");
+      await fs.writeFile(
+        path.join(flowsDir, "root.yaml"),
+        `steps:\n  - run: frag.yaml\n${nestedSteps({ name: "missing", project_root: projectDir })}`
+      );
+      const handler = await handlerWith(ALL);
+      expect(await handler!.handle(resolveLine(flowsDir, "frag.yaml"))).toMatchObject({
+        ok: true,
+        exists: true,
+      });
+      expect(await handler!.handle(resolveLine(flowsDir, "missing.yaml"))).toMatchObject({
+        ok: true,
+        exists: false,
+      });
+
+      for (const key of ["frag", "missing"]) {
+        const file = path.join(flowsDir, "__baselines__", key, "home.png");
+        expect(await handler!.handle(readLine(file))).toEqual({
+          id: "req-1",
+          ok: false,
+          error: `${file} is not a baseline of this run; this run has no baseline directory on this client`,
+        });
+      }
+    });
+
+    it("keys a nested flow's baselines by the stem of its real file, or by the name the step gives", async () => {
+      const vault = path.join(tmpDir, "vault");
+      await fs.mkdir(vault);
+      await fs.writeFile(path.join(vault, "real-name.yaml"), "steps:\n  - snapshot: home\n");
+      await fs.writeFile(path.join(vault, "real.yml"), "steps:\n  - snapshot: home\n");
+      await fs.symlink(path.join(vault, "real-name.yaml"), path.join(flowsDir, "linked.yaml"));
+      await fs.symlink(path.join(vault, "real.yml"), path.join(flowsDir, "alias.yaml"));
+      await nests(
+        { name: "linked", project_root: projectDir },
+        { name: "alias", project_root: projectDir }
+      );
+      const handler = await handlerWith(ALL, { roots: [projectDir, vault] });
+
+      expect(await handler!.handle(resolveLine(flowsDir, "linked.yaml"))).toMatchObject({
+        ok: true,
+        canonical: path.join(vault, "real-name.yaml"),
+      });
+      expect(await handler!.handle(resolveLine(flowsDir, "alias.yaml"))).toMatchObject({
+        ok: true,
+        canonical: path.join(vault, "real.yml"),
+      });
+
+      for (const key of ["real-name", "alias"]) {
+        const file = path.join(vault, "__baselines__", key, "home.png");
+        expect(await handler!.handle(readLine(file))).toEqual({
+          id: "req-1",
+          ok: true,
+          exists: false,
+        });
+      }
+      for (const file of [
+        path.join(vault, "__baselines__", "linked", "home.png"),
+        path.join(flowsDir, "__baselines__", "linked", "home.png"),
+        path.join(flowsDir, "__baselines__", "alias", "home.png"),
+      ]) {
+        expect(await handler!.handle(readLine(file))).toMatchObject({ ok: false });
+      }
+    });
+  });
+});
+
 describe("roots", () => {
   it("serves a file under a second root", async () => {
     const other = path.join(tmpDir, "other");

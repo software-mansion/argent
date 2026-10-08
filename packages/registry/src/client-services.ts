@@ -118,6 +118,13 @@ export function hasToolFileExtension(file: string): boolean {
   return TOOL_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
 }
 
+/**
+ * The request header the argent tools client sets to `1` on every call it
+ * sends over `argent link` or `ARGENT_TOOLS_URL`, a link to 127.0.0.1
+ * included. The tool-server reads it as `InvokeToolOptions.linked`.
+ */
+export const LINKED_CALL_HEADER = "x-argent-linked";
+
 /** How long the server waits for the answer to a file op. */
 export const CLIENT_FILE_OP_TIMEOUT_MS = 30_000;
 /** The decoded size cap of a file carried in an answer or a write; mirrors the file-input cap. */

@@ -11,6 +11,8 @@ import {
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
   type ClientFileDirective,
+  type OnDiskSpelling,
+  type ToolContext,
 } from "@argent/registry";
 import {
   hasVisibleText,
@@ -165,9 +167,11 @@ export function getFlowPath(projectRoot: string, name: string): string {
  * A case-SENSITIVE volume (ext4) keeps `Login` and `login` apart on its own:
  * `realpath` there simply fails to find the variant spelling.
  *
- * "client" mode needs no special case: the caller's root does not exist on this
- * host, so both `realpath` calls fail and the fallback returns
- * {@link getFlowPath} unchanged.
+ * "client" mode needs no special case. When the caller's root does not exist
+ * on this host, both `realpath` calls fail and the fallback returns
+ * {@link getFlowPath} unchanged. When it does (a link to 127.0.0.1, or a
+ * client path this host also has), the key is this host's real path, which is
+ * harmless: the key is only an identity.
  */
 // `async`, so `getFlowPath`'s validation throws land as a rejection like every
 // other failure here rather than synchronously out of a promise-returning call.
@@ -203,13 +207,60 @@ const keyResolutions = new Map<string, Promise<string>>();
 /**
  * Where a recording's YAML is persisted:
  * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
- *                directly; the caller's project root is on this machine.
- * - `"client"` — the caller's project root is NOT on this machine (remote
- *                tool-server). The flow lives in memory here and every mutating
- *                tool returns a {@link ClientFileDirective} so the *client*
- *                writes the YAML into the agent's project.
+ *                directly; the caller's project root is on this machine and
+ *                the recording did not start over a link.
+ * - `"client"` — the recording started over a link (`argent link` or
+ *                `ARGENT_TOOLS_URL`, a link to 127.0.0.1 included), or the
+ *                caller's project root is NOT on this machine. The flow lives
+ *                in memory here and every mutating tool returns a
+ *                {@link ClientFileDirective} so the *client* writes the YAML
+ *                into the agent's project.
  */
 export type FlowPersistMode = "host" | "client";
+
+/**
+ * The refusal of a flow passed by `name` whose file a case-insensitive
+ * filesystem matched under another spelling: the name keys the report and
+ * `__baselines__/`, and no directory entry carries it.
+ */
+export function flowNameCasingError(
+  flowName: string,
+  spelling: Extract<OnDiskSpelling, { state: "case_folded" }>
+): FailureError {
+  // Hand back a name only when one can reach the file: an on-disk .YAML is
+  // addressable by no name at all (the name route always builds
+  // "<name>.yaml"), it is omitted from `argent flow list`, and flow_path
+  // refuses it too.
+  const recovery = spelling.addressable
+    ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
+    : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
+      `lowercase .yaml.`;
+  return new FailureError(
+    `Invalid flow name "${flowName}": no saved flow is named "${flowName}.yaml" — this ` +
+      `filesystem matched it case-insensitively to "${spelling.actual}", so the flow name ` +
+      `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
+      recovery,
+    {
+      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+      failure_stage: "flow_name_casing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
+ * Whether a recorder call is over a link, for every recorder check that asks.
+ * A `client` take is (also one an older client started), and so is a call
+ * that carries the link header, also into a take that started in `host` mode.
+ * Over a link the recorder accepts only what a replay over the same link runs.
+ */
+export function isLinkedRecorderCall(
+  session: RecordingSession,
+  ctx: Pick<ToolContext, "linked"> | undefined
+): boolean {
+  return session.persist === "client" || ctx?.linked === true;
+}
 
 /**
  * One recorded step's warning, plus the anchor saying WHICH step it judged.
@@ -255,7 +306,8 @@ export interface RecordingSession {
   /**
    * Absolute path of the flow file as the CALLER knows it. A real host path in
    * "host" mode; in "client" mode it names a file on the client's machine and
-   * is only echoed back inside the directive.
+   * is echoed back inside the directive. Over a link it also anchors what the
+   * recorder asks the client to resolve beside the recording.
    */
   filePath: string;
   /** In-memory flow content — authoritative in "client" mode. */

@@ -8,11 +8,16 @@
  * The handler decides what leaves and enters this machine. It serves the
  * files the user's own flows compose and nothing else: the call's root flow,
  * each `run:` target named by a file it has already served, resolved beside
- * that file as the runner resolves it, each absolute path that a `tool:` step
- * of such a file names as an argument, and the snapshot baselines in the run's
- * own `__baselines__/<flow>/` directory beside the root flow's real file,
- * which is also the only place it writes. A request for any other file is
- * refused before it is read, the same way whether or not the file exists. It
+ * that file as the runner resolves it, the saved flow that a `tool:
+ * flow-execute` step of such a file names by `name` and `project_root`, each
+ * absolute path that a `tool:` step of such a file names as an argument, and
+ * the snapshot baselines in the run's own `__baselines__/<flow>/` directory
+ * beside the root flow's real file and, once such a nested flow was served,
+ * in that flow's own one beside its real file; those directories are also the
+ * only places it writes. For a `flow-add-step` call it serves what the one
+ * recorded step names in place of what the recording file names. A request
+ * for any other file is refused before it is read, the same way whether or
+ * not the file exists. It
  * reads and writes nothing outside the roots the client itself sent, serves
  * `.yaml` and `.png` names only, refuses a file above the 32 MiB cap, and
  * refuses an op it did not offer. A requested
@@ -35,13 +40,16 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   TOOL_FILE_EXTENSIONS,
+  baselineKeyFor,
   classifyOnDiskSpelling,
   completeRunExtension,
   hasToolFileExtension,
+  nestedFlowTarget,
   type ClientRequestLine,
   type ClientResponseBody,
   type ClientServiceOp,
   type ClientServicesParam,
+  type NestedFlowTarget,
   type ReadFileAnswer,
   type ResolveFileAnswer,
   type WriteFileAnswer,
@@ -112,32 +120,64 @@ function mayVisit(fence: Fence, position: string): boolean {
   );
 }
 
+/** The tool whose `tool:` step runs another flow as a nested run. */
+const NESTED_FLOW_TOOL = "flow-execute";
+
 /**
- * What a flow file makes the runner ask this client for. `runTargets`: the
- * `run:` targets it names, spelled as the runner requests them: every string
- * `run` in its `steps`, and in the `steps` of a block directive (`when`), with
- * the runner's extension completion. A value the runner refuses (a backslash,
- * an absolute or drive-prefixed path) names nothing. `snapshots`: whether one
- * of those steps is a `snapshot`, which reads or writes a baseline.
- * `toolFiles`: every absolute path that one of those steps, a `tool:` step,
- * names as an argument, as written; the runner asks for a file argument by
- * that spelling. A file that does not parse names nothing.
+ * The forms of a nested `tool: flow-execute` step a flow file names a flow
+ * by: the tool-server runs such a step over a link only in the `name` form.
  */
-function flowRequests(content: string): {
+const FILE_NESTED_KINDS: readonly NestedFlowTarget["kind"][] = ["name"];
+/** A step that `flow-add-step` runs live may name its flow either way. */
+const STEP_NESTED_KINDS: readonly NestedFlowTarget["kind"][] = ["name", "flow_path"];
+
+/**
+ * What a list of steps makes the runner ask this client for. `runTargets`:
+ * the `run:` targets it names, spelled as the runner requests them: every
+ * string `run` in the list, and in the `steps` of a block directive (`when`),
+ * with the runner's extension completion. A value the runner refuses (a
+ * backslash, an absolute or drive-prefixed path) names nothing. `snapshots`:
+ * whether one of those steps is a `snapshot`, which reads or writes a
+ * baseline. `toolFiles`: every absolute path that one of those steps, a
+ * `tool:` step, names as an argument, as written; the runner asks for a file
+ * argument by that spelling. `nestedFlows`: the flow file each `tool:
+ * flow-execute` step among them names, as the registry's `nestedFlowTarget`
+ * spells it, for a step of one of `nestedKinds`; the runner asks for the
+ * flow of a `name` step in the project's `.argent/flows` by that spelling.
+ * `keepsBaselines` marks a step that sets `updateBaselines: false`: its
+ * nested run never writes a baseline.
+ */
+interface FlowRequests {
   runTargets: string[];
   snapshots: boolean;
   toolFiles: string[];
-} {
+  nestedFlows: { path: string; keepsBaselines: boolean }[];
+}
+
+/** A flow file's {@link FlowRequests}. A file that does not parse names nothing. */
+function flowRequests(content: string): FlowRequests {
   let doc: unknown;
   try {
     // The runner's parse; its warnings belong to the run, not to this terminal.
     doc = parseYaml(content.trim(), { logLevel: "error" });
   } catch {
-    return { runTargets: [], snapshots: false, toolFiles: [] };
+    return stepsRequests(undefined, FILE_NESTED_KINDS);
   }
+  return stepsRequests(isRecord(doc) ? doc.steps : undefined, FILE_NESTED_KINDS);
+}
+
+/**
+ * The {@link FlowRequests} of `list`: a flow file's `steps`, or the one step a
+ * `flow-add-step` call records. Anything but an array names nothing.
+ */
+function stepsRequests(
+  list: unknown,
+  nestedKinds: readonly NestedFlowTarget["kind"][]
+): FlowRequests {
   const targets: string[] = [];
   let snapshots = false;
   const toolFiles: string[] = [];
+  const nestedFlows: FlowRequests["nestedFlows"] = [];
   const seen = new Set<unknown>();
   const visit = (steps: unknown, depth: number): void => {
     if (!Array.isArray(steps) || depth > MAX_STEP_DEPTH || seen.has(steps)) return;
@@ -148,6 +188,13 @@ function flowRequests(content: string): {
       if (typeof step.tool === "string" && isRecord(step.args)) {
         for (const value of Object.values(step.args)) {
           if (typeof value === "string" && path.isAbsolute(value)) toolFiles.push(value);
+        }
+      }
+      if (step.tool === NESTED_FLOW_TOOL) {
+        const nested = nestedFlowTarget(step.args);
+        if (nested !== undefined && nestedKinds.includes(nested.kind)) {
+          const keepsBaselines = isRecord(step.args) && step.args.updateBaselines === false;
+          nestedFlows.push({ path: nested.path, keepsBaselines });
         }
       }
       const run = step.run;
@@ -162,8 +209,8 @@ function flowRequests(content: string): {
       visit(step.steps, depth + 1);
     }
   };
-  if (isRecord(doc)) visit(doc.steps, 0);
-  return { runTargets: targets, snapshots, toolFiles };
+  visit(list, 0);
+  return { runTargets: targets, snapshots, toolFiles, nestedFlows };
 }
 
 function components(p: string): string[] {
@@ -315,7 +362,7 @@ async function readAdmitted(
 /**
  * `<dir>/__baselines__/<flow>/<name>.png`, absolute, in normal form, with no `..`:
  * the shape of the only file the tool-server reads or writes through this
- * client. The handler also holds the path to the run's own baseline directory.
+ * client. The handler also holds the baseline directories the call may reach.
  */
 function isBaselinePath(file: string): boolean {
   const keyDir = path.dirname(file);
@@ -359,22 +406,42 @@ function notBaseline(file: string): string {
  * Build the handler for one call, or null when there is nothing to serve:
  * no root exists on this machine, the server advertised no op this client
  * implements, or the root flow asks for nothing (or cannot be read or parsed
- * here): it names no `run:` target, has no `snapshot` step or the server
- * advertised no baseline op, and has no `tool:` step that names a file (an
- * absolute path with a {@link TOOL_FILE_EXTENSIONS} ending) or the server did
- * not advertise `read-file`. Text such as `/start` typed by a `keyboard` step
- * is not a file. A file outside the roots counts: the step that names it
- * then fails with the refusal that says so, not with a hint to update. The runner asks for files
- * only to resolve `run:` targets, to read and write baselines and to read the
- * file arguments of `tool:` steps, so any other flow goes out without client
- * services, as it did before they existed, and keeps running through a proxy
- * that rewrites `Accept`. `ops` keeps the implemented order; `roots` are
- * realpaths. `rootFlow` is the call's root flow file as the client sent it;
- * the server asks for it in the directory it is spelled in. `baselineDir` is
- * the one directory read-file and write-file may reach: the run's
- * `<real dir of the root flow>/__baselines__/<key>`, where the tool-server
- * keys the run's baselines. Null when the run has no such directory on this
- * client; both ops then refuse every path.
+ * here): it names no `run:` target, names no flow in a `tool: flow-execute`
+ * step or the server did not advertise `resolve-file`, has no `snapshot` step
+ * or the server advertised no baseline op, and has no `tool:` step that names
+ * a file (an absolute path with a {@link TOOL_FILE_EXTENSIONS} ending) or the
+ * server did not advertise `read-file`. Text such as `/start` typed by a
+ * `keyboard` step is not a file. A file outside the roots counts: the step
+ * that names it then fails with the refusal that says so, not with a hint to
+ * update. The runner asks for files only to resolve `run:` targets and nested
+ * flows, to read and write baselines and to read the file arguments of
+ * `tool:` steps, so any other flow goes out without client services, as it
+ * did before they existed, and keeps running through a proxy that rewrites
+ * `Accept`. `ops` keeps the implemented order; `roots` are realpaths.
+ * `rootFlow` is the call's root flow file as the client sent it; the server
+ * asks for it in the directory it is spelled in.
+ *
+ * `baselineDir` is the run's `<real dir of the root flow>/__baselines__/<key>`,
+ * where the tool-server keys the run's baselines, or null when the run has no
+ * such directory on this client. A flow that a `tool: flow-execute` step names
+ * by `name` (with its `project_root`) runs as a nested run, which keys its own
+ * baselines in `<real dir of that flow>/__baselines__/<key>`: `<key>` is the
+ * stem of the flow's real file when that stem is a flow name, and else the
+ * flow name the step gives (its `name`, or the stem of its `flow_path`). That
+ * file is served where the step spells it, and once resolve-file has served
+ * it, its baseline directory is one read-file may reach too, and write-file
+ * as well unless every step that names it sets `updateBaselines: false`.
+ * Those directories are the only ones they reach; with none, both ops refuse
+ * every path.
+ *
+ * `step` is the step a `flow-add-step` call runs live and records into
+ * `rootFlow`, its recording file. The call then serves what that one step
+ * names, a nested flow it names by `flow_path` included, and nothing the
+ * recording file names: only the step decides whether there is anything to
+ * serve. The recording file itself is served when it is there, since the
+ * server resolves it to anchor the sibling of a nested flow, but nothing it
+ * names becomes servable, also not once it was served. A recording file that
+ * is missing is not served, and the handler is still built.
  *
  * Under `ARGENT_CLIENT_SERVICES_LOG=1` each request gets one line once its
  * answer is decided, `[client-services] <op> <path>: served`, `: missing`,
@@ -388,6 +455,7 @@ export async function createClientServicesHandler(opts: {
   rootFlow: string;
   advertised: ClientServiceOp[];
   baselineDir: string | null;
+  step?: { tool: string; args: Record<string, unknown> };
   log?: (line: string) => void;
 }): Promise<ClientServicesHandler | null> {
   const resolvedRoots: string[] = [];
@@ -412,37 +480,84 @@ export async function createClientServicesHandler(opts: {
   const outsideRoots = (target: string) =>
     `${target} is outside every root this client serves (${roots.join(", ")})`;
 
-  // The real paths this call may serve: the root flow, and the run: targets
-  // of each file served, resolved beside that file as the runner anchors them.
+  // The real paths this call may serve: the root flow, the run: targets of
+  // each file served, resolved beside that file as the runner anchors them,
+  // and the nested flows its steps name, walked as the step spells them.
   const servable = new Set<string>();
   // The file arguments the tool: steps of each file served name, as written:
   // the runner asks for one by that spelling, and the walk resolves it.
   const toolFiles = new Set<string>();
-  async function addRequests(
-    canonical: string,
-    requests: ReturnType<typeof flowRequests>
-  ): Promise<void> {
+  // Each nested flow by its real path, with the flow names the steps that
+  // name it give (the key of its baselines when its stem is not a flow name),
+  // and whether one of those steps lets its run update baselines.
+  const nestedFlows = new Map<string, { names: Set<string>; updates: boolean }>();
+  // The directories read-file may reach: the run's own, then that of each
+  // nested flow once resolve-file has served it. write-file reaches those
+  // of `writableBaselineDirs` only: not a nested flow whose every step sets
+  // `updateBaselines: false`, which the tool-server never updates.
+  const baselineDirs = new Set<string>(opts.baselineDir === null ? [] : [opts.baselineDir]);
+  const writableBaselineDirs = new Set<string>(baselineDirs);
+  // The recording file of a flow-add-step call, once known to be servable:
+  // what it names is not the call's to serve.
+  let recording: string | null = null;
+  /** Adds what `canonical`, the file that names `requests`, makes servable. */
+  async function addRequests(canonical: string, requests: FlowRequests): Promise<void> {
     for (const file of requests.toolFiles) toolFiles.add(file);
     for (const target of requests.runTargets) {
       const walked = await walk(path.dirname(canonical) + path.sep + target, fence);
       if (walked.kind !== "outside") servable.add(walked.canonical);
     }
+    // An absolute path, walked from itself rather than beside `canonical`.
+    for (const nested of requests.nestedFlows) {
+      const walked = await walk(nested.path, fence);
+      if (walked.kind === "outside") continue;
+      servable.add(walked.canonical);
+      const entry = nestedFlows.get(walked.canonical) ?? {
+        names: new Set<string>(),
+        updates: false,
+      };
+      // Both forms spell `<flow name>.yaml`: `<name>.yaml`, or a flow_path's basename.
+      entry.names.add(path.basename(nested.path, ".yaml"));
+      entry.updates ||= !nested.keepsBaselines;
+      nestedFlows.set(walked.canonical, entry);
+    }
   }
-  const root = await walk(opts.rootFlow, fence);
-  if (root.kind !== "found") return null;
-  const rootText = await fs.readFile(root.canonical, "utf8").catch(() => null);
-  if (rootText === null) return null;
-  const rootRequests = flowRequests(rootText);
+  /** Where the nested runs of the flow at `canonical` key their baselines. */
+  function nestedBaselineDirs(canonical: string): string[] {
+    const entry = nestedFlows.get(canonical);
+    if (entry === undefined) return [];
+    const keys = new Set([...entry.names].map((name) => baselineKeyFor(canonical, name)));
+    return [...keys].map((key) => path.join(path.dirname(canonical), "__baselines__", key));
+  }
+
   const servesBaselines = ops.includes("read-file") || ops.includes("write-file");
-  if (
-    rootRequests.runTargets.length === 0 &&
-    !(rootRequests.snapshots && servesBaselines) &&
-    !(rootRequests.toolFiles.some(hasToolFileExtension) && ops.includes("read-file"))
-  ) {
-    return null;
+  const asksForFiles = (requests: FlowRequests): boolean =>
+    requests.runTargets.length > 0 ||
+    (requests.nestedFlows.length > 0 && ops.includes("resolve-file")) ||
+    (requests.snapshots && servesBaselines) ||
+    (requests.toolFiles.some(hasToolFileExtension) && ops.includes("read-file"));
+  if (opts.step === undefined) {
+    const root = await walk(opts.rootFlow, fence);
+    if (root.kind !== "found") return null;
+    const rootText = await fs.readFile(root.canonical, "utf8").catch(() => null);
+    if (rootText === null) return null;
+    const rootRequests = flowRequests(rootText);
+    if (!asksForFiles(rootRequests)) return null;
+    servable.add(root.canonical);
+    await addRequests(root.canonical, rootRequests);
+  } else {
+    const stepRequests = stepsRequests([opts.step], STEP_NESTED_KINDS);
+    if (!asksForFiles(stepRequests)) return null;
+    // Walked as a root flow is, but a recording file that is not there yet
+    // only goes unserved; one that cannot be read is refused when asked for.
+    const root = await walk(opts.rootFlow, fence);
+    if (root.kind === "found") {
+      servable.add(root.canonical);
+      recording = root.canonical;
+    }
+    // The step joins the recording file; it names no run: target to anchor there.
+    await addRequests(opts.rootFlow, stepRequests);
   }
-  servable.add(root.canonical);
-  await addRequests(root.canonical, rootRequests);
 
   const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
 
@@ -475,7 +590,12 @@ export async function createClientServicesHandler(opts: {
     const file = await walk(spelled, fence);
     if (file.kind === "outside") return refuse(id, outsideRoots(target));
     if (!servable.has(file.canonical)) {
-      return refuse(id, `${target} is not a run: target of a flow this client served`);
+      return refuse(
+        id,
+        opts.step === undefined
+          ? `${target} is not a run: target of a flow this client served`
+          : `${target} is not a flow that the recorded step runs`
+      );
     }
     named.path = file.canonical;
     if ((await walk(path.dirname(spelled), fence)).kind === "outside") {
@@ -501,20 +621,30 @@ export async function createClientServicesHandler(opts: {
     const read = await readAdmitted(canonical);
     if ("refusal" in read) return refuse(id, read.refusal);
     if (read.answer.content !== undefined) {
-      const text = Buffer.from(read.answer.content, "base64").toString("utf8");
-      await addRequests(canonical, flowRequests(text));
+      // The recording file adds nothing, unless the step runs it as a nested flow.
+      if (canonical !== recording || nestedFlows.has(canonical)) {
+        const text = Buffer.from(read.answer.content, "base64").toString("utf8");
+        await addRequests(canonical, flowRequests(text));
+      }
+      for (const dir of nestedBaselineDirs(canonical)) {
+        baselineDirs.add(dir);
+        if (nestedFlows.get(canonical)?.updates) writableBaselineDirs.add(dir);
+      }
     }
     const answer: ResolveFileAnswer = { canonical, spelling, ...read.answer };
     return { id, ok: true, ...answer };
   }
 
-  // The baselines of this run only: another flow's baselines, or a
-  // `__baselines__` tree anywhere else under the roots, stay out of reach.
-  function notOfThisRun(file: string): string | null {
-    if (path.dirname(file) === opts.baselineDir) return null;
-    return opts.baselineDir === null
-      ? `${file} is not a baseline of this run; this run has no baseline directory on this client`
-      : `${file} is not a baseline of this run (${opts.baselineDir}/<name>.png)`;
+  // The baselines of this run and of the nested flows it served only: another
+  // flow's baselines, or a `__baselines__` tree anywhere else under the
+  // roots, stay out of reach.
+  function notOfThisRun(file: string, dirs: ReadonlySet<string>): string | null {
+    if (dirs.has(path.dirname(file))) return null;
+    if (dirs.size === 0) {
+      return `${file} is not a baseline of this run; this run has no baseline directory on this client`;
+    }
+    const shapes = [...dirs].map((dir) => `${dir}/<name>.png`);
+    return `${file} is not a baseline of this run (${shapes.join(", ")})`;
   }
 
   /**
@@ -552,7 +682,7 @@ export async function createClientServicesHandler(opts: {
   /**
    * A file argument of a `tool:` step ({@link readToolFile}), or else a
    * snapshot baseline of this run, read as the server names it: the path lies
-   * in the run's baseline directory, so there is nothing to resolve.
+   * in a baseline directory of the run, so there is nothing to resolve.
    * `named.path` is set to it once it is known to be one.
    */
   async function readFile(
@@ -570,7 +700,7 @@ export async function createClientServicesHandler(opts: {
           `nor a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png)`
       );
     }
-    const otherRun = notOfThisRun(file);
+    const otherRun = notOfThisRun(file, baselineDirs);
     if (otherRun !== null) return refuse(id, otherRun);
     named.path = file;
     const walked = await walk(file, fence);
@@ -595,10 +725,11 @@ export async function createClientServicesHandler(opts: {
 
   /**
    * A new snapshot baseline of this run. The only file the tool-server may
-   * write here, and only into the run's baseline directory: the place a run
-   * with no link writes it, beside the root flow's real file. That file's
-   * directory exists, so mkdir makes at most `__baselines__` and the key
-   * directory. `named.path` is set to the path once it is known to be one.
+   * write here, and only into a baseline directory of the run: the place a
+   * run with no link writes it, beside the real file of the root flow or of a
+   * nested flow it served. That file's directory exists, so mkdir makes at
+   * most `__baselines__` and the key directory. `named.path` is set to the
+   * path once it is known to be one.
    */
   async function writeFile(
     id: string,
@@ -610,7 +741,7 @@ export async function createClientServicesHandler(opts: {
       return refuse(id, "write-file needs string path and content");
     }
     if (!isBaselinePath(file)) return refuse(id, notBaseline(file));
-    const otherRun = notOfThisRun(file);
+    const otherRun = notOfThisRun(file, writableBaselineDirs);
     if (otherRun !== null) return refuse(id, otherRun);
     named.path = file;
     const keyDir = path.dirname(file);

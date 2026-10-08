@@ -121,6 +121,18 @@ export interface InvokeToolOptions {
       timeoutMs: number
     ): Promise<Record<string, unknown>>;
   };
+  /**
+   * True when the call came over HTTP with the header `x-argent-linked: 1`,
+   * which the argent client sends on every call over `argent link` or
+   * `ARGENT_TOOLS_URL`. Absent for a direct invocation and for a sub-tool call.
+   */
+  linked?: boolean;
+  /**
+   * Internal: the run-stack entries of the flow runs that enclose this call,
+   * outermost first, which a sub-tool call passes on to a nested
+   * `flow-execute`. The HTTP route never sets it.
+   */
+  flowStack?: readonly { canonical: string; display: string }[];
 }
 
 /**

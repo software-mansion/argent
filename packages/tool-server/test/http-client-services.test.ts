@@ -738,6 +738,95 @@ describe("HTTP client services", () => {
 });
 
 /**
+ * A real registry with one tool that has no schema, so every body key reaches
+ * it as a param, and that keeps the context the registry built for the call.
+ */
+function contextRegistry(): { registry: Registry; seen: { params: unknown; ctx?: ToolContext }[] } {
+  const seen: { params: unknown; ctx?: ToolContext }[] = [];
+  const registry = new Registry();
+  registry.registerTool({
+    id: "ctx-tool",
+    description: "A stub tool without a schema that keeps its context",
+    inputSchema: { type: "object", properties: {} },
+    services: () => ({}),
+    execute: async (_services: Record<string, unknown>, params: unknown, ctx?: ToolContext) => {
+      seen.push({ params, ctx });
+      return { ok: true };
+    },
+  } as unknown as ToolDefinition);
+  return { registry, seen };
+}
+
+describe("the link header and the internal context fields of POST /tools/:name", () => {
+  let handle: HttpAppHandle | undefined;
+
+  afterEach(() => {
+    handle?.dispose();
+    handle = undefined;
+  });
+
+  it("gives ctx.linked === true for x-argent-linked: 1, in any header case and for a stream", async () => {
+    const { registry, seen } = contextRegistry();
+    handle = createHttpApp(registry);
+
+    await supertest(handle.app).post("/tools/ctx-tool").set("x-argent-linked", "1").send({});
+    await supertest(handle.app).post("/tools/ctx-tool").set("X-Argent-Linked", "1").send({});
+    await supertest(handle.app)
+      .post("/tools/ctx-tool")
+      .set("x-argent-linked", "1")
+      .set("Accept", "application/x-ndjson")
+      .send({})
+      .buffer(true)
+      .parse(collectText)
+      .expect(200);
+
+    expect(seen.map(({ ctx }) => ctx?.linked)).toEqual([true, true, true]);
+  });
+
+  it("gives no linked key for another header value or no header", async () => {
+    const { registry, seen } = contextRegistry();
+    handle = createHttpApp(registry);
+
+    // Only the exact value counts. (Padding is no test: the HTTP parser strips
+    // the whitespace around a header value, so " 1" arrives as "1".)
+    const values = ["0", "true", "yes", "01", ""];
+    for (const value of values) {
+      await supertest(handle.app)
+        .post("/tools/ctx-tool")
+        .set("x-argent-linked", value)
+        .send({})
+        .expect(200);
+    }
+    await supertest(handle.app).post("/tools/ctx-tool").send({}).expect(200);
+
+    expect(seen).toHaveLength(values.length + 1);
+    for (const [index, { ctx }] of seen.entries()) {
+      expect(ctx, values[index] ?? "no header").toBeDefined();
+      expect(ctx, values[index] ?? "no header").not.toHaveProperty("linked");
+    }
+  });
+
+  it("keeps a flowStack or linked key of the body out of the context", async () => {
+    const { registry, seen } = contextRegistry();
+    handle = createHttpApp(registry);
+    const flowStack = [{ canonical: "/proj/.argent/flows/root.yaml", display: "root" }];
+
+    await supertest(handle.app)
+      .post("/tools/ctx-tool")
+      .send({ flowStack, linked: true })
+      .expect(200);
+
+    // The keys reached the tool as params, so the body was not dropped.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.params).toEqual({ flowStack, linked: true });
+    expect(seen[0]!.ctx).toBeDefined();
+    expect(seen[0]!.ctx!.flowStack).toBeUndefined();
+    expect(seen[0]!.ctx).not.toHaveProperty("flowStack");
+    expect(seen[0]!.ctx).not.toHaveProperty("linked");
+  });
+});
+
+/**
  * The REAL flow-execute behind the HTTP layer, its steps dispatched to a stub,
  * so a call exercises the whole client-services chain: the advert in the
  * listing, the parameter taken off the body, the stream, the answer route and

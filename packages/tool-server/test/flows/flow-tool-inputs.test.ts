@@ -3,24 +3,30 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CLIENT_FILE_OP_TIMEOUT_MS,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
   type ClientServiceOp,
   type Registry,
+  type ToolContext,
   type ToolDefinition,
 } from "@argent/registry";
 import { FileInputError } from "../../src/file-inputs";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import {
+  FLOW_RUN_CLIENT_OPS,
   prepareToolStepInputs,
   refusedToolInputFix,
   servedToolInput,
+  toolFilePathHints,
   toolStepFilePaths,
+  toolStepUploadIssue,
+  uploadUpdateHint,
   type ToolStepFile,
 } from "../../src/tools/flows/flow-tool-inputs";
-import type { ProjectAccess } from "../../src/tools/flows/project-access";
+import { ClientProjectAccess, type ProjectAccess } from "../../src/tools/flows/project-access";
 import { reinstallAppTool } from "../../src/tools/reinstall-app";
 import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
 import { gatherWorkspaceDataTool } from "../../src/tools/workspace/gather-workspace-data";
@@ -62,6 +68,39 @@ function project(mode: "host" | "client", readFile: ReadFile = async () => null)
     }),
   } satisfies ProjectAccess;
   return access;
+}
+
+type ClientServices = NonNullable<ToolContext["clientServices"]>;
+
+/**
+ * The client side of a nested flow-execute: `resolve-file` answered from
+ * `files` (the client's real path of a flow -> its text) the way the argent
+ * client answers it, behind the real {@link ClientProjectAccess}. `realpaths`
+ * maps a path the server asks for to the real path the client reports for it
+ * (a symlinked project root); a path missing from `files` is absent there.
+ */
+function nestedFlowClient(
+  files: Record<string, string>,
+  realpaths: Record<string, string> = {}
+): { request: ReturnType<typeof vi.fn<ClientServices["request"]>>; access: ClientProjectAccess } {
+  const request = vi.fn<ClientServices["request"]>(async (op, args) => {
+    if (op !== "resolve-file") throw new Error(`${op} is not part of a nested flow-execute step`);
+    const asked = path.posix.join(String(args.anchorDir), String(args.target));
+    const canonical = realpaths[asked] ?? asked;
+    const text = files[canonical];
+    return text === undefined
+      ? { canonical, spelling: { state: "absent" }, exists: false }
+      : {
+          canonical,
+          spelling: { state: "listed" },
+          exists: true,
+          content: Buffer.from(text, "utf8").toString("base64"),
+        };
+  });
+  return {
+    request,
+    access: new ClientProjectAccess({ ops: FLOW_RUN_CLIENT_OPS, roots: ["/client"], request }),
+  };
 }
 
 let scratch = "";
@@ -117,15 +156,209 @@ describe("prepareToolStepInputs", () => {
     expect(await inputTempDirs()).toEqual([]);
   });
 
-  it("passes the args of flow-execute through in client mode, with no client request", async () => {
-    const client = project("client", async () => Buffer.from("steps: []"));
-    const args = { flow_path: "/client/proj/.argent/flows/login.yaml", udid: "sim-1" };
+  it("reads the flow a flow-execute names by name from the client into a flow_file temp file", async () => {
+    const text = "steps:\n  - echo: from the client\n";
+    const client = nestedFlowClient({ "/client/proj/.argent/flows/login.yaml": text });
+    const args = { name: "login", project_root: "/client/proj", device: "sim-1" };
 
-    const prepared = await prepareToolStepInputs(registry, client, "flow-execute", args);
+    const prepared = await prepareToolStepInputs(registry, client.access, "flow-execute", args);
+    cleanups.push(prepared.cleanup);
 
-    expect(prepared.args).toBe(args);
-    expect(prepared).not.toHaveProperty("fileInputs");
-    expect(client.readFile).not.toHaveBeenCalled();
+    // One request, for the saved flow beside the others of that project.
+    expect(client.request.mock.calls).toEqual([
+      [
+        "resolve-file",
+        { anchorDir: "/client/proj/.argent/flows", target: "login.yaml", kind: "flow" },
+        CLIENT_FILE_OP_TIMEOUT_MS,
+      ],
+    ]);
+    const served = prepared.args.flow_file as string;
+    expect(path.dirname(path.dirname(served))).toBe(scratch);
+    expect(path.basename(path.dirname(served))).toMatch(/^argent-file-input-/);
+    expect(path.basename(served)).toBe("login.yaml");
+    expect(await fs.readFile(served, "utf8")).toBe(text);
+    // The nested run gets the step's own args, plus the uploaded flow.
+    expect(prepared.args).toEqual({ ...args, flow_file: served });
+    expect(prepared.fileInputs).toEqual({
+      flow_file: {
+        clientPath: "/client/proj/.argent/flows/login.yaml",
+        presentOnHost: false,
+        viaUpload: true,
+      },
+    });
+    expect(args).not.toHaveProperty("flow_file");
+
+    await prepared.cleanup();
+    expect(await inputTempDirs()).toEqual([]);
+  });
+
+  it("writes a non-ASCII nested flow byte for byte, sized by its UTF-8 bytes", async () => {
+    const text = "steps:\n  - echo: zażółć gęślą jaźń 🚀\n";
+    expect(Buffer.byteLength(text, "utf8")).toBeGreaterThan(text.length);
+    const client = nestedFlowClient({ "/client/proj/.argent/flows/login.yaml": text });
+
+    // The resolver refuses an upload whose size is not its decoded byte count,
+    // so a size in characters fails the step here.
+    const prepared = await prepareToolStepInputs(registry, client.access, "flow-execute", {
+      name: "login",
+      project_root: "/client/proj",
+    });
+    cleanups.push(prepared.cleanup);
+
+    expect(await fs.readFile(prepared.args.flow_file as string)).toEqual(Buffer.from(text, "utf8"));
+  });
+
+  it("names the path the step names as clientPath when the client reports another real path", async () => {
+    const client = nestedFlowClient(
+      { "/client/real/.argent/flows/login.yaml": "steps: []\n" },
+      { "/client/proj/.argent/flows/login.yaml": "/client/real/.argent/flows/login.yaml" }
+    );
+
+    const prepared = await prepareToolStepInputs(registry, client.access, "flow-execute", {
+      name: "login",
+      project_root: "/client/proj",
+    });
+    cleanups.push(prepared.cleanup);
+
+    expect(await fs.readFile(prepared.args.flow_file as string, "utf8")).toBe("steps: []\n");
+    expect(prepared.fileInputs?.flow_file?.clientPath).toBe(
+      "/client/proj/.argent/flows/login.yaml"
+    );
+  });
+
+  it("uses the client copy of a nested flow even when this host has another file at the same path", async () => {
+    const projectRoot = path.join(scratch, "proj");
+    const hostFlow = path.join(projectRoot, ".argent", "flows", "login.yaml");
+    await fs.mkdir(path.dirname(hostFlow), { recursive: true });
+    // Same size, so the host file would pass a size-only stat probe as well.
+    await fs.writeFile(hostFlow, "steps:\n  - echo: SERVER\n");
+    const client = nestedFlowClient({ [hostFlow]: "steps:\n  - echo: CLIENT\n" });
+
+    const prepared = await prepareToolStepInputs(registry, client.access, "flow-execute", {
+      name: "login",
+      project_root: projectRoot,
+    });
+    cleanups.push(prepared.cleanup);
+
+    expect(prepared.args.flow_file).not.toBe(hostFlow);
+    expect(await fs.readFile(prepared.args.flow_file as string, "utf8")).toBe(
+      "steps:\n  - echo: CLIENT\n"
+    );
+    expect(prepared.fileInputs?.flow_file).toMatchObject({ clientPath: hostFlow, viaUpload: true });
+    expect(await fs.readFile(hostFlow, "utf8")).toBe("steps:\n  - echo: SERVER\n");
+  });
+
+  it("fails a nested flow the client does not have with the ENOENT of a host read, at the client's real path, and never reads the host file", async () => {
+    const projectRoot = path.join(scratch, "proj");
+    const hostFlow = path.join(projectRoot, ".argent", "flows", "login.yaml");
+    await fs.mkdir(path.dirname(hostFlow), { recursive: true });
+    await fs.writeFile(hostFlow, "steps: []\n");
+    const client = nestedFlowClient({}, { [hostFlow]: "/client/real/.argent/flows/login.yaml" });
+
+    const failure = await prepareToolStepInputs(registry, client.access, "flow-execute", {
+      name: "login",
+      project_root: projectRoot,
+    }).then(
+      () => undefined,
+      (err: unknown) => err
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "ENOENT: no such file or directory, open '/client/real/.argent/flows/login.yaml'"
+    );
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(await inputTempDirs()).toEqual([]);
+  });
+
+  it("refuses a nested flow the client has only under a name that differs in case, as a run without a link does", async () => {
+    const request = vi.fn<ClientServices["request"]>(async () => ({
+      canonical: "/client/proj/.argent/flows/login.yaml",
+      spelling: { state: "case_folded", actual: "login.yaml", addressable: true },
+      exists: true,
+      content: Buffer.from("steps: []\n", "utf8").toString("base64"),
+    }));
+    const access = new ClientProjectAccess({
+      ops: FLOW_RUN_CLIENT_OPS,
+      roots: ["/client"],
+      request,
+    });
+
+    const failure = await prepareToolStepInputs(registry, access, "flow-execute", {
+      name: "Login",
+      project_root: "/client/proj",
+    }).then(
+      () => undefined,
+      (err: unknown) => err
+    );
+
+    expect(getFailureSignal(failure)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+      failure_stage: "flow_name_casing",
+    });
+    expect((failure as Error).message).toContain('Invalid flow name "Login"');
+    expect((failure as Error).message).toContain('Pass name "login".');
+    expect(await inputTempDirs()).toEqual([]);
+  });
+
+  it("propagates a refusal of the nested flow from the client unchanged", async () => {
+    const refusal = new FailureError(`"/client/proj" is outside every root the client serves`, {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "client_request_refused",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+    const request = vi.fn<ClientServices["request"]>(async () => {
+      throw refusal;
+    });
+    const access = new ClientProjectAccess({ ops: FLOW_RUN_CLIENT_OPS, roots: ["/"], request });
+
+    await expect(
+      prepareToolStepInputs(registry, access, "flow-execute", {
+        name: "login",
+        project_root: "/client/proj",
+      })
+    ).rejects.toBe(refusal);
+    expect(await inputTempDirs()).toEqual([]);
+  });
+
+  it("passes flow-execute args in any other form through in client mode, with no client request", async () => {
+    const forms: Record<string, unknown>[] = [
+      { flow_path: "/client/proj/.argent/flows/login.yaml", udid: "sim-1" },
+      { name: "login", project_root: "proj" },
+      { name: "login", project_root: "/client/../proj" },
+      { name: "login" },
+      { name: "../login", project_root: "/client/proj" },
+      { name: "login.yaml", project_root: "/client/proj" },
+      { name: "login", project_root: "/client/proj", flow_path: "/client/x.yaml" },
+      {},
+    ];
+    for (const args of forms) {
+      const client = nestedFlowClient({ "/client/proj/.argent/flows/login.yaml": "steps: []\n" });
+
+      const prepared = await prepareToolStepInputs(registry, client.access, "flow-execute", args);
+
+      expect(prepared.args, JSON.stringify(args)).toBe(args);
+      expect(prepared, JSON.stringify(args)).not.toHaveProperty("fileInputs");
+      expect(client.request, JSON.stringify(args)).not.toHaveBeenCalled();
+    }
+    expect(await inputTempDirs()).toEqual([]);
+  });
+
+  it("passes flow-execute args through in host mode, by name or by flow_path", async () => {
+    for (const args of [
+      { name: "login", project_root: "/client/proj" },
+      { flow_path: "/client/proj/.argent/flows/login.yaml" },
+    ]) {
+      const host = project("host");
+
+      const prepared = await prepareToolStepInputs(registry, host, "flow-execute", args);
+
+      expect(prepared.args).toBe(args);
+      expect(prepared).not.toHaveProperty("fileInputs");
+      expect(host.resolveFlowFile).not.toHaveBeenCalled();
+      expect(host.readFile).not.toHaveBeenCalled();
+    }
     expect(await inputTempDirs()).toEqual([]);
   });
 
@@ -443,5 +676,195 @@ describe("refusedToolInputFix", () => {
     for (const file of noFix) {
       expect(refusedToolInputFix(file), `${file.spec.target} ${file.path}`).toBeUndefined();
     }
+  });
+});
+
+describe("toolStepUploadIssue", () => {
+  const WITH_RESOLVE: ClientServiceOp[] = ["resolve-file"];
+  const WITH_READ: ClientServiceOp[] = ["resolve-file", "read-file"];
+  const byName = { name: "login", project_root: "/client/proj" };
+
+  it("runs a flow-execute that names its flow by name with an absolute project_root for a client with resolve-file", () => {
+    expect(toolStepUploadIssue(registry, "flow-execute", byName, WITH_RESOLVE)).toBeUndefined();
+    expect(
+      toolStepUploadIssue(
+        registry,
+        "flow-execute",
+        { ...byName, udid: "sim-1" },
+        FLOW_RUN_CLIENT_OPS
+      )
+    ).toBeUndefined();
+  });
+
+  it("refuses a flow-execute by name for a client without resolve-file, as a nested step with no fix", () => {
+    const ops: Array<ClientServiceOp[] | undefined> = [undefined, [], ["read-file", "write-file"]];
+    for (const offered of ops) {
+      expect(
+        toolStepUploadIssue(registry, "flow-execute", byName, offered),
+        String(offered)
+      ).toEqual({ kind: "nested", line: "tool: flow-execute (name: login)", fixes: [] });
+    }
+  });
+
+  it("refuses a flow-execute in any other form for a client with resolve-file", () => {
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [
+        { flow_path: "/client/proj/.argent/flows/login.yaml" },
+        "tool: flow-execute (flow_path: /client/proj/.argent/flows/login.yaml)",
+      ],
+      [{ name: "login", project_root: "proj" }, "tool: flow-execute (name: login)"],
+      [{ name: "login", project_root: "/client/../proj" }, "tool: flow-execute (name: login)"],
+      [{ name: "login" }, "tool: flow-execute (name: login)"],
+      [{ ...byName, flow_path: "/client/x.yaml" }, "tool: flow-execute (name: login)"],
+      [{}, "tool: flow-execute"],
+    ];
+    for (const [args, line] of cases) {
+      expect(
+        toolStepUploadIssue(registry, "flow-execute", args, FLOW_RUN_CLIENT_OPS),
+        JSON.stringify(args)
+      ).toEqual({ kind: "nested", line, fixes: [] });
+    }
+  });
+
+  it("runs another tool's absolute .png or .yaml file argument for a client with read-file", () => {
+    expect(
+      toolStepUploadIssue(
+        registry,
+        "screenshot-diff",
+        { baselinePath: "/client/a.png", currentPath: "/client/B.PNG" },
+        WITH_READ
+      )
+    ).toBeUndefined();
+    expect(
+      toolStepUploadIssue(
+        registry,
+        "flow-read-prerequisite",
+        { flow_path: "/client/proj/.argent/flows/login.yaml" },
+        ["read-file"]
+      )
+    ).toBeUndefined();
+    // A tool with no file input runs for every client.
+    expect(toolStepUploadIssue(registry, "gesture-tap", { x: 0.5 }, undefined)).toBeUndefined();
+  });
+
+  it("refuses a file argument a client without read-file cannot send, with the update fix", () => {
+    for (const offered of [undefined, WITH_RESOLVE]) {
+      expect(
+        toolStepUploadIssue(
+          registry,
+          "screenshot-diff",
+          { baselinePath: "/client/a.png" },
+          offered
+        ),
+        String(offered)
+      ).toEqual({
+        kind: "toolFile",
+        line: "tool: screenshot-diff (/client/a.png)",
+        fixes: ["update"],
+      });
+    }
+  });
+
+  it("asks for an absolute path for a relative file argument, and a served name for another extension", () => {
+    expect(
+      toolStepUploadIssue(registry, "screenshot-diff", { baselinePath: "shots/a.png" }, WITH_READ)
+    ).toEqual({
+      kind: "toolFile",
+      line: "tool: screenshot-diff (shots/a.png)",
+      fixes: ["relative"],
+    });
+    expect(
+      toolStepUploadIssue(registry, "screenshot-diff", { currentPath: "/client/b.json" }, WITH_READ)
+    ).toEqual({
+      kind: "toolFile",
+      line: "tool: screenshot-diff (/client/b.json)",
+      fixes: ["extension"],
+    });
+  });
+
+  it("refuses a directory, an app, an output directory or a path built from several arguments with no fix", () => {
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ["gather-workspace-data", { workspacePath: "/client/proj" }, "/client/proj"],
+      ["reinstall-app", { udid: "sim-1", appPath: "/client/App.app" }, "/client/App.app"],
+      ["screenshot-diff", { outputDir: "/client/out" }, "/client/out"],
+      ["flow-read-prerequisite", byName, "/client/proj/.argent/flows/login.yaml"],
+    ];
+    for (const [tool, args, refused] of cases) {
+      expect(toolStepUploadIssue(registry, tool, args, FLOW_RUN_CLIENT_OPS), tool).toEqual({
+        kind: "toolFile",
+        line: `tool: ${tool} (${refused})`,
+        fixes: [],
+      });
+    }
+  });
+
+  it("lists only the refused paths, in the order of the tool's file inputs, with each fix once", () => {
+    expect(
+      toolStepUploadIssue(
+        registry,
+        "screenshot-diff",
+        { baselinePath: "/client/a.png", currentPath: "shots/b.png", outputDir: "/client/out" },
+        WITH_READ
+      )
+    ).toEqual({
+      kind: "toolFile",
+      line: "tool: screenshot-diff (shots/b.png, /client/out)",
+      fixes: ["relative"],
+    });
+    expect(
+      toolStepUploadIssue(
+        registry,
+        "screenshot-diff",
+        { baselinePath: "a.png", currentPath: "b.png" },
+        WITH_READ
+      )
+    ).toEqual({
+      kind: "toolFile",
+      line: "tool: screenshot-diff (a.png, b.png)",
+      fixes: ["relative"],
+    });
+    expect(
+      toolStepUploadIssue(
+        registry,
+        "screenshot-diff",
+        { baselinePath: "/client/a.webp", currentPath: "shots/b.png", outputDir: "/client/out" },
+        undefined
+      )
+    ).toEqual({
+      kind: "toolFile",
+      line: "tool: screenshot-diff (/client/a.webp, shots/b.png, /client/out)",
+      fixes: ["extension", "relative"],
+    });
+  });
+});
+
+describe("toolFilePathHints", () => {
+  const RELATIVE = " Over a link, a tool: step must name a file by an absolute path.";
+  const EXTENSION = " Over a link, a tool: step can name only a .png or .yaml file.";
+
+  it("says how to name a refused file argument, once per fix, relative first", () => {
+    expect(toolFilePathHints([])).toBe("");
+    expect(toolFilePathHints(["update"])).toBe("");
+    expect(toolFilePathHints(["relative"])).toBe(RELATIVE);
+    expect(toolFilePathHints(["extension"])).toBe(EXTENSION);
+    expect(toolFilePathHints(["extension", "relative", "extension", "update"])).toBe(
+      RELATIVE + EXTENSION
+    );
+    expect(toolFilePathHints(new Set(["extension", "relative"] as const))).toBe(
+      RELATIVE + EXTENSION
+    );
+  });
+});
+
+describe("uploadUpdateHint", () => {
+  it("names what this tool-server serves for a newer client, or nothing", () => {
+    expect(uploadUpdateHint([])).toBe("");
+    expect(uploadUpdateHint(["run: steps for a client that sends client services"])).toBe(
+      " This tool-server serves run: steps for a client that sends client services. Update the " +
+        "argent CLI or MCP adapter on the client."
+    );
+    expect(uploadUpdateHint(["a", "b", "c"])).toBe(
+      " This tool-server serves a, and b, and c. Update the argent CLI or MCP adapter on the client."
+    );
   });
 });

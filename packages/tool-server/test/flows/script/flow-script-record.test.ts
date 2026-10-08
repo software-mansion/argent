@@ -805,11 +805,59 @@ describe("a recording this server cannot reach", () => {
 
     expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
     expect(signal?.failure_stage).toBe("flow_add_script_client_mode");
-    expect(message).toContain('Cannot access the script for flow "remote"');
-    expect(message).toContain("add the `script:` step to the YAML");
+    expect(message).toContain(
+      'Cannot add a script step to flow "remote": the recording is over a link'
+    );
+    expect(message).toContain("Nothing ran and no step was recorded.");
     await expect(fs.stat(marker)).rejects.toThrow();
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
     expect((await getRecordingSession(CLIENT_ROOT, "remote"))?.flow.steps).toEqual([]);
+  });
+
+  // A take that started without a link writes its file on this host, and a
+  // later call into it over a link is still a call a replay over that link
+  // makes: it would refuse the script step, so the recorder runs nothing.
+  it("refuses a linked call into a host-mode take without running anything", async () => {
+    const marker = path.join(root, "ran.txt");
+    await write(
+      "scripts/seed.mjs",
+      `import { writeFileSync } from "node:fs";
+       writeFileSync(${JSON.stringify(marker)}, "ran");`
+    );
+    await start("linked", root, {
+      artifacts: new ArtifactStore(),
+      fileInputs: {
+        project_root: { clientPath: root, presentOnHost: true, viaUpload: false },
+      },
+    });
+    expect((await getRecordingSession(root, "linked"))?.persist).toBe("host");
+
+    let signal;
+    let message = "";
+    try {
+      await addScript(
+        "linked",
+        "../../scripts/seed.mjs",
+        {},
+        {
+          artifacts: new ArtifactStore(),
+          linked: true,
+        }
+      );
+    } catch (err) {
+      signal = getFailureSignal(err);
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+    expect(signal?.failure_stage).toBe("flow_add_script_client_mode");
+    expect(message).toContain(
+      'Cannot add a script step to flow "linked": the recording is over a link'
+    );
+    expect(message).toContain("Nothing ran and no step was recorded.");
+    await expect(fs.stat(marker)).rejects.toThrow();
+    expect(await steps("linked")).toEqual([]);
+    expect((await getRecordingSession(root, "linked"))?.flow.steps).toEqual([]);
   });
 });
 

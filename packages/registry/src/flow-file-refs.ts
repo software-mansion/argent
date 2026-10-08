@@ -8,7 +8,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { FLOW_FILE_NAME_PATTERN } from "./file-inputs";
+import { FLOW_FILE_NAME_PATTERN, FLOW_NAME_PATTERN } from "./file-inputs";
 
 /**
  * The input must arrive with any `..` segments intact (no path.resolve/join
@@ -169,4 +169,75 @@ export async function resolveFlowRelativeFile(
     addressable
   );
   return { canonical, spelling };
+}
+
+/**
+ * The `__baselines__/<segment>` a run's snapshots key their baseline store
+ * under. The store is `<flowsDir>/__baselines__/<key>` and `flowsDir` is the
+ * CANONICAL root flow's directory, so the key must name the canonical file too.
+ * With the as-written stem it does not, and the disagreement merges distinct
+ * flows: two projects whose `.argent/flows/smoke.yaml` are symlinks into one
+ * shared vault (`vault/a-smoke.yaml`, `vault/b-smoke.yaml`) both anchor at
+ * `vault/` and both key "smoke", so a single `vault/__baselines__/smoke/` holds
+ * one PNG the two flows silently overwrite in turn while each
+ * `--update-baselines` run reports "baseline updated". For a root flow that is a
+ * regular file the canonical stem IS the as-written one, so only symlinked roots
+ * move.
+ *
+ * The canonical stem is the symlink TARGET's filename, which nothing validates:
+ * `assertSafeFlowName` and `classifyOnDiskSpelling` only run against the
+ * as-written spelling, so a vault file may legitimately be called `...yaml` —
+ * whose stem after `.yaml` is `..`, and
+ * `path.join(flowsDir, "__baselines__", "..")` IS `flowsDir`, so every baseline
+ * would land beside the flow files themselves (the escape
+ * `flow-path-baseline-escape.test.ts` pins for the as-written spelling). Hence
+ * the pattern check, against the same charset every other flow name is held to.
+ * An unsafe stem falls back to the always-validated `flowName` rather than
+ * throwing: an unusually named vault file is not the caller's error to fix
+ * mid-run. The argent client keys the baselines it serves with this same
+ * function, so both sides of a link agree on the directory.
+ */
+export function baselineKeyFor(canonicalPath: string, flowName: string): string {
+  // path.basename leaves a bare ".yaml" intact (stripping it would leave
+  // nothing) — the pattern rejects that spelling too, so it falls back as well.
+  const stem = path.basename(canonicalPath, ".yaml");
+  return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
+}
+
+/**
+ * The flow a nested `tool: flow-execute` step names, in a form both sides of a
+ * link accept, or undefined. `name`: a flow name with an absolute
+ * `project_root` that has no `..` segment, and no `flow_path`; `path` is the
+ * saved flow `<project_root>/.argent/flows/<name>.yaml`. `flow_path`: an
+ * absolute path with no `..` segment to a `<flow-name>.yaml` file, and no
+ * `name`. The argent client serves the flow of a `name` step, and the
+ * tool-server runs a nested step over a link only in that form, so the two
+ * decide with this one function.
+ */
+export type NestedFlowTarget =
+  | { kind: "name"; projectRoot: string; name: string; path: string }
+  | { kind: "flow_path"; path: string };
+
+export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+  const { name, project_root: projectRoot, flow_path: flowPath } = args as Record<string, unknown>;
+  if (flowPath === undefined) {
+    if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return undefined;
+    if (!isResolvedAbsolute(projectRoot)) return undefined;
+    return {
+      kind: "name",
+      projectRoot,
+      name,
+      path: path.join(projectRoot, ".argent", "flows", `${name}.yaml`),
+    };
+  }
+  if (name !== undefined || !isResolvedAbsolute(flowPath)) return undefined;
+  if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flowPath))) return undefined;
+  return { kind: "flow_path", path: flowPath };
+}
+
+function isResolvedAbsolute(value: unknown): value is string {
+  return (
+    typeof value === "string" && path.isAbsolute(value) && !value.split(/[\\/]+/).includes("..")
+  );
 }

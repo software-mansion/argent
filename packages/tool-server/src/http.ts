@@ -9,6 +9,7 @@ import { randomUUID, createHash } from "node:crypto";
 import {
   CLIENT_CONTENT_CAP_BYTES,
   FAILURE_CODES,
+  LINKED_CALL_HEADER,
   clientServicesParamSchema,
   describeParamIssues,
   getFailureSignal,
@@ -1129,6 +1130,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
+          // The argent client marks every call it sends over a link. A false
+          // mark makes the recorder stricter for that caller and keeps its
+          // recording in memory, sent back in client-file directives. It also
+          // lets a nested flow be asked of a client that may not serve it;
+          // that step then fails on the client's refusal.
+          ...(firstHeader(req.headers[LINKED_CALL_HEADER]) === "1" ? { linked: true } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream

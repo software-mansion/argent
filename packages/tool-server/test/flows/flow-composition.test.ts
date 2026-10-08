@@ -3513,11 +3513,13 @@ describe("flow composition (run:)", () => {
   });
 
   it("rejects an uploaded flow whose nested tool: flow-execute names a flow on the client", async () => {
-    // The raw step the recorder keeps for every nested flow in a remote
-    // recording. invokeSubTool forwards no file inputs, so without the
-    // preflight the nested run opens `<project_root>/.argent/flows/login.yaml`
-    // on THIS host after step 1 drove the device: ENOENT, or — when the same
-    // path exists here — the server's own copy, reported as a pass.
+    // The nested flow is on the client, and only `resolve-file` brings it
+    // here: the runner reads it from the client and hands it to the nested run
+    // as an upload. A client that sends no client services, or one that offers
+    // no `resolve-file`, cannot serve it, so without the preflight the nested
+    // run would open `<project_root>/.argent/flows/login.yaml` on THIS host
+    // after step 1 drove the device: ENOENT, or, when the same path exists
+    // here, the server's own copy, reported as a pass.
     const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
     await fs.writeFile(
       uploadedPath,
@@ -3585,10 +3587,139 @@ describe("flow composition (run:)", () => {
     expect((refused as Error).message).toContain(
       "which stay on the client:\n  - step 2: tool: flow-execute (name: login)\nRun the flow"
     );
-    expect((refused as Error).message).not.toContain("Update the argent CLI");
+    // A client without the link header is older than this tool-server.
+    expect((refused as Error).message).toContain(
+      "This tool-server serves tool: flow-execute steps that name a flow with name, for a " +
+        "client that serves those flows. Update the argent CLI or MCP adapter on the client."
+    );
     expect(getFailureSignal(refused)?.failure_stage).toBe("flow_upload_nested_flow");
     expect(withReadFile.invokeTool).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
+
+    // An older client offers resolve-file without the link header, and serves
+    // only what the root flow composes: refused before step 1, not at the step.
+    const older = fakeClientServices({}, { ops: ["resolve-file", "read-file"], bytes: {} });
+    const withOlderClient = mockRegistry();
+    const olderRefusal = await rejectUpload(
+      [
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { name: "login", project_root: "/client", prerequisiteAcknowledged: true },
+        },
+      ],
+      withOlderClient,
+      older.services
+    );
+    expect(getFailureSignal(olderRefusal)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect((olderRefusal as Error).message).toContain("Update the argent CLI");
+    expect(withOlderClient.invokeTool).not.toHaveBeenCalled();
+    expect(older.calls).toEqual([]);
+
+    // A client that offers resolve-file serves the nested flow: the same steps
+    // run, and the nested flow-execute (the real one) runs the client's copy.
+    const nestedYaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "logged in on the client" }],
+    });
+    const served = fakeClientServices({ "/client/.argent/flows/login.yaml": nestedYaml });
+    const withResolveFile = mockRegistry();
+    const flowExecute = createRunFlowTool(withResolveFile);
+    vi.mocked(withResolveFile.getTool).mockImplementation((id: string) =>
+      id === "flow-execute" ? (flowExecute as never) : undefined
+    );
+    (withResolveFile.invokeTool as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, params?: unknown, options?: Partial<ToolContext>) =>
+        id === "flow-execute"
+          ? flowExecute.execute({}, params as never, { artifacts: new ArtifactStore(), ...options })
+          : { ok: true }
+    );
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+          {
+            kind: "tool",
+            name: "flow-execute",
+            args: { name: "login", project_root: "/client", prerequisiteAcknowledged: true },
+          },
+        ],
+      }),
+      "utf8"
+    );
+    const result = asRun(
+      await flowExecute.execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: uploadedFlowFile(),
+          clientServices: served.services,
+          linked: true,
+        }
+      )
+    );
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tool:pass", "tool:pass"]);
+    expect(result.ok).toBe(true);
+    // The nested report is the client's flow, not a stub answer.
+    const nested = result.steps[1].result as FlowRunResult;
+    expect(nested.flow).toBe("login");
+    expect(nested.steps.map((s) => `${s.kind}:${s.status}:${s.message}`)).toEqual([
+      "echo:pass:logged in on the client",
+    ]);
+    expect(served.calls).toEqual([
+      {
+        op: "resolve-file",
+        args: { anchorDir: "/client/.argent/flows", target: "login.yaml", kind: "flow" },
+      },
+    ]);
+    expect(withResolveFile.invokeTool).toHaveBeenCalledWith(
+      "flow-execute",
+      expect.objectContaining({ name: "login", project_root: "/client" }),
+      expect.objectContaining({
+        fileInputs: {
+          flow_file: expect.objectContaining({
+            clientPath: "/client/.argent/flows/login.yaml",
+            viaUpload: true,
+          }),
+        },
+        clientServices: served.services,
+      })
+    );
+  });
+
+  it("names nested flow-execute steps by name, and not by flow_path, in the update hint of a client without client services", async () => {
+    // A newer client serves the flow a `name` step names; no client serves a
+    // `flow_path` one, so only the first gets the update sentence.
+    const hint =
+      " This tool-server serves tool: flow-execute steps that name a flow with name, for a " +
+      "client that serves those flows. Update the argent CLI or MCP adapter on the client.";
+    const byName = await rejectUpload([
+      {
+        kind: "tool",
+        name: "flow-execute",
+        args: { name: "login", project_root: "/client", prerequisiteAcknowledged: true },
+      },
+    ]);
+    expect(getFailureSignal(byName)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect((byName as Error).message.slice(-hint.length)).toBe(hint);
+
+    const byPath = await rejectUpload([
+      {
+        kind: "tool",
+        name: "flow-execute",
+        args: { flow_path: "/client/.argent/flows/login.yaml", project_root: "/client" },
+      },
+    ]);
+    expect(getFailureSignal(byPath)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect((byPath as Error).message).toContain(
+      "  - step 1: tool: flow-execute (flow_path: /client/.argent/flows/login.yaml)"
+    );
+    expect((byPath as Error).message).not.toContain("tool: flow-execute steps that name a flow");
+    expect((byPath as Error).message).not.toContain("Update the argent CLI");
   });
 
   /** Run an uploaded flow with these steps and return what it threw. */
@@ -3641,8 +3772,9 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
 
     // flow-execute declares flow_path a `file` input at an absolute path, the
-    // shape read-file serves for any other tool. A nested flow is still refused:
-    // its own run: steps and snapshots would resolve on this host.
+    // shape read-file serves for any other tool, and this client also offers
+    // resolve-file. A nested flow is still refused: the client serves a nested
+    // flow only when the step names it with `name`.
     const withReadFile = mockRegistry();
     const flowExecute = createRunFlowTool(withReadFile);
     vi.mocked(withReadFile.getTool).mockImplementation((id: string) =>
@@ -4698,10 +4830,12 @@ describe("flow composition (run:)", () => {
 
   it("runs a nested flow-execute against the run device, not the recorded one (issue #607)", async () => {
     // The raw `tool: flow-execute` form is what the recorder falls back to when
-    // the target is not a resolvable sibling — and what a remote recording always
-    // produces. Its device parameter is named `device`, which was not a bind key,
-    // so the sub-run drove the id baked in at record time. Here the flow carries
-    // a device that does not exist while the run is given a real one.
+    // the target is not a resolvable sibling, with or without a link. Its device
+    // parameter is named `device`, which was not a bind key, so the sub-run
+    // drove the id baked in at record time. Here the flow carries a device that
+    // does not exist while the run is given a real one. The third argument is
+    // the call's options: a flow-execute step passes the run stack on, for the
+    // nested run's cycle and depth guards.
     await writeFlow("main", {
       executionPrerequisite: "",
       steps: [
@@ -4724,11 +4858,14 @@ describe("flow composition (run:)", () => {
 
     expect(registry.invokeTool).toHaveBeenCalledWith(
       "flow-execute",
-      expect.objectContaining({ device: DEVICE })
+      expect.objectContaining({ device: DEVICE }),
+      expect.objectContaining({ flowStack: expect.any(Array) })
     );
+    // The same three-argument shape, so a call with the stale id would match.
     expect(registry.invokeTool).not.toHaveBeenCalledWith(
       "flow-execute",
-      expect.objectContaining({ device: "STALE-ID" })
+      expect.objectContaining({ device: "STALE-ID" }),
+      expect.objectContaining({ flowStack: expect.any(Array) })
     );
     expect(result.ok).toBe(true);
   });

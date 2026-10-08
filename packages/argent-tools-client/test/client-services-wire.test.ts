@@ -69,7 +69,7 @@ let url: string;
 let requests: Recorded[];
 let projectDir: string;
 let flowsDir: string;
-/** Per test: how POST /tools/flow-execute answers, given the parsed body. */
+/** Per test: how POST /tools/flow-execute and /tools/flow-add-step answer, given the parsed body. */
 let onInvoke: (body: unknown, res: ServerResponse) => void | Promise<void>;
 /**
  * Per test: how POST /invocations/:id/client-responses answers. A string body
@@ -153,7 +153,10 @@ beforeEach(async () => {
       res.end(JSON.stringify({ tools: listing }));
       return;
     }
-    if (req.method === "POST" && req.url === "/tools/flow-execute") {
+    if (
+      req.method === "POST" &&
+      (req.url === "/tools/flow-execute" || req.url === "/tools/flow-add-step")
+    ) {
       await onInvoke(body, res);
       return;
     }
@@ -193,8 +196,8 @@ afterEach(async () => {
   await fs.rm(projectDir, { recursive: true, force: true });
 });
 
-function invokeRequest(): Recorded {
-  const found = requests.find((r) => r.url === "/tools/flow-execute");
+function invokeRequest(tool = "flow-execute"): Recorded {
+  const found = requests.find((r) => r.url === `/tools/${tool}`);
   if (!found) throw new Error("no invoke request recorded");
   return found;
 }
@@ -326,6 +329,22 @@ function streamOneRequest(line: Record<string, unknown>, answers = 1) {
       armAnswer();
     }
     res.end(`${JSON.stringify({ event: "result", data: { ran: true }, note: "done" })}\n`);
+  };
+}
+
+/**
+ * Request lines the stub server writes one at a time, each once the one before
+ * it was answered, then the result.
+ */
+function streamRequests(lines: Record<string, unknown>[]) {
+  onInvoke = async (_body, res) => {
+    res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+    for (const line of lines) {
+      res.write(`${JSON.stringify({ event: "client-request", invocation: "inv-1", ...line })}\n`);
+      await nextAnswer;
+      armAnswer();
+    }
+    res.end(`${JSON.stringify({ event: "result", data: { ran: true } })}\n`);
   };
 }
 
@@ -780,6 +799,9 @@ describe("callTool client services", () => {
       content: Buffer.from("steps:\n  - echo: hi\n").toString("base64"),
     });
     expect(invokeRequest().headers.authorization).toBe("Bearer secret-token");
+    // The call says it came over a link; its answers are not calls.
+    expect(invokeRequest().headers["x-argent-linked"]).toBe("1");
+    expect(answer!.headers["x-argent-linked"]).toBeUndefined();
   });
 
   it("posts a refusal when the handler declines a request", async () => {
@@ -1351,5 +1373,235 @@ describe("callTool client services", () => {
     ).rejects.toThrow(
       "The connection to the tool-server closed before flow-execute finished (the stream ended without a result). The tool may have run; check its effect before you run it again."
     );
+  });
+});
+
+describe("callTool client services for a flow-add-step call", () => {
+  const ALL_OPS = ["resolve-file", "read-file", "write-file"];
+  /** The flow-add-step entry of the listing. */
+  let recorder: { name: string; description: string; inputSchema: object; clientServices: object };
+  let recording: string;
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+  beforeEach(async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    recorder = {
+      name: "flow-add-step",
+      description: "",
+      inputSchema: {},
+      clientServices: { ops: ALL_OPS },
+    };
+    listing.push(recorder);
+    // The recording composes and snapshots: none of that is the step's to serve.
+    recording = path.join(flowsDir, "rec.yaml");
+    await fs.writeFile(recording, "steps:\n  - run: frag.yaml\n  - snapshot: home\n");
+    await fs.writeFile(path.join(flowsDir, "child.yaml"), "steps:\n  - snapshot: home\n");
+    await fs.writeFile(path.join(flowsDir, "other.yaml"), "steps: []\n");
+  });
+
+  /** A flow-add-step call that records `command` with `args`, sent as JSON text as MCP sends it. */
+  const addStep = (command: unknown, args?: Record<string, unknown>) => ({
+    name: "rec",
+    project_root: projectDir,
+    command,
+    ...(args === undefined ? {} : { args: JSON.stringify(args) }),
+  });
+  const nestChild = () => addStep("flow-execute", { name: "child", project_root: projectDir });
+  const resolveRequest = (id: string, target: string) => ({
+    id,
+    op: "resolve-file",
+    args: { anchorDir: flowsDir, target, kind: "flow" },
+  });
+  const readRequest = (id: string, file: string) => ({ id, op: "read-file", args: { path: file } });
+  const notRun = (id: string, target: string) => ({
+    id,
+    ok: false,
+    error: `${target} is not a flow that the recorded step runs`,
+  });
+  const offered = () =>
+    (invokeRequest("flow-add-step").body as { client_services?: unknown }).client_services;
+  const answers = () => answerRequests().map((r) => r.body);
+  /** The tool-server answers without a stream, as for a call that asks for none. */
+  function answerPlainly(): void {
+    onInvoke = (_body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: { ok: true } }));
+    };
+  }
+
+  it("offers client services for a step that runs a nested flow, and serves that flow only", async () => {
+    streamRequests([
+      resolveRequest("req-child", "child.yaml"),
+      resolveRequest("req-other", "other.yaml"),
+    ]);
+
+    const result = await createToolsClient().callTool("flow-add-step", nestChild());
+
+    expect(result.data).toEqual({ ran: true });
+    // A recorder call updates no baselines, so write-file is not offered.
+    expect(offered()).toEqual({ ops: ["resolve-file", "read-file"], roots: [projectDir] });
+    expect(invokeRequest("flow-add-step").headers.accept).toContain("application/x-ndjson");
+    expect(answers()).toEqual([
+      expect.objectContaining({
+        id: "req-child",
+        ok: true,
+        exists: true,
+        canonical: path.join(flowsDir, "child.yaml"),
+      }),
+      notRun("req-other", "other.yaml"),
+    ]);
+  });
+
+  it("offers no write-file for a recorder call that carries updateBaselines", async () => {
+    // The schema of flow-add-step has no updateBaselines; a call that adds it
+    // must not open the nested flow's baselines to writes.
+    streamRequests([]);
+
+    await createToolsClient().callTool("flow-add-step", { ...nestChild(), updateBaselines: true });
+
+    expect(offered()).toEqual({ ops: ["resolve-file", "read-file"], roots: [projectDir] });
+  });
+
+  it("offers read-file for a step with an absolute .png argument, and serves that file only", async () => {
+    const shots = path.join(projectDir, "shots");
+    await fs.mkdir(shots);
+    const home = path.join(shots, "home.png");
+    const other = path.join(shots, "other.png");
+    await fs.writeFile(home, PNG);
+    await fs.writeFile(other, PNG);
+    streamRequests([readRequest("req-home", home), readRequest("req-other", other)]);
+
+    await createToolsClient().callTool(
+      "flow-add-step",
+      addStep("screenshot-diff", { baselinePath: home, captureCurrent: true })
+    );
+
+    expect(offered()).toEqual({ ops: ["resolve-file", "read-file"], roots: [projectDir] });
+    expect(answers()).toEqual([
+      expect.objectContaining({
+        id: "req-home",
+        ok: true,
+        exists: true,
+        content: PNG.toString("base64"),
+      }),
+      {
+        id: "req-other",
+        ok: false,
+        error:
+          `${other} is neither a file argument of a tool: step in a flow this client served ` +
+          `nor a snapshot baseline (<dir>/__baselines__/<flow>/<name>.png)`,
+      },
+    ]);
+  });
+
+  it("sends a gesture-tap step without client services or a stream, though the recording composes", async () => {
+    answerPlainly();
+    const call = addStep("gesture-tap", { udid: "X", x: 0.5, y: 0.5 });
+
+    const result = await createToolsClient().callTool("flow-add-step", call);
+
+    expect(result.data).toEqual({ ok: true });
+    expect(invokeRequest("flow-add-step").body).toEqual(call);
+    expect(invokeRequest("flow-add-step").headers.accept ?? "").not.toContain("ndjson");
+    expect(invokeRequest("flow-add-step").headers["x-argent-linked"]).toBe("1");
+  });
+
+  it("serves the recording file and the nested flow, and nothing the recording file names", async () => {
+    const recordingShot = path.join(flowsDir, "__baselines__", "rec", "home.png");
+    const childKeyDir = path.join(flowsDir, "__baselines__", "child");
+    streamRequests([
+      resolveRequest("req-rec", "rec.yaml"),
+      resolveRequest("req-frag", "frag.yaml"),
+      readRequest("req-rec-shot", recordingShot),
+      resolveRequest("req-child", "child.yaml"),
+      readRequest("req-rec-shot-again", recordingShot),
+      readRequest("req-child-shot", path.join(childKeyDir, "home.png")),
+    ]);
+
+    await createToolsClient().callTool("flow-add-step", nestChild());
+
+    expect(answers()).toEqual([
+      expect.objectContaining({ id: "req-rec", ok: true, exists: true, canonical: recording }),
+      // Served or not, the recording file names nothing the call serves.
+      notRun("req-frag", "frag.yaml"),
+      {
+        id: "req-rec-shot",
+        ok: false,
+        error: `${recordingShot} is not a baseline of this run; this run has no baseline directory on this client`,
+      },
+      expect.objectContaining({ id: "req-child", ok: true, exists: true }),
+      {
+        id: "req-rec-shot-again",
+        ok: false,
+        error: `${recordingShot} is not a baseline of this run (${childKeyDir}/<name>.png)`,
+      },
+      { id: "req-child-shot", ok: true, exists: false },
+    ]);
+  });
+
+  it("serves the files the step names when the recording file does not exist", async () => {
+    await fs.rm(recording);
+    streamRequests([
+      resolveRequest("req-child", "child.yaml"),
+      resolveRequest("req-rec", "rec.yaml"),
+    ]);
+
+    await createToolsClient().callTool("flow-add-step", nestChild());
+
+    expect(offered()).toEqual({ ops: ["resolve-file", "read-file"], roots: [projectDir] });
+    expect(answers()).toEqual([
+      expect.objectContaining({ id: "req-child", ok: true, exists: true }),
+      notRun("req-rec", "rec.yaml"),
+    ]);
+  });
+
+  it("sends no client_services when command is not a string or args is not the JSON text of an object", async () => {
+    answerPlainly();
+    const nested = { name: "child", project_root: projectDir };
+    const { callTool } = createToolsClient();
+
+    for (const call of [
+      { ...nestChild(), args: JSON.stringify([nested]) },
+      { ...nestChild(), args: "null" },
+      { ...nestChild(), args: "5" },
+      { ...nestChild(), args: JSON.stringify("child") },
+      { ...nestChild(), args: "{not json" },
+      { ...nestChild(), args: nested },
+      { ...nestChild(), command: 7 },
+      { ...nestChild(), name: "../rec" },
+      { ...nestChild(), project_root: "proj" },
+    ]) {
+      requests.length = 0;
+      await callTool("flow-add-step", call);
+      expect(invokeRequest("flow-add-step").body).toEqual(call);
+    }
+    // The same step as the JSON text of an object is served.
+    requests.length = 0;
+    await callTool("flow-add-step", nestChild());
+    expect(offered()).toMatchObject({ ops: ["resolve-file", "read-file"] });
+  });
+
+  it("serves a nested flow that a recorded step names by an absolute flow_path", async () => {
+    // resolve-file alone: the flow_path is a nested flow here, not only a tool: argument.
+    recorder.clientServices = { ops: ["resolve-file"] };
+    streamRequests([resolveRequest("req-child", "child.yaml")]);
+
+    await createToolsClient().callTool(
+      "flow-add-step",
+      addStep("flow-execute", {
+        project_root: projectDir,
+        flow_path: path.join(flowsDir, "child.yaml"),
+      })
+    );
+
+    expect(offered()).toEqual({ ops: ["resolve-file"], roots: [projectDir] });
+    expect(answers()).toEqual([
+      expect.objectContaining({
+        id: "req-child",
+        ok: true,
+        exists: true,
+        canonical: path.join(flowsDir, "child.yaml"),
+      }),
+    ]);
   });
 });

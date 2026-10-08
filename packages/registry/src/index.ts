@@ -44,17 +44,20 @@ export type {
   ClientFileDirective,
 } from "./file-inputs";
 export {
+  baselineKeyFor,
   canonicalFlowPath,
   classifyOnDiskSpelling,
   completeRunExtension,
+  nestedFlowTarget,
   resolveFlowRelativeFile,
 } from "./flow-file-refs";
-export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
+export type { NestedFlowTarget, OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
 export {
   CLIENT_SERVICE_OPS,
   CLIENT_REQUEST_EVENT,
   CLIENT_FILE_OP_TIMEOUT_MS,
   CLIENT_CONTENT_CAP_BYTES,
+  LINKED_CALL_HEADER,
   TOOL_FILE_EXTENSIONS,
   clientServicesParamSchema,
   hasToolFileExtension,

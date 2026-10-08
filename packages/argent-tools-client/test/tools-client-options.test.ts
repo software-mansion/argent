@@ -26,7 +26,12 @@ afterAll(() => {
 
 let server: Server;
 let url: string;
-let requests: Array<{ method: string; url: string; body: string }>;
+let requests: Array<{
+  method: string;
+  url: string;
+  headers: IncomingMessage["headers"];
+  body: string;
+}>;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -40,7 +45,7 @@ beforeEach(async () => {
   requests = [];
   server = createServer(async (req, res) => {
     const body = await readBody(req);
-    requests.push({ method: req.method ?? "", url: req.url ?? "", body });
+    requests.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body });
     const json = (payload: unknown, contentType = "application/json") => {
       res.writeHead(200, { "Content-Type": contentType });
       res.end(JSON.stringify(payload));
@@ -229,6 +234,38 @@ describe("createToolsClient options", () => {
     });
 
     await expect(callTool("gateway-page", {})).rejects.toThrow(/^502 Bad Gateway$/);
+  });
+
+  it("marks each POST /tools/:name of a call over a link as linked, and nothing else", async () => {
+    // A link to 127.0.0.1 included: only the header tells the tool-server.
+    const overLink = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+    await overLink.callTool("slow", {});
+    await overLink.callTool("slow", {}, { onProgress: () => {} });
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    await createToolsClient().callTool("slow", {});
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    const local = createToolsClient({ baseUrl: async () => ({ url, token: "t", remote: false }) });
+    await local.callTool("slow", {});
+
+    expect(requests.map((r) => [r.method, r.url, r.headers["x-argent-linked"] ?? null])).toEqual([
+      ["GET", "/tools", null],
+      ["POST", "/tools/slow", "1"],
+      ["GET", "/tools", null],
+      ["POST", "/tools/slow", "1"],
+      ["GET", "/tools", null],
+      ["POST", "/tools/slow", "1"],
+      ["GET", "/tools", null],
+      ["POST", "/tools/slow", null],
+    ]);
+    // The call carries no client_services: the header does not depend on them.
+    expect(requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body))).toEqual([
+      {},
+      {},
+      {},
+      {},
+    ]);
   });
 
   it("returns outputHint from the listing on the buffered and the streamed path", async () => {

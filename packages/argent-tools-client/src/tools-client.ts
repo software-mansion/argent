@@ -7,6 +7,8 @@ import {
   FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
+  LINKED_CALL_HEADER,
+  baselineKeyFor,
   describeParamIssues,
   type ClientRequestLine,
   type ClientResponseBody,
@@ -500,6 +502,9 @@ export function errorBodyMessage(body: {
   return body.error ?? body.message;
 }
 
+/** The recorder tool that runs one tool live and records it as a step. */
+const RECORD_STEP_TOOL = "flow-add-step";
+
 /**
  * The handler for one call, or null; then the call carries no
  * `client_services` and is not made a stream for them. Null when the root
@@ -523,8 +528,17 @@ export function errorBodyMessage(body: {
  * `project_root`, and the flow's fragments in its own project must not depend
  * on where the shell stands. Every root is served by its real location; one
  * that does not exist is dropped.
+ *
+ * A `flow-add-step` call runs one tool live and records it into the flow
+ * `name` that is being recorded: its root flow is that recording file, in the
+ * same roots, and the handler serves what the recorded step names (`command`,
+ * with `args` parsed from its JSON text, `{}` without it) in place of what the
+ * recording file names. No handler when `command` is not a string or `args`
+ * is not the JSON text of an object: a tool takes its arguments as an object,
+ * so no step runs with such arguments.
  */
 async function clientServicesHandlerFor(
+  tool: string,
   advert: ClientServicesAdvert,
   args: unknown,
   log: (line: string) => void
@@ -534,7 +548,14 @@ async function clientServicesHandlerFor(
   if (!isResolvedAbsolute(project_root)) return null;
   const flowsDir = path.join(project_root, ".argent", "flows");
   let rootFlow: string;
-  if (flow_path !== undefined && name === undefined) {
+  let step: { tool: string; args: Record<string, unknown> } | undefined;
+  if (tool === RECORD_STEP_TOOL) {
+    // flow-add-step names its recording by `name` alone; it has no flow_path.
+    if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return null;
+    step = recordedStep(args as Record<string, unknown>);
+    if (step === undefined) return null;
+    rootFlow = path.join(flowsDir, `${name}.yaml`);
+  } else if (flow_path !== undefined && name === undefined) {
     if (!isResolvedAbsolute(flow_path)) return null;
     if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flow_path))) return null;
     rootFlow = flow_path;
@@ -558,30 +579,56 @@ async function clientServicesHandlerFor(
     ))
       ? resolved
       : null;
+  // A recorded step keys no baselines of the recording; only a nested flow it
+  // runs has its own, which the handler adds once it served that flow.
   let baselineDir: string | null = null;
-  if (real !== null) {
-    roots.push(path.dirname(real));
+  if (real !== null) roots.push(path.dirname(real));
+  if (real !== null && step === undefined) {
     // Where the tool-server keys this run's baselines: beside the root flow's
     // real file (the canonical that resolve-file answers for it), under that
     // file's stem, or under the flow name when the stem is not a flow name (a
     // `.yml` file, a name with a space). The flow name is `name`, or the
     // basename of `flow_path`.
-    const stem = path.basename(real, ".yaml");
-    const key = FLOW_NAME_PATTERN.test(stem) ? stem : path.basename(rootFlow, ".yaml");
+    const key = baselineKeyFor(real, path.basename(rootFlow, ".yaml"));
     baselineDir = path.join(path.dirname(real), "__baselines__", key);
   }
   for (const file of real === null ? [rootFlow] : [rootFlow, real]) {
     const project = savedFlowProject(file);
     if (project !== null) roots.push(project);
   }
-  const updatesBaselines = (args as Record<string, unknown>).updateBaselines === true;
+  // A recorded step updates no baseline, whatever its call carries.
+  const updatesBaselines =
+    step === undefined && (args as Record<string, unknown>).updateBaselines === true;
   return createClientServicesHandler({
     roots,
     rootFlow,
     advertised: advert.ops.filter((op) => op !== "write-file" || updatesBaselines),
     baselineDir,
+    ...(step === undefined ? {} : { step }),
     log,
   });
+}
+
+/**
+ * The step a `flow-add-step` call runs and records: its `command`, with
+ * `args` parsed from the JSON text of an object, or `{}` when the call has no
+ * `args`. Undefined for any other `command` or `args`.
+ */
+function recordedStep(
+  args: Record<string, unknown>
+): { tool: string; args: Record<string, unknown> } | undefined {
+  const { command, args: text } = args;
+  if (typeof command !== "string") return undefined;
+  if (text === undefined) return { tool: command, args: {} };
+  if (typeof text !== "string") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+  return { tool: command, args: parsed as Record<string, unknown> };
 }
 
 /** An absolute path with no `..` segment, as the tool-server requires. */
@@ -723,7 +770,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         });
       }
       if (remote && meta.clientServices) {
-        const handler = await clientServicesHandlerFor(meta.clientServices, args, diagnose);
+        const handler = await clientServicesHandlerFor(name, meta.clientServices, args, diagnose);
         if (handler) {
           finalArgs = { ...(finalArgs as Record<string, unknown>), client_services: handler.param };
           services = {
@@ -745,6 +792,9 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // Tells the tool-server the call came over a link, a link to
+          // 127.0.0.1 included, which nothing else in the request shows.
+          ...(remote ? { [LINKED_CALL_HEADER]: "1" } : {}),
           // A proxy that compresses the stream holds each line until its buffer
           // fills, so a request line never gets its answer. `identity` keeps the
           // stream uncompressed end to end.

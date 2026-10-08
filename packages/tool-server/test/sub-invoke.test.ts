@@ -139,6 +139,142 @@ describe("invokeSubTool", () => {
     ]);
   });
 
+  it("forwards flowStack on both paths", async () => {
+    const flowStack = [{ canonical: "/proj/.argent/flows/root.yaml", display: "root" }];
+    const args = { name: "child", project_root: "/proj" };
+    const signal = new AbortController().signal;
+
+    // Without a recorder: from ctx alone, from ctx beside the signal, and from
+    // extra with no ctx at all.
+    const direct = mockRegistry();
+    await invokeSubTool(
+      direct,
+      { artifacts: {}, flowStack } as unknown as ToolContext,
+      "flow-execute",
+      args
+    );
+    await invokeSubTool(
+      direct,
+      { artifacts: {}, signal, flowStack } as unknown as ToolContext,
+      "flow-execute",
+      args
+    );
+    await invokeSubTool(direct, undefined, "flow-execute", args, { flowStack });
+    expect(vi.mocked(direct.invokeTool).mock.calls).toStrictEqual([
+      ["flow-execute", args, { flowStack }],
+      ["flow-execute", args, { signal, flowStack }],
+      ["flow-execute", args, { flowStack }],
+    ]);
+
+    // With a recorder: forwarded beside the minted id and the recorder.
+    const recorded = mockRegistry();
+    const recordChildInvocation = vi.fn((_id: string, _args?: unknown) => vi.fn());
+    await invokeSubTool(
+      recorded,
+      { artifacts: {}, signal, recordChildInvocation, flowStack } as unknown as ToolContext,
+      "flow-execute",
+      args
+    );
+    const childId = recordChildInvocation.mock.calls[0]![0];
+    expect(vi.mocked(recorded.invokeTool).mock.calls).toStrictEqual([
+      [
+        "flow-execute",
+        args,
+        { signal, toolInvocationId: childId, recordChildInvocation, flowStack },
+      ],
+    ]);
+  });
+
+  it("lets a key of extra win over the field of ctx", async () => {
+    const outer = [{ canonical: "/proj/.argent/flows/outer.yaml", display: "outer" }];
+    const inner = [...outer, { canonical: "/proj/.argent/flows/root.yaml", display: "root" }];
+    const args = { name: "child", project_root: "/proj" };
+
+    const direct = mockRegistry();
+    await invokeSubTool(
+      direct,
+      { artifacts: {}, flowStack: outer } as unknown as ToolContext,
+      "flow-execute",
+      args,
+      { flowStack: inner }
+    );
+    const recorded = mockRegistry();
+    const recordChildInvocation = vi.fn((_id: string, _args?: unknown) => vi.fn());
+    await invokeSubTool(
+      recorded,
+      { artifacts: {}, recordChildInvocation, flowStack: outer } as unknown as ToolContext,
+      "flow-execute",
+      args,
+      { flowStack: inner }
+    );
+
+    const directOptions = vi.mocked(direct.invokeTool).mock.calls[0]![2];
+    const recordedOptions = vi.mocked(recorded.invokeTool).mock.calls[0]![2];
+    expect(directOptions).toStrictEqual({ flowStack: inner });
+    expect(directOptions?.flowStack).toBe(inner);
+    expect(recordedOptions?.flowStack).toBe(inner);
+  });
+
+  it("does not forward clientServices or linked from ctx", async () => {
+    const clientServices = {
+      ops: ["resolve-file", "read-file"],
+      roots: ["/client/proj"],
+      request: vi.fn(async () => ({})),
+    };
+    const args = { name: "child", project_root: "/client/proj" };
+
+    // Nothing else to forward: the two-argument call, as for a bare ctx.
+    const direct = mockRegistry();
+    await invokeSubTool(
+      direct,
+      { artifacts: {}, clientServices, linked: true } as unknown as ToolContext,
+      "flow-execute",
+      args
+    );
+    expect(vi.mocked(direct.invokeTool).mock.calls).toStrictEqual([["flow-execute", args]]);
+
+    // With a recorder: only the id and the recorder travel.
+    const recorded = mockRegistry();
+    const recordChildInvocation = vi.fn((_id: string, _args?: unknown) => vi.fn());
+    await invokeSubTool(
+      recorded,
+      {
+        artifacts: {},
+        clientServices,
+        linked: true,
+        recordChildInvocation,
+      } as unknown as ToolContext,
+      "flow-execute",
+      args
+    );
+    const childId = recordChildInvocation.mock.calls[0]![0];
+    expect(vi.mocked(recorded.invokeTool).mock.calls).toStrictEqual([
+      [
+        "flow-execute",
+        args,
+        { signal: undefined, toolInvocationId: childId, recordChildInvocation },
+      ],
+    ]);
+    expect(clientServices.request).not.toHaveBeenCalled();
+  });
+
+  it("passes an options object when only extra.clientServices is set", async () => {
+    const registry = mockRegistry();
+    const clientServices = {
+      ops: ["resolve-file", "read-file"] as const,
+      roots: ["/client/proj"],
+      request: vi.fn(async () => ({})),
+    };
+    const args = { flow_file: "/tmp/argent-file-input-x/login.yaml" };
+
+    await invokeSubTool(registry, undefined, "flow-execute", args, { clientServices });
+
+    // No signal key: only what was set travels.
+    expect(vi.mocked(registry.invokeTool).mock.calls).toStrictEqual([
+      ["flow-execute", args, { clientServices }],
+    ]);
+  });
+
   it("releases the recorded metadata even when the sub-tool throws", async () => {
     const registry = {
       invokeTool: vi.fn(async () => {
