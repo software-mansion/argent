@@ -274,7 +274,7 @@ export function attrIsTrue(attrs: Record<string, string>, key: string): boolean 
   return attrs[key] === "true";
 }
 
-function isInteractive(attrs: Record<string, string>): boolean {
+export function isInteractive(attrs: Record<string, string>): boolean {
   if (hasGestureFlag(attrs)) return true;
   // Focusable without a label is just a focus trap on a layout wrapper.
   if (attrIsTrue(attrs, "focusable") && labelOf(attrs) !== "") return true;
@@ -302,7 +302,7 @@ function isSystemChrome(attrs: Record<string, string>): boolean {
   return SYSTEM_RID_PREFIXES.some((p) => rid.startsWith(p));
 }
 
-function rectsEqual(a: PixelRect, b: PixelRect): boolean {
+export function rectsEqual(a: PixelRect, b: PixelRect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
@@ -328,7 +328,7 @@ export function rectFullyOutside(
  * capped, so a clickable container with no label of its own can borrow its
  * descendants' (the "row-as-tap-target" pattern).
  */
-function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
+export function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
   const parts: string[] = [];
   const seen = new Set<string>();
   const stack: ParsedXmlNode[] = [parsed];
