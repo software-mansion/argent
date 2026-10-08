@@ -104,7 +104,7 @@ The runner resolves a selector against a different tree than the `describe` tool
 | Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
 | Vega            | Toolkit page source                           | Same source                |
 
-On an iOS simulator and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+On an iOS simulator and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`. On Android, the runner gives a view the label that `describe` shows, so a role and a text from `describe` resolve in a flow.
 
 ## Directives
 
