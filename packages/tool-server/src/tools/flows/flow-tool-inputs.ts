@@ -31,7 +31,7 @@ function nestedFlowRef(args: Record<string, unknown>): string {
 }
 
 /** The file inputs a `tool:` step's args fill in for the tool it names ({@link toolStepFiles}). */
-export function toolStepFilePaths(
+function toolStepFilePaths(
   registry: Registry,
   tool: string,
   args: Record<string, unknown>
@@ -54,7 +54,7 @@ function isFileArgument({ spec }: ToolStepFile): boolean {
  * `screenshot-diff`'s `outputDir` do not travel with the call, so a step that
  * fills one stays refused for every client.
  */
-export function servedToolInput(file: ToolStepFile, withFiles: boolean): boolean {
+function servedToolInput(file: ToolStepFile, withFiles: boolean): boolean {
   return isClientFileArgument(file) && withFiles;
 }
 
