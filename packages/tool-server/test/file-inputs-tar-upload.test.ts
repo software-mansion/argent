@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FILE_INPUT_MARKER, type FileInputSpec } from "@argent/registry";
+import { createArchiveFile } from "@argent/archive";
 import { resolveFileInputs, type UploadEntry } from "../src/file-inputs";
 
 const execFileAsync = promisify(execFile);
@@ -172,6 +173,24 @@ describe("resolveFileInputs — tar-upload kind", () => {
 
     await cleanup();
     await expect(fs.stat(resolvedPath)).rejects.toThrow();
+  });
+
+  it("extracts a zstd upload", async () => {
+    const appDir = await makeFakeApp();
+    const tarPath = path.join(tmpDir, "upload.tar.zst");
+    await createArchiveFile(appDir, tarPath, "zstd");
+    const entry = await uploadEntry(tarPath);
+
+    const { args, cleanup } = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wireUpload("/client/MyApp.app", "u-zstd", entry) },
+      (id) => (id === "u-zstd" ? entry : undefined)
+    );
+    cleanups.push(cleanup);
+
+    expect(await fs.readFile(path.join(args.appPath as string, "Info.plist"), "utf8")).toBe(
+      "<plist/>"
+    );
   });
 
   it("extracts an uploaded single file (e.g. an .apk) and returns its path", async () => {

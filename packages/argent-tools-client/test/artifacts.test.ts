@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { gunzipSync, zstdCompressSync } from "node:zlib";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, rm, readFile, writeFile, stat, symlink, readdir } from "node:fs/promises";
@@ -373,6 +374,25 @@ describe("materializeArtifacts directory bundles", () => {
     expect(extracted).toBe(join(artifactDir(), "session.trace"));
     expect((await stat(extracted)).isDirectory()).toBe(true);
     expect(await readFile(join(extracted, "top.txt"), "utf8")).toBe("top");
+    expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
+  });
+
+  it("remote: asks for zstd and unpacks a zstd bundle", async () => {
+    const { tarGz } = await makeBundle();
+    const zst = zstdCompressSync(gunzipSync(tarGz));
+    const accepts: Array<string | undefined> = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      accepts.push((init?.headers as Record<string, string> | undefined)?.Accept);
+      return fakeFetchBuffer({ t5: zst })(url, init);
+    }) as unknown as typeof fetch;
+
+    const { result } = await materializeArtifacts(
+      { traceFile: archiveHandle("t5", join(hostDir, "gone.trace")) },
+      { toolsUrl: "http://remote:3001", fetchImpl }
+    );
+
+    expect(accepts).toEqual(["application/zstd, application/gzip"]);
+    const extracted = (result as { traceFile: string }).traceFile;
     expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
   });
 

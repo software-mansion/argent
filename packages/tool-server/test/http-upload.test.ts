@@ -141,7 +141,7 @@ describe("POST /upload", () => {
       .post("/upload")
       .set("Content-Type", "application/gzip")
       .send(body);
-    const tarFile = path.join(os.tmpdir(), `argent-upload-${res.body.uploadId}.tar.gz`);
+    const tarFile = path.join(os.tmpdir(), `argent-upload-${res.body.uploadId}`);
     expect(await fs.stat(tarFile)).toBeTruthy();
 
     handle.dispose();
@@ -152,7 +152,7 @@ describe("POST /upload", () => {
   });
 
   it("discards the partial file when the client disconnects mid-upload", async () => {
-    // The upload path is join(os.tmpdir(), `argent-upload-${id}.tar.gz`).
+    // The upload path is join(os.tmpdir(), `argent-upload-${id}`).
     // Scope the tmpdir to this test so the leak check sees only this run's
     // partials: against the machine-wide tmpdir a concurrent run's in-flight
     // upload never disappears, and the poll below turns into a timeout rather

@@ -173,7 +173,9 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return cached;
   }
 
-  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+  async function fetchToolList(opts?: {
+    signal?: AbortSignal;
+  }): Promise<{ tools: ToolMeta[]; uploadFormats?: string[] }> {
     opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
     const res = await fetch(`${url}/tools`, {
@@ -181,8 +183,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       signal: opts?.signal,
     });
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
-    const json = (await res.json()) as { tools: ToolMeta[] };
-    return json.tools;
+    return (await res.json()) as { tools: ToolMeta[]; uploadFormats?: string[] };
+  }
+
+  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+    return (await fetchToolList(opts)).tools;
   }
 
   async function fetchTool(
@@ -205,13 +210,14 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (co-located) or from inlined content (remote).
     let finalArgs = args;
-    const meta = await fetchTool(name, { signal: opts?.signal });
+    const { tools, uploadFormats } = await fetchToolList({ signal: opts?.signal });
+    const meta = tools.find((t) => t.name === name);
     if (meta?.fileInputs?.length) {
       const { url: routedUrl } = await getResolvedToolsUrl();
       const isRemote = routedUrl !== null;
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
         includeContent: isRemote,
-        uploadEndpoint: isRemote ? { url, token } : undefined,
+        uploadEndpoint: isRemote ? { url, token, formats: uploadFormats } : undefined,
         signal: opts?.signal,
       });
     }

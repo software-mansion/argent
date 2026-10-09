@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 
-import { safeExtractTarGz } from "@argent/archive";
+import { ARCHIVE_CONTENT_TYPES, ARCHIVE_FORMATS, safeExtractArchive } from "@argent/archive";
 import { argentHomeDir, findProjectRoot, getConfigValueByKey } from "@argent/configuration-core";
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
@@ -78,7 +78,7 @@ export interface ArtifactHandle {
   /**
    * Present when the artifact is a directory bundle (e.g. an Instruments
    * `.trace`). Used in place locally; on a remote miss the download is a
-   * gzipped tar the client unpacks back into a directory.
+   * compressed tar the client unpacks back into a directory.
    */
   archive?: "tar.gz";
   /**
@@ -381,7 +381,7 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
     const st = await stat(handle.hostPath);
     if (handle.archive) {
       // Directory bundle: size/mtime are meaningless for a dir, so existence as
-      // one is the whole check; a hit skips the tar.gz round-trip.
+      // one is the whole check; a hit skips the archive round-trip.
       return st.isDirectory() ? handle.hostPath : null;
     }
     if (!st.isFile()) return null;
@@ -396,7 +396,7 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
 }
 
 /**
- * Unpack a downloaded gzipped tar back into a directory under `dir`, returning
+ * Unpack a downloaded compressed tar back into a directory under `dir`, returning
  * the unpacked path. Null when extraction fails, so a bad bundle degrades to a
  * missing-file signal rather than throwing.
  */
@@ -405,11 +405,11 @@ async function downloadAndExtractArchive(
   data: Buffer,
   dir: string
 ): Promise<string | null> {
-  const tarball = join(dir, `${sanitizeSegment(handle.filename)}.tar.gz`);
+  const tarball = join(dir, `${sanitizeSegment(handle.filename)}.archive`);
   try {
     await writeFile(tarball, data);
     // Slip-hardened: a `../` member must not write outside the cache.
-    return await safeExtractTarGz(tarball, dir, handle.filename);
+    return await safeExtractArchive(tarball, dir, handle.filename);
   } catch {
     return null;
   } finally {
@@ -512,7 +512,12 @@ export async function materializeArtifacts(
       }
       try {
         const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
-          headers: authHeaders,
+          headers: value.archive
+            ? {
+                ...authHeaders,
+                Accept: ARCHIVE_FORMATS.map((f) => ARCHIVE_CONTENT_TYPES[f]).join(", "),
+              }
+            : authHeaders,
           signal: ctx.signal,
         });
         if (!res.ok) return null;

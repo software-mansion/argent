@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { safeExtractArchive } from "@argent/archive";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
@@ -261,6 +262,96 @@ describe("GET /artifacts/:id", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("streams a zstd tar when the client's Accept lists application/zstd", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-bundle-"));
+    try {
+      const bundle = join(root, "session.trace");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "top.txt"), "top");
+
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: bundle,
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      const res = await supertest(handle.app)
+        .get(`/artifacts/${artifact.id}`)
+        .set("Accept", "application/zstd, application/gzip")
+        .buffer(true)
+        .parse(binaryParser as never);
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/zstd");
+      expect(res.headers["content-disposition"]).toContain("session.trace.tar.zst");
+      const archive = join(root, "out.archive");
+      await writeFile(archive, res.body);
+      const dest = await mkdtemp(join(root, "dest-"));
+      const member = await safeExtractArchive(archive, dest, "session.trace");
+      expect(await readFile(join(member, "top.txt"), "utf8")).toBe("top");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  describe("when tar exits non-zero", () => {
+    let root: string;
+    const realPath = process.env.PATH;
+
+    // A `tar` on PATH that runs the real one, keeps the first FAKE_TAR_BYTES of
+    // its output, and exits 1 like tar abandoning or warning.
+    beforeEach(async () => {
+      root = await mkdtemp(join(tmpdir(), "artifact-faketar-"));
+      const realTar = execFileSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).trim();
+      await mkdir(join(root, "bin"));
+      await writeFile(
+        join(root, "bin", "tar"),
+        `#!/bin/sh\n"${realTar}" "$@" | head -c "$FAKE_TAR_BYTES"\nexit 1\n`,
+        { mode: 0o755 }
+      );
+      process.env.PATH = `${join(root, "bin")}:${realPath}`;
+      const bundle = join(root, "B.trace");
+      await mkdir(bundle);
+      for (const n of ["a", "b", "c", "d"]) await writeFile(join(bundle, n), n.repeat(512));
+    });
+
+    afterEach(async () => {
+      process.env.PATH = realPath;
+      delete process.env.FAKE_TAR_BYTES;
+      await rm(root, { recursive: true, force: true });
+    });
+
+    async function download(): Promise<supertest.Response> {
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: join(root, "B.trace"),
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      return supertest(handle.app)
+        .get(`/artifacts/${artifact.id}`)
+        .set("Accept", "application/zstd")
+        .buffer(true)
+        .parse(binaryParser as never);
+    }
+
+    it("cuts the response off when tar abandoned the archive", async () => {
+      process.env.FAKE_TAR_BYTES = "2560"; // the first member and a half
+      await expect(download()).rejects.toThrow();
+    });
+
+    it("completes the response when tar wrote the whole archive", async () => {
+      process.env.FAKE_TAR_BYTES = "100000000";
+      const res = await download();
+      expect(res.status).toBe(200);
+      process.env.PATH = realPath;
+      const archive = join(root, "out.archive");
+      await writeFile(archive, res.body);
+      const member = await safeExtractArchive(archive, await mkdtemp(join(root, "d-")), "B.trace");
+      expect(await readFile(join(member, "d"), "utf8")).toBe("d".repeat(512));
+    });
   });
 
   it("404s an unknown artifact id", async () => {

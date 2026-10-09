@@ -1,7 +1,9 @@
 /**
- * Shared `tar.gz` helpers for the file boundary: a bundle (an iOS `.app`, an
- * `.apk`/`.vpkg`, a `.trace`) moves between client and tool-server as a gzipped
- * tar via the system `tar` (present on macOS/Linux and Windows 10+).
+ * Shared archive helpers for the file boundary: a bundle (an iOS `.app`, an
+ * `.apk`/`.vpkg`, a `.trace`) moves between client and tool-server as a tar
+ * compressed with zstd or gzip. The system `tar` (present on macOS/Linux and
+ * Windows 10+) only packs and unpacks; compression runs in `node:zlib`, since
+ * stock `tar` builds can't read zstd.
  *
  * The archive carries the source's basename as its single top-level member, so
  * extraction recreates `<destDir>/<basename>`. Extraction is tar-slip hardened
@@ -9,35 +11,205 @@
  * uploading or a compromised tool-server serving an artifact.
  */
 
-import { execFile } from "node:child_process";
-import { rm, readdir } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { createReadStream, createWriteStream } from "node:fs";
+import { open, rm, readdir } from "node:fs/promises";
 import { basename, dirname, join, posix, resolve, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
+import zlib from "node:zlib";
 
 const execFileAsync = promisify(execFile);
 
-/** Thrown when an archive is empty or holds an unsafe (tar-slip / bad-type) member. */
+/** Thrown when an archive is empty, unreadable, or holds an unsafe (tar-slip / bad-type) member. */
 export class ArchiveError extends Error {}
 
+export type ArchiveFormat = "zstd" | "gzip";
+
 /**
- * `tar` argv that gzips `sourcePath`'s basename as the archive's single
- * top-level member. `target` is an output file path, or `"-"` for stdout.
+ * Formats this runtime can write and read, preferred first. zstd is missing
+ * from Node 23.0-23.7, which `engines` still admits.
  */
-export function createTarGzArgs(sourcePath: string, target: string): string[] {
-  return ["-czf", target, "-C", dirname(sourcePath), basename(sourcePath)];
+export const ARCHIVE_FORMATS: readonly ArchiveFormat[] =
+  typeof zlib.createZstdCompress === "function" ? ["zstd", "gzip"] : ["gzip"];
+
+export const ARCHIVE_CONTENT_TYPES: Readonly<Record<ArchiveFormat, string>> = {
+  zstd: "application/zstd",
+  gzip: "application/gzip",
+};
+
+/**
+ * The format to send a peer that can read `peerFormats`: the first of ours it
+ * lists, else gzip, which every argent version reads.
+ */
+export function pickArchiveFormat(peerFormats: readonly string[] | undefined): ArchiveFormat {
+  return ARCHIVE_FORMATS.find((f) => peerFormats?.includes(f)) ?? "gzip";
+}
+
+/** The archive formats an HTTP `Accept` header lists by content type, minus any at `q=0`. */
+export function archiveFormatsFromAccept(accept: string | undefined): ArchiveFormat[] {
+  const types = (accept ?? "")
+    .split(",")
+    .map((t) => t.split(";").map((p) => p.trim().toLowerCase()))
+    .filter(([, ...params]) => !params.some((p) => /^q=0(\.0*)?$/.test(p)))
+    .map(([type]) => type);
+  return ARCHIVE_FORMATS.filter((f) => types.includes(ARCHIVE_CONTENT_TYPES[f]));
+}
+
+// zlib's default 16 KiB chunks make piping a large tar 2-3x slower.
+const CHUNK_BYTES = 1 << 20;
+
+export function createCompressor(format: ArchiveFormat): zlib.Gzip | zlib.ZstdCompress {
+  return format === "zstd"
+    ? zlib.createZstdCompress({
+        chunkSize: CHUNK_BYTES,
+        // Lets the decoder detect corruption.
+        params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 },
+      })
+    : zlib.createGzip({ chunkSize: CHUNK_BYTES });
 }
 
 /**
- * Gzip `sourcePath` (file or directory) into the tar file at `tarPath`. Removes
- * the partial archive if `tar` fails, so a mid-write failure doesn't leak it.
+ * `tar` argv that writes an uncompressed tar of `sourcePath`'s basename, as the
+ * archive's single top-level member, to stdout.
  */
-export async function createTarGzFile(sourcePath: string, tarPath: string): Promise<void> {
+export function createTarArgs(sourcePath: string): string[] {
+  return ["-cf", "-", "-C", dirname(sourcePath), basename(sourcePath)];
+}
+
+/**
+ * Archive `sourcePath` (file or directory) into `archivePath`. Removes the
+ * partial archive on failure.
+ */
+export async function createArchiveFile(
+  sourcePath: string,
+  archivePath: string,
+  format: ArchiveFormat
+): Promise<void> {
   try {
-    await execFileAsync("tar", createTarGzArgs(sourcePath, tarPath));
+    const child = spawn("tar", createTarArgs(sourcePath), { stdio: ["ignore", "pipe", "pipe"] });
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+    const exited = new Promise<number | null>((res, rej) => {
+      child.on("error", rej);
+      child.on("close", res);
+    });
+    const [, code] = await Promise.all([
+      pipeline(child.stdout, createCompressor(format), createWriteStream(archivePath)),
+      exited,
+    ]);
+    if (code !== 0) throw new Error(`tar exited with code ${code}: ${stderr.trim()}`);
   } catch (err) {
-    await rm(tarPath, { force: true }).catch(() => {});
+    await rm(archivePath, { force: true }).catch(() => {});
     throw err;
   }
+}
+
+/** Identify the compression by its magic bytes; the sender's label isn't trusted. */
+async function sniffFormat(archivePath: string): Promise<ArchiveFormat> {
+  const fh = await open(archivePath, "r");
+  try {
+    const { buffer, bytesRead } = await fh.read(Buffer.alloc(4), 0, 4, 0);
+    const magic = buffer.subarray(0, bytesRead).toString("hex");
+    if (magic.startsWith("1f8b")) return "gzip";
+    if (magic === "28b52ffd" && ARCHIVE_FORMATS.includes("zstd")) return "zstd";
+    throw new ArchiveError("unrecognized compression");
+  } finally {
+    await fh.close();
+  }
+}
+
+const ZSTD_FRAME_MAGIC = 0xfd2fb528;
+
+/**
+ * Throw unless `archivePath` is complete zstd frames of which only the first
+ * carries data, by walking frame and block headers (RFC 8878 §3.1.1). Node's
+ * decoder silently accepts a truncated frame (nodejs/node#64592, fixed in 24.21)
+ * and drops a later frame (nodejs/node#64741, fixed in 26.11).
+ */
+async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void> {
+  const fh = await open(archivePath, "r");
+  try {
+    const { size } = await fh.stat();
+    const buf = Buffer.alloc(5);
+    let pos = 0;
+    const read = async (n: number): Promise<Buffer> => {
+      const { bytesRead } = await fh.read(buf, 0, n, pos);
+      if (bytesRead < n) throw new ArchiveError("truncated zstd frame");
+      return buf;
+    };
+    for (let frame = 0; pos < size; frame++) {
+      const header = await read(5);
+      if (header.readUInt32LE(0) !== ZSTD_FRAME_MAGIC) throw new ArchiveError("bad zstd frame");
+      const descriptor = header[4]!;
+      const singleSegment = (descriptor >> 5) & 1;
+      pos +=
+        5 +
+        (singleSegment ? 0 : 1) + // window descriptor
+        [0, 1, 2, 4][descriptor & 3]! + // dictionary id
+        [singleSegment, 2, 4, 8][descriptor >> 6]!; // frame content size
+      let hasData = false;
+      for (let last = 0; !last; ) {
+        const block = (await read(3)).readUIntLE(0, 3);
+        last = block & 1;
+        const type = (block >> 1) & 3;
+        const blockSize = block >> 3;
+        if (type === 3) throw new ArchiveError("bad zstd block");
+        if (blockSize > 0) hasData = true;
+        pos += 3 + (type === 1 ? 1 : blockSize); // an RLE block stores one byte
+      }
+      if ((descriptor >> 2) & 1) pos += 4; // content checksum
+      if (hasData && frame > 0) throw new ArchiveError("multi-frame zstd");
+    }
+    if (pos !== size) throw new ArchiveError("truncated zstd frame");
+  } finally {
+    await fh.close();
+  }
+}
+
+interface Archive {
+  path: string;
+  format: ArchiveFormat;
+}
+
+/** A pipe `tar` closed because it stopped reading, which isn't a failure by itself. */
+function isClosedPipe(err: NodeJS.ErrnoException): boolean {
+  return err.code === "EPIPE" || err.code === "ERR_STREAM_PREMATURE_CLOSE";
+}
+
+/**
+ * Run `tar <args>` over `archive`, returning stdout. gzip goes to `tar -z`;
+ * zstd is decompressed here and piped in, since stock `tar` can't read it.
+ */
+async function runTar(archive: Archive, args: string[]): Promise<string> {
+  if (archive.format === "gzip") {
+    const { stdout } = await execFileAsync("tar", [...args, "-zf", archive.path], {
+      maxBuffer: Infinity, // a bundle with ~13k members lists past the 1 MiB default
+    });
+    return stdout;
+  }
+  const child = spawn("tar", [...args, "-f", "-"], { stdio: ["pipe", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (d: string) => (stdout += d));
+  child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+  const exited = new Promise<number | null>((res, rej) => {
+    child.on("error", rej);
+    child.on("close", res);
+  });
+  const fed = pipeline(
+    createReadStream(archive.path, { highWaterMark: CHUNK_BYTES }),
+    zlib.createZstdDecompress({ chunkSize: CHUNK_BYTES }),
+    child.stdin
+  ).then(
+    () => null,
+    (err: NodeJS.ErrnoException) => err
+  );
+  const [code, feedError] = await Promise.all([exited, fed]);
+  if (feedError && !isClosedPipe(feedError)) throw feedError;
+  if (code !== 0)
+    throw new Error(`tar ${args.join(" ")} exited with code ${code}: ${stderr.trim()}`);
+  return stdout;
 }
 
 function normalizeTarMemberPath(memberPath: string): string {
@@ -59,8 +231,8 @@ function isSafeTarMember(memberPath: string, destDir: string): boolean {
 }
 
 /** List an archive's members without extracting, so they can be vetted first. */
-async function listTarMembers(tarPath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("tar", ["-tzf", tarPath]);
+async function listTarMembers(archive: Archive): Promise<string[]> {
+  const stdout = await runTar(archive, ["-t"]);
   return stdout
     .split("\n")
     .map((line) => line.trim())
@@ -77,11 +249,11 @@ function isEscapingLinkTarget(target: string): boolean {
  * Reject members that could write or link outside `destDir`. Regular files and
  * directories pass; symlinks pass only when their target stays inside (a `.app`
  * carries internal ones like `Current -> A`); every other type (hardlink,
- * device, fifo, …) is refused. Only `tar -tzvf`'s type char and ` -> <target>`
+ * device, fifo, …) is refused. Only `tar -tv`'s type char and ` -> <target>`
  * are read — the column-formatted name is not stable across tar variants.
  */
-async function assertSafeMemberTypes(tarPath: string): Promise<void> {
-  const { stdout } = await execFileAsync("tar", ["-tzvf", tarPath]);
+async function assertSafeMemberTypes(archive: Archive): Promise<void> {
+  const stdout = await runTar(archive, ["-tv"]);
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const type = line[0];
@@ -106,10 +278,10 @@ async function assertSafeMemberTypes(tarPath: string): Promise<void> {
 }
 
 /** Throw {@link ArchiveError} unless every member is safe to extract into `destDir`. */
-async function assertSafeArchive(tarPath: string, destDir: string): Promise<void> {
+async function assertSafeArchive(archive: Archive, destDir: string): Promise<void> {
   let members: string[];
   try {
-    members = await listTarMembers(tarPath);
+    members = await listTarMembers(archive);
   } catch (err) {
     throw new ArchiveError(
       `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
@@ -123,7 +295,7 @@ async function assertSafeArchive(tarPath: string, destDir: string): Promise<void
       throw new ArchiveError(`Archive contains an unsafe path "${member}" — refusing extraction.`);
     }
   }
-  await assertSafeMemberTypes(tarPath);
+  await assertSafeMemberTypes(archive);
 }
 
 /**
@@ -147,18 +319,27 @@ async function resolveMember(destDir: string, expectedName: string): Promise<str
 }
 
 /**
- * Vet a gzipped tar (no path or symlink escaping `destDir`), extract it into
- * `destDir`, and return its top-level member path. Used in both directions —
- * neither the uploading client nor the serving tool-server is trusted. Throws
- * {@link ArchiveError}; callers map it to their own contract (upload path → a
- * 4xx, download path → null).
+ * Vet a zstd or gzip compressed tar (no path or symlink escaping `destDir`),
+ * extract it into `destDir`, and return its top-level member path. Used in both
+ * directions — neither the uploading client nor the serving tool-server is
+ * trusted. Throws {@link ArchiveError}; callers map it to their own contract
+ * (upload path → a 4xx, download path → null).
  */
-export async function safeExtractTarGz(
-  tarPath: string,
+export async function safeExtractArchive(
+  archivePath: string,
   destDir: string,
   expectedName: string
 ): Promise<string> {
-  await assertSafeArchive(tarPath, destDir);
-  await execFileAsync("tar", ["-xzf", tarPath, "-C", destDir]);
+  let archive: Archive;
+  try {
+    archive = { path: archivePath, format: await sniffFormat(archivePath) };
+    if (archive.format === "zstd") await assertSingleCompleteZstdFrame(archivePath);
+  } catch (err) {
+    throw new ArchiveError(
+      `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  await assertSafeArchive(archive, destDir);
+  await runTar(archive, ["-x", "-C", destDir]);
   return resolveMember(destDir, expectedName);
 }

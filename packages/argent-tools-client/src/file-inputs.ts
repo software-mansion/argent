@@ -18,7 +18,12 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
-import { createTarGzFile } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  createArchiveFile,
+  pickArchiveFormat,
+  type ArchiveFormat,
+} from "@argent/archive";
 import { FLOW_FILE_NAME_PATTERN } from "@argent/registry";
 
 /** Must match the wire contract in `@argent/registry`'s file-inputs.ts. */
@@ -77,10 +82,11 @@ export interface PrepareFileInputsOptions {
   includeContent: boolean;
   /**
    * Set only when routed to a remote tool-server: `kind: "tar-upload"` inputs
-   * are tarballed and streamed to `POST <url>/upload` before the tool call.
-   * Absent for co-located sessions (the server reads the path in place).
+   * are archived and streamed to `POST <url>/upload` before the tool call, in
+   * the best of `formats` (the server's `GET /tools` `uploadFormats`). Absent
+   * for co-located sessions (the server reads the path in place).
    */
-  uploadEndpoint?: { url: string; token: string };
+  uploadEndpoint?: { url: string; token: string; formats?: readonly string[] };
   /** Stops the upload. */
   signal?: AbortSignal;
 }
@@ -103,9 +109,10 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
   return missing ? null : out;
 }
 
-async function tarball(sourcePath: string): Promise<string> {
-  const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
-  await createTarGzFile(sourcePath, tarPath);
+async function tarball(sourcePath: string, format: ArchiveFormat): Promise<string> {
+  const ext = format === "zstd" ? "tar.zst" : "tar.gz";
+  const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.${ext}`);
+  await createArchiveFile(sourcePath, tarPath, format);
   return tarPath;
 }
 
@@ -121,6 +128,7 @@ function sha256File(filePath: string): Promise<string> {
 
 async function uploadTar(
   tarPath: string,
+  format: ArchiveFormat,
   endpoint: { url: string; token: string },
   signal?: AbortSignal
 ): Promise<string> {
@@ -129,7 +137,7 @@ async function uploadTar(
   const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: {
-      "content-type": "application/gzip",
+      "content-type": ARCHIVE_CONTENT_TYPES[format],
       ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
     },
     body: createReadStream(tarPath) as unknown as BodyInit,
@@ -209,9 +217,10 @@ export async function prepareFileInputs(
           process.stderr.write(
             `Uploading ${path.basename(filePath)} to the remote tool-server...\n`
           );
-          tarPath = await tarball(filePath);
+          const format = pickArchiveFormat(opts.uploadEndpoint.formats);
+          tarPath = await tarball(filePath, format);
           wire.contentHash = await sha256File(tarPath);
-          wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint, opts.signal);
+          wire.uploadId = await uploadTar(tarPath, format, opts.uploadEndpoint, opts.signal);
         } finally {
           if (tarPath) await rm(tarPath, { force: true }).catch(() => {});
         }
