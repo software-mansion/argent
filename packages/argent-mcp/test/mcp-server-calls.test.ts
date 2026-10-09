@@ -50,6 +50,10 @@ interface Stub {
   url: string;
   port: number;
   requests: Recorded[];
+  /** Routes that hold their answer for 3 s. */
+  hanging: Set<string>;
+  /** The routes whose caller closed the connection before the answer. */
+  hungUp: string[];
   close: () => Promise<void>;
 }
 
@@ -63,12 +67,20 @@ const LISTING = {
     },
     { name: "reject", description: "Reject", inputSchema: { type: "object", properties: {} } },
     { name: "noted", description: "Noted", inputSchema: { type: "object", properties: {} } },
+    {
+      name: "hang",
+      description: "Hang",
+      inputSchema: { type: "object", properties: {} },
+      longRunning: true,
+    },
   ],
 };
 
 /** A stub tool-server. With `token`, a request without that bearer token gets 401. */
 async function startStub(token?: string): Promise<Stub> {
   const requests: Recorded[] = [];
+  const hanging = new Set(["/tools/hang"]);
+  const hungUp: string[] = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
@@ -83,6 +95,14 @@ async function startStub(token?: string): Promise<Stub> {
       if (token !== undefined && req.headers.authorization !== `Bearer ${token}`) {
         return json(401, { error: "unauthorized" });
       }
+      if (hanging.has(reqUrl)) {
+        const timer = setTimeout(() => json(200, { data: {} }), 3_000);
+        res.on("close", () => {
+          clearTimeout(timer);
+          if (!res.writableFinished) hungUp.push(reqUrl);
+        });
+        return;
+      }
       if (req.method === "GET" && reqUrl === "/tools") return json(200, LISTING);
       if (req.method === "POST" && reqUrl === "/upload") return json(200, { uploadId: "u-1" });
       if (req.method === "POST" && reqUrl === "/tools/reinstall-app") {
@@ -91,6 +111,16 @@ async function startStub(token?: string): Promise<Stub> {
       if (req.method === "POST" && reqUrl === "/tools/reject") return json(422, { error: "nope" });
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return json(200, { data: { tapped: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
+        return json(200, { data: { idle: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/screenshot") return json(200, { data: {} });
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, { data: { description: "tree" } });
       }
       json(404, { error: "not found" });
     });
@@ -101,6 +131,8 @@ async function startStub(token?: string): Promise<Stub> {
     url: `http://127.0.0.1:${port}`,
     port,
     requests,
+    hanging,
+    hungUp,
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections();
@@ -163,7 +195,7 @@ describe("startMcpServer tool calls", () => {
 
   it("lists the tools of the tool-server", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(["reinstall-app", "reject", "noted"]);
+    expect(tools.map((t) => t.name)).toEqual(["reinstall-app", "reject", "noted", "hang"]);
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {
@@ -213,6 +245,40 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(result)).toBe("nope");
     expect(requests.filter((r) => r.url === "/tools/reject")).toHaveLength(1);
   });
+
+  it("ends the tool-server request of a call the client cancels, and answers the next call", async () => {
+    const controller = new AbortController();
+
+    const pending = client.callTool({ name: "hang", arguments: {} }, undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(requests.filter((r) => r.url === "/tools/hang")).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools/hang"]));
+    const next = await client.callTool({ name: "noted", arguments: {} });
+    expect(next.isError).toBeFalsy();
+  });
+
+  it.each(["/tools/await-screen-idle", "/tools/screenshot", "/tools/describe"])(
+    "ends the capture request %s of an interaction the client cancels",
+    async (route) => {
+      stub.hanging.add(route);
+      const controller = new AbortController();
+
+      const pending = client.callTool(
+        { name: "gesture-tap", arguments: { udid: "dev-1", x: 0.5, y: 0.5 } },
+        undefined,
+        { signal: controller.signal }
+      );
+      await vi.waitFor(() => expect(requests.filter((r) => r.url === route)).toHaveLength(1));
+      controller.abort("stopped in the editor");
+
+      await expect(pending).rejects.toThrow("stopped in the editor");
+      await vi.waitFor(() => expect(stub.hungUp).toEqual([route]));
+    }
+  );
 
   it("puts the tool-server's note before the result", async () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
