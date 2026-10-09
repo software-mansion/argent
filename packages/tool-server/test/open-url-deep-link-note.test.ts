@@ -23,12 +23,12 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-// androidImpl goes through the adbShell util; ios-remote through simctlOpenUrl.
+// androidImpl goes through the runAdb util; ios-remote through simctlOpenUrl.
 // Stub both at the module boundary to assert their returned result shapes.
-const adbShellMock = vi.fn();
+const runAdbMock = vi.fn();
 vi.mock("../src/utils/adb", async () => {
   const actual = await vi.importActual<object>("../src/utils/adb");
-  return { ...actual, adbShell: (...args: unknown[]) => adbShellMock(...args) };
+  return { ...actual, runAdb: (...args: unknown[]) => runAdbMock(...args) };
 });
 const simctlOpenUrlMock = vi.fn();
 vi.mock("../src/utils/sim-remote", async () => {
@@ -47,8 +47,11 @@ const androidDevice = { platform: "android", udid: "emulator-5554" } as unknown 
 beforeEach(() => {
   execFileMock.mockReset();
   execFileMock.mockReturnValue({ stdout: "", stderr: "" });
-  adbShellMock.mockReset();
-  adbShellMock.mockResolvedValue("Starting: Intent { act=android.intent.action.VIEW }");
+  runAdbMock.mockReset();
+  runAdbMock.mockResolvedValue({
+    stdout: "Starting: Intent { act=android.intent.action.VIEW }",
+    stderr: "",
+  });
   simctlOpenUrlMock.mockReset();
   simctlOpenUrlMock.mockResolvedValue(undefined);
 });
