@@ -390,6 +390,29 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
 
   const FRAGMENT = "steps:\n  - echo: fragment\n";
 
+  it("keeps the text of an uploaded member and removes its upload", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+    const store = uploadStore({ a });
+
+    const { fileInputs, cleanup } = await resolveFileInputs(
+      { fileInputs: FLOW_SPEC },
+      { flow_path: flowWire([member("a.yaml", "a", a, { size: Buffer.byteLength(FRAGMENT) })]) },
+      store.lookup
+    );
+    cleanups.push(cleanup);
+
+    expect(fileInputs!.flow_path!.members).toEqual({
+      [flowMemberKey(FLOWS, "a.yaml")]: {
+        role: "flow",
+        state: "present",
+        canonical: `${FLOWS}/a.yaml`,
+        spelling: { state: "listed" },
+        text: FRAGMENT,
+      },
+    });
+    await expect(fs.stat(a.tarPath)).rejects.toThrow();
+  });
+
   it("fails when the uploaded member disagrees with the size the client recorded", async () => {
     const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
 
@@ -462,6 +485,18 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
       restoreTmpdir();
       await fs.rm(scratch, { recursive: true, force: true });
     }
+  });
+
+  it("fails when the upload of a member is not on the tool-server", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        { flow_path: flowWire([member("a.yaml", "expired", a)]) },
+        uploadStore({}).lookup
+      )
+    ).rejects.toThrow(/Upload "expired" was not found on the tool-server/);
   });
 
   it("removes the uploads of the later members when one member fails", async () => {

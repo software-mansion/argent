@@ -10,6 +10,7 @@ import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequisite";
 import { serializeFlow } from "../src/tools/flows/flow-utils";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({ updateInstallable: false, currentVersion: "1.0.0" })),
@@ -909,5 +910,119 @@ describe("flow-execute over a link, from the real argent client", () => {
     } finally {
       process.chdir(originalCwd);
     }
+  });
+});
+
+describe("flow-execute with run: fragments sent through POST /upload", () => {
+  // The client inlines members up to 256 KiB in all, so each fragment this
+  // size goes to POST /upload.
+  const PADDING = `#${"x".repeat(300 * 1024)}\n`;
+  const clientSrc = path.resolve(__dirname, "../../argent-tools-client/src/tools-client.ts");
+  let server: Server;
+  let url: string;
+  let scratch: string;
+
+  beforeEach(async () => {
+    server = handle.app.listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    // Uploads and their extract dirs go to os.tmpdir(), so one that stays shows here.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "http-flow-upload-"));
+    scratch = dir;
+    const restoreTmpdir = redirectTmpdir(dir);
+    return async () => {
+      restoreTmpdir();
+      await fs.rm(dir, { recursive: true, force: true });
+    };
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  async function uploadsLeft(): Promise<string[]> {
+    return (await fs.readdir(scratch)).filter(
+      (entry) => entry.startsWith("argent-upload-") || entry.startsWith("argent-tar-upload-")
+    );
+  }
+
+  async function writeFlows(files: Record<string, string>): Promise<string> {
+    const flows = path.join(projectRoot, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+    for (const [name, text] of Object.entries(files)) {
+      await fs.writeFile(path.join(flows, name), text, "utf8");
+    }
+    return path.join(flows, "root.yaml");
+  }
+
+  type Body = { flow_path: { members: Record<string, unknown>[] } };
+
+  /** Run `flowPath` over a link. `tamper` edits the body after the client built it. */
+  async function callLinked(flowPath: string, tamper?: (body: Body) => void) {
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+    let sent: Body | undefined;
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote: true }),
+      fetchImpl: async (target: string, init: RequestInit) => {
+        if (!target.endsWith("/tools/flow-execute")) return fetch(target, init);
+        sent = JSON.parse(String(init.body)) as Body;
+        const body = JSON.parse(String(init.body)) as Body;
+        tamper?.(body);
+        return fetch(target, { ...init, body: JSON.stringify(body) });
+      },
+    });
+    const outcome = await client
+      .callTool("flow-execute", { flow_path: flowPath, project_root: projectRoot, device: DEVICE })
+      .then(
+        ({ data }) => (data as FlowRunResult).steps.map((step) => `${step.status} ${step.flow}`),
+        (err: unknown) => err
+      );
+    return { outcome, sent: sent! };
+  }
+
+  it("runs a fragment that came through POST /upload", async () => {
+    const root = await writeFlows({
+      "root.yaml": "steps:\n  - run: big.yaml\n  - echo: done\n",
+      "big.yaml": `steps:\n  - echo: from the upload\n${PADDING}`,
+    });
+
+    const { outcome, sent } = await callLinked(root);
+
+    expect(sent.flow_path.members.map((m) => [typeof m.uploadId, m.content])).toEqual([
+      ["string", undefined],
+    ]);
+    expect(outcome).toEqual(["pass big", "pass big", "pass root"]);
+    // The extract dir goes once the response has closed.
+    await vi.waitFor(async () => expect(await uploadsLeft()).toEqual([]));
+  });
+
+  it.each([
+    ["an archive that is not the one uploaded", { contentHash: "0".repeat(64) }, /hash mismatch/],
+    ["a size that is not the size of the file", { size: 5 }, /but the client recorded 5/],
+  ])("fails the call on %s and keeps none of its uploads", async (_case, change, error) => {
+    const root = await writeFlows({
+      "root.yaml": "steps:\n  - run: a.yaml\n  - run: b.yaml\n",
+      "a.yaml": `steps:\n  - echo: a\n${PADDING}`,
+      "b.yaml": `steps:\n  - echo: b\n${PADDING}`,
+    });
+
+    const { outcome, sent } = await callLinked(root, (body) => {
+      Object.assign(body.flow_path.members[0]!, change);
+    });
+
+    expect(String(outcome)).toMatch(error);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+    expect(await uploadsLeft()).toEqual([]);
+    // The upload of the second fragment is gone, not only its file.
+    const again = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({ ...sent, flow_path: { ...sent.flow_path, members: [sent.flow_path.members[1]] } });
+    expect(again.status).toBe(422);
+    expect(again.body.error).toMatch(/was not found on the tool-server/);
   });
 });
