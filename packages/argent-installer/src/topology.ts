@@ -11,18 +11,24 @@ import { isYarnPnp } from "./preflight.js";
 // and local (project dependency, the committable "team-share" flow).
 // update/uninstall probe and handle each independently.
 
-// `which argent` also matches temp package runners (npx / pnpm dlx / bunx /
-// yarn dlx), which prepend their cache .bin/ dir to PATH.
-const TEMP_RUNNER_MARKERS = [
-  "_npx",
-  "/dlx-",
-  "\\dlx-",
-  "bun/install/cache",
-  ".bun\\install\\cache",
+// `which argent` also matches the copy a temp package runner prepends to PATH.
+// Matched against the path with `/` separators.
+const TEMP_RUNNER_PATTERNS = [
+  // npx: <npm cache>/_npx/<hash>/node_modules/.bin
+  /\/_npx\//,
+  // pnpm 9+ dlx: <pnpm cache>/dlx/<hash>/<id>/node_modules/.bin
+  /\/dlx\/[^/]+\/[^/]+\/node_modules\/\.bin\//,
+  // pnpm 8 dlx: <store>/tmp/dlx-<pid>/node_modules/.bin
+  /\/dlx-\d+\//,
+  // yarn 2+ dlx: <tmp>/xfs-<hex>/argent
+  /\/xfs-[0-9a-f]{8,}\//,
+  // bunx: <tmp>/bunx-<uid>-<spec>/node_modules/.bin
+  /\/bunx-\d+-/,
 ];
 
 function isTempRunnerPath(binaryPath: string): boolean {
-  return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
+  const slashed = binaryPath.split("\\").join("/");
+  return TEMP_RUNNER_PATTERNS.some((pattern) => pattern.test(slashed));
 }
 
 /**
