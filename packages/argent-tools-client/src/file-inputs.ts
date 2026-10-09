@@ -81,6 +81,8 @@ export interface PrepareFileInputsOptions {
    * Absent for co-located sessions (the server reads the path in place).
    */
   uploadEndpoint?: { url: string; token: string };
+  /** Stops the upload. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -119,7 +121,8 @@ function sha256File(filePath: string): Promise<string> {
 
 async function uploadTar(
   tarPath: string,
-  endpoint: { url: string; token: string }
+  endpoint: { url: string; token: string },
+  signal?: AbortSignal
 ): Promise<string> {
   // `duplex: "half"` is required to stream a Node Readable request body via
   // undici's fetch, but it isn't in the DOM RequestInit type.
@@ -131,6 +134,7 @@ async function uploadTar(
     },
     body: createReadStream(tarPath) as unknown as BodyInit,
     duplex: "half",
+    signal,
   };
   const res = await fetch(`${endpoint.url}/upload`, init);
   if (!res.ok) {
@@ -207,7 +211,7 @@ export async function prepareFileInputs(
           );
           tarPath = await tarball(filePath);
           wire.contentHash = await sha256File(tarPath);
-          wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint);
+          wire.uploadId = await uploadTar(tarPath, opts.uploadEndpoint, opts.signal);
         } finally {
           if (tarPath) await rm(tarPath, { force: true }).catch(() => {});
         }

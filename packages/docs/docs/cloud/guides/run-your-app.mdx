@@ -35,6 +35,14 @@ sim-remote simctl io <UDID> screenshot shot.png
 sim-remote simctl io <UDID> recordVideo demo.mp4
 ```
 
+## Read the logs after a crash
+
+`--console` shows the output of the app while it runs. After a crash, download the crash report and the logs of the simulator. See [Get crash reports and logs](/docs/cloud/guides/logs).
+
+```bash
+sim-remote logs <UDID> --process com.example.MyApp
+```
+
 ## Send a push or open a deep link
 
 `push` reads the payload from a local file or from stdin. `openurl` goes to the machine without changes.

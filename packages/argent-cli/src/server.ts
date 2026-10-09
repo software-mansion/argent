@@ -83,8 +83,13 @@ async function stopCmd(paths?: ToolsServerPaths): Promise<void> {
     if (foreign) console.log(`${foreign}\nStop one with: kill <pid>`);
     return;
   }
-  await killToolServer(paths?.bundlePath);
-  console.log(`tool-server stopped (pid ${state.pid}).`);
+  if (await killToolServer(paths?.bundlePath)) {
+    console.log(`tool-server stopped (pid ${state.pid}).`);
+  } else {
+    console.log(
+      `tool-server: not running (pid ${state.pid} is gone or not an argent tool-server).`
+    );
+  }
 }
 
 function logsCmd(follow: boolean): void {

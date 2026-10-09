@@ -27,7 +27,7 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const childProcessMock = vi.hoisted(() => ({
-  execSync: vi.fn(() => "/usr/local/bin/argent\n"),
+  which: vi.fn((..._args: unknown[]) => "/usr/local/bin/argent\n"),
   execFileSync: vi.fn(),
 }));
 
@@ -37,7 +37,15 @@ const toolsClientMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@argent/telemetry", () => telemetryMock);
-vi.mock("node:child_process", () => childProcessMock);
+// The PATH probe (`which -a argent` / `where argent`) goes to its own mock so the
+// execFileSync assertions below only see package-manager runs.
+vi.mock("node:child_process", () => ({
+  ...childProcessMock,
+  execFileSync: (bin: string, ...rest: unknown[]) =>
+    bin === "which" || bin === "where"
+      ? childProcessMock.which(bin, ...rest)
+      : childProcessMock.execFileSync(bin, ...rest),
+}));
 vi.mock("@argent/tools-client", () => toolsClientMock);
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
@@ -75,7 +83,7 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
-  childProcessMock.execSync.mockImplementation(() => "/usr/local/bin/argent\n");
+  childProcessMock.which.mockImplementation(() => "/usr/local/bin/argent\n");
   childProcessMock.execFileSync.mockImplementation(() => undefined);
 });
 
@@ -107,7 +115,7 @@ describe("uninstall — telemetry consent preservation", () => {
   });
 
   it("does not reset uninstall telemetry identity when no global package was uninstalled", async () => {
-    childProcessMock.execSync.mockImplementationOnce(() => {
+    childProcessMock.which.mockImplementationOnce(() => {
       throw new Error("not found");
     });
     process.chdir(tmpDir);
@@ -182,9 +190,7 @@ describe("uninstall — telemetry consent preservation", () => {
     const globalPkg = path.join(tmpDir, "global-argent");
     writeFile(path.join(globalPkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
     writeFile(path.join(globalPkg, "bin", "argent"), "#!/usr/bin/env node\n");
-    childProcessMock.execSync.mockImplementation(
-      () => path.join(globalPkg, "bin", "argent") + "\n"
-    );
+    childProcessMock.which.mockImplementation(() => path.join(globalPkg, "bin", "argent") + "\n");
     toolsClientMock.killToolServerForInstallDir.mockRejectedValueOnce(
       new Error("tool server busy")
     );
@@ -566,7 +572,7 @@ describe("uninstall — local (committable) mode package removal", () => {
     process.chdir(tmpDir);
     // No global argent anywhere: this devDependency is the machine's last known
     // install, so removing it must reset local telemetry like a global uninstall.
-    childProcessMock.execSync.mockImplementation(() => {
+    childProcessMock.which.mockImplementation(() => {
       throw new Error("not found");
     });
 

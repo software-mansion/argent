@@ -76,8 +76,8 @@ describe("flow-execute with a debugger-status connectivity gate", () => {
       )
     );
 
-    // debugger-status ran; the trailing tap did NOT.
-    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    // debugger-status ran, then the failure screenshot; the trailing tap did NOT.
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
     const executed = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
     expect(executed).toHaveLength(1);
     const gate = executed[0];
@@ -126,7 +126,8 @@ steps:
       )
     );
 
-    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    // The gate, then the failure screenshot.
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
     const executed = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
     expect(executed).toHaveLength(1);
     expect(executed[0].tool).toBe("debugger-log-registry");
