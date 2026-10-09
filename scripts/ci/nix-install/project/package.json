@@ -1,0 +1,6 @@
+{
+  "name": "nix-managed-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fixture project whose toolchain comes from Nix (see shell.nix)."
+}
