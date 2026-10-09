@@ -817,4 +817,41 @@ describe("flow-execute over a link, from the real argent client", () => {
       ["refused", undefined],
     ]);
   });
+
+  it("finds nothing past a missing directory and its .., as the co-located run, and sends nothing", async () => {
+    // The kernel stops at the missing `x`, so no `..` after it leads back. A
+    // lexical collapse would land on a .yaml link to a .env, on a file behind
+    // a directory link out of the project, and on a flow that does exist.
+    await write(".argent/flows/login.yaml", "steps:\n  - echo: logged in\n");
+    const env = await write(".env", "TOKEN=hunter2\n");
+    await fs.symlink(env, path.join(projectRoot, ".argent/flows/secret.yaml"));
+    await fs.mkdir(path.join(tmpDir, "outside"));
+    await fs.writeFile(path.join(tmpDir, "outside/private.yaml"), "steps:\n  - echo: outside\n");
+    await fs.symlink(path.join(tmpDir, "outside"), path.join(projectRoot, "linkout"));
+    const flowsDir = await fs.realpath(path.join(projectRoot, ".argent/flows"));
+
+    for (const target of [
+      "x/../secret.yaml",
+      "../../x/../linkout/private.yaml",
+      "nonexist/../login.yaml",
+    ]) {
+      const root = await write(
+        ".argent/flows/root.yaml",
+        `steps:\n  - echo: start\n  - run: ${target}\n`
+      );
+      let members: { state?: string; content?: string }[] = [];
+
+      const linked = await callFlow(true, root, async (body) => {
+        members = JSON.parse(body).flow_path.members;
+      });
+      const colocated = await callFlow(false, root);
+
+      expect(linked).toEqual(colocated);
+      expect(colocated[1]!.reason).toBe(
+        `could not load fragment "${target}": ENOENT: no such file or directory, ` +
+          `open '${flowsDir}${path.sep}${target}'`
+      );
+      expect(members.map((m) => [m.state, m.content])).toEqual([["missing", undefined]]);
+    }
+  });
 });

@@ -74,10 +74,10 @@ export class HostProjectAccess implements ProjectAccess {
 
 /**
  * The client's files, looked up by the pair the runner resolves: the client
- * resolved each `run:` target of its flow before the call, with the same
- * resolution code the host implementation runs, and sent what it found. A
- * pair the client did not send, or refused to send, is refused here with the
- * client's reason.
+ * resolved each `run:` target of its flow on its own disk before the call,
+ * named it as the host implementation names it (`canonicalFlowPath`), and sent
+ * what it found. A pair the client did not send, or refused to send, is
+ * refused here with the client's reason.
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;

@@ -64,26 +64,35 @@ function savedFlowProject(file: string): string | null {
 }
 
 /**
- * Where `spelled` lands on this machine: its realpath, or, when a component
- * is missing, the realpath of the nearest existing ancestor with the rest
- * appended. `error` is the kernel's refusal other than a missing component
- * (a link loop, a file used as a directory).
+ * How `spelled` resolves on this machine. `canonical` is its realpath, or, when
+ * it does not resolve, the host's name for it ({@link canonicalFlowPath}), so a
+ * missing fragment fails its step with the text of a co-located run. `fence` is
+ * where the kernel's lookup ends, for the root fence: the realpath, or the
+ * first component it cannot resolve, beside the realpath of its parent. The
+ * lookup stops there, so a `..` after a missing directory leads nowhere:
+ * `x/../a.yaml` with no `x` is missing, whatever `a.yaml` is. `missing` is the
+ * kernel's ENOENT; `error` is any other refusal (a link loop, a file used as a
+ * directory).
  */
-async function landing(spelled: string): Promise<{ canonical: string; error?: string }> {
+async function landing(
+  spelled: string
+): Promise<{ canonical: string; fence: string; missing?: true; error?: string }> {
   try {
-    return { canonical: await realpath(spelled) };
+    const canonical = await realpath(spelled);
+    return { canonical, fence: canonical };
   } catch (err) {
-    const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
-    const rest: string[] = [];
+    const failure =
+      (err as NodeJS.ErrnoException).code === "ENOENT"
+        ? { missing: true as const }
+        : { error: (err as Error).message };
+    const canonical = await canonicalFlowPath(spelled);
     let at = spelled;
     for (;;) {
-      rest.unshift(path.basename(at));
       const parent = path.dirname(at);
-      if (parent === at) return { canonical: spelled };
+      if (parent === at) return { canonical, fence: spelled, ...failure };
       const real = await realpath(parent).catch(() => null);
       if (real !== null) {
-        const canonical = path.join(real, ...rest);
-        return missing ? { canonical } : { canonical, error: (err as Error).message };
+        return { canonical, fence: path.join(real, path.basename(at)), ...failure };
       }
       at = parent;
     }
@@ -135,7 +144,7 @@ async function readFlowMember(
   opts: PrepareFileInputsOptions
 ): Promise<{ member: FileInputMember; text?: string; sent: string }> {
   const spelled = anchorDir + path.sep + target;
-  const { canonical, error } = await landing(spelled);
+  const { canonical, fence, missing, error } = await landing(spelled);
   const spelling = await classifyOnDiskSpelling(
     path.dirname(spelled),
     path.posix.basename(target),
@@ -152,10 +161,11 @@ async function readFlowMember(
     member: { ...member, state: "refused" as const, error: reason },
     sent: `refused (${reason})`,
   });
-  if (!roots.some((root) => isWithin(canonical, root))) {
+  if (!roots.some((root) => isWithin(fence, root))) {
     return refuse(`${target} is outside every root this client serves (${roots.join(", ")})`);
   }
   if (error !== undefined) return refuse(error);
+  if (missing) return { member: { ...member, state: "missing" }, sent: "missing" };
   const st = await stat(canonical).catch((err: NodeJS.ErrnoException) => err);
   if (st instanceof Error) {
     if (st.code !== "ENOENT") return refuse(st.message);
