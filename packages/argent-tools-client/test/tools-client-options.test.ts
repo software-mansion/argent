@@ -9,6 +9,7 @@ import { redirectHomeTo } from "./helpers/home-redirect.js";
 // link-config.ts captures ~/.argent/link.json at module load; an isolated HOME
 // keeps a developer's real link out of the "never spawns" case.
 let createToolsClient: typeof import("../src/tools-client.js").createToolsClient;
+let ToolInvocationError: typeof import("../src/errors.js").ToolInvocationError;
 let TEST_HOME: string;
 let restoreHome: () => void;
 
@@ -17,6 +18,7 @@ beforeAll(async () => {
   restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   ({ createToolsClient } = await import("../src/tools-client.js"));
+  ({ ToolInvocationError } = await import("../src/errors.js"));
 });
 
 afterAll(() => {
@@ -257,11 +259,19 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: true }),
     });
 
-    await expect(
-      callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME })
-    ).rejects.toThrow(
-      /^Upload to .+\/upload failed: 413 .+ The proxy must accept a body of at least 1 MB on POST \/upload, for example client_max_body_size 1m in nginx$/
+    const err = await callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME }).catch(
+      (e: unknown) => e
     );
+
+    expect(err).toBeInstanceOf(ToolInvocationError);
+    expect(err).toMatchObject({
+      message: expect.stringMatching(
+        /^Upload to .+\/upload failed: 413 .+ The proxy must accept a body of at least 1 MB on POST \/upload, for example client_max_body_size 1m in nginx$/
+      ),
+      // The flow was never sent, so the refusal belongs to this call alone.
+      errorCode: "FILE_INPUT_UPLOAD_FAILED",
+      errorKind: "validation",
+    });
     expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
   });
 

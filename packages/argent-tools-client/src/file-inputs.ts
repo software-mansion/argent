@@ -20,10 +20,13 @@ import * as path from "node:path";
 
 import { createTarGzFile } from "@argent/archive";
 import {
+  FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
   type FileInputMember,
   type OnDiskSpelling,
 } from "@argent/registry";
+
+import { ToolInvocationError } from "./errors.js";
 
 /** Must match the wire contract in `@argent/registry`'s file-inputs.ts. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
@@ -201,8 +204,15 @@ function toolServerError(text: string): string | undefined {
  * Why `POST /upload` refused an archive of `bytes` bytes. A 413 that the
  * tool-server did not send comes from a proxy that limits the size of a
  * request body, so the error names the size that the proxy must accept.
+ * The call that needs the upload is not sent, so the error is a rejection of
+ * that call alone (kind "validation"): the tool did not run.
  */
-function uploadFailure(url: string, res: Response, text: string, bytes: number): Error {
+function uploadFailure(
+  url: string,
+  res: Response,
+  text: string,
+  bytes: number
+): ToolInvocationError {
   const status = `${res.status} ${res.statusText}`.trim();
   const own = toolServerError(text);
   let detail = own === undefined ? "" : `: ${own}`;
@@ -213,7 +223,10 @@ function uploadFailure(url: string, res: Response, text: string, bytes: number):
       `The proxy must accept a body of at least ${mb} MB on POST /upload, for example ` +
       `client_max_body_size ${mb}m in nginx`;
   }
-  return new Error(`Upload to ${url}/upload failed: ${status}${detail}`);
+  return new ToolInvocationError(`Upload to ${url}/upload failed: ${status}${detail}`, {
+    errorCode: FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED,
+    errorKind: "validation",
+  });
 }
 
 async function uploadTar(

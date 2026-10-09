@@ -1195,6 +1195,8 @@ function rejectionVerdict(code: string | undefined): string {
       return "not run (invalid flow)";
     case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
       return "not run (no device resolved)";
+    case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:
+      return "not run (upload failed)";
     default:
       return "not run (rejected)";
   }
@@ -1233,10 +1235,10 @@ interface BatchFlowResult {
  * Run every discovered flow in `dir` sequentially. Prints each flow's failing
  * steps and warnings, then its outcome (no live step lines), then a flow-level
  * summary; a flow failing its steps — or one the tool-server rejects up front
- * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
- * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, or a reply that is not a report stops it and counts the
- * remaining flows skipped.
+ * (a bad YAML, an unparseable step, a device it cannot resolve, a refused
+ * upload of one of its files) — lets the batch continue, while a transport
+ * throw, a rejection the server does not mark as validation, or a reply that
+ * is not a report stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,

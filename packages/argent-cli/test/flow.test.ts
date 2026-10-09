@@ -106,6 +106,19 @@ const UNREACHABLE_ENV_MESSAGE =
   "Could not reach the tool-server at http://127.0.0.1:47899 (set by ARGENT_TOOLS_URL): " +
   "connection refused.\nStart that tool-server, or unset ARGENT_TOOLS_URL to use the local one.";
 
+const UPLOAD_REFUSED_MESSAGE =
+  "Upload to http://127.0.0.1:47899/upload failed: 413 Request Entity Too Large. A proxy " +
+  "between the client and the tool-server limits the size of a request body. The proxy must " +
+  "accept a body of at least 1 MB on POST /upload, for example client_max_body_size 1m in nginx";
+
+/** What the tools client throws when a proxy refuses a fragment's upload, before it sends the flow. */
+function uploadRefused(): ToolInvocationError {
+  return new ToolInvocationError(UPLOAD_REFUSED_MESSAGE, {
+    errorCode: "FILE_INPUT_UPLOAD_FAILED",
+    errorKind: "validation",
+  });
+}
+
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const steps: StepFixture[] = [{ index: 0, kind: "tap", status: "pass" }];
   return {
@@ -1681,6 +1694,33 @@ describe("argent flow run", () => {
     expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
   });
 
+  // A refused upload ends the call before the tool-server gets the flow, so
+  // nothing ran: the flow is rejected with its own verdict and code.
+  it("reports a refused fragment upload as a flow that did not run", async () => {
+    toolsClientMock.callTool.mockRejectedValue(uploadRefused());
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual(['Flow "checkout"', "  ✗ not run (upload failed)"]);
+    expect(errs).toEqual([UPLOAD_REFUSED_MESSAGE]);
+  });
+
+  it("writes a refused fragment upload as a record with its code under --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(uploadRefused());
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UPLOAD_REFUSED_MESSAGE,
+        error_code: "FILE_INPUT_UPLOAD_FAILED",
+        error_kind: "validation",
+      },
+    ]);
+  });
+
   // Not every refused connect is a missing tool-server: with no routing it is
   // the auto-started local one, and an open socket can end with the same
   // codes after the run started. Both stay run errors, and a failure that is
@@ -2498,6 +2538,47 @@ describe("argent flow run <dir>", () => {
     });
     expect(errs.map((line) => JSON.parse(line))).toEqual([
       { event: "error", error: UNREACHABLE_ENV_MESSAGE, ...signal },
+    ]);
+  });
+
+  // A refused upload depends on the size of that flow's own fragments. Each
+  // later flow sends its own files, so the batch goes on.
+  it("continues past a flow whose fragment upload is refused", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(uploadRefused())
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs).toEqual([UPLOAD_REFUSED_MESSAGE]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ not run (upload failed)");
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toMatch(/^ {2}PASS /);
+    expect(lines).toContain("  ✗ a-login.yaml › not run (upload failed)");
+    expect(lines.at(-1)).toMatch(/^FAIL — 2 flows: 1 passed, 1 failed, 0 skipped /);
+  });
+
+  it("carries a refused fragment upload into the --json aggregate and runs the next flow", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(uploadRefused())
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    const signal = { error_code: "FILE_INPUT_UPLOAD_FAILED", error_kind: "validation" };
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({
+      ok: false,
+      passed: 1,
+      failed: 1,
+      skipped: 0,
+      flows: [
+        { path: "a-login.yaml", status: "fail", error: UPLOAD_REFUSED_MESSAGE, ...signal },
+        { path: "b-checkout.yaml", status: "pass" },
+      ],
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: UPLOAD_REFUSED_MESSAGE, ...signal },
     ]);
   });
 
