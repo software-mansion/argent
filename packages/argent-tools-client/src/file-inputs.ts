@@ -174,10 +174,45 @@ function sha256File(filePath: string): Promise<string> {
   });
 }
 
+/**
+ * The `error` of a reply that the tool-server itself sent: a JSON object with
+ * `error` as its only field. A proxy's JSON error page has more fields.
+ */
+function toolServerError(text: string): string | undefined {
+  try {
+    const body = JSON.parse(text) as unknown;
+    if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
+    const { error, ...rest } = body as { error?: unknown };
+    return typeof error === "string" && Object.keys(rest).length === 0 ? error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Why `POST /upload` refused an archive of `bytes` bytes. A 413 that the
+ * tool-server did not send comes from a proxy that limits the size of a
+ * request body, so the error names the size that the proxy must accept.
+ */
+function uploadFailure(url: string, res: Response, text: string, bytes: number): Error {
+  const status = `${res.status} ${res.statusText}`.trim();
+  const own = toolServerError(text);
+  let detail = own === undefined ? "" : `: ${own}`;
+  if (own === undefined && res.status === 413) {
+    const mb = Math.max(1, Math.ceil(bytes / (1024 * 1024)));
+    detail =
+      `. A proxy between the client and the tool-server limits the size of a request body. ` +
+      `The proxy must accept a body of at least ${mb} MB on POST /upload, for example ` +
+      `client_max_body_size ${mb}m in nginx`;
+  }
+  return new Error(`Upload to ${url}/upload failed: ${status}${detail}`);
+}
+
 async function uploadTar(
   tarPath: string,
   endpoint: { url: string; token: string }
 ): Promise<string> {
+  const { size } = await stat(tarPath);
   // `duplex: "half"` is required to stream a Node Readable request body via
   // undici's fetch, but it isn't in the DOM RequestInit type.
   const init: RequestInit & { duplex: "half" } = {
@@ -191,7 +226,13 @@ async function uploadTar(
   };
   const res = await fetch(`${endpoint.url}/upload`, init);
   if (!res.ok) {
-    throw new Error(`Upload to ${endpoint.url}/upload failed: ${res.status} ${res.statusText}`);
+    let text = "";
+    try {
+      text = await res.text();
+    } catch {
+      // The status alone still says what failed.
+    }
+    throw uploadFailure(endpoint.url, res, text, size);
   }
   const json = (await res.json()) as { uploadId: string };
   return json.uploadId;

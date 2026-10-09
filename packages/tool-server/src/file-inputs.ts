@@ -18,8 +18,9 @@
  * - `kind: "probe"` passes through and only reports presence.
  * - A `collect` spec's `members` (a flow's `run:` closure, sent with the flow
  *   by a linked client) are decoded with the same checks, each into its own
- *   state: a member that cannot be used fails only where it is used, never the
- *   call as a whole.
+ *   state: a member that the client did not send fails only where it is used.
+ *   A member whose bytes fail those checks fails the call, as a declared
+ *   input does.
  *
  * Plain string args (older clients, direct invocations) pass through untouched.
  */
@@ -220,16 +221,19 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** One member's bytes, read the way a declared file input's are. */
+/**
+ * One member's bytes, read the way a declared file input's are, or undefined
+ * when the client sent neither content nor an upload for it. Bytes that fail
+ * a check, or an upload that is gone, throw the {@link FileInputError} of a
+ * declared input.
+ */
 async function memberText(
   member: FileInputMember,
   tempDirs: string[],
   lookupUpload: UploadLookup | undefined
-): Promise<string> {
+): Promise<string | undefined> {
   if (typeof member.content === "string") return decodeContent(member).toString("utf8");
-  if (typeof member.uploadId !== "string") {
-    throw new FileInputError(`the client sent no content for "${member.path}"`);
-  }
+  if (typeof member.uploadId !== "string") return undefined;
   const unused: ResolvedFileInput = {
     clientPath: member.path,
     presentOnHost: false,
@@ -237,15 +241,21 @@ async function memberText(
   };
   const wire = member as unknown as FileInputWire;
   const { value } = await extractTarUpload(wire, member.uploadId, unused, tempDirs, lookupUpload);
-  return readFile(value, "utf8");
+  return readFile(value, "utf8").catch((err: unknown) => {
+    throw new FileInputError(
+      `Could not read the uploaded file "${member.path}": ${errorText(err)}`
+    );
+  });
 }
 
 /**
- * Resolve a wire's members by key. An entry this server cannot use is never
- * an error of the call: a malformed one becomes `refused`, and so does one
- * whose bytes fail the checks of a declared input, so the step that needs it
- * fails, and nothing else. An entry of a role this server does not know is
- * left out, as is a repeated key after its first entry.
+ * Resolve a wire's members by key. An entry that the client did not send is
+ * never an error of the call: a malformed one becomes `refused`, so the step
+ * that needs it fails, and nothing else. An entry whose transfer failed (its
+ * bytes fail the checks of a declared input, or its upload is gone) fails the
+ * call with that upload error, as a declared input does: the flow is fine,
+ * its transfer is not. An entry of a role this server does not know is left
+ * out, as is a repeated key after its first entry.
  */
 async function resolveMembers(
   members: unknown[],
@@ -283,15 +293,11 @@ async function resolveMembers(
         error: typeof member.error === "string" ? member.error : "the client did not send it",
       };
     } else {
-      try {
-        out[member.key] = {
-          ...base,
-          state: "present",
-          text: await memberText(member, tempDirs, lookupUpload),
-        };
-      } catch (err) {
-        out[member.key] = { ...base, state: "refused", error: errorText(err) };
-      }
+      const text = await memberText(member, tempDirs, lookupUpload);
+      out[member.key] =
+        text === undefined
+          ? { ...base, state: "refused", error: `the client sent no content for "${member.path}"` }
+          : { ...base, state: "present", text };
     }
   }
   return out;
