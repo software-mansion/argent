@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redirectHomeTo } from "./helpers/home-redirect.js";
@@ -28,6 +28,7 @@ let server: Server;
 let url: string;
 let requests: Array<{ method: string; url: string; body: string }>;
 let uploadStatus: number;
+let runFlowData: unknown;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -40,6 +41,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 beforeEach(async () => {
   requests = [];
   uploadStatus = 200;
+  runFlowData = { ok: true };
   server = createServer(async (req, res) => {
     const body = await readBody(req);
     requests.push({ method: req.method ?? "", url: req.url ?? "", body });
@@ -92,7 +94,7 @@ beforeEach(async () => {
     if (req.method === "POST" && req.url === "/tools/reinstall-app") {
       return json({ data: { reinstalled: true } });
     }
-    if (req.method === "POST" && req.url === "/tools/run-flow") return json({ data: { ok: true } });
+    if (req.method === "POST" && req.url === "/tools/run-flow") return json({ data: runFlowData });
     if (req.method === "POST" && req.url === "/tools/proxy-page") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html>Sign in</html>");
@@ -259,6 +261,32 @@ describe("createToolsClient options", () => {
       /^Upload to .+\/upload failed: 413 .+ The proxy must accept a body of at least 1 MB on POST \/upload, for example client_max_body_size 1m in nginx$/
     );
     expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
+  });
+
+  it("writes a baseline the run returns only into the run's baseline directory, and reports one it refused", async () => {
+    const flowPath = join(TEST_HOME, "snap.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const dir = join(realpathSync(TEST_HOME), "__baselines__", "snap");
+    const inside = join(dir, "title__ios-30x60.png");
+    const outside = join(realpathSync(TEST_HOME), "title__ios-30x60.png");
+    const directive = (path: string) => ({
+      __argentClientFile: true,
+      path,
+      content: Buffer.from("png").toString("base64"),
+      encoding: "base64",
+    });
+    runFlowData = { ok: true, baselineWrites: [directive(inside), directive(outside)] };
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    const { data } = await callTool("run-flow", { flow_path: flowPath, updateBaselines: true });
+
+    expect((data as { baselineWrites: unknown }).baselineWrites).toEqual([
+      inside,
+      { path: outside, error: `${outside} is not a baseline of this call (${dir}/<name>.png)` },
+    ]);
+    expect(existsSync(outside)).toBe(false);
   });
 
   it("rejects a 2xx answer whose body cannot be read", async () => {
