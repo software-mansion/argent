@@ -188,27 +188,6 @@ describe("getResolvedToolsUrl — precedence chain", () => {
   });
 });
 
-describe("isRemoteRouted", () => {
-  it("returns false when neither env nor link is configured", async () => {
-    expect(await linkConfig.isRemoteRouted()).toBe(false);
-  });
-
-  it("returns true when a link file is configured", async () => {
-    await linkConfig.writeLinkConfig(sampleConfig);
-    expect(await linkConfig.isRemoteRouted()).toBe(true);
-  });
-
-  it("returns true when ARGENT_TOOLS_URL is set (regardless of link presence)", async () => {
-    process.env.ARGENT_TOOLS_URL = "http://override.example:9000";
-    expect(await linkConfig.isRemoteRouted()).toBe(true);
-  });
-
-  it("is gated on a *valid* link file — corrupt JSON does not count as routed", async () => {
-    writeFileSync(LINK_FILE, "{ not json", "utf8");
-    expect(await linkConfig.isRemoteRouted()).toBe(false);
-  });
-});
-
 describe("token handling", () => {
   const withToken = { ...sampleConfig, token: "tok_abc123" };
 

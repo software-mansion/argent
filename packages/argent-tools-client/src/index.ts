@@ -40,7 +40,6 @@ export {
   writeLinkConfig,
   clearLinkConfig,
   getResolvedToolsUrl,
-  isRemoteRouted,
   formatLinkUrl,
   parseLinkUrl,
   parseLinkTarget,
