@@ -53,7 +53,7 @@ parse_tool_model() {
       rest = substr(line, RSTART+RLENGTH)
       sub(/^[[:space:]]*<[^>]*>/, "", rest)   # a boolean flag carries no <value>
       sub(/^[[:space:]]+/, "", rest)
-      # "-json" is the CLI's rendering of an object / array-of-object field
+      # "-json" is how the CLI renders an object / array-of-object field
       # (--selector-json); the schema key is the name without it.
       sub(/-json$/, "", name)
       req = (line ~ /\(required\)/) ? 1 : 0
