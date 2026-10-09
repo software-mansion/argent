@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import {
   FILE_INPUT_MARKER,
@@ -165,10 +166,12 @@ export function withClientPaths(prepared: PreparedToolStep, text: string): strin
  * the same paths and the same `ctx.fileInputs` as for a direct call. A file
  * the client does not have fails the step: a server file at the same path is
  * never used in its place. A `flow-execute` gets the flow it names by `name`
- * from those files instead ({@link prepareNestedFlow}). In host mode the args
- * pass through unchanged. An input whose `unwrapWhenSet` param is set stays
- * the client path, unread, as an HTTP call unwraps it: the tool's own
- * validation diagnoses the second source. The client skips such an input too.
+ * from those files instead ({@link prepareNestedFlow}). In host mode each file
+ * argument resolves in place with this host's stat, as an argent client
+ * without a link sends it ({@link prepareHostFileArguments}). An input whose
+ * `unwrapWhenSet` param is set stays the client path, unread, as an HTTP call
+ * unwraps it: the tool's own validation diagnoses the second source. The
+ * client skips such an input too.
  */
 export async function prepareToolStepInputs(
   registry: Registry,
@@ -179,12 +182,10 @@ export async function prepareToolStepInputs(
   if (project instanceof ClientProjectAccess && toolId === "flow-execute") {
     return prepareNestedFlow(registry, project, args);
   }
-  const files =
-    project.mode === "client"
-      ? toolStepFilePaths(registry, toolId, args).filter(
-          ({ spec }) => spec.unwrapWhenSet === undefined || args[spec.unwrapWhenSet] === undefined
-        )
-      : [];
+  const files = toolStepFilePaths(registry, toolId, args).filter(
+    ({ spec }) => spec.unwrapWhenSet === undefined || args[spec.unwrapWhenSet] === undefined
+  );
+  if (project.mode === "host") return prepareHostFileArguments(files, args);
   if (files.length === 0) return { args, cleanup: async () => {} };
   const wrapped: Record<string, unknown> = { ...args };
   for (const file of files) {
@@ -209,6 +210,35 @@ export async function prepareToolStepInputs(
     wrapped[file.spec.target] = wire;
   }
   const resolved = await resolveFileInputs({ fileInputs: files.map((f) => f.spec) }, wrapped);
+  return {
+    args: resolved.args,
+    ...(resolved.fileInputs ? { fileInputs: resolved.fileInputs } : {}),
+    cleanup: resolved.cleanup,
+  };
+}
+
+/**
+ * A `tool:` step without a link: each file argument resolves as an argent
+ * client without a link sends it (the stat of a regular file, no content), so
+ * the tool gets the `ctx.fileInputs` of a direct call, without which
+ * `flow-execute` and `flow-read-prerequisite` refuse a `flow_path`. A path
+ * that names no regular file fails as such a call fails. Directories, apps,
+ * probes and paths a tool builds from several args stay as written.
+ */
+async function prepareHostFileArguments(
+  files: ToolStepFile[],
+  args: Record<string, unknown>
+): Promise<PreparedToolStep> {
+  const fileArgs = files.filter(isFileArgument);
+  if (fileArgs.length === 0) return { args, cleanup: async () => {} };
+  const wrapped: Record<string, unknown> = { ...args };
+  for (const file of fileArgs) {
+    const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: file.path };
+    const st = await stat(file.path).catch(() => null);
+    if (st?.isFile()) Object.assign(wire, { size: st.size, mtimeMs: st.mtimeMs });
+    wrapped[file.spec.target] = wire;
+  }
+  const resolved = await resolveFileInputs({ fileInputs: fileArgs.map((f) => f.spec) }, wrapped);
   return {
     args: resolved.args,
     ...(resolved.fileInputs ? { fileInputs: resolved.fileInputs } : {}),
