@@ -20,6 +20,7 @@ import {
   SOURCE_RUNNER_DIR,
   type ScriptWorkspace,
 } from "../../helpers/flow-script-workspace";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 const workspaces: ScriptWorkspace[] = [];
 const cleanups: Array<() => void> = [];
@@ -64,14 +65,16 @@ async function withFakeRunner(source: string, extra: Partial<FlowScriptRequest> 
 
 describe("script response parsing", () => {
   it("accepts the three valid shapes", () => {
-    const started: ScriptResponse | null = parseScriptResponse({ type: "started" });
+    const started: ScriptResponse | null = parseScriptResponse({ type: "started" }, "node");
     expect(started).toEqual({ type: "started" });
-    expect(parseScriptResponse({ type: "result", outputJson: "{}" })).toEqual({
+    expect(parseScriptResponse({ type: "result", outputJson: "{}" }, "node")).toEqual({
       type: "result",
       outputJson: "{}",
     });
     const runtime: ScriptFailureType = "runtime";
-    expect(parseScriptResponse({ type: "failure", failureType: runtime, message: "x" })).toEqual({
+    expect(
+      parseScriptResponse({ type: "failure", failureType: runtime, message: "x" }, "node")
+    ).toEqual({
       type: "failure",
       failureType: runtime,
       message: "x",
@@ -80,12 +83,39 @@ describe("script response parsing", () => {
 
   it("carries a stack when there is one, and drops one that is not a string", () => {
     expect(
-      parseScriptResponse({ type: "failure", failureType: "runtime", message: "x", stack: "at y" })
+      parseScriptResponse(
+        { type: "failure", failureType: "runtime", message: "x", stack: "at y" },
+        "node"
+      )
     ).toEqual({ type: "failure", failureType: "runtime", message: "x", stack: "at y" });
     expect(
-      parseScriptResponse({ type: "failure", failureType: "runtime", message: "x", stack: 7 })
+      parseScriptResponse(
+        { type: "failure", failureType: "runtime", message: "x", stack: 7 },
+        "node"
+      )
     ).toEqual({ type: "failure", failureType: "runtime", message: "x" });
   });
+
+  it.each(["spawn", "signal"] as const)("accepts the bash-mode failure type %s", (failureType) => {
+    expect(parseScriptResponse({ type: "failure", failureType, message: "x" }, "bash")).toEqual({
+      type: "failure",
+      failureType,
+      message: "x",
+    });
+  });
+
+  // In node mode the script runs inside the runner with the protocol descriptor
+  // open, and a `spawn` failure is the one the step reports as "nothing ran, so
+  // there is nothing to clean up". A script that has already done its work must
+  // not be able to write that answer for itself.
+  it.each(["spawn", "signal"] as const)(
+    "refuses the bash-mode failure type %s in node mode",
+    (failureType) => {
+      expect(
+        parseScriptResponse({ type: "failure", failureType, message: "x" }, "node")
+      ).toBeNull();
+    }
+  );
 
   it.each([
     ["a non-object", "started"],
@@ -99,7 +129,8 @@ describe("script response parsing", () => {
       { type: "failure", failureType: "weird", message: "x" },
     ],
   ])("rejects %s", (_label, raw) => {
-    expect(parseScriptResponse(raw)).toBeNull();
+    expect(parseScriptResponse(raw, "node")).toBeNull();
+    expect(parseScriptResponse(raw, "bash")).toBeNull();
   });
 });
 
@@ -416,15 +447,22 @@ describe("flow script executor — the runner's reporting path survives the scri
   });
 });
 
+function nestedDocument(depth: number, leaf: string): string {
+  let json = JSON.stringify(leaf);
+  for (let i = 0; i < depth; i++) json = `{"nested":${json}}`;
+  return json;
+}
+
 describe("flow script executor — redacting a document from a runner", () => {
+  // Deeper than a recursive walk survives - the runner's own `walk` gives out
+  // between about 3450 and 3925 across Node 20 to 26 - and inside the depth the
+  // parent admits, so the scrub is what has to hold here.
   it("scrubs a document too deep for a recursive walk", async () => {
-    const depth = 20_000;
-    let json = JSON.stringify("token sk-live-9d3f0a1b2c3d4e5f");
-    for (let i = 0; i < depth; i++) json = `{"nested":${json}}`;
+    const depth = 4_000;
     const result = await withFakeRunner(
       `process.on("message", () => {
          process.send({ type: "started" });
-         process.send({ type: "result", outputJson: ${JSON.stringify(json)} }, () => process.exit(0));
+         process.send({ type: "result", outputJson: ${JSON.stringify(nestedDocument(depth, "token sk-live-9d3f0a1b2c3d4e5f"))} }, () => process.exit(0));
        });`,
       { secrets: [{ name: "TOKEN", value: "sk-live-9d3f0a1b2c3d4e5f" }] }
     );
@@ -433,6 +471,21 @@ describe("flow script executor — redacting a document from a runner", () => {
     let node: unknown = result.output;
     for (let i = 0; i < depth; i++) node = (node as Record<string, unknown>).nested;
     expect(node).toBe("token {{secret:TOKEN}}");
+  }, 30_000);
+
+  // Past the bound the parent applies. A verdict, because that is what `execute`
+  // owes its caller: nothing on this path may throw, however deep the document a
+  // mismatched or hostile runner sends.
+  it("answers a document past the depth bound with a verdict, not a throw", async () => {
+    const result = await withFakeRunner(
+      `process.on("message", () => {
+         process.send({ type: "started" });
+         process.send({ type: "result", outputJson: ${JSON.stringify(nestedDocument(20_000, "deep"))} }, () => process.exit(0));
+       });`
+    );
+
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("nests deeper than");
   }, 30_000);
 });
 
@@ -531,6 +584,42 @@ describe("flow script runner — the watchdogs, driven directly", () => {
         maxOutputBytes: 1,
       },
     ],
+    // The protocol carries no version field, so an interpreter the runner does
+    // not know is malformed rather than a default.
+    [
+      "a request naming an interpreter the runner does not know",
+      {
+        type: "execute",
+        interpreter: "zsh",
+        scriptUrl: "file:///x",
+        outputJson: "{}",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
+    [
+      "a bash request with no interpreter path",
+      {
+        type: "execute",
+        interpreter: "bash",
+        scriptPath: "/tmp/x.sh",
+        outputFile: "/tmp/o.json",
+        outputJson: "{}",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
+    [
+      "a bash request with no exchange file",
+      {
+        type: "execute",
+        interpreter: "bash",
+        interpreterPath: "/bin/bash",
+        scriptPath: "/tmp/x.sh",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
   ])(
     "refuses %s, from the child's side of the protocol",
     async (_label, message) => {
@@ -552,6 +641,63 @@ describe("flow script runner — the watchdogs, driven directly", () => {
     },
     30_000
   );
+
+  // The loader resolves whichever runner sits beside the compiled executor, so
+  // a parent from before bash mode — one that names no interpreter at all —
+  // really can reach this file. Its request means node, which is the shape
+  // `forkRunner` sends by default.
+  it("reads a request that names no interpreter as a node one", async () => {
+    const ws = workspace();
+    const script = ws.write("legacy.mjs", `output.ran = true;`);
+    const child = forkRunner(script, 20_000);
+    const result = await new Promise<{ outputJson?: string } | null>((resolve) => {
+      child.on("message", (raw) => {
+        const m = raw as { type?: string; outputJson?: string };
+        if (m.type === "result") resolve(m);
+      });
+      child.once("exit", () => resolve(null));
+    });
+
+    expect(result?.outputJson).toBe('{"ran":true}');
+  }, 30_000);
+
+  // A bash request carries the interpreter, the script and the one exchange
+  // file, and nothing names a reason file any more: a runner that still asked
+  // for one would refuse every bash step the parent sends.
+  it("runs a bash request that names no reason file", async (ctx) => {
+    const found = await resolveHostBash();
+    if (!("path" in found)) {
+      ctx.skip(`this host has no bash to run a .sh step with: ${found.problem}`);
+      return;
+    }
+    const ws = workspace();
+    // Forward slashes, as the executor sends them.
+    const slashed = (file: string) => file.split(path.sep).join("/");
+    const outputFile = ws.resolve("output.json");
+    fs.writeFileSync(outputFile, "{}");
+    const script = ws.write("ran.sh", `printf '{"ran":true}' > "$ARGENT_OUTPUT"`);
+    // Any entry will do: in bash mode the runner parks before one can load.
+    const child = forkRunner(ws.write("entry.mjs", ""), 20_000, {
+      type: "execute",
+      interpreter: "bash",
+      interpreterPath: found.path,
+      scriptPath: slashed(script),
+      outputFile: slashed(outputFile),
+      outputJson: "{}",
+      timeoutMs: 20_000,
+      deadlineMs: 20_000,
+      maxOutputBytes: 1024 * 1024,
+    });
+    const answer = await new Promise<Record<string, unknown> | null>((resolve) => {
+      child.on("message", (raw) => {
+        const m = raw as { type?: string };
+        if (m.type === "result" || m.type === "failure") resolve(m);
+      });
+      child.once("exit", () => resolve(null));
+    });
+
+    expect(answer).toMatchObject({ type: "result", outputJson: '{"ran":true}' });
+  }, 30_000);
 
   it("obeys the first request and ignores a second", async () => {
     const ws = workspace();

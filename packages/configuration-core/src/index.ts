@@ -22,7 +22,14 @@ export {
   type ConfigPathOptions,
 } from "./paths.js";
 
-export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
+export {
+  configDocumentProblem,
+  readConfigObject,
+  updateConfig,
+  getAtPath,
+  setAtPath,
+  deleteAtPath,
+} from "./config.js";
 
 // Ordered environment + dotenv-file chain that `{{secret:…}}` placeholders and
 // `argent secrets` resolve names through.
@@ -57,6 +64,7 @@ export {
   asStringArray,
   MIN_SCRIPT_HEAP_LIMIT_MB,
   MIN_SCRIPT_TIMEOUT_MS,
+  WINDOWS_ROOTED_PATH_RE,
   type ConfigDefinition,
 } from "./config-schema.js";
 

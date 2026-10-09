@@ -56,6 +56,18 @@ describe("commandOnPath", () => {
     expect(execFileMock).toHaveBeenCalledWith("where", ["adb"]);
   });
 
+  // `command -v` answers once, so a rejected answer is a miss — where `where`
+  // lists every match and a rejected first hit still finds a later one. Only
+  // the Windows half of `accept` was covered.
+  it("takes the POSIX answer away when `accept` rejects it, rather than looking again", async () => {
+    setPlatform("darwin");
+    execFileMock.mockReturnValue({ stdout: "/usr/bin/bash\n", stderr: "" });
+
+    expect(await commandOnPath("bash", (candidate) => candidate !== "/usr/bin/bash")).toBeNull();
+    expect(await commandOnPath("bash", () => true)).toBe("/usr/bin/bash");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
   it("returns null when the command is not on PATH (non-zero exit)", async () => {
     setPlatform("darwin");
     execFileMock.mockReturnValue(new Error("not found"));

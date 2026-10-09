@@ -17,6 +17,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import { workerData } from "node:worker_threads";
+import { stopOwnGroup } from "./flow-script-watchdog-deadline.mjs";
 
 const LIFELINE_FD = 4;
 
@@ -33,11 +34,7 @@ const stop = () => {
   // left behind. Killing the group takes this process with it, which is the
   // point — the main thread it has to stop may be in the very synchronous loop
   // this control exists for.
-  try {
-    process.kill(-process.pid, "SIGKILL");
-  } catch {
-    // No process group to name (Windows, or a runner that never led one).
-  }
+  stopOwnGroup();
   process.kill(process.pid, "SIGKILL");
 };
 

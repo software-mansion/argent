@@ -95,8 +95,14 @@ export class ConfigScopeError extends Error {
 }
 
 /**
- * Thrown when a value fails the schema's `parse` validator. Carries what the key
- * accepts and an example, so a caller can tell the user what to type instead.
+ * Thrown when a value fails the validator a WRITE goes through - `validateWrite`
+ * where the key has one, and `parse` otherwise. Carries what the key accepts and
+ * an example, so a caller can tell the user what to type instead.
+ *
+ * The two differ where a key keeps a value on the read side that it refuses to
+ * be given: `scripts.bash` parses with `asPresentText`, so a hand-edited
+ * relative path survives for its own resolver to name, and validates a write
+ * with `asAbsolutePath`, so typing that same path raises this.
  */
 export class ConfigValidationError extends Error {
   constructor(
@@ -143,7 +149,7 @@ export function setConfigValue(
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
-  const parsed = def.parse(rawValue);
+  const parsed = (def.validateWrite ?? def.parse)(rawValue);
   if (parsed === undefined)
     throw new ConfigValidationError(def.key, describeExpectedValue(def), def.example);
   updateConfig((config) => setAtPath(config, key, parsed), scope, options);

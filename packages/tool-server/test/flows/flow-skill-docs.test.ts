@@ -90,6 +90,28 @@ describe("create-flow selector-scope docs", () => {
   });
 });
 
+describe("bash script failure docs", () => {
+  const REFERENCE = path.resolve(__dirname, "../../../docs/docs/reference/flow-yaml.mdx");
+
+  // The runner sets no reason file. A doc that names one teaches a variable
+  // that expands to the empty string, and the explanation written to it is lost.
+  it.each([REFERENCE, FLOW_YAML, LIVE_AUTHORING, SKILL])("names no reason file in %s", (file) => {
+    expect(readFileSync(file, "utf8")).not.toContain("ARGENT_REASON");
+  });
+
+  // A bash step explains a non-zero exit through stderr alone: the reason ends
+  // with a line the script wrote there - the last non-blank one, unless a
+  // Node.js, Bun or npm trailer or a job still running after bash moves it -
+  // and stdout never reaches it. Read inside the bash section, so a mention elsewhere on the
+  // page cannot stand in for it.
+  it("teaches the stderr failure reason in the Bash documentation", () => {
+    const section = between(REFERENCE, "### Bash scripts", "\n## The `argent flow` command");
+    expect(section).toMatch(/last non-blank[^.]*stderr/);
+    expect(section).toMatch(/echo "[^"]+" >&2(?:;|\n)\s*exit 1/);
+    expect(section).toMatch(/reason[^.]*stdout|stdout[^.]*reason/);
+  });
+});
+
 // The `idle` account moved out of SKILL.md into the flow-yaml reference, so
 // these read it there. They are otherwise the guards that came with the
 // warn-instead-of-fail change: the reference has to agree with what `idle`

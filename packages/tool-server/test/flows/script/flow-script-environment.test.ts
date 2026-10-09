@@ -139,6 +139,10 @@ describe("flow script executor — the environment allowlist", () => {
     "npm_config_globalconfig",
     "ELECTRON_RUN_AS_NODE",
     "ARGENT_FLOW_SCRIPT_RUNNER",
+    // The bash exchange. Refused whichever language the step runs, because the
+    // caller's map is not tied to one step's language and a bash step's runner
+    // sets its own value over it.
+    "ARGENT_OUTPUT",
   ])("refuses %s in a caller-supplied environment", async (name) => {
     const ws = workspace();
     const script = ws.write("env.mjs", `output.ok = true;`);

@@ -99,7 +99,7 @@ wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
 as the flow's \`launch\` step); for a reusable fragment, skip that and pass
 executionPrerequisite instead. Use flow-add-echo to add labels, and
-flow-add-script to run a local .mjs file and record it as a \`script:\` step.
+flow-add-script to run a local .mjs or .sh file and record it as a \`script:\` step.
 Call flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, edit the .yaml file directly to

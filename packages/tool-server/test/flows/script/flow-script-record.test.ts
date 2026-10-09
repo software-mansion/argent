@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,6 +22,7 @@ import {
   type FlowStep,
 } from "../../../src/tools/flows/flow-utils";
 import { SCRIPT_STEP_LOG_LIMIT_BYTES } from "../../../src/tools/flows/script/flow-script-executor";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 /** Real child processes, so the budgets are generous. */
 vi.setConfig({ testTimeout: 30_000 });
@@ -107,6 +108,17 @@ function parseError(scriptYaml: string): string {
     return err instanceof Error ? err.message : String(err);
   }
   throw new Error(`expected parseFlow to reject "${scriptYaml}"`);
+}
+
+let noBash: string | undefined;
+
+beforeAll(async () => {
+  const found = await resolveHostBash();
+  if (!("path" in found)) noBash = found.problem;
+});
+
+function skipWithoutBash(ctx: { skip: (note?: string) => void }): void {
+  if (noBash) ctx.skip(`this host has no bash to run a .sh step with: ${noBash}`);
 }
 
 beforeEach(async () => {
@@ -494,7 +506,7 @@ describe("recording a script step", () => {
     expect(result.logTruncated).toBe(true);
     expect(result.log!.length).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
     // The cut leaves nothing in the text, which is why the flag is the only
-    // signal and the tool description tells the caller to read it.
+    // signal.
     expect(result.log).not.toContain("truncated");
     expect(await steps("chatty")).toHaveLength(1);
   });
@@ -518,6 +530,75 @@ describe("recording a script step", () => {
     expect(result.logTruncated).toBe(true);
     expect(result.log).toMatch(/\[6 V8 stack frames omitted]/);
     expect(Buffer.byteLength(result.log!, "utf8")).toBeLessThan(SCRIPT_STEP_LOG_LIMIT_BYTES / 2);
+  });
+});
+
+describe("recording a bash step", () => {
+  it("runs the .sh, appends it, and hands back its document and what it printed", async (ctx) => {
+    skipWithoutBash(ctx);
+    await write(
+      "scripts/seed.sh",
+      `set -euo pipefail\n` +
+        `echo "seeded order 4711"\n` +
+        `printf '{"order":{"id":4711}}' > "$ARGENT_OUTPUT"\n`
+    );
+    await start("checkout");
+
+    const result = await addScript("checkout", "../../scripts/seed.sh");
+
+    expect(result.status).toBe("pass");
+    expect(result.log).toContain("seeded order 4711");
+    expect(result.outputJson).toBe('{"order":{"id":4711}}');
+    expect(result.recorded).toBe("1. script: ../../scripts/seed.sh");
+    expect(await steps("checkout")).toEqual([{ kind: "script", path: "../../scripts/seed.sh" }]);
+  });
+
+  it("records nothing when the .sh fails, and carries its reason back", async (ctx) => {
+    skipWithoutBash(ctx);
+    // The last stdout line is what a reason read off the whole log, rather than
+    // off stderr alone, would end with. The two are separate pipes, and only the
+    // pause puts that line after the explanation in the log.
+    await write(
+      "scripts/half.sh",
+      `echo "created 2 of 3 records"\n` +
+        `echo "the backend refused the third" >&2\n` +
+        `sleep 0.2\n` +
+        `echo "left 2 records behind"\n` +
+        `exit 1\n`
+    );
+    await start("failing");
+
+    const result = await addScript("failing", "../../scripts/half.sh");
+
+    expect(result.status).toBe("fail");
+    expect(result.reason).toContain("exited with code 1");
+    expect(result.reason).toContain("the backend refused the third");
+    expect(result.reason).not.toContain("created 2 of 3 records");
+    expect(result.reason).not.toContain("left 2 records behind");
+    expect(result.log).toContain("created 2 of 3 records");
+    expect(result.log).toContain("the backend refused the third");
+    expect(result.log).toContain("left 2 records behind");
+    expect(result).not.toHaveProperty("recorded");
+    expect(result).not.toHaveProperty("outputJson");
+    expect(result.message).toContain("Check or restore its changes");
+    expect(await steps("failing")).toEqual([]);
+  });
+
+  it("records a .mjs and a .sh into one flow, in the order they ran", async (ctx) => {
+    skipWithoutBash(ctx);
+    await write("scripts/first.mjs", `output.user = { id: "u_1" };`);
+    await write("scripts/second.sh", `printf '{"order":{"id":4711}}' > "$ARGENT_OUTPUT"`);
+    await start("mixed");
+
+    const first = await addScript("mixed", "../../scripts/first.mjs");
+    const second = await addScript("mixed", "../../scripts/second.sh");
+
+    expect([first.status, second.status]).toEqual(["pass", "pass"]);
+    expect(second.outputJson).toBe('{"order":{"id":4711}}');
+    expect(await steps("mixed")).toEqual([
+      { kind: "script", path: "../../scripts/first.mjs" },
+      { kind: "script", path: "../../scripts/second.sh" },
+    ]);
   });
 });
 
@@ -711,6 +792,8 @@ describe("the paths flow-add-script accepts", () => {
     ["a drive-relative prefix", "C:seed.mjs", 'path: "C:seed.mjs"'],
     ["an uppercase extension", "scripts/SEED.MJS", 'path: "scripts/SEED.MJS"'],
     ["a wrong extension", "scripts/seed.js", 'path: "scripts/seed.js"'],
+    ["an uppercase .sh", "scripts/seed.SH", 'path: "scripts/seed.SH"'],
+    ["a second spelling of bash", "scripts/seed.bash", 'path: "scripts/seed.bash"'],
     ["a basename outside the charset", "scripts/seed order.mjs", 'path: "scripts/seed order.mjs"'],
     ["an empty path", "", 'path: ""'],
   ];
