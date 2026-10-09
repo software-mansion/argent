@@ -8,6 +8,7 @@ import {
   type FileInputSpec,
   type FileInputWire,
 } from "./file-inputs.js";
+import { collectFlowMembers } from "./flow-files.js";
 
 export interface ToolMeta {
   name: string;
@@ -81,8 +82,10 @@ export interface CreateToolsClientOptions {
 
 /**
  * A tool invocation the SERVER answered with an error — an HTTP error status or
- * the NDJSON stream's terminal `error` line. `errorKind`/`errorCode` carry the
- * server's failure signal (e.g. kind "validation") when it sent one.
+ * the NDJSON stream's terminal `error` line — or one whose connection closed
+ * after the call was sent, so that the tool may have run.
+ * `errorKind`/`errorCode` carry the server's failure signal (e.g. kind
+ * "validation") when it sent one.
  *
  * `issues` is the issue list a 400 carries beside its prose message, so a caller
  * can map a rejected field back to the flag its user typed. Undefined for an
@@ -94,9 +97,10 @@ export class ToolInvocationError extends Error {
   readonly issues?: readonly unknown[];
   constructor(
     message: string,
-    signal?: { errorCode?: string; errorKind?: string; issues?: readonly unknown[] }
+    signal?: { errorCode?: string; errorKind?: string; issues?: readonly unknown[] },
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     this.name = "ToolInvocationError";
     this.errorCode = signal?.errorCode;
     this.errorKind = signal?.errorKind;
@@ -109,18 +113,25 @@ function authHeaders(token: string | undefined): Record<string, string> {
 }
 
 /**
- * The stream of a call ended before its result line: the tool may have acted
- * already, which a caller must know before it runs the tool again.
+ * The connection of a call closed before its result arrived, during its
+ * stream or before its answer: the tool may have acted already, which a
+ * caller must know before it runs the tool again.
  */
-function brokenStream(name: string, reason: string, progress: number, cause?: unknown): Error {
+function brokenStream(
+  name: string,
+  reason: string,
+  progress: number,
+  cause?: unknown
+): ToolInvocationError {
   const ran =
     progress > 0
       ? `${progress} progress update${progress === 1 ? "" : "s"} had arrived, so the tool ran at ` +
         `least in part`
       : `The tool may have run`;
-  return new Error(
+  return new ToolInvocationError(
     `The connection to the tool-server closed before ${name} finished (${reason}). ${ran}; ` +
       `check its effect before you run it again.`,
+    undefined,
     cause === undefined ? undefined : { cause }
   );
 }
@@ -254,6 +265,12 @@ function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   );
 }
 
+/** A rejected fetch's reason, with undici's cause ("other side closed") beside its "fetch failed". */
+function fetchFailure(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  return err.cause instanceof Error ? `${err.message}: ${err.cause.message}` : err.message;
+}
+
 function wiresOf(args: unknown): Partial<FileInputWire>[] {
   if (typeof args !== "object" || args === null) return [];
   return Object.values(args).filter(
@@ -262,14 +279,17 @@ function wiresOf(args: unknown): Partial<FileInputWire>[] {
   );
 }
 
-/** True when a prepared argument carries members (see file-inputs.ts `collect`). */
+/**
+ * True when a prepared argument carries `members`, an empty list included
+ * (see file-inputs.ts `collect`): the call runs a flow over a link.
+ */
 function carriesMembers(args: unknown): boolean {
-  return wiresOf(args).some((wire) => (wire.members?.length ?? 0) > 0);
+  return wiresOf(args).some((wire) => Array.isArray(wire.members));
 }
 
 /**
  * True when a prepared argument names an upload that the tool-server will
- * consume, or carries members: a call that sends a flow's closure is never
+ * consume, or carries members: a call that runs a flow over a link is never
  * sent twice, so a run's steps never act on the device twice.
  */
 function carriesUpload(args: unknown): boolean {
@@ -346,6 +366,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         uploadEndpoint: remote ? { url, token } : undefined,
         log: diagnose,
         baselineDirs,
+        collectMembers: collectFlowMembers,
       });
     }
     // File boundary, inbound: persist client-write directives (recorded flow
@@ -363,12 +384,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       return applied.result;
     };
 
-    // A call that sends a flow's closure, or that updates its baselines, runs
-    // that flow over a link, and its progress lines keep the connection busy
-    // through a proxy's idle timeout. Neither is ever sent twice: the run's
-    // steps would act on the device again.
-    const runsOverLink = carriesMembers(finalArgs) || baselineDirs.length > 0;
-    const stream = opts?.onProgress !== undefined || runsOverLink;
+    // A call that sends a flow's closure runs that flow over a link, and its
+    // progress lines keep the connection busy through a proxy's idle timeout.
+    const stream = opts?.onProgress !== undefined || carriesMembers(finalArgs);
+    const sentOnce = carriesUpload(finalArgs);
     const res = await doFetch(
       `${url}/tools/${encodeURIComponent(name)}`,
       {
@@ -382,11 +401,13 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         },
         body: JSON.stringify(finalArgs ?? {}),
       },
-      {
-        longRunning: meta?.longRunning === true,
-        carriesUpload: runsOverLink || carriesUpload(finalArgs),
-      }
-    );
+      { longRunning: meta?.longRunning === true, carriesUpload: sentOnce }
+    ).catch((err: unknown) => {
+      // A call that is sent once may have reached the tool-server before its
+      // connection closed, and nothing sends it again.
+      if (!sentOnce) throw err;
+      throw brokenStream(name, fetchFailure(err), 0, err);
+    });
     // The server commits to streaming only after every pre-invoke gate passes —
     // validation errors stay plain JSON with their status codes — so Content-Type
     // is the authoritative mode signal.
