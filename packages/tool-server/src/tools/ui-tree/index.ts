@@ -59,6 +59,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -89,6 +90,12 @@ Fails if the iOS ax-service predates the tree command; update argent.`,
           }
           return readIosUiTree(registry, device);
         },
+      },
+      iosRemote: {
+        // ax-service routes through sim-remote for an ios-remote device, so
+        // only the preflight dep differs from the ios branch.
+        requires: ["sim-remote"],
+        handler: async (_services, _params, device) => readIosUiTree(registry, device),
       },
       android: {
         requires: androidRequires,
