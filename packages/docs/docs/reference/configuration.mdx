@@ -204,6 +204,8 @@ An environment variable changes the behavior of the process that reads it. Expor
 | `ARGENT_IOS_TEAM_ID`                                   | unset                                   | The Apple Developer Team ID that signs the runner for [physical iOS devices](/docs/features/physical-ios-devices). Unset, Argent detects the team from the keychain of the Mac. The variable must be in the environment of the tool-server; a value in the shell of the client does not reach a running server |
 | `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME` | SDK defaults                            | The standard Android SDK locations. Argent reads them to find `adb`, the emulator and the AVDs                                                                                                                                                                                                                 |
 
+A Simulator.app older than the installed CoreSimulator crashes at launch, for example Xcode 16.4's after an Xcode 27 install. `boot-device` notices this on the first launch and stops opening that Simulator.app, so iOS simulators boot without the window. It keeps the result per Simulator.app and CoreSimulator build in `~/.argent/simulator-app-launch.json`. Delete the file to try again.
+
 ### MCP server
 
 | Variable                                  | Default                    | Description                                                                                                                                                            |

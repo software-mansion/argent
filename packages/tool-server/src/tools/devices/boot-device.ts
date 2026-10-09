@@ -35,6 +35,7 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { launchSimulatorApp } from "../../utils/simulator-app-launch";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
 import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
@@ -541,7 +542,8 @@ async function bootIos(
  * Xcode 27 replaces Simulator.app with Device Hub, which opens the device's
  * own window from a `devices://device/open?id=<udid>` URL; it reports success
  * even when it cannot show the device, so a missing window goes unnoticed.
- * Without either app nothing is opened.
+ * Without either app, or with a Simulator.app that crashes at launch, nothing
+ * is opened.
  */
 async function openSimulatorWindow(udid: string): Promise<void> {
   const timeout = 5_000;
@@ -549,7 +551,14 @@ async function openSimulatorWindow(udid: string): Promise<void> {
   const developerDir = realpathSync(stdout.trim());
   const simulatorApp = join(developerDir, "Applications", "Simulator.app");
   if (existsSync(simulatorApp)) {
-    await execFileAsync("open", ["-a", simulatorApp], { timeout });
+    const launched = await launchSimulatorApp(simulatorApp, () =>
+      execFileAsync("open", ["-a", simulatorApp], { timeout })
+    );
+    if (!launched) {
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] not opening ${simulatorApp}: it exited right after an earlier launch, so the device runs without a window. Delete ~/.argent/simulator-app-launch.json to try again.\n`
+      );
+    }
     return;
   }
   const deviceHubApp = join(developerDir, "..", "Applications", "DeviceHub.app");
