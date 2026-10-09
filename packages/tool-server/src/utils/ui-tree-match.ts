@@ -783,11 +783,16 @@ export function deriveSelector(node: DescribeNode): Selector | null {
 // and value separately, so a joined "Volume 50%" would match nothing, not
 // even the node it came from. Label first: a value like "50%" is the volatile
 // part of a control. Icon-font labels are invisible in YAML (see
-// hasVisibleText), so a node carrying only those falls through to role.
+// hasVisibleText), so a node carrying only those falls through to role. A
+// toggle's "0"/"1" is its state and flips with the tap, and a password's value
+// is the secret, so neither value names the node.
 function ownSelectors(node: DescribeNode): Selector[] {
   const out: Selector[] = [];
   if (node.identifier && node.identifier.trim()) out.push({ identifier: node.identifier });
-  const text = [node.label, node.value]
+  const skipValue =
+    node.password === true ||
+    (node.checked !== undefined && (node.value === "0" || node.value === "1"));
+  const text = [node.label, skipValue ? undefined : node.value]
     .map((t) => t?.replace(/\s+/g, " ").trim())
     .find((t) => t && hasVisibleText(t));
   if (text) out.push({ text });

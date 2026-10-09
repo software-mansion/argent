@@ -40,6 +40,15 @@ import {
 // settle on them, and a tap in their padding records as a scroll area.
 const SCROLLING_TYPES = new Set(["ScrollView", "Table", "CollectionView", "WebView"]);
 
+/**
+ * UIKit's scroll indicator ("Vertical scroll bar, 3 pages"): an adjustable
+ * element of no type of its own, in a scrolling container. Nobody taps it or
+ * reads it as content, so it is neither a leaf nor hoisted text.
+ */
+function isScrollIndicator(node: UiTreeNode): boolean {
+  return node.type === "Other" && node.traits?.length === 1 && node.traits[0] === "adjustable";
+}
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -66,11 +75,11 @@ function onScreenFrame(frame: DescribeFrame): DescribeFrame | undefined {
 /**
  * Project one accessibility node for the shared flatten (see
  * `flow-tree-flatten`). Covered subtrees (under a system alert) are dropped,
- * as describe drops them; what a scrolling container has scrolled out of its
- * frame is pruned by the flatten's scroll clip (`rect` + `scrolls`). Only
- * scrolling ancestors clip: a UIKit stack view reports a frame smaller than
- * its children, so clipping by every framed ancestor (the tree's `hidden`)
- * would drop buttons describe shows. A leaf is emitted for every node
+ * as describe drops them, and so are a scroller's indicators; what a scrolling
+ * container has scrolled out of its frame is pruned by the flatten's scroll
+ * clip (`rect` + `scrolls`). Only scrolling ancestors clip: a UIKit stack view
+ * reports a frame smaller than its children, so clipping by every framed
+ * ancestor (the tree's `hidden`) would drop buttons describe shows. A leaf is emitted for every node
  * describe would print — an id, a label, a value, a non-group role, input
  * focus — and for a scrolling container. An identifier shields hoisted text
  * to the nearest identified ancestor; a password never contributes its value.
@@ -106,7 +115,7 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
   }
   return {
     skip: false,
-    children: node.children,
+    children: scrollable ? node.children.filter((c) => !isScrollIndicator(c)) : node.children,
     // Off-screen text must not hoist: a `text` assert guards what the screen shows.
     ownText: leaf ? nodeText(leaf) : "",
     leaf,

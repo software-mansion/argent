@@ -211,7 +211,87 @@ describe("iOS simulator flow tree projection", () => {
       frame: frame(0, 0.3, 1, 0.05),
     });
     expect(password!.value).toBeUndefined();
-    expect(toggle).toMatchObject({ checked: true, disabled: true, selected: true });
+    expect(toggle).toMatchObject({
+      role: "AXSwitch",
+      checked: true,
+      disabled: true,
+      selected: true,
+    });
+  });
+
+  it("drops a scroll indicator from the leaves and the hoisted text, but keeps sliders", () => {
+    const tree = adaptIosUiTreeForFlows(
+      adaptAxTree(
+        reply([
+          app,
+          { index: 1, parentIndex: 0, elementType: 26, frame: frame(0, 0.1, 1, 0.8) },
+          {
+            index: 2,
+            parentIndex: 1,
+            label: "Haptic Feedback",
+            traits: ["staticText"],
+            elementType: 48,
+            frame: frame(0.09, 0.2, 0.3, 0.03),
+          },
+          // UIKit's indicator: an unnamed adjustable element in the scroller.
+          {
+            index: 3,
+            parentIndex: 1,
+            label: "Vertical scroll bar, 3 pages",
+            value: "0%",
+            traits: ["adjustable"],
+            elementType: 0,
+            frame: frame(0.918, 0.133, 0.075, 0.7),
+          },
+          { index: 4, parentIndex: 3, elementType: 0, frame: frame(0.985, 0.136, 0.007, 0.4) },
+          // A slider in a row of the list.
+          { index: 5, parentIndex: 1, elementType: 75, frame: frame(0.05, 0.3, 0.9, 0.06) },
+          {
+            index: 6,
+            parentIndex: 5,
+            label: "Volume",
+            value: "50%",
+            traits: ["adjustable"],
+            elementType: 0,
+            frame: frame(0.1, 0.31, 0.8, 0.04),
+          },
+          // Sliders placed in the scroller itself: a UISlider, and a custom
+          // control with a second trait.
+          {
+            index: 7,
+            parentIndex: 1,
+            label: "Brightness",
+            value: "20%",
+            traits: ["adjustable"],
+            elementType: 33,
+            frame: frame(0.1, 0.4, 0.8, 0.04),
+          },
+          {
+            index: 8,
+            parentIndex: 1,
+            label: "Contrast",
+            value: "70%",
+            traits: ["adjustable", "notEnabled"],
+            elementType: 0,
+            frame: frame(0.1, 0.5, 0.8, 0.04),
+          },
+        ])
+      )
+    );
+    expect(leaves(tree)).toEqual([
+      "Haptic Feedback",
+      "Volume",
+      "Brightness",
+      "Contrast",
+      "AXGroup",
+    ]);
+    expect(tree.children.filter((c) => c.role === "AXAdjustable").map((c) => c.label)).toEqual([
+      "Volume",
+      "Brightness",
+      "Contrast",
+    ]);
+    const list = tree.children.find((c) => c.scrollable)!;
+    expect(list.subtreeText).toBe("Haptic Feedback Volume 50% Brightness 20% Contrast 70%");
   });
 });
 

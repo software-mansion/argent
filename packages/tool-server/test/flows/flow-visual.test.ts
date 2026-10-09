@@ -47,10 +47,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
-  // The real offscreenHint: cropOn failures must surface the directives'
+  // The real selectorMissReason: cropOn failures must surface the directives'
   // standard not-found reason, so the tests assert against the real text.
-  offscreenHint: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
-    .offscreenHint,
+  selectorMissReason: (await importOriginal<typeof import("../../src/tools/flows/flow-actions")>())
+    .selectorMissReason,
   settleTree: vi.fn(async () => ({})),
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
   waitForFrame: vi.fn(async () => {

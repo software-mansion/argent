@@ -111,6 +111,7 @@ On an iOS simulator and on a physical iPhone, the runner and `describe` read one
 - The runner removes the elements that are scrolled or clipped out of view.
 - The runner removes the elements under a system alert.
 - The runner keeps the unlabeled scrolling containers that `describe` does not show.
+- The runner keeps the unlabeled containers that carry an id. `describe` does not show them.
 
 On Android and on Chromium, an id absent from `describe` can still resolve in a flow. Verify the id in a scratch fragment.
 
