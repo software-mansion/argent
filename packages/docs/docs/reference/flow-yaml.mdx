@@ -436,7 +436,7 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 
 ### Flows over a link
 
-`argent link` and the `ARGENT_TOOLS_URL` variable route the CLI to a tool-server. In this section, both are a link. Over a link, `argent flow run` uploads the flow file and each `run:` fragment that the flow reaches. The other files beside the flow file stay on the client.
+`argent link` and the `ARGENT_TOOLS_URL` variable route the CLI to a tool-server. In this section, both are a link. Over a link, `argent flow run` uploads the flow file, each `run:` fragment that the flow reaches and the snapshot baselines of the run. The other files stay on the client.
 
 | Flow content                                                                                                           | Over a link                                                                                                       |
 | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |

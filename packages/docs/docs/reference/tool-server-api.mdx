@@ -83,20 +83,20 @@ The client collects the members before the call:
 
 The client resolves each pair of directory and target one time. The client stops at 20 levels, the maximum depth of a `run:` chain. A cycle stops when a pair repeats.
 
-| Field         | Value                                                                                                                                          |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role`        | `flow`. For a baseline, see [Baselines](#baselines)                                                                                            |
-| `key`         | The real directory of the file that names the target, a NUL character, and the target as written. The tool-server finds the member by this key |
-| `path`        | The real directory of the file that names the target, a path separator, and the target as written                                              |
-| `canonical`   | The real path of the target on the client. For a missing file, the real path of the nearest directory that exists, with the rest of the path   |
-| `spelling`    | How the directory of `path` lists the basename of the target                                                                                   |
-| `content`     | The file as base64, when the file is in the call body                                                                                          |
-| `uploadId`    | The id that `POST /upload` returned, when the client sent the file to `POST /upload`. Set together with `contentHash`                          |
-| `contentHash` | The SHA-256 digest of the uploaded archive                                                                                                     |
-| `size`        | The size of the file in bytes                                                                                                                  |
-| `mtimeMs`     | The modification time of the file in epoch milliseconds                                                                                        |
-| `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. Not set when the member has its bytes              |
-| `error`       | The reason, when `state` is `refused`                                                                                                          |
+| Field         | Value                                                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`        | `flow`. For a baseline, see [Baselines](#baselines)                                                                                                                                           |
+| `key`         | The real directory of the file that names the target, a NUL character, and the target as written. The tool-server finds the member by this key                                                |
+| `path`        | The real directory of the file that names the target, a path separator, and the target as written                                                                                             |
+| `canonical`   | The real path of the target on the client. For a missing file, the real path of the nearest directory that exists, with the rest of the path                                                  |
+| `spelling`    | How the directory of `path` lists the basename of the target                                                                                                                                  |
+| `content`     | The file as base64, when the file is in the call body                                                                                                                                         |
+| `uploadId`    | The id that `POST /upload` returned, when the client sent the file to `POST /upload`. Set together with `contentHash`                                                                         |
+| `contentHash` | The SHA-256 digest of the uploaded archive                                                                                                                                                    |
+| `size`        | The size of the file in bytes                                                                                                                                                                 |
+| `mtimeMs`     | The modification time of the file in epoch milliseconds                                                                                                                                       |
+| `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. `listed` when the client sends only the name of a baseline. Not set when the member has its bytes |
+| `error`       | The reason, when `state` is `refused`                                                                                                                                                         |
 
 The client puts the members in the call body until they are 256 KiB in total. The client sends each other member to `POST /upload` as one gzipped tar, as for an input of kind `tar-upload`. Thus the body limit of a reverse proxy applies to the flow file with up to 256 KiB of members, and to one member at a time. When a proxy refuses an upload with the status 413, the client does not send the call. The error gives the body size that the proxy must accept on `POST /upload`, for example with `client_max_body_size` in nginx.
 
