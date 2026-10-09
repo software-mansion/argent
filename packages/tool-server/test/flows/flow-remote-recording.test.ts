@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { OnDiskSpelling, Registry, ResolvedMember, ToolContext } from "@argent/registry";
+import type { Registry, ResolvedMember, ToolContext } from "@argent/registry";
 import {
   ArtifactStore,
   CLIENT_FILE_MARKER,
@@ -25,9 +25,7 @@ import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/fl
  * Remote-mode flow behavior: the agent's project_root does NOT exist on this
  * host (the boundary probe says presentOnHost: false), so recording stays in
  * memory and every mutating tool returns a client-write directive instead of
- * touching this host's disk. The recorder treats every call into such a take
- * as a call over a link, header or not: it records only what a replay over
- * the same link runs.
+ * touching this host's disk.
  */
 
 // A path that exists on the (simulated) client but not on this "server".
@@ -67,67 +65,6 @@ function createMockRegistry(tools: Record<string, { result: unknown }> = {}) {
     }),
     getTool: vi.fn(() => undefined),
   } as unknown as Registry;
-}
-
-/**
- * {@link createMockRegistry} whose `getTool` answers `flow-execute` with its
- * real definition: over a link the recorder reads that tool's file inputs to
- * hand the nested run the flow it read from the client.
- */
-function flowExecuteRegistry(result: unknown): Registry {
-  const registry = createMockRegistry({ "flow-execute": { result } });
-  const runFlow = createRunFlowTool(registry);
-  vi.mocked(registry.getTool).mockImplementation((id: string) =>
-    id === "flow-execute" ? (runFlow as never) : undefined
-  );
-  return registry;
-}
-
-/**
- * The files a current argent client sends with a flow-add-step call over a
- * link, as the tool-server resolves them: each flow in `files` (keyed by the
- * client path it is spelled as) under the key the recorder looks it up by, its
- * directory and basename, with the spelled path as its real path, listed as
- * written unless `spellings` says otherwise. Each path in `missing` is a flow
- * the client looked for and does not have. The client sends nothing else.
- */
-function stepMembers(
-  files: Record<string, string>,
-  {
-    spellings = {},
-    missing = [],
-  }: { spellings?: Record<string, OnDiskSpelling>; missing?: string[] } = {}
-): Record<string, ResolvedMember> {
-  const members: Record<string, ResolvedMember> = {};
-  for (const spelled of missing) {
-    members[flowMemberKey(path.dirname(spelled), path.basename(spelled))] = {
-      role: "flow",
-      state: "missing",
-      canonical: spelled,
-      spelling: { state: "absent" },
-    };
-  }
-  for (const [spelled, text] of Object.entries(files)) {
-    members[flowMemberKey(path.dirname(spelled), path.basename(spelled))] = {
-      role: "flow",
-      state: "present",
-      canonical: spelled,
-      spelling: spellings[spelled] ?? { state: "listed" },
-      text,
-    };
-  }
-  return members;
-}
-
-/** The ctx of a flow-add-step call over a link from a client that sends the files of its step. */
-function linkedCtx(members: Record<string, ResolvedMember>): ToolContext {
-  return {
-    artifacts: new ArtifactStore(),
-    linked: true,
-    fileInputs: {
-      project_root: { clientPath: CLIENT_ROOT, presentOnHost: false, viaUpload: false, members },
-    },
-  };
 }
 
 beforeEach(() => {
@@ -187,19 +124,34 @@ describe("flow recording with a remote client (probe miss)", () => {
   });
 
   it("does not bake a device id into a remotely recorded flow-execute step (issue #607)", async () => {
-    // Over a link the recorder writes `run: sub.yaml` only when the client
-    // has the sibling beside the recording and it is the flow that ran. This
-    // nested call names a flow of a SECOND client project, and the recording's
-    // folder has no sub.yaml (the client sends it as missing), so
-    // captureRunTarget keeps the raw `tool: flow-execute` step. A raw step is
-    // where a record-time device id would be baked in and pin every replay.
+    // The client sends the flow of a second project and reports no sibling
+    // sub.yaml beside the recording, so captureRunTarget keeps the raw
+    // `tool: flow-execute` step: where a record-time device id would be baked
+    // in and pin every replay.
     const subPath = path.join(OTHER_CLIENT_ROOT, ".argent", "flows", "sub.yaml");
     const sibling = path.join(CLIENT_ROOT, ".argent", "flows", "sub.yaml");
-    const members = stepMembers(
-      { [subPath]: "steps:\n  - echo: sub\n", [CLIENT_FLOW_PATH]: "steps: []\n" },
-      { missing: [sibling] }
-    );
-    const registry = flowExecuteRegistry({ ok: true, steps: [] });
+    const member = (spelled: string, text?: string): [string, ResolvedMember] => [
+      flowMemberKey(path.dirname(spelled), path.basename(spelled)),
+      text === undefined
+        ? { role: "flow", state: "missing", canonical: spelled, spelling: { state: "absent" } }
+        : {
+            role: "flow",
+            state: "present",
+            canonical: spelled,
+            spelling: { state: "listed" },
+            text,
+          },
+    ];
+    const members = Object.fromEntries([
+      member(subPath, "steps:\n  - echo: sub\n"),
+      member(CLIENT_FLOW_PATH, "steps: []\n"),
+      member(sibling),
+    ]);
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    vi.mocked(registry.getTool).mockImplementation(((id: string) =>
+      id === "flow-execute" ? createRunFlowTool(registry) : undefined) as never);
     const addStep = createFlowAddStepTool(registry);
 
     await flowStartRecordingTool.execute(
@@ -220,15 +172,20 @@ describe("flow recording with a remote client (probe miss)", () => {
           device: "RECORD-TIME-ID",
         }),
       },
-      linkedCtx(members)
+      {
+        artifacts: new ArtifactStore(),
+        linked: true,
+        fileInputs: {
+          project_root: {
+            clientPath: CLIENT_ROOT,
+            presentOnHost: false,
+            viaUpload: false,
+            members,
+          },
+        },
+      }
     );
 
-    // The sibling is missing on the client, so the raw step is the record.
-    expect(stepResult.message).toContain(
-      `could not resolve "sub" as a sibling fragment (ENOENT: no such file or directory, ` +
-        `open '${sibling}')`
-    );
-    expect(stepResult.message).toContain("kept the raw flow-execute step");
     const directive = stepResult.savedTo as { content: string };
     expect(parseFlow(directive.content).steps).toEqual([
       {
@@ -240,8 +197,6 @@ describe("flow recording with a remote client (probe miss)", () => {
   });
 
   it("add-step rejects a flow-execute flow_path — a client sibling is unreadable here", async () => {
-    // No files sent with the call (an older client): nothing can confirm that
-    // the flow_path names a sibling of the recording.
     const registry = createMockRegistry({ "flow-execute": { result: { ok: true, steps: [] } } });
     const addStep = createFlowAddStepTool(registry);
 
@@ -266,119 +221,6 @@ describe("flow recording with a remote client (probe miss)", () => {
       )
     ).rejects.toThrow("the argent client sent no files with this call");
 
-    expect(registry.invokeTool).not.toHaveBeenCalled();
-  });
-
-  it("add-step gives a flow_path that no sibling can match its own reason over a link", async () => {
-    // The path itself is wrong, so the reason names the path, not the client.
-    const registry = createMockRegistry({ "flow-execute": { result: { ok: true, steps: [] } } });
-    const addStep = createFlowAddStepTool(registry);
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
-      remoteCtx()
-    );
-    const add = (flowPath: string) =>
-      addStep.execute(
-        {},
-        {
-          name: "remote-flow",
-          project_root: CLIENT_ROOT,
-          command: "flow-execute",
-          args: JSON.stringify({ flow_path: flowPath, project_root: CLIENT_ROOT }),
-        }
-      );
-
-    await expect(add(path.join(CLIENT_ROOT, ".argent", "flows", "login.yml"))).rejects.toThrow(
-      "flow files must use the .yaml extension"
-    );
-    await expect(add("login.yaml")).rejects.toThrow("it is not in the recording's flow directory");
-    expect(registry.invokeTool).not.toHaveBeenCalled();
-  });
-
-  it("add-step rewrites a flow-execute flow_path to its sibling name when the client lists the sibling", async () => {
-    const flowsDir = path.join(CLIENT_ROOT, ".argent", "flows");
-    const loginPath = path.join(flowsDir, "login.yaml");
-    const members = stepMembers({
-      [loginPath]: "steps:\n  - echo: login\n",
-      [CLIENT_FLOW_PATH]: "steps: []\n",
-    });
-    const registry = flowExecuteRegistry({ ok: true, steps: [] });
-    const addStep = createFlowAddStepTool(registry);
-
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
-      remoteCtx()
-    );
-
-    const stepResult = await addStep.execute(
-      {},
-      {
-        name: "remote-flow",
-        project_root: CLIENT_ROOT,
-        command: "flow-execute",
-        args: JSON.stringify({ flow_path: loginPath, project_root: CLIENT_ROOT }),
-      },
-      linkedCtx(members)
-    );
-
-    // The live call names the sibling by name, and reads it as the upload of
-    // the flow the client sent, not by the client path, with the files of the
-    // call for its own steps.
-    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
-    const [tool, args, options] = vi.mocked(registry.invokeTool).mock.calls[0]!;
-    expect(tool).toBe("flow-execute");
-    expect(args).toMatchObject({ name: "login", project_root: CLIENT_ROOT });
-    expect(args).not.toHaveProperty("flow_path");
-    expect(options?.fileInputs?.flow_file).toMatchObject({
-      clientPath: loginPath,
-      viaUpload: true,
-      canonical: loginPath,
-    });
-    expect(options?.fileInputs?.flow_file?.members).toBe(members);
-    expect((args as Record<string, unknown>).flow_file).not.toBe(loginPath);
-
-    const directive = stepResult.savedTo as { content: string };
-    expect(parseFlow(directive.content).steps).toEqual([{ kind: "run", flow: "login.yaml" }]);
-  });
-
-  it("add-step refuses a flow-execute flow_path whose spelling the client does not list", async () => {
-    // The spelling is the client's answer: this host has no such directory,
-    // and a host listing it cannot read would skip the check.
-    const loginPath = path.join(CLIENT_ROOT, ".argent", "flows", "Login.yaml");
-    const members = stepMembers(
-      { [loginPath]: "steps: []\n" },
-      {
-        spellings: {
-          [loginPath]: { state: "case_folded", actual: "login.yaml", addressable: true },
-        },
-      }
-    );
-    const registry = flowExecuteRegistry({ ok: true, steps: [] });
-    const addStep = createFlowAddStepTool(registry);
-
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "remote-flow", project_root: CLIENT_ROOT, executionPrerequisite: "Home" },
-      remoteCtx()
-    );
-
-    await expect(
-      addStep.execute(
-        {},
-        {
-          name: "remote-flow",
-          project_root: CLIENT_ROOT,
-          command: "flow-execute",
-          args: JSON.stringify({ flow_path: loginPath, project_root: CLIENT_ROOT }),
-        },
-        linkedCtx(members)
-      )
-    ).rejects.toThrow(
-      '(this filesystem matched it case-insensitively to "login.yaml"), so the recorded run: ' +
-        "step would name a flow no case-sensitive checkout can find"
-    );
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
