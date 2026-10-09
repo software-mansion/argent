@@ -51,7 +51,7 @@ export function createDebuggerLogRegistryTool(
     },
     description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet — but check { note }, which is present only when the stats are empty BECAUSE a stop-all-simulator-servers tore the previous debugger session down and deleted its log file. Absent that note, empty really does mean the app has logged nothing.
+Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet — but check { note }, which is present only when the stats are empty BECAUSE a stop-all-simulator-servers tore the previous debugger session down and deleted its log file, or when { file } does not exist and cannot be read. Absent that note, empty really does mean the app has logged nothing.
 When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } with NO log file — follow the guidance (do not retry in a loop, and do not try to read a log file from this state). A "connected" result's stats may come from a session whose socket has since died — use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
@@ -101,6 +101,10 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
             reaped ??= entry;
           }
           if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
+        }
+        if (!api.logWriter.hasFile()) {
+          const missing = `No log file exists at ${stats.file}, so there is nothing to grep: the counts and clusters are all that was captured. Usually ~/.argent/tmp is not writable (e.g. a root-owned ~/.argent: sudo chown -R "$USER" ~/.argent); only a new debugger session gets a file.`;
+          response.note = response.note ? `${response.note} ${missing}` : missing;
         }
         return response;
       } catch (err) {
