@@ -11,10 +11,11 @@
  * The client replaces each declared arg with a {@link FileInputWire} carrying
  * the path, its stat, and (only when routed to a remote tool-server) the
  * base64 content. The tool-server resolves it back to a server-readable path
- * *before* zod validation: used in place when the path on its own disk matches
- * the recorded stat (co-located ⇒ zero copies, mirroring the artifact gate),
- * otherwise materialized from the inlined content. Tools therefore always
- * execute against a plain local path.
+ * *before* zod validation: materialized from the inlined content whenever the
+ * client sent it (a linked client), otherwise used in place when the path on
+ * its own disk matches the recorded stat (an unlinked client ⇒ zero copies,
+ * mirroring the artifact gate). Tools therefore always execute against a plain
+ * local path.
  *
  * {@link ClientFileDirective} is the reverse: a tool whose output belongs in
  * the *client's* project (e.g. a recorded flow YAML) returns the content plus
@@ -31,7 +32,7 @@ export interface FileInputWire {
    * Absolute path on the CLIENT machine. Also probed on the tool-server's own
    * filesystem — a hit (existence for directories, size/mtime match for files)
    * means client and server are co-located (or share a checkout) and the path
-   * is used in place with no copy.
+   * is used in place with no copy, unless the wrapper carries `content`.
    */
   path: string;
   /** stat of `path` on the client, for the server-side co-location probe. */
@@ -40,7 +41,8 @@ export interface FileInputWire {
   /**
    * Base64 file bytes, inlined only when the client is routed to an external
    * tool-server (`argent link` / ARGENT_TOOLS_URL), so unlinked local calls
-   * never pay the encoding cost.
+   * never pay the encoding cost. When present, the server uses these bytes
+   * even if a host file at `path` matches the stat.
    */
   content?: string;
   /**

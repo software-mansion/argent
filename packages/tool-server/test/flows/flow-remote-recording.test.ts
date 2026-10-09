@@ -793,7 +793,11 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     ).rejects.toThrow("flow_path file-input boundary");
   });
 
-  it("rejects an uploaded flow_path because its sibling filesystem is unavailable", async () => {
+  it("accepts an uploaded flow_path and marks it viaUpload", async () => {
+    // The materialized temp file is this process's own copy of the client's
+    // file, so no boundary stat and no host listing has anything to judge; the
+    // flow name comes from the client's spelling, and viaUpload is what makes
+    // execute() refuse a run:, script: or snapshot: step before step 1.
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
     await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
@@ -801,7 +805,41 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         presentOnHost: false,
         viaUpload: true,
       })
-    ).rejects.toThrow("explicit flow paths require a co-located client and tool server");
+    ).resolves.toEqual({ filePath: uploaded, flowName: "caller-visible", viaUpload: true });
+  });
+
+  it("rejects an uploaded flow_path whose client spelling is relative", async () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
+    await expect(
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+        clientPath: "flows/relative.yaml",
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).rejects.toThrow('Invalid flow_path "flows/relative.yaml": flow paths must be absolute');
+  });
+
+  it("rejects an uploaded flow_path whose client spelling has a .. segment", async () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
+    await expect(
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+        // Spelled, not joined: path.join collapses the segment this test exists to catch.
+        clientPath: `${CLIENT_ROOT}/flows/../shared/caller-visible.yaml`,
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).rejects.toThrow('flow paths must not contain ".." segments');
+  });
+
+  it("rejects an uploaded flow_path without the .yaml extension", async () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
+    await expect(
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+        clientPath: path.join(CLIENT_ROOT, "flows", "caller-visible.yml"),
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).rejects.toThrow("flow files must use the .yaml extension");
   });
 
   it("rejects direct callers that provide both flow sources", async () => {

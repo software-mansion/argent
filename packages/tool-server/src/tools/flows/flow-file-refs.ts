@@ -63,17 +63,16 @@ interface ResolvedFlowRelativeFile {
  * the tool-server user can read it, which is the reach the front door already
  * grants: an operator can point `flow_path` at any YAML on the host.
  *
- * An uploaded flow — the one route that carries untrusted content — cannot name
- * a target of its OWN: `assertUploadSelfContained` rejects every `run:` and
- * `script:` step it declares, and a recording whose files are not on this host
- * is refused by `flow-add-script` before it gets here. It does still ARRIVE
- * here, through a nested `tool: flow-execute` naming a flow already on this
- * host — `invokeSubTool` forwards no `fileInputs`, so the inner run is an
- * ordinary `name` run with `viaUpload` false and that flow's own targets
- * resolve through this function. The decision above does not rest on uploads
- * being absent: it rests on the reach being unchanged, since a caller who can
- * send the wrapping upload can call `flow-execute` with that same `name`
- * directly and get the same result.
+ * An uploaded flow — the route that carries untrusted content, by `name` and
+ * by `flow_path` alike — never reaches this function: `assertUploadSelfContained`
+ * refuses it before step 1 when any step would, which covers `run:`, `script:`
+ * and `snapshot`, a nested `tool: flow-execute`, any other `tool:` step that
+ * takes a file, and the recording tools. A recording whose files are not on
+ * this host is refused by `flow-add-script` before it gets here. The decision
+ * above does not rest on that refusal, though: it rests on the reach being
+ * unchanged, since a caller who can send an upload can call `flow-execute` with
+ * a `name` or a verified `flow_path` on this host directly and get the same
+ * result.
  */
 export async function resolveFlowRelativeFile(
   anchorDir: string,

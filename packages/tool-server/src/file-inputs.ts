@@ -6,13 +6,16 @@
  * server-readable string *before* zod validation, so tools always execute
  * against a local path:
  *
- * - co-located client: the wrapper's path matches on this host's own
- *   filesystem and is used in place — zero copies.
- * - remote client: `kind: "file"` content is materialized into a temp file;
- *   `kind: "directory"` fails with remote-mode guidance (a tree can't ride in
- *   a tool call); `kind: "tar-upload"` is extracted from a streamed tar
- *   whenever `uploadId` is set, even if the path also exists on this host;
- *   `kind: "probe"` passes through and only reports presence.
+ * - `kind: "file"`: inlined content (sent only by a linked client) is
+ *   materialized into a temp file, even when the path also matches on this
+ *   host; without content, a path that matches on this host's own filesystem
+ *   is used in place — zero copies.
+ * - `kind: "tar-upload"` is extracted from a streamed tar whenever `uploadId`
+ *   is set, even if the path also exists on this host, and otherwise used in
+ *   place.
+ * - `kind: "directory"` is used in place, and fails with remote-mode guidance
+ *   when absent here (a tree can't ride in a tool call).
+ * - `kind: "probe"` passes through and only reports presence.
  *
  * Plain string args (older clients, direct invocations) pass through untouched.
  */
@@ -224,6 +227,19 @@ async function resolveOne(
     );
   }
 
+  // The client inlines content only when it is linked, and then its bytes are
+  // the latest: a host file that matches the stat may be a mirrored copy (cp -p
+  // and tar keep size and mtime) of an older revision, beside siblings that are
+  // older still. Like a tar-upload's uploadId, uploaded content wins.
+  if (spec.kind === "file" && typeof wire.content === "string") {
+    const { filePath, dir } = await materializeUpload(wire);
+    tempDirs.push(dir);
+    return {
+      value: filePath,
+      meta: { clientPath: wire.path, presentOnHost: probe.present, viaUpload: true },
+    };
+  }
+
   if (meta.presentOnHost) {
     return { value: wire.path, meta };
   }
@@ -235,12 +251,6 @@ async function resolveOne(
         `uploaded with the call — when the tool-server runs on a different machine, pass a ` +
         `path that exists on that machine (e.g. the server-side checkout of the project).`
     );
-  }
-
-  if (typeof wire.content === "string") {
-    const { filePath, dir } = await materializeUpload(wire);
-    tempDirs.push(dir);
-    return { value: filePath, meta: { ...meta, viaUpload: true } };
   }
 
   if (wire.contentOmitted === "size-limit") {
