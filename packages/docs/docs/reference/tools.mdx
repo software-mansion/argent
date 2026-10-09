@@ -55,7 +55,7 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `await-ui-element`   | Block until a UI element reaches an expected state, instead of polling in a loop |
 | `ui-tree` (SDK only) | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 
-`ui-tree` is hidden from MCP; call it with the [Argent SDK](./node-client.mdx), which exports its `UiTree` result type. Fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. Every node of the covered app is `covered`.
+`ui-tree` is hidden from MCP; call it with the [Argent SDK](./node-client.mdx), which exports its `UiTree` result type. Fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset.
 
 ## Interacting
 

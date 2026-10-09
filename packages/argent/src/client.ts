@@ -61,7 +61,7 @@ export interface UiTreeNode {
   bundleId?: string;
   editable?: boolean;
   heading?: boolean;
-  /** iOS: on screen, but behind an in-app presentation or a system alert. */
+  /** On screen, but behind an in-app presentation (iOS) or a system alert. */
   covered?: boolean;
   placeholder?: string;
   /** The input shows its placeholder: it holds no text, and `value` is unset. */
@@ -76,14 +76,23 @@ export interface UiTree {
   source: "ax-service" | "android-devtools";
   /** Native units: iOS points, Android pixels. */
   screen?: { width: number; height: number };
-  /** While an iOS system alert shows, the system app first and the app it covers second. */
+  /**
+   * iOS: while a system alert shows, the system app first and the app it covers
+   * second. Android: one root per window, topmost first.
+   */
   roots: UiTreeNode[];
   truncated: boolean;
   alertVisible?: boolean;
   keyboardVisible?: boolean;
-  /** The bundle id of the app in front, under any system alert. */
+  /**
+   * The bundle id or package of the app in front, under any system alert.
+   * Android: unset when the alert hides the app's window.
+   */
   foregroundApp?: string;
-  /** Fields this source cannot report. */
+  /**
+   * Fields this source cannot report. On Android they depend on the API level:
+   * `placeholder` and `hintShowing` need 26, `heading` 28.
+   */
   unsupportedFields: string[];
 }
 
