@@ -261,18 +261,27 @@ describe("ensureAndroidDevtoolsInstalled", () => {
     expect(installs()).toHaveLength(0);
   });
 
-  // API 23 has no `cmd`, and API 24-25 reject `--show-versioncode`.
-  describe("where `cmd package` cannot report the versionCode", () => {
-    const dumpsys = (body: string) => (cmd: string) => {
-      if (cmd.startsWith("cmd package"))
+  // Every way `cmd package` can fail to give a versionCode falls back to
+  // `dumpsys package`. API 23's shell prints `cmd: not found` and exits 0.
+  const CMD_FAILURES: [string, (cmd: string) => string][] = [
+    [
+      "throws",
+      () => {
         throw new Error("Error: Unknown option: --show-versioncode");
-      return body;
-    };
-    const PACKAGE = (versionCode: number) =>
-      "Packages:\n" +
-      "  Package [com.argent.androiddevtools] (5c1a2b3):\n" +
-      "    userId=10061\n" +
-      `    versionCode=${versionCode} targetSdk=36\n`;
+      },
+    ],
+    ["prints `cmd: not found` and exits 0", () => "/system/bin/sh: cmd: not found\n"],
+    ["lists the package without a versionCode", () => "package:com.argent.androiddevtools\n"],
+  ];
+  const PACKAGE = (versionCode: number) =>
+    "Packages:\n" +
+    "  Package [com.argent.androiddevtools] (5c1a2b3):\n" +
+    "    userId=10061\n" +
+    `    versionCode=${versionCode} targetSdk=36\n`;
+
+  describe.each(CMD_FAILURES)("where `cmd package` %s", (_name, cmdAnswer) => {
+    const dumpsys = (body: string) => (cmd: string) =>
+      cmd.startsWith("cmd package") ? cmdAnswer(cmd) : body;
 
     it("upgrades an older helper", async () => {
       probe = dumpsys(PACKAGE(0));

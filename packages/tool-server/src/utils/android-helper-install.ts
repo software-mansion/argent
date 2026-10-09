@@ -9,40 +9,41 @@ interface InstalledVersionProbe {
 }
 
 /**
- * `--show-versioncode` returns the version in the same round-trip; `pm path`
- * would need a follow-up `dumpsys package`.
+ * `--show-versioncode` returns the version in the same round-trip. Anything
+ * short of a listed versionCode — a throw, no matching line, or a line without
+ * one — falls back to `dumpsys package`: API 23 has no `cmd` (its shell prints
+ * `cmd: not found` and exits 0), and API 24-25 have no `--show-versioncode`.
  */
 async function probeInstalledVersion(
   serial: string,
   packageName: string
 ): Promise<InstalledVersionProbe> {
-  let out: string;
   try {
-    out = await adbShell(serial, `cmd package list packages --show-versioncode ${packageName}`, {
-      timeoutMs: 5_000,
-    });
-  } catch {
-    // API 23 has no `cmd`, and API 24-25 reject `--show-versioncode`.
-    // `dumpsys package` reports the versionCode on every supported level.
-    try {
-      out = await adbShell(serial, `dumpsys package ${packageName}`, { timeoutMs: 5_000 });
-    } catch {
-      return { installed: false, versionCode: null };
+    const out = await adbShell(
+      serial,
+      `cmd package list packages --show-versioncode ${packageName}`,
+      { timeoutMs: 5_000 }
+    );
+    for (const line of out.split("\n")) {
+      const match = line.trim().match(/^package:([^\s]+)\s+versionCode:(\d+)$/);
+      if (match?.[1] === packageName) {
+        return { installed: true, versionCode: parseInt(match[2]!, 10) };
+      }
     }
-    const block = out.split(`Package [${packageName}]`)[1];
-    if (block === undefined) return { installed: false, versionCode: null };
-    const versionCode = block.match(/versionCode=(\d+)/);
-    return { installed: true, versionCode: versionCode ? parseInt(versionCode[1]!, 10) : null };
+  } catch {
+    // Fall through to `dumpsys package`.
   }
 
-  for (const line of out.split("\n")) {
-    const match = line.trim().match(/^package:([^\s]+)(?:\s+versionCode:(\d+))?$/);
-    if (!match) continue;
-    if (match[1] !== packageName) continue;
-    const versionCode = match[2] ? parseInt(match[2], 10) : null;
-    return { installed: true, versionCode: Number.isFinite(versionCode!) ? versionCode! : null };
+  let out: string;
+  try {
+    out = await adbShell(serial, `dumpsys package ${packageName}`, { timeoutMs: 5_000 });
+  } catch {
+    return { installed: false, versionCode: null };
   }
-  return { installed: false, versionCode: null };
+  const block = out.split(`Package [${packageName}]`)[1];
+  if (block === undefined) return { installed: false, versionCode: null };
+  const versionCode = block.match(/versionCode=(\d+)/);
+  return { installed: true, versionCode: versionCode ? parseInt(versionCode[1]!, 10) : null };
 }
 
 /**
@@ -62,12 +63,14 @@ async function probeInstalledVersion(
  * and a memo would keep skipping the install for the life of the process. One
  * `cmd package list packages` per service instantiation is cheap enough to pay.
  *
- * `force` installs without probing, and with `-d` so the install may go
- * backwards in versionCode. The probe cannot tell a working helper from a
- * foreign build carrying the same or a higher versionCode, so a repair has to
- * ignore its verdict. It runs only when the device says the instrumentation is
- * missing, which a newer helper of the same package never does, so it does not
- * downgrade a working newer helper.
+ * `force` installs without probing, and with `-d`. The probe cannot tell a
+ * working helper from a foreign build carrying the same or a higher
+ * versionCode, so a repair has to ignore its verdict. `-d` only lets the
+ * install go backwards on a debuggable build (emulator images without Play
+ * Store); release images reject a downgrade of the non-debuggable helper with
+ * INSTALL_FAILED_VERSION_DOWNGRADE. The repair runs only when the device says
+ * the instrumentation is missing, which a newer helper of the same package
+ * never does, so it does not touch a working newer helper.
  */
 export async function ensureAndroidDevtoolsInstalled(
   serial: string,
@@ -77,7 +80,7 @@ export async function ensureAndroidDevtoolsInstalled(
 
   if (!options.force) {
     const probe = await probeInstalledVersion(serial, manifest.packageName);
-    // A null versionCode means the device listed the package without one.
+    // A null versionCode means `dumpsys package` listed the package without one.
     // Treat it as current: installing on every instantiation would replace a
     // working helper each time, and a broken one is caught by the forced
     // reinstall once `am instrument` refuses it.
