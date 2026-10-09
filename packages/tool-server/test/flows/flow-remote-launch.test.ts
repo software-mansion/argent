@@ -44,7 +44,8 @@ function mockRegistry(
         nodes: [],
         truncated: false,
         foregroundApp,
-        treeVersion: 2,
+        interfaceOrientation: "portrait",
+        treeVersion: 3,
       }),
     })),
   } as unknown as Registry;

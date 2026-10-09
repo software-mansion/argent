@@ -99,8 +99,41 @@ describe("ui-tree iOS adapter", () => {
       "hintShowing",
       "bundleId",
       "foregroundApp",
+      "interfaceOrientation",
     ]);
-    expect(adaptAxTree(reply([{ index: 0 }], { treeVersion: 2 })).unsupportedFields).toEqual([]);
+  });
+
+  it("names the fields each treeVersion does not send", () => {
+    const fields = (treeVersion?: number) =>
+      adaptAxTree(reply([{ index: 0 }], { treeVersion })).unsupportedFields;
+    const legacy = [
+      "type",
+      "password",
+      "placeholder",
+      "hintShowing",
+      "bundleId",
+      "foregroundApp",
+      "interfaceOrientation",
+    ];
+    expect(fields(undefined)).toEqual(legacy);
+    expect(fields(1)).toEqual(legacy);
+    expect(fields(2)).toEqual(["interfaceOrientation"]);
+    expect(fields(3)).toEqual([]);
+    expect(fields(4)).toEqual([]);
+  });
+
+  it("reads the interface orientation as UIKit names it, and drops an unknown name", () => {
+    const orientation = (interfaceOrientation?: string) =>
+      adaptAxTree(reply([{ index: 0 }], { treeVersion: 3, interfaceOrientation }))
+        .interfaceOrientation;
+    expect(orientation("portrait")).toBe("portrait");
+    expect(orientation("portraitUpsideDown")).toBe("portraitUpsideDown");
+    expect(orientation("landscapeLeft")).toBe("landscapeLeft");
+    expect(orientation("landscapeRight")).toBe("landscapeRight");
+    // The daemon omits it when it does not know; a name UIKit does not use is not trusted.
+    expect(orientation(undefined)).toBeUndefined();
+    expect(orientation("faceUp")).toBeUndefined();
+    expect(orientation("LandscapeRight")).toBeUndefined();
   });
 
   it("names the element type and reads secure, placeholder and hint fields", () => {

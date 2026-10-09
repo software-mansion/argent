@@ -37,7 +37,8 @@ const TREE: AXTreeResponse = {
   ],
   truncated: false,
   foregroundApp: APP,
-  treeVersion: 2,
+  interfaceOrientation: "portrait",
+  treeVersion: 3,
 };
 
 /** The service URNs resolved, so a test can assert WHICH source was read. */

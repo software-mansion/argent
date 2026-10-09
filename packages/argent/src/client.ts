@@ -83,6 +83,11 @@ export interface UiTree {
   keyboardVisible?: boolean;
   /** The bundle id of the app in front, under any system alert. */
   foregroundApp?: string;
+  /**
+   * iOS: the interface orientation, as UIKit names it. Frames stay in the
+   * screen's portrait-native space, so on a landscape UI their axes are not the user's.
+   */
+  interfaceOrientation?: "portrait" | "portraitUpsideDown" | "landscapeLeft" | "landscapeRight";
   /** Fields this source cannot report. */
   unsupportedFields: string[];
 }

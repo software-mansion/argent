@@ -17,6 +17,7 @@ const UNSUPPORTED_FIELDS = [
   "heading",
   "keyboardVisible",
   "foregroundApp",
+  "interfaceOrientation",
 ];
 
 type XmlNode = NonNullable<ReturnType<typeof parseUiAutomatorXml>>;

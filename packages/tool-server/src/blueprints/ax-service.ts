@@ -60,6 +60,8 @@ export interface AXDescribeElement {
 export interface AXDescribeResponse {
   alertVisible: boolean;
   screenFrame?: { width: number; height: number };
+  /** UIKit's name for the interface orientation; frames stay in the portrait-native space. */
+  interfaceOrientation?: string;
   elements: AXDescribeElement[];
 }
 
@@ -84,7 +86,12 @@ export interface AXTreeResponse {
   nodes: AXTreeNode[];
   truncated: boolean;
   foregroundApp?: string;
-  /** 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId. */
+  /** UIKit's name for the interface orientation; frames stay in the portrait-native space. */
+  interfaceOrientation?: string;
+  /**
+   * 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId.
+   * 3 and up: the response carries interfaceOrientation.
+   */
   treeVersion?: number;
 }
 
@@ -478,6 +485,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         return {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
+          interfaceOrientation: result.interfaceOrientation,
           elements: result.elements ?? [],
         };
       },
@@ -502,6 +510,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           nodes: result.nodes ?? [],
           truncated: result.truncated === true,
           foregroundApp: result.foregroundApp,
+          interfaceOrientation: result.interfaceOrientation,
           treeVersion: result.treeVersion,
         };
       },

@@ -325,7 +325,8 @@ describe("flow-execute chromium boot", () => {
         nodes: [],
         truncated: false,
         foregroundApp: "com.acme.app",
-        treeVersion: 2,
+        interfaceOrientation: "portrait",
+        treeVersion: 3,
       }),
     }));
 

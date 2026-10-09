@@ -124,6 +124,7 @@ describe("ui-tree Android adapter", () => {
       "heading",
       "keyboardVisible",
       "foregroundApp",
+      "interfaceOrientation",
     ]);
   });
 });

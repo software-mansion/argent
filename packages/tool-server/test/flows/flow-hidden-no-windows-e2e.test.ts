@@ -24,7 +24,8 @@ const EMPTY_TREE: AXTreeResponse = {
   nodes: [{ index: 0, label: "App", bundleId: APP }],
   truncated: false,
   foregroundApp: APP,
-  treeVersion: 2,
+  interfaceOrientation: "portrait",
+  treeVersion: 3,
 };
 
 // The registry's tool surface is inert: the flow has no launch or tool steps.

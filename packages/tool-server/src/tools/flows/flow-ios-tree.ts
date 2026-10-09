@@ -23,7 +23,8 @@ import {
  * print. Recording and replay therefore read one tree, so a selector copied
  * from `describe` (id, text, role) resolves at replay. Frames are normalized
  * to the screen's fixed (portrait-native) panel, the space touches are taken
- * in; the daemon reports no interface orientation.
+ * in; the daemon reports the interface orientation, which turns the flow's
+ * directions and reading order on a landscape UI (`flow-orientation.ts`).
  *
  * Physical devices (`queryIosDeviceFlowTree`): the XCUITest runner accessibility
  * snapshot, the same tree `describe` serves, reshaped into the flow contract.
@@ -64,15 +65,18 @@ function onScreenFrame(frame: DescribeFrame): DescribeFrame | undefined {
 
 /**
  * Project one accessibility node for the shared flatten (see
- * `flow-tree-flatten`). Hidden (scrolled or clipped out of view) and covered
- * (under a system alert) subtrees are dropped, as describe drops them. A leaf
- * is emitted for every node describe would print — an id, a label, a value, a
- * non-group role, input focus — and for a scrolling container. An identifier
- * shields hoisted text to the nearest identified ancestor; a password never
- * contributes its value.
+ * `flow-tree-flatten`). Covered subtrees (under a system alert) are dropped,
+ * as describe drops them; what a scrolling container has scrolled out of its
+ * frame is pruned by the flatten's scroll clip (`rect` + `scrolls`). Only
+ * scrolling ancestors clip: a UIKit stack view reports a frame smaller than
+ * its children, so clipping by every framed ancestor (the tree's `hidden`)
+ * would drop buttons describe shows. A leaf is emitted for every node
+ * describe would print — an id, a label, a value, a non-group role, input
+ * focus — and for a scrolling container. An identifier shields hoisted text
+ * to the nearest identified ancestor; a password never contributes its value.
  */
 function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
-  if (node.hidden || node.covered) {
+  if (node.covered) {
     return { skip: true, children: [], ownText: "", leaf: null, shield: false };
   }
   const frame = node.frame && onScreenFrame(node.frame);
@@ -107,6 +111,14 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
     ownText: leaf ? nodeText(leaf) : "",
     leaf,
     shield: Boolean(node.identifier) || node.password === true,
+    // Scroll-clip inputs, unclamped and in the tree's normalized space.
+    rect: node.frame && {
+      x: node.frame.x,
+      y: node.frame.y,
+      w: node.frame.width,
+      h: node.frame.height,
+    },
+    scrolls: scrollable,
   };
 }
 
@@ -119,7 +131,7 @@ function projectAxNode(node: UiTreeNode): FlatNode<UiTreeNode> {
 export function adaptIosUiTreeForFlows(tree: UiTree): DescribeNode {
   const children: DescribeNode[] = [];
   for (const root of tree.roots) {
-    if (root.hidden || root.covered) continue;
+    if (root.covered) continue;
     for (const child of root.children) flattenHoisting(child, projectAxNode, children);
   }
   return parseDescribeResult({
@@ -174,8 +186,8 @@ function treeUnavailable(device: DeviceInfo, err: unknown): Error {
  * One read of the simulator's accessibility tree, as `ui-tree` adapts it. Every
  * failure is rethrown with a remedy: an accessibility service too old for
  * flows (`AX_TREE_UNSUPPORTED`, also when it serves a tree without
- * `foregroundApp`), a simulator the service cannot reach, a read that timed
- * out. Flows on a simulator have no other tree source.
+ * `foregroundApp` or `interfaceOrientation`), a simulator the service cannot
+ * reach, a read that timed out. Flows on a simulator have no other tree source.
  */
 export async function readIosSimulatorUiTree(
   registry: Registry,
@@ -190,9 +202,13 @@ export async function readIosSimulatorUiTree(
   } catch (err) {
     throw treeUnavailable(device, err);
   }
-  if (tree.unsupportedFields.includes("foregroundApp")) {
+  if (
+    tree.unsupportedFields.includes("foregroundApp") ||
+    tree.unsupportedFields.includes("interfaceOrientation")
+  ) {
     throw unsupportedTree(
-      `the accessibility tree of ${device.id} names no foreground app. ${UPDATE_REMEDY}`
+      `the accessibility tree of ${device.id} names no foreground app or interface ` +
+        `orientation. ${UPDATE_REMEDY}`
     );
   }
   return { ...tree, degraded: ax.degraded };
@@ -228,7 +244,12 @@ export async function queryIosSimulatorFlowTree(
             `draw, or relaunch it with \`restart-app\`, then run the flow again.`
     );
   }
-  return { tree: adaptIosUiTreeForFlows(tree), source: "ax-service", screen: tree.screen };
+  return {
+    tree: adaptIosUiTreeForFlows(tree),
+    source: "ax-service",
+    screen: tree.screen,
+    uiOrientation: tree.interfaceOrientation,
+  };
 }
 
 /**

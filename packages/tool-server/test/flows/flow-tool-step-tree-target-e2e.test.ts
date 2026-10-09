@@ -39,7 +39,8 @@ function axTree(app: string): AXTreeResponse {
     ],
     truncated: false,
     foregroundApp: app,
-    treeVersion: 2,
+    interfaceOrientation: "portrait",
+    treeVersion: 3,
   };
 }
 

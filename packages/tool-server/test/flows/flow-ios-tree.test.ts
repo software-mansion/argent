@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DeviceInfo, Registry } from "@argent/registry";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { AXTreeNode, AXTreeResponse } from "../../src/blueprints/ax-service";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 import { adaptAxTree } from "../../src/tools/ui-tree/ios";
@@ -20,7 +20,8 @@ function reply(nodes: AXTreeNode[], extra: Partial<AXTreeResponse> = {}): AXTree
     nodes,
     truncated: false,
     foregroundApp: "com.example.app",
-    treeVersion: 2,
+    interfaceOrientation: "portrait",
+    treeVersion: 3,
     ...extra,
   };
 }
@@ -83,7 +84,28 @@ describe("iOS simulator flow tree projection", () => {
     expect(tree.children[1]).toMatchObject({ role: "AXButton", label: "Edit" });
   });
 
-  it("drops hidden and covered subtrees and the app under an alert", () => {
+  it("keeps a button hanging outside a non-scrolling container's frame", () => {
+    // A UIKit stack view reports a frame smaller than its children.
+    const tree = adaptIosUiTreeForFlows(
+      adaptAxTree(
+        reply([
+          app,
+          { index: 1, parentIndex: 0, frame: frame(0.15, 0.48, 0.7, 0.13) },
+          {
+            index: 2,
+            parentIndex: 1,
+            label: "Fruits",
+            identifier: "home-list-button",
+            traits: ["button"],
+            frame: frame(0.15, 0.655, 0.7, 0.058),
+          },
+        ])
+      )
+    );
+    expect(leaves(tree)).toEqual(["Fruits"]);
+  });
+
+  it("drops covered subtrees and the app under an alert", () => {
     const tree = adaptIosUiTreeForFlows(
       adaptAxTree(
         reply(
@@ -213,7 +235,17 @@ describe("queryIosSimulatorFlowTree", () => {
     const data = await queryIosSimulatorFlowTree(registryWith(screen()), device);
     expect(data.source).toBe("ax-service");
     expect(data.screen).toEqual({ width: 402, height: 874 });
+    expect(data.uiOrientation).toBe("portrait");
     expect(data.tree.children.map((c) => c.label)).toEqual(["Continue"]);
+  });
+
+  it("reports the interface orientation and leaves the frames in the portrait-native space", async () => {
+    const data = await queryIosSimulatorFlowTree(
+      registryWith(screen({ interfaceOrientation: "landscapeRight" })),
+      device
+    );
+    expect(data.uiOrientation).toBe("landscapeRight");
+    expect(data.tree.children[0]!.frame).toEqual(frame(0, 0.5, 1, 0.1));
   });
 
   it("fails a pinned read when another app is in the foreground", async () => {
@@ -242,7 +274,7 @@ describe("queryIosSimulatorFlowTree", () => {
     ).resolves.toBeDefined();
   });
 
-  it("names the update remedy when the daemon predates tree or omits the foreground app", async () => {
+  it("names the update remedy when the daemon predates tree, the foreground app or the orientation", async () => {
     const old = new FailureError("ax-service predates `tree`; update argent", {
       error_code: FAILURE_CODES.AX_TREE_UNSUPPORTED,
       failure_stage: "ax_service_tree",
@@ -258,6 +290,15 @@ describe("queryIosSimulatorFlowTree", () => {
         device
       )
     ).rejects.toThrow(/names no foreground app.*update argent/);
+    // treeVersion 2 names the foreground app but not the interface orientation.
+    const err = await queryIosSimulatorFlowTree(
+      registryWith(screen({ treeVersion: 2, interfaceOrientation: undefined })),
+      device
+    ).catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_TREE_UNSUPPORTED);
+    expect((err as Error).message).toMatch(
+      /names no foreground app or interface orientation\. .*update argent.*argent server stop/
+    );
   });
 
   it("names boot-device when the service cannot be reached and the settle remedy on a timeout", async () => {
