@@ -88,8 +88,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `run:` targets of its steps and of the steps of its block directives
  * (`when:`), taken or not, spelled as the runner keeps them (extension
  * completed). A value the runner's parse refuses names nothing. Pure: it walks
- * a document the caller parsed, so the client and the tool-server's parity
- * test share it without a YAML or file-system dependency.
+ * a document the caller parsed, with no YAML or file-system dependency. The
+ * tool-server's test/flows/flow-collect-parity.test.ts holds the client's walk
+ * over it to the runner's parse.
  */
 export function collectFlowRequests(doc: unknown): { runTargets: string[] } {
   const runTargets = new Set<string>();

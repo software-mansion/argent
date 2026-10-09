@@ -239,10 +239,10 @@ async function readFlowMember(
  * order, each resolution once, as deep as the runner resolves
  * ({@link MAX_RUN_DEPTH}). Every branch of a `when:` counts, since which one
  * runs is decided on the device. The targets come from the registry's
- * {@link collectFlowRequests}, which the tool-server's own tests hold to the
- * runner's parse. `canonical` and `spelling` describe the root flow itself.
- * Nothing is collected for arguments the tool-server refuses
- * ({@link namesValidFlow}).
+ * {@link collectFlowRequests}; the tool-server's
+ * test/flows/flow-collect-parity.test.ts holds this walk to the runner's parse.
+ * `canonical` and `spelling` describe the root flow itself. Nothing is
+ * collected for arguments the tool-server refuses ({@link namesValidFlow}).
  */
 export async function collectFlowMembers(
   rootPath: string,
