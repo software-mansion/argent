@@ -301,6 +301,9 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
       // Electron-based MCP host it would boot the binary in Node mode with no
       // CDP endpoint, failing boot-device instead of bringing the app up.
       env: electronGuiChildEnv({ ELECTRON_ENABLE_LOGGING: "1" }),
+      // `detached: true` on Windows otherwise gives the child its own console
+      // window in addition to the Electron app's real window. No-op off Windows.
+      windowsHide: true,
     });
   } catch (err) {
     throw new FailureError(
