@@ -911,6 +911,40 @@ describe("flow-execute over a link, from the real argent client", () => {
       process.chdir(originalCwd);
     }
   });
+
+  /** A flow whose first step acts on the device, then runs `target`. */
+  function tapThenRun(target: string): Promise<string> {
+    return write(
+      ".argent/flows/root.yaml",
+      `steps:\n  - tool: tap\n    args: { x: 0.5, y: 0.5 }\n  - run: ${target}\n`
+    );
+  }
+
+  it("refuses before step 1 a script: step in a fragment the client sent", async () => {
+    const root = await tapThenRun("seed.yaml");
+    const seed = await write(".argent/flows/seed.yaml", "steps:\n  - script: { path: seed.mjs }\n");
+
+    const err = await callFlow(true, root).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      `step 1 in ${await fs.realpath(seed)}: script: { path: seed.mjs }`
+    );
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses before step 1 a fragment outside the project that a sent fragment names", async () => {
+    await fs.writeFile(path.join(tmpDir, "outside.yaml"), "steps:\n  - echo: outside\n");
+    const root = await tapThenRun("mid.yaml");
+    const mid = await write(".argent/flows/mid.yaml", "steps:\n  - run: ../../../outside.yaml\n");
+
+    const err = await callFlow(true, root).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      `step 1 in ${await fs.realpath(mid)}: run: ../../../outside.yaml ` +
+        "(../../../outside.yaml is outside every root this client serves"
+    );
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("flow-execute with run: fragments sent through POST /upload", () => {
