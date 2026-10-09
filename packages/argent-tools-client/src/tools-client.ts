@@ -21,6 +21,8 @@ export interface ToolMeta {
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
+  /** Listed for programmatic callers only; the MCP adapter skips it. */
+  hideFromMcp?: boolean;
 }
 
 export interface ToolInvocationResult {
@@ -36,11 +38,16 @@ export interface CallToolOptions {
    * an NDJSON stream. A server that answers with plain JSON fires no events.
    */
   onProgress?: (event: unknown) => void;
+  /**
+   * Stop waiting for the call. Every request rejects with the signal's reason,
+   * as `fetch` does, never with a ToolInvocationError.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ToolsClient {
-  fetchTools(): Promise<ToolMeta[]>;
-  fetchTool(name: string): Promise<ToolMeta | null>;
+  fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]>;
+  fetchTool(name: string, opts?: { signal?: AbortSignal }): Promise<ToolMeta | null>;
   callTool(name: string, args: unknown, opts?: CallToolOptions): Promise<ToolInvocationResult>;
   /** Returns the tool-server base URL + auth token, spawning if needed. */
   baseUrl(): Promise<ToolsServerHandle>;
@@ -112,7 +119,8 @@ function brokenStream(
 async function consumeToolStream(
   name: string,
   body: ReadableStream<Uint8Array>,
-  onProgress: (event: unknown) => void
+  onProgress: (event: unknown) => void,
+  signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
   let progress = 0;
@@ -147,6 +155,8 @@ async function consumeToolStream(
       try {
         chunk = await reader.read();
       } catch (err) {
+        // fetch errors the body on abort, which is not a closed connection.
+        signal?.throwIfAborted();
         throw brokenStream(name, err instanceof Error ? err.message : String(err), progress, err);
       }
       const { done, value } = chunk;
@@ -154,6 +164,8 @@ async function consumeToolStream(
       buffered += decoder.decode(value, { stream: true });
       let newline: number;
       while ((newline = buffered.indexOf("\n")) !== -1) {
+        // fetch errors the body on abort, but not a chunk it already handed over.
+        signal?.throwIfAborted();
         const line = buffered.slice(0, newline);
         buffered = buffered.slice(newline + 1);
         handleLine(line);
@@ -167,6 +179,8 @@ async function consumeToolStream(
     throw err;
   }
 
+  // Before the missing-result check: a trailing progress callback may abort.
+  signal?.throwIfAborted();
   if (!final) {
     throw brokenStream(name, "the stream ended without a result", progress);
   }
@@ -292,11 +306,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return { url, token };
   }
 
-  async function fetchTools(): Promise<ToolMeta[]> {
+  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+    opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
     const res = await doFetch(
       `${url}/tools`,
-      { headers: authHeaders(token) },
+      { headers: authHeaders(token), signal: opts?.signal },
       { longRunning: false, carriesUpload: false }
     );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
@@ -304,8 +319,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return json.tools;
   }
 
-  async function fetchTool(name: string): Promise<ToolMeta | null> {
-    const tools = await fetchTools();
+  async function fetchTool(
+    name: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<ToolMeta | null> {
+    const tools = await fetchTools(opts);
     return tools.find((t) => t.name === name) ?? null;
   }
 
@@ -314,12 +332,14 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     args: unknown,
     opts?: CallToolOptions
   ): Promise<ToolInvocationResult> {
+    // An aborted signal must not start a tool-server.
+    opts?.signal?.throwIfAborted();
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
     let finalArgs = args;
-    const meta = await fetchTool(name);
+    const meta = await fetchTool(name, { signal: opts?.signal });
     if (meta?.fileInputs?.length) {
       if (remote) assertRequiredPresent(meta, args);
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
@@ -327,6 +347,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         uploadEndpoint: remote ? { url, token } : undefined,
         log: diagnose,
         collectMembers: collectFlowMembers,
+        signal: opts?.signal,
       });
     }
 
@@ -346,9 +367,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           ...authHeaders(token),
         },
         body: JSON.stringify(finalArgs ?? {}),
+        signal: opts?.signal,
       },
       { longRunning: meta?.longRunning === true, carriesUpload: sentOnce }
     ).catch((err: unknown) => {
+      // An abort rejects with the signal's reason, not as a closed connection.
+      opts?.signal?.throwIfAborted();
       // A call that is sent once may have reached the tool-server before its
       // connection closed, and nothing sends it again.
       if (!sentOnce) throw err;
@@ -359,7 +383,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
     if (stream && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      const streamed = await consumeToolStream(name, res.body, opts?.onProgress ?? (() => {}));
+      const streamed = await consumeToolStream(
+        name,
+        res.body,
+        opts?.onProgress ?? (() => {}),
+        opts?.signal
+      );
       return { ...streamed, outputHint: meta?.outputHint };
     }
     let json: {
@@ -374,6 +403,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     try {
       json = (await res.json()) as typeof json;
     } catch (err) {
+      // An abort while reading the body is not an empty body.
+      opts?.signal?.throwIfAborted();
       // A 2xx whose body cannot be read (a proxy's own page, a connection cut
       // mid-answer) is not a result: the tool may have run, but its outcome is
       // lost. An error status keeps its `<status> <statusText>` fallback below.
@@ -394,6 +425,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         issues: Array.isArray(json.issues) ? json.issues : undefined,
       });
     }
+    opts?.signal?.throwIfAborted();
     // File boundary, inbound: persist client-write directives (e.g. recorded
     // flow YAMLs) and rewrite them to the written paths.
     const { result: data } = await applyClientFileDirectives(json.data);

@@ -309,7 +309,7 @@ describe("attaching to a provider's simulator-server", () => {
     const simulatorServer = await startSimulatorServer();
     const device = attachTo(simulatorServer);
     const instance = await simulatorServerBlueprint.factory({}, device, { device });
-    await expect(setSimulatorClipboardText(instance.api, "hello")).resolves.toBeUndefined();
+    await expect(setSimulatorClipboardText(instance.api, "hello")).resolves.toBe("set");
     expect(simulatorServer.clipboardTexts).toEqual(["hello"]);
   });
 

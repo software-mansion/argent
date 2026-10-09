@@ -38,6 +38,8 @@ sidebar_custom_props:
 
 **The app in the simulator cannot reach your local server.** The simulator has no route to your `localhost`. Run `sim-remote reverse start <UDID> <PORT>` and confirm the tunnel with `sim-remote reverse status`. See [Connect to local servers](/docs/cloud/guides/local-servers).
 
+**The app crashes on the hosted simulator.** The crash report is a file on the machine. Run `sim-remote logs <UDID> --process <BUNDLE_ID>` to download the crash reports and the recent logs of the app. See [Get crash reports and logs](/docs/cloud/guides/logs).
+
 **Argent shows no hosted simulators.** Argent needs `sim-remote` on `PATH` and a session with a machine. Run `sim-remote login` and list the devices again.
 
 **The machine was released while a test ran.** The idle timeout expired because no `sim-remote` command ran for 15 minutes. Run `sim-remote keepalive <TIME>` next to the test, or increase `SIM_REMOTE_IDLE_TIMEOUT_SECS`. See [Sessions and limits](/docs/cloud/reference/sessions).

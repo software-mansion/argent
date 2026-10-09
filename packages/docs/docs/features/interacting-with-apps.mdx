@@ -31,13 +31,13 @@ After a screen change, the action returns the new screen: a screenshot and the e
 
 ## Launching apps
 
-The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data.
+The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data. On an Apple simulator or a physical iPhone, the agent can also give launch arguments to the app, for example to turn on a feature flag.
 
 ## Gestures and text
 
 The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
 
-To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
+To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent. When Device Hub has opened a simulator, Argent types a secret instead of pasting it. The secret does not go to the Mac clipboard.
 
 ## Permissions
 

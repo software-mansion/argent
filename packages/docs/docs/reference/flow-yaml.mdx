@@ -146,11 +146,14 @@ Use the map form for a flow that runs on more than one platform:
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
 - launch: { ios: com.acme.app, android: com.acme.app.android, chromium: ../../app }
+- launch: { ios: { app: com.acme.app, args: [-FeatureFlag, YES] }, android: com.acme.app }
 ```
 
-`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. A launch that has no id for the platform of the run is an error.
+`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. `ios` accepts a bundle id, or `{ app, args }`. On an iOS simulator or a physical iPhone, Argent passes `args` to the app process at launch. Each arg must be a string, so quote a number or boolean: `"5"`, not `5`. A launch that has no id for the platform of the run is an error.
 
 A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry, the run uses the `native` entry.
+
+When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry.
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the flow as a fragment.
 
@@ -357,7 +360,7 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 | `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                       |
 | `--platform <p>`     | `ios`, `android`, `chromium`, `vega` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them                                                                                                            |
-| `--output <dir>`     | Write the failed baseline, current and diff images to `<dir>/<flow>/`, for a CI artifact upload                                                                   |
+| `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<flow>/`, for a CI artifact upload                               |
 | `-r, --recursive`    | With a directory, also run the flows in subdirectories. Dot-directories and `node_modules` are skipped                                                            |
 | `--json`             | Print the JSON report of the flow, or the JSON aggregate of the directory                                                                                         |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One flow, and not with `--json`                                                                       |
@@ -371,6 +374,8 @@ argent flow run .argent/flows --recursive
 ```
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
+
+When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. With `--output`, Argent writes the screenshot to `<dir>/<flow>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
 
 Each step line shows the time of the step before the reason, for example `(1.2s)`. A step that did not run shows no time. The time of a `when` or `run` step does not include the steps in its block or fragment. The last line of a flow run shows the time of the run. The summary of a directory run shows the time of all flows, for example `(1m 32s)`.
 

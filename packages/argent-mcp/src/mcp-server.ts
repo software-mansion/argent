@@ -36,7 +36,7 @@ import {
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
 } from "./auto-capture.js";
-import { toMcpTool } from "./tool-mapping.js";
+import { toMcpToolList } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
 
@@ -159,13 +159,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
-      const tools = await fetchTools();
+      const tools = toMcpToolList(await fetchTools());
       await spyLog({
         ts: new Date().toISOString(),
         event: "list_tools",
         count: tools.length,
       });
-      return { tools: tools.map(toMcpTool) };
+      return { tools };
     } catch (err) {
       process.stderr.write(
         `[argent] Failed to list tools: ${err instanceof Error ? err.message : err}\n`

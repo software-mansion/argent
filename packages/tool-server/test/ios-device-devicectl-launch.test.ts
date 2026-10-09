@@ -41,6 +41,38 @@ describe("devicectl launchApp argv", () => {
     ]);
   });
 
+  it("passes app arguments after a -- separator", async () => {
+    await launchApp(UDID, "com.example.app", {
+      terminateExisting: true,
+      args: ["-FeatureFlag", "YES", "--help"],
+    });
+
+    expect(spawned.argv).toEqual([
+      [
+        "devicectl",
+        "device",
+        "process",
+        "launch",
+        "--device",
+        UDID,
+        "--terminate-existing",
+        "com.example.app",
+        "--",
+        "-FeatureFlag",
+        "YES",
+        "--help",
+      ],
+    ]);
+  });
+
+  it("omits the separator for an empty argument list", async () => {
+    await launchApp(UDID, "com.example.app", { args: [] });
+
+    expect(spawned.argv).toEqual([
+      ["devicectl", "device", "process", "launch", "--device", UDID, "com.example.app"],
+    ]);
+  });
+
   it("omits the flag for a plain launch", async () => {
     await launchApp(UDID, "com.example.app");
 

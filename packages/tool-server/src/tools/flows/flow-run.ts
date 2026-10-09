@@ -32,6 +32,7 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   getFlowPath,
+  iosLaunchArgs,
   isBlockStep,
   parseFlow,
   precedesLeadingLaunch,
@@ -90,6 +91,8 @@ import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-elec
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
+import type { ArtifactHandle } from "../../artifacts";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -248,8 +251,12 @@ export interface StepReport {
    * runs' files apart.
    */
   snapshotRemote?: true;
-  /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
-  artifacts?: SnapshotArtifacts;
+  /**
+   * Snapshot-step artifacts (baseline/current/diff), or `screen` on any other
+   * step that failed: the device as it was when the step failed. Materializable
+   * handles.
+   */
+  artifacts?: SnapshotArtifacts | { screen: ArtifactHandle };
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   /**
@@ -632,9 +639,14 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
+  // An ios `{ app, args }` entry's args reach only an iOS device.
+  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
   let restart: unknown;
   try {
-    restart = await invokeOnDevice(env, "restart-app", { bundleId });
+    restart = await invokeOnDevice(env, "restart-app", {
+      bundleId,
+      ...(launchArgs ? { launchArgs } : {}),
+    });
   } catch (err) {
     // A cancellation makes the sub-tool reject; that rejection is the abort,
     // not an app failure, so it must not be attributed to restart-app.
@@ -991,6 +1003,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * baseline-collision guard, never persisted and never part of the key.
    */
   snapshotApps: Map<string, string>;
+  /**
+   * True once a step carrying a `{{secret:…}}` placeholder ran. The value may
+   * still be on screen, so a later failure takes no screenshot.
+   */
+  secretTyped?: boolean;
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
@@ -2197,10 +2214,36 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
+    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
+    if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
+      const screen = await captureFailureScreen(state);
+      if (screen) report.artifacts = { screen };
+    }
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
+  }
+}
+
+/**
+ * Screenshot of the device at a failed step, so the report shows what was on
+ * screen. Best-effort: no device, a cancelled run, a typed secret, or a
+ * capture that throws (the app or device is gone) all yield no image, and the
+ * step keeps its own failure either way.
+ */
+async function captureFailureScreen(state: ExecState): Promise<ArtifactHandle | undefined> {
+  if (!state.device || state.signal?.aborted || state.secretTyped) return undefined;
+  try {
+    // Full resolution: the image is a file in the report, never in an agent's
+    // context (the MCP client prints only its path).
+    const shot = (await invokeOnDevice(deviceEnv(state), "screenshot", {
+      scale: 1.0,
+      includeImageInContext: false,
+    })) as { image?: ArtifactHandle };
+    return shot.image;
+  } catch {
+    return undefined;
   }
 }
 

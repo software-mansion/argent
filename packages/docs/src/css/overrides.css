@@ -76,6 +76,10 @@ button[class*="DocSearch-Button"] {
   margin: 0 !important;
 }
 
+.navbar-sidebar button[class*="DocSearch-Button"] {
+  box-sizing: border-box;
+}
+
 /* Center logo vertically in navbar items */
 .navbar__items a[href="/argent/"] img,
 .navbar__brand a[href="/argent/"] img,
@@ -369,6 +373,23 @@ article [class*="llmDropdownItem"]:hover {
   backdrop-filter: blur(60px);
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
   mask-image: linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%);
+}
+
+.navbar-sidebar__items > .navbar-sidebar__item.menu {
+  width: 100%;
+  padding-right: 20px;
+}
+
+.navbar-sidebar .menu__list > div:first-child:has(> .product-switcher) {
+  margin-left: calc(20px - 1.5rem);
+}
+
+.navbar-sidebar [class*="sidebarFooter"] {
+  display: none;
+}
+
+.navbar-sidebar [class*="navbar-sidebar__items"] {
+  height: calc(100% - var(--ifm-navbar-height) - var(--swm-navbar-sidebar-items-height) + 4em);
 }
 
 .product-switcher {

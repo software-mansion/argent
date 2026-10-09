@@ -26,6 +26,7 @@ function makeSequencedAXService(responses: AXDescribeResponse[]): AXServiceApi {
     describe: async () => responses[Math.min(i++, responses.length - 1)],
     alertCheck: async () => false,
     livePanel: async () => null,
+    tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => true,
   };
 }

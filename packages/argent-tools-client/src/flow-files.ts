@@ -225,7 +225,7 @@ async function readFlowMember(
     budget.inline += size;
     return { member: { ...member, ...read }, text, sent: `inline ${size}` };
   }
-  const uploaded = await uploadFile(canonical, opts.uploadEndpoint);
+  const uploaded = await uploadFile(canonical, opts.uploadEndpoint, opts.signal);
   return {
     member: { ...member, size: read.size, mtimeMs: read.mtimeMs, ...uploaded },
     text,

@@ -108,6 +108,8 @@ export interface PrepareFileInputsOptions {
     args: Record<string, unknown>,
     opts: PrepareFileInputsOptions
   ) => Promise<Pick<FileInputWire, "canonical" | "spelling" | "members">>;
+  /** Stops the upload. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -231,7 +233,8 @@ function uploadFailure(
 
 async function uploadTar(
   tarPath: string,
-  endpoint: { url: string; token: string }
+  endpoint: { url: string; token: string },
+  signal?: AbortSignal
 ): Promise<string> {
   const { size } = await stat(tarPath);
   // `duplex: "half"` is required to stream a Node Readable request body via
@@ -244,6 +247,7 @@ async function uploadTar(
     },
     body: createReadStream(tarPath) as unknown as BodyInit,
     duplex: "half",
+    signal,
   };
   const res = await fetch(`${endpoint.url}/upload`, init);
   if (!res.ok) {
@@ -262,14 +266,15 @@ async function uploadTar(
 /** Tar `sourcePath`, stream it to `POST /upload`, and return what the wire names it by. */
 export async function uploadFile(
   sourcePath: string,
-  endpoint: { url: string; token: string }
+  endpoint: { url: string; token: string },
+  signal?: AbortSignal
 ): Promise<{ uploadId: string; contentHash: string }> {
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
   trackArchive(tarPath);
   try {
     await createTarGzFile(sourcePath, tarPath);
     const contentHash = await sha256File(tarPath);
-    return { uploadId: await uploadTar(tarPath, endpoint), contentHash };
+    return { uploadId: await uploadTar(tarPath, endpoint, signal), contentHash };
   } finally {
     untrackArchive(tarPath);
     await rm(tarPath, { force: true }).catch(() => {});
@@ -376,7 +381,7 @@ export async function prepareFileInputs(
       if (opts.uploadEndpoint && st) {
         // stderr, not stdout (MCP owns it), so a slow upload isn't silent.
         process.stderr.write(`Uploading ${path.basename(filePath)} to the remote tool-server...\n`);
-        Object.assign(wire, await uploadFile(filePath, opts.uploadEndpoint));
+        Object.assign(wire, await uploadFile(filePath, opts.uploadEndpoint, opts.signal));
       }
     }
 
