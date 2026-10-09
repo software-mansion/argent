@@ -42,9 +42,10 @@ export interface StepReport {
   /** Set beside `snapshotKey` when a remote simulator took the capture; a local run shares that key. */
   snapshotRemote?: boolean;
   /**
-   * Snapshot-step artifacts keyed by role (baseline/current/diff). Arrives as
+   * Step artifacts keyed by role: baseline/current/diff on a snapshot step,
+   * `screen` on a failed step that flow-run screenshotted. Arrives as
    * artifact handles; by render time each is a string — a durable local copy
-   * for the failed snapshots `--output` exports, otherwise the handle's
+   * for what `--output` exports, otherwise the handle's
    * server-side hostPath/filename — or null when a download failed.
    */
   artifacts?: Record<string, unknown>;
@@ -157,6 +158,7 @@ Options (run):
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
+                         and failed-step screenshots (step-<n>-screen.png)
                          under <dir>/<flow>/ — a stable path for CI artifact
                          upload; a directory run keys nested flows as
                          <dir>/<subdir>/<flow>/. A different flow file with the
@@ -456,9 +458,10 @@ const FLOWS_DIR = path.join(".argent", "flows");
 /**
  * Charset every POSIX shell passes through unquoted (shlex.quote's set).
  * Anything outside it — a space above all — would be word-split or interpreted
- * if pasted into a terminal.
+ * if pasted into a terminal. A leading "=" is excluded too: zsh (the macOS
+ * default shell) expands `=name` to the path of the command `name`.
  */
-const SHELL_SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const SHELL_SAFE_ARG = /^(?!=)[A-Za-z0-9_@%+=:,./-]+$/;
 
 /**
  * Quote an argument for splicing into a printed `argent flow run …` command —
@@ -690,13 +693,15 @@ async function claimExportDirName(
 }
 
 /**
- * Copy each failed snapshot's artifacts into a durable, globbable location —
+ * Copy each failed step's artifacts into a durable, globbable location —
  * `<outputDir>/<flow>/<key>-<role>.png`, where `<flow>` is the YAML filename
  * stem (derived from the CLI-resolved `flowPath`, never from the wire report)
  * and `<key>` is the snapshot's baseline key, so a run that hits several
  * flows/snapshots can't clobber itself. A remote simulator's capture lands at
  * `<key>-remote-<role>.png`, because its key is the one a local run of the same
- * device class reports. Stems are unique only per directory, so
+ * device class reports. The `screen` screenshot flow-run attaches to any other
+ * failed or errored step lands at `step-<n>-screen.png`, `<n>` being the step
+ * number the report prints (renderFailedSteps). Stems are unique only per directory, so
  * when a different flow file already owns `<flow>/` (see EXPORT_SOURCE_MARKER)
  * this run lands in the deterministic `<flow>-<pathhash>/` instead, and when
  * nothing at all can be claimed the export is skipped with a warning rather
@@ -709,7 +714,7 @@ async function claimExportDirName(
  * file's runs are indistinguishable to a separate process.
  *
  * This is the only place the CLI needs artifact bytes, so materialization
- * happens here, scoped to each failed snapshot's artifacts. Rewrites each
+ * happens here, scoped to each exported step's artifacts. Rewrites each
  * copied role's path in the report so the renderers and `--json` print the
  * durable location instead of a temp path. Failure-only: a clean pass carries
  * no artifacts, and a seeded baseline is already durable under
@@ -732,7 +737,7 @@ export async function exportFailureArtifacts(
     return;
   }
   // Claimed lazily, at the first byte actually about to be copied, because
-  // nothing earlier proves a byte will land at all: no failed snapshot, no
+  // nothing earlier proves a byte will land at all: no failed step, no
   // usable key, an empty artifacts object, or every role null after a failed
   // download. Claiming for any of them would leave a directory and a marker
   // behind for a run holding no artifacts — and the marker is not inert: it
@@ -740,17 +745,37 @@ export async function exportFailureArtifacts(
   // late is exactly as race-free: the atomicity is O_EXCL's, not the
   // ordering's, and the marker still precedes the first byte.
   let dir: string | null = null;
+  // Numbered as renderFailedSteps numbers steps, so `step-<n>-screen.png`
+  // names the step the report prints as step n.
+  let n = 0;
   for (const s of report.steps) {
-    if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
-    // Key first: keyFromBaselinePath needs the original baseline path, not a
-    // materialized rewrite. The pattern check also hardens that fallback, whose
-    // basename can still be ".." for a path ending in "/..".
-    const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
-    if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
-    // Materialize only this snapshot's artifacts — never the whole report.
-    const { result } = await materializeArtifacts(s.artifacts, ctx);
-    s.artifacts = result as Record<string, unknown>;
-    for (const [role, value] of Object.entries(s.artifacts)) {
+    if (s.kind !== "echo") n++;
+    if (!s.artifacts) continue;
+    let artifacts: Record<string, unknown>;
+    let fileName: (role: string) => string;
+    if (s.kind === "snapshot" && s.status === "fail") {
+      // Key first: keyFromBaselinePath needs the original baseline path, not a
+      // materialized rewrite. The pattern check also hardens that fallback, whose
+      // basename can still be ".." for a path ending in "/..".
+      const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
+      if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
+      artifacts = s.artifacts;
+      // A remote simulator reports the key a local run of the same device class
+      // does, so its files carry a marker. Without it, a local run and a remote
+      // run exported into one --output overwrite each other's evidence.
+      const remote = s.snapshotRemote === true ? "-remote" : "";
+      fileName = (role) => `${key}${remote}-${role}.png`;
+    } else if ((s.status === "fail" || s.status === "error") && s.artifacts.screen != null) {
+      // The screenshot flow-run attaches to a failed leaf step.
+      artifacts = { screen: s.artifacts.screen };
+      fileName = () => `step-${n}-screen.png`;
+    } else {
+      continue;
+    }
+    // Materialize only this step's exported artifacts — never the whole report.
+    const { result } = await materializeArtifacts(artifacts, ctx);
+    Object.assign(s.artifacts, result);
+    for (const [role, value] of Object.entries(result as Record<string, unknown>)) {
       if (typeof value !== "string") continue; // null = failed materialization
       if (dir === null) {
         const dirName = await claimExportDirName(outputDir, flowPath, stem);
@@ -760,13 +785,7 @@ export async function exportFailureArtifacts(
         // next run to redirect away from.
         dir = path.join(outputDir, dirName);
       }
-      // A remote simulator reports the key a local run of the same device class
-      // does, so its files carry a marker. Without it, a local run and a remote
-      // run exported into one --output overwrite each other's evidence.
-      const dest = path.join(
-        dir,
-        `${key}${s.snapshotRemote === true ? "-remote" : ""}-${role}.png`
-      );
+      const dest = path.join(dir, fileName(role));
       // Even if the key and stem patterns are ever weakened, the copy stays
       // inside --output. Also covers `role`, the remaining server-supplied piece
       // of the destination. It judges the real destination, so it can only run
@@ -804,7 +823,7 @@ function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null 
  * path would be pure waste against a remote tool-server. The renderers and
  * `--json` filter on `typeof v === "string"`, so a raw handle object would
  * vanish from the output. Runs after the optional `--output` export, which has
- * already replaced the failed snapshots' handles with durable local copies.
+ * already replaced the exported handles with durable local copies.
  */
 function resolveArtifactDisplayPaths(report: FlowReport): void {
   for (const s of report.steps) {
@@ -1163,7 +1182,7 @@ function runToolsClient(
 }
 
 /**
- * Durable diff output: copy failed-snapshot images out of the tool-server's
+ * Durable diff output: copy failed-step images out of the tool-server's
  * cache before any renderer prints paths, so every output mode shows the
  * durable location. The only artifact bytes the CLI ever fetches; baseUrl is
  * resolved lazily so a run without --output makes no extra round-trip. Whatever
@@ -1200,6 +1219,8 @@ function rejectionVerdict(code: string | undefined): string {
       return "not run (invalid flow)";
     case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
       return "not run (no device resolved)";
+    case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:
+      return "not run (upload failed)";
     default:
       return "not run (rejected)";
   }
@@ -1253,10 +1274,10 @@ interface BatchFlowResult {
  * Run every discovered flow in `dir` sequentially. Prints each flow's failing
  * steps and warnings, then its outcome (no live step lines), then a flow-level
  * summary; a flow failing its steps — or one the tool-server rejects up front
- * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
- * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, or a reply that is not a report stops it and counts the
- * remaining flows skipped.
+ * (a bad YAML, an unparseable step, a device it cannot resolve, a refused
+ * upload of one of its files) — lets the batch continue, while a transport
+ * throw, a rejection the server does not mark as validation, or a reply that
+ * is not a report stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,

@@ -32,6 +32,12 @@ const zodSchema = z.object({
     .describe(
       "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS."
     ),
+  launchArgs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. Ignored on other targets.'
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;

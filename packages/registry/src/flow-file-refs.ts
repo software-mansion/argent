@@ -91,8 +91,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * its `tool:` steps, whose file arguments the run reads (which arguments are
  * files depends on the tool's declaration: {@link toolStepFiles}). A value the
  * runner's parse refuses names nothing. Pure: it walks a document the caller
- * parsed, so the client and the tool-server's parity test share it without a
- * YAML or file-system dependency.
+ * parsed, with no YAML or file-system dependency. The tool-server's
+ * test/flows/flow-collect-parity.test.ts holds the client's walk over it to
+ * the runner's parse.
  */
 export function collectFlowRequests(doc: unknown): {
   runTargets: string[];
@@ -246,10 +247,11 @@ export interface ResolvedFlowRelativeFile {
  * on the host. The one route that carries untrusted content, an uploaded flow,
  * never resolves a target of its own on the host: the runner either refuses
  * the step kind before any step runs, or looks the reference up in the files
- * the client sent with the call, which the client resolved with this same
- * function on its OWN files and fenced to the roots it chose to send. A nested `tool: flow-execute` naming a flow already on the host is
- * an ordinary `name` run and resolves here as one, with the reach a direct
- * `flow-execute` call for that same `name` already has.
+ * the client sent with the call. The client resolved those on its OWN disk,
+ * named each one as {@link canonicalFlowPath} names it, and fenced them to the
+ * roots it chose to send. A nested `tool: flow-execute` naming a flow already
+ * on the host is an ordinary `name` run and resolves here as one, with the
+ * reach a direct `flow-execute` call for that same `name` already has.
  */
 export async function resolveFlowRelativeFile(
   anchorDir: string,
