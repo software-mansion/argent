@@ -133,10 +133,13 @@ does not mark as validation, or a reply that is not a report stops the batch and
 counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
-automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
-either, the CLI uploads the flow file, and the tool-server rejects a flow with
-run:, script: or snapshot: steps, or with tool: steps that take a file or
-record a flow, before the first step. With neither, all step kinds run.
+automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
+a link, the CLI uploads the flow file and the run: fragments that it reaches.
+The tool-server rejects the flow before the first step when the flow or a
+fragment has one of these steps:
+  - script: or snapshot:
+  - a tool: step that takes a file or records a flow
+Without a link, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
@@ -1155,6 +1158,25 @@ function writeJsonStreamError(err: unknown): void {
 }
 
 /**
+ * The tools client for a run. Under --json stderr carries one JSON object per
+ * line, so the client's diagnostics go there as warning records, not prose.
+ */
+function runToolsClient(
+  args: ReturnType<typeof parseRunArgs>,
+  options: FlowCommandOptions
+): ToolsClient {
+  return createToolsClient({
+    paths: options.paths,
+    ...(args.json
+      ? {
+          onDiagnostic: (message: string) =>
+            console.error(JSON.stringify({ event: "warning", warning: message })),
+        }
+      : {}),
+  });
+}
+
+/**
  * Durable diff output: copy failed-step images out of the tool-server's
  * cache before any renderer prints paths, so every output mode shows the
  * durable location. The only artifact bytes the CLI ever fetches; baseUrl is
@@ -1192,6 +1214,8 @@ function rejectionVerdict(code: string | undefined): string {
       return "not run (invalid flow)";
     case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
       return "not run (no device resolved)";
+    case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:
+      return "not run (upload failed)";
     default:
       return "not run (rejected)";
   }
@@ -1230,10 +1254,10 @@ interface BatchFlowResult {
  * Run every discovered flow in `dir` sequentially. Prints each flow's failing
  * steps and warnings, then its outcome (no live step lines), then a flow-level
  * summary; a flow failing its steps — or one the tool-server rejects up front
- * (a bad YAML, an unparseable step, a device it cannot resolve) — lets the
- * batch continue, while a transport throw, a rejection the server does not mark
- * as validation, or a reply that is not a report stops it and counts the
- * remaining flows skipped.
+ * (a bad YAML, an unparseable step, a device it cannot resolve, a refused
+ * upload of one of its files) — lets the batch continue, while a transport
+ * throw, a rejection the server does not mark as validation, or a reply that
+ * is not a report stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -1265,7 +1289,7 @@ async function runFlowDirectory(
     );
   }
 
-  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
+  const { callTool, baseUrl } = runToolsClient(args, options);
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
@@ -1648,7 +1672,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     );
   }
 
-  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
+  const { callTool, baseUrl } = runToolsClient(args, options);
 
   const payload = buildRunPayload(flowPath, projectRoot, args);
 

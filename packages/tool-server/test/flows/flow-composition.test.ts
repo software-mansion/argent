@@ -7,13 +7,13 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   getFailureSignal,
+  MAX_RUN_DEPTH,
   type Registry,
 } from "@argent/registry";
 import {
   createRunFlowTool,
   flowLaunchGateReason,
   LAUNCH_TO_VERDICT_MS,
-  MAX_RUN_DEPTH,
   NATIVE_READY_TIMEOUT_MS,
   type FlowRunResult,
 } from "../../src/tools/flows/flow-run";

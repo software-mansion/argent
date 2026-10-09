@@ -8,6 +8,8 @@ import {
   type FileInputSpec,
   type FileInputWire,
 } from "./file-inputs.js";
+import { collectFlowMembers } from "./flow-files.js";
+import { ToolInvocationError } from "./errors.js";
 
 export interface ToolMeta {
   name: string;
@@ -76,44 +78,53 @@ export interface CreateToolsClientOptions {
     init: RequestInit,
     meta: { longRunning: boolean; carriesUpload: boolean }
   ) => Promise<Response>;
-}
-
-/**
- * A tool invocation the SERVER answered with an error — an HTTP error status or
- * the NDJSON stream's terminal `error` line. `errorKind`/`errorCode` carry the
- * server's failure signal (e.g. kind "validation") when it sent one.
- *
- * `issues` is the issue list a 400 carries beside its prose message, so a caller
- * can map a rejected field back to the flag its user typed. Undefined for an
- * older server.
- */
-export class ToolInvocationError extends Error {
-  readonly errorCode?: string;
-  readonly errorKind?: string;
-  readonly issues?: readonly unknown[];
-  constructor(
-    message: string,
-    signal?: { errorCode?: string; errorKind?: string; issues?: readonly unknown[] }
-  ) {
-    super(message);
-    this.name = "ToolInvocationError";
-    this.errorCode = signal?.errorCode;
-    this.errorKind = signal?.errorKind;
-    this.issues = signal?.issues;
-  }
+  /**
+   * Receives each diagnostic line of the client, without a trailing newline:
+   * today the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on.
+   * Defaults to writing the line to stderr; `argent flow run --json` turns it
+   * into a JSON record, since its stderr carries one JSON object per line.
+   */
+  onDiagnostic?: (message: string) => void;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * The connection of a call closed before its result arrived, during its
+ * stream or before its answer: the tool may have acted already, which a
+ * caller must know before it runs the tool again.
+ */
+function brokenStream(
+  name: string,
+  reason: string,
+  progress: number,
+  cause?: unknown
+): ToolInvocationError {
+  const ran =
+    progress > 0
+      ? `${progress} progress update${progress === 1 ? "" : "s"} had arrived, so the tool ran at ` +
+        `least in part`
+      : `The tool may have run`;
+  return new ToolInvocationError(
+    `The connection to the tool-server closed before ${name} finished (${reason}). ${ran}; ` +
+      `check its effect before you run it again.`,
+    undefined,
+    cause === undefined ? undefined : { cause }
+  );
+}
+
 /** Read an NDJSON tool-invocation stream, mirroring the buffered path's contract. */
 async function consumeToolStream(
+  name: string,
   body: ReadableStream<Uint8Array>,
   onProgress: (event: unknown) => void,
   signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
   let final: { data?: unknown; note?: string } | undefined;
+  let progress = 0;
+  const reader = body.getReader();
   const handleLine = (line: string): void => {
     if (!line.trim()) return;
     const msg = JSON.parse(line) as {
@@ -124,8 +135,10 @@ async function consumeToolStream(
       error_code?: string;
       error_kind?: string;
     };
-    if (msg.event === "progress") onProgress(msg.data);
-    else if (msg.event === "result") final = { data: msg.data, note: msg.note };
+    if (msg.event === "progress") {
+      progress++;
+      onProgress(msg.data);
+    } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
     else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
         errorCode: msg.error_code,
@@ -134,12 +147,19 @@ async function consumeToolStream(
     }
   };
 
-  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        // fetch errors the body on abort, which is not a closed connection.
+        signal?.throwIfAborted();
+        throw brokenStream(name, err instanceof Error ? err.message : String(err), progress, err);
+      }
+      const { done, value } = chunk;
       if (done) break;
       buffered += decoder.decode(value, { stream: true });
       let newline: number;
@@ -162,7 +182,7 @@ async function consumeToolStream(
   // Before the missing-result check: a trailing progress callback may abort.
   signal?.throwIfAborted();
   if (!final) {
-    throw new Error("tool stream ended without a result — connection lost mid-run?");
+    throw brokenStream(name, "the stream ended without a result", progress);
   }
   // File boundary, inbound: same directive handling as the buffered path.
   const { result: data } = await applyClientFileDirectives(final.data);
@@ -222,18 +242,42 @@ function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   );
 }
 
-/** True when a prepared argument names an upload that the tool-server will consume. */
+/** A rejected fetch's reason, with undici's cause ("other side closed") beside its "fetch failed". */
+function fetchFailure(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  return err.cause instanceof Error ? `${err.message}: ${err.cause.message}` : err.message;
+}
+
+function wiresOf(args: unknown): Partial<FileInputWire>[] {
+  if (typeof args !== "object" || args === null) return [];
+  return Object.values(args).filter(
+    (value): value is Partial<FileInputWire> =>
+      (value as Partial<FileInputWire> | null)?.[FILE_INPUT_MARKER] === true
+  );
+}
+
+/**
+ * True when a prepared argument carries `members`, an empty list included
+ * (see file-inputs.ts `collect`): the call runs a flow over a link.
+ */
+function carriesMembers(args: unknown): boolean {
+  return wiresOf(args).some((wire) => Array.isArray(wire.members));
+}
+
+/**
+ * True when a prepared argument names an upload that the tool-server will
+ * consume, or carries members: a call that runs a flow over a link is never
+ * sent twice, so a run's steps never act on the device twice.
+ */
 function carriesUpload(args: unknown): boolean {
-  if (typeof args !== "object" || args === null) return false;
-  return Object.values(args).some((value) => {
-    const wire = value as Partial<FileInputWire> | null;
-    return wire?.[FILE_INPUT_MARKER] === true && typeof wire.uploadId === "string";
-  });
+  return carriesMembers(args) || wiresOf(args).some((wire) => typeof wire.uploadId === "string");
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const diagnose =
+    options.onDiagnostic ?? ((message: string) => void process.stderr.write(`${message}\n`));
 
   // The handle and the file-input mode come from one resolution, so a call
   // never sends to one tool-server with the file rules of another.
@@ -301,30 +345,50 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
         includeContent: remote,
         uploadEndpoint: remote ? { url, token } : undefined,
+        log: diagnose,
+        collectMembers: collectFlowMembers,
         signal: opts?.signal,
       });
     }
 
+    // A call that sends a flow's closure runs that flow over a link, and its
+    // progress lines keep the connection busy through a proxy's idle timeout.
+    const stream = opts?.onProgress !== undefined || carriesMembers(finalArgs);
+    const sentOnce = carriesUpload(finalArgs);
     const res = await doFetch(
       `${url}/tools/${encodeURIComponent(name)}`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(opts?.onProgress ? { Accept: "application/x-ndjson" } : {}),
+          // A proxy that compresses the stream holds each line until its buffer
+          // fills. `identity` keeps the stream uncompressed end to end.
+          ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
           ...authHeaders(token),
         },
         body: JSON.stringify(finalArgs ?? {}),
         signal: opts?.signal,
       },
-      { longRunning: meta?.longRunning === true, carriesUpload: carriesUpload(finalArgs) }
-    );
+      { longRunning: meta?.longRunning === true, carriesUpload: sentOnce }
+    ).catch((err: unknown) => {
+      // An abort rejects with the signal's reason, not as a closed connection.
+      opts?.signal?.throwIfAborted();
+      // A call that is sent once may have reached the tool-server before its
+      // connection closed, and nothing sends it again.
+      if (!sentOnce) throw err;
+      throw brokenStream(name, fetchFailure(err), 0, err);
+    });
     // The server commits to streaming only after every pre-invoke gate passes —
     // validation errors stay plain JSON with their status codes — so Content-Type
     // is the authoritative mode signal.
     const contentType = res.headers.get("content-type") ?? "";
-    if (opts?.onProgress && res.ok && res.body && contentType.includes("application/x-ndjson")) {
-      const streamed = await consumeToolStream(res.body, opts.onProgress, opts.signal);
+    if (stream && res.ok && res.body && contentType.includes("application/x-ndjson")) {
+      const streamed = await consumeToolStream(
+        name,
+        res.body,
+        opts?.onProgress ?? (() => {}),
+        opts?.signal
+      );
       return { ...streamed, outputHint: meta?.outputHint };
     }
     let json: {

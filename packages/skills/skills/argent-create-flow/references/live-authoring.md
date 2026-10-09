@@ -266,7 +266,11 @@ Resolve every hit and confirm:
 
 Run `flow-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
 
-`flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`. Over `argent link` or `ARGENT_TOOLS_URL`, either source sends only that one YAML file, and the tool server runs that copy. The server checks the whole flow before it runs the first step. It refuses a flow with a `run:`, `script:`, or `snapshot:` step, or with a `tool:` step that takes a file (such as `screenshot-diff`, `reinstall-app`, or `flow-execute`) or records a flow, at any depth. The error lists each such step. Replay only a self-contained flow over a link. A flow that composes, runs a script, or takes a snapshot runs only with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool server.
+`flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`.
+
+Over `argent link` or `ARGENT_TOOLS_URL`, `run:` fragments work when they are under `project_root`, under its `.argent/flows/`, or beside the flow file. Keep fragments there. These steps do not work over a link, in the flow or in a fragment that it reaches: `script:`, `snapshot:`, and a `tool:` step that takes a file (such as `screenshot-diff`, `reinstall-app`, or `flow-execute`) or records a flow.
+
+The tool-server checks the flow and its fragments before the first step. The error lists each step that does not work over a link, and each `run:` step whose fragment the client could not send, with the reason. A fragment that does not exist fails its `run:` step when the step runs. Run a flow that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
 
 Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason — most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
 

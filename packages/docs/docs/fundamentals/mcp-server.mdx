@@ -59,6 +59,7 @@ Over a link, the MCP server uploads files with the same rules as the `argent` CL
 
 - `reinstall-app` uploads the app at `appPath`.
 - `flow-execute` and `flow-read-prerequisite` upload the flow file with the call. `screenshot-diff` uploads its images with the call. The MCP server uploads a file of 32 MiB or less. For a larger file, it sends only the path, the size and the modification time. The tool-server then uses its own file at that path only if the size and the modification time are the same. The files of one call can be approximately 36 MiB in total. The tool-server refuses a call that is larger.
+- `flow-execute` also uploads the `run:` fragments that the flow reaches. A fragment larger than 32 MiB stops the flow before the first step. See [Remote runs](/docs/reference/flow-yaml#remote-runs).
 - Other path parameters reach the tool-server as a path only, for example the `workspacePath` of `gather-workspace-data`.
 
 Run `argent server status` to see the state of the local tool-server. Run `argent server logs` to read its output.
