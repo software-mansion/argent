@@ -257,11 +257,26 @@ export function serializeCpuSampleIndex(index: CpuSampleIndex): SerializedCpuSam
   };
 }
 
+function isSampleArray(value: unknown, sampleCount: number): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length === sampleCount &&
+    value.every((entry) => Number.isFinite(entry))
+  );
+}
+
 export function deserializeCpuSampleIndex(raw: SerializedCpuSampleIndex): CpuSampleIndex {
-  // Validate rather than coerce: `new Float64Array(undefined)` is zero-length, so a
-  // truncated or stale index would deserialize into a profile with no samples and
-  // answer every query with "no hotspots".
-  if (raw?.version !== 2 || !Array.isArray(raw.timestampsMs) || !Array.isArray(raw.nodes)) {
+  // The three sample arrays are read at the same index, and a bad one reaches the
+  // user as an answer rather than an error: `undefined` from a short array turns
+  // every column NaN, a string node id turns every sample "idle" (#950).
+  const sampleCount = Array.isArray(raw?.timestampsMs) ? raw.timestampsMs.length : -1;
+  if (
+    raw?.version !== 2 ||
+    !Array.isArray(raw.nodes) ||
+    !isSampleArray(raw.timestampsMs, sampleCount) ||
+    !isSampleArray(raw.intervalStartsMs, sampleCount) ||
+    !isSampleArray(raw.sampleNodeIds, sampleCount)
+  ) {
     throw new Error("unsupported CPU sample index format");
   }
   const nodeMap = new Map<number, HermesProfileNode>();
@@ -270,7 +285,7 @@ export function deserializeCpuSampleIndex(raw: SerializedCpuSampleIndex): CpuSam
   }
   return {
     timestampsMs: new Float64Array(raw.timestampsMs),
-    intervalStartsMs: new Float64Array(raw.intervalStartsMs ?? []),
+    intervalStartsMs: new Float64Array(raw.intervalStartsMs),
     sampleNodeIds: raw.sampleNodeIds,
     nodeMap,
     childToParent: buildChildToParent(nodeMap),
