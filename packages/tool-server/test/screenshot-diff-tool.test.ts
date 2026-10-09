@@ -504,6 +504,36 @@ describe("a live capture of a foldable", () => {
     expect(result.summary.split("- panel:")).toHaveLength(2);
   });
 
+  it("says so when staging a baseline whose panel could not be resolved", async () => {
+    resolveLivePanelMock.mockClear();
+    resolveLivePanelMock.mockResolvedValue({
+      screen: 1,
+      source: "unknown",
+      reason: "the accessibility service failed (no); CoreDevice failed (no)",
+    });
+    const dir = await makeTempDir("argent-screenshot-diff-foldable-stage-");
+    const capturedPath = path.join(dir, "captured.png");
+    await writePng(capturedPath, 2, 2, { r: 10, g: 20, b: 30 });
+    const captureScreenshot = vi.fn(async () => ({
+      url: "http://localhost/baseline.png",
+      path: capturedPath,
+    }));
+
+    const result = await executeScreenshotDiffTool(
+      { simulatorServer: foldable },
+      { captureBaseline: true, udid: DUO, outputDir: dir },
+      { artifacts: new ArtifactStore() },
+      captureScreenshot as never
+    );
+
+    expect(captureScreenshot).toHaveBeenCalledWith(foldable, undefined, undefined, 1.0, 1);
+    expect(result.summary).toContain("Screenshot diff baseline staged");
+    expect(result.summary).toContain(
+      "- panel: The panel this foldable simulator renders to could not be resolved"
+    );
+    expect(result.summary.split("- panel:")).toHaveLength(2);
+  });
+
   it("asks nothing and adds nothing for a device that is not foldable", async () => {
     const plain = { apiUrl: "http://localhost:4949", deviceId: DUO };
     const { result, captureScreenshot } = await diffLive(plain);
