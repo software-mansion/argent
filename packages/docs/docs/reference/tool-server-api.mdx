@@ -136,7 +136,7 @@ When the environment of the client has `ARGENT_FLOW_FILES_LOG=1`, the client pri
 
 The client asks for a stream for each call with a `members` field, also when the list is empty. It sends `Accept: application/x-ndjson` and `Accept-Encoding: identity`.
 
-The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` stops buffering only in the nginx that gets the header. When an nginx that terminates TLS is in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines.
+The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. A proxy that holds the stream delays the progress lines, but the result does not change. The tool-server sends a progress line after each step. A proxy ends the response when no data arrives from the tool-server within its read timeout. The default is 60 seconds in nginx. Thus a step that runs longer than this timeout fails the call.
 
 The client sends a call with a `members` field only one time. When the connection closes before the result arrives, the client does not send the call again. The MCP server sets no timeout for this call. The error says that the tool possibly ran, for example `The connection to the tool-server closed before flow-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
 
