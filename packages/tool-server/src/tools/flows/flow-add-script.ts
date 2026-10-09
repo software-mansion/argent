@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as nodePath from "node:path";
 import {
+  canonicalFlowPath,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
@@ -10,6 +11,7 @@ import {
 import {
   appendStepToFlow,
   countStepsOnDisk,
+  isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
   recordingSessionState,
@@ -18,7 +20,6 @@ import {
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
-import { canonicalFlowPath } from "./flow-file-refs";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
@@ -131,7 +132,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry.`,
+  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use when the user requests a local script in the flow, and only then. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such a flow with no link.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a
@@ -146,10 +147,14 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
   async execute(_services, params, ctx) {
     const session = await requireRecordingSession(params.project_root, params.name);
 
-    if (session.persist !== "host") {
+    // A replay over a link refuses every `script:` step, so a recording over
+    // one must not run or record one either.
+    if (isLinkedRecorderCall(session, ctx)) {
       throw new FailureError(
-        `Cannot access the script for flow "${params.name}". Finish the recording, add the ` +
-          `\`script:\` step to the YAML, and replay it locally.`,
+        `Cannot add a script step to flow "${params.name}": the recording is over a link ` +
+          `(argent link or ARGENT_TOOLS_URL), and a flow cannot run script steps over a link. ` +
+          `Nothing ran and no step was recorded. To record a script step, record the flow on ` +
+          `the computer that runs the tool-server, with no link and no ARGENT_TOOLS_URL.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_add_script_client_mode",

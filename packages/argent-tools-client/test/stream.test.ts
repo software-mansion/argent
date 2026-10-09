@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createToolsClient, errorBodyMessage, ToolInvocationError } from "../src/tools-client.js";
+import { createToolsClient, errorBodyMessage } from "../src/tools-client.js";
+import { ToolInvocationError } from "../src/errors.js";
 
 let server: Server | undefined;
 

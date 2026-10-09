@@ -40,10 +40,11 @@ const zodSchema = z.object({
 
 /**
  * `project_root` is the AGENT's project; the probe says whether it also exists
- * on this host. If it does (co-located, or a synced checkout) the flow file is
- * written here; if it doesn't (remote tool-server) the recording is kept in
- * memory and every mutating flow tool returns a client-write directive, so the
- * YAML lands in the agent's project instead of recreating its layout here.
+ * on this host. A call without a link whose root is here (co-located) writes
+ * the flow file here. A call over a link, or one whose root is not here, keeps
+ * the recording in memory, and every mutating flow tool returns a client-write
+ * directive, so the YAML lands in the agent's project instead of recreating its
+ * layout here.
  */
 const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "probe" },
@@ -81,7 +82,7 @@ export const flowStartRecordingTool: ToolDefinition<
   description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one.
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same flow was discarded.
-Whether this server writes that file depends on where your project is: co-located, it creates it and fails if the .argent/flows/ directory cannot be created or the file cannot be written; against a remote tool-server it writes nothing and \`savedTo\` is a directive your client applies (a null \`savedTo\` back means it did not).
+Without a link, it creates that file and fails if the .argent/flows/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), your client writes the file, and \`savedTo\` is its path on your computer, or null when that write failed.
 
 Several flows can be recorded at once — each keyed by the \`name\` + \`project_root\`
 that every subsequent recording tool repeats — and one recording's steps never
@@ -105,10 +106,10 @@ Call flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, edit the .yaml file directly to
 remove or reorder steps - after flow-finish-recording, not during the
-recording. Against a remote client the in-memory copy is authoritative and
-every write serializes it over your edit; in host mode the recorder re-reads
-the file before each append, so a mid-recording edit renumbers the steps and
-costs the finish the cross-tree verdicts anchored to them.`,
+recording. Over a link, the next recorded step writes over your edit.
+Without a link, the recorder reads the file again before each step, but an
+edit that renumbers the steps drops the warnings that flow-finish-recording
+reports for those steps.`,
   zodSchema,
   fileInputs,
   services: () => ({}),
@@ -124,10 +125,13 @@ costs the finish the cross-tree verdicts anchored to them.`,
     validateFlow(flow);
     const flowFile = serializeFlow(flow);
 
-    // No probe (older client, direct invocation) means the caller shares this
-    // filesystem — the pre-boundary assumption — so host persistence stands.
+    // A call over a link keeps the flow on the client, also when this host has
+    // a directory at the same path: a replay over that link reads the client
+    // copy, so the recording must write it there. Without the header (no link,
+    // an older client) the probe decides. No probe (direct invocation) means
+    // the caller shares this filesystem, so host persistence stands.
     const probe = ctx?.fileInputs?.project_root;
-    const persist = probe && !probe.presentOnHost ? "client" : "host";
+    const persist = ctx?.linked || (probe && !probe.presentOnHost) ? "client" : "host";
 
     // Truncate-and-register is one critical section: under the flow-file lock a
     // step from the take being discarded can neither slip in between the reset

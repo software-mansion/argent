@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import { HostProjectAccess } from "../../src/tools/flows/project-access";
 import { ArtifactStore } from "../../src/artifacts";
 import {
   diffPngFiles,
@@ -156,6 +157,7 @@ function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
     updateBaselines: false,
     appIdentity: "/apps/app-a",
     seenKeys: new Map<string, string>(),
+    project: new HostProjectAccess(),
     ...overrides,
   };
 }

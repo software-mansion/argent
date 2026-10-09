@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry, ToolContext } from "@argent/registry";
+import type { Registry, ResolvedMember, ToolContext } from "@argent/registry";
 import {
   ArtifactStore,
   CLIENT_FILE_MARKER,
   FAILURE_CODES,
+  flowMemberKey,
   getFailureSignal,
   zodObjectToJsonSchema,
 } from "@argent/registry";
@@ -123,13 +124,34 @@ describe("flow recording with a remote client (probe miss)", () => {
   });
 
   it("does not bake a device id into a remotely recorded flow-execute step (issue #607)", async () => {
-    // A remote recording ALWAYS keeps the raw `tool: flow-execute` step —
-    // `run:` composition is host-resolved, so captureRunTarget bails before it
-    // can rewrite. That makes this path the main real-world producer of a flow
-    // with a record-time device id baked in, which then pinned every replay.
+    // The client sends the flow of a second project and reports no sibling
+    // sub.yaml beside the recording, so captureRunTarget keeps the raw
+    // `tool: flow-execute` step: where a record-time device id would be baked
+    // in and pin every replay.
+    const subPath = path.join(OTHER_CLIENT_ROOT, ".argent", "flows", "sub.yaml");
+    const sibling = path.join(CLIENT_ROOT, ".argent", "flows", "sub.yaml");
+    const member = (spelled: string, text?: string): [string, ResolvedMember] => [
+      flowMemberKey(path.dirname(spelled), path.basename(spelled)),
+      text === undefined
+        ? { role: "flow", state: "missing", canonical: spelled, spelling: { state: "absent" } }
+        : {
+            role: "flow",
+            state: "present",
+            canonical: spelled,
+            spelling: { state: "listed" },
+            text,
+          },
+    ];
+    const members = Object.fromEntries([
+      member(subPath, "steps:\n  - echo: sub\n"),
+      member(CLIENT_FLOW_PATH, "steps: []\n"),
+      member(sibling),
+    ]);
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
+    vi.mocked(registry.getTool).mockImplementation(((id: string) =>
+      id === "flow-execute" ? createRunFlowTool(registry) : undefined) as never);
     const addStep = createFlowAddStepTool(registry);
 
     await flowStartRecordingTool.execute(
@@ -144,14 +166,33 @@ describe("flow recording with a remote client (probe miss)", () => {
         name: "remote-flow",
         project_root: CLIENT_ROOT,
         command: "flow-execute",
-        args: JSON.stringify({ name: "sub", project_root: CLIENT_ROOT, device: "RECORD-TIME-ID" }),
+        args: JSON.stringify({
+          name: "sub",
+          project_root: OTHER_CLIENT_ROOT,
+          device: "RECORD-TIME-ID",
+        }),
       },
-      remoteCtx()
+      {
+        artifacts: new ArtifactStore(),
+        linked: true,
+        fileInputs: {
+          project_root: {
+            clientPath: CLIENT_ROOT,
+            presentOnHost: false,
+            viaUpload: false,
+            members,
+          },
+        },
+      }
     );
 
     const directive = stepResult.savedTo as { content: string };
     expect(parseFlow(directive.content).steps).toEqual([
-      { kind: "tool", name: "flow-execute", args: { name: "sub", project_root: CLIENT_ROOT } },
+      {
+        kind: "tool",
+        name: "flow-execute",
+        args: { name: "sub", project_root: OTHER_CLIENT_ROOT },
+      },
     ]);
   });
 
@@ -178,7 +219,7 @@ describe("flow recording with a remote client (probe miss)", () => {
           }),
         }
       )
-    ).rejects.toThrow(/not persisted on this host/i);
+    ).rejects.toThrow("the argent client sent no files with this call");
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
@@ -793,7 +834,11 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     ).rejects.toThrow("flow_path file-input boundary");
   });
 
-  it("rejects an uploaded flow_path because its sibling filesystem is unavailable", async () => {
+  it("accepts an uploaded flow_path and marks it viaUpload", async () => {
+    // The materialized temp file is this process's own copy of the client's
+    // file, so no boundary stat and no host listing has anything to judge; the
+    // flow name comes from the client's spelling, and viaUpload is what makes
+    // execute() refuse a run:, script: or snapshot: step before step 1.
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
     await expect(
       resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
@@ -801,7 +846,41 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         presentOnHost: false,
         viaUpload: true,
       })
-    ).rejects.toThrow("explicit flow paths require a co-located client and tool server");
+    ).resolves.toEqual({ filePath: uploaded, flowName: "caller-visible", viaUpload: true });
+  });
+
+  it("rejects an uploaded flow_path whose client spelling is relative", async () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
+    await expect(
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+        clientPath: "flows/relative.yaml",
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).rejects.toThrow('Invalid flow_path "flows/relative.yaml": flow paths must be absolute');
+  });
+
+  it("rejects an uploaded flow_path whose client spelling has a .. segment", async () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
+    await expect(
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+        // Spelled, not joined: path.join collapses the segment this test exists to catch.
+        clientPath: `${CLIENT_ROOT}/flows/../shared/caller-visible.yaml`,
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).rejects.toThrow('flow paths must not contain ".." segments');
+  });
+
+  it("rejects an uploaded flow_path without the .yaml extension", async () => {
+    const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
+    await expect(
+      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+        clientPath: path.join(CLIENT_ROOT, "flows", "caller-visible.yml"),
+        presentOnHost: false,
+        viaUpload: true,
+      })
+    ).rejects.toThrow("flow files must use the .yaml extension");
   });
 
   it("rejects direct callers that provide both flow sources", async () => {
