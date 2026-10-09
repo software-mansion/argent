@@ -862,6 +862,89 @@ describe("flow-add-step", () => {
     ]);
   });
 
+  it("records a restart-app with launchArgs on iOS as a native + ios { app, args } launch", async () => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "launch-ios-args", project_root: tmpDir });
+    await tool.execute(
+      {},
+      {
+        name: "launch-ios-args",
+        project_root: tmpDir,
+        command: "restart-app",
+        args: JSON.stringify({
+          udid: "00000000-0000-0000-0000-0000000000ab",
+          bundleId: "com.acme.app",
+          launchArgs: ["-Flag", "YES"],
+        }),
+      }
+    );
+
+    expect(parseFlow(await onDisk("launch-ios-args")).steps).toEqual([
+      {
+        kind: "launch",
+        app: {
+          native: "com.acme.app",
+          ios: { app: "com.acme.app", args: ["-Flag", "YES"] },
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ["iOS", "00000000-0000-0000-0000-0000000000ab"],
+    ["Android", "emulator-5554"],
+  ])("records a restart-app with empty launchArgs on %s as a bare launch", async (_p, udid) => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "launch-empty-args", project_root: tmpDir });
+    await tool.execute(
+      {},
+      {
+        name: "launch-empty-args",
+        project_root: tmpDir,
+        command: "restart-app",
+        args: JSON.stringify({ udid, bundleId: "com.acme.app", launchArgs: [] }),
+      }
+    );
+
+    expect(parseFlow(await onDisk("launch-empty-args")).steps).toEqual([
+      { kind: "launch", app: "com.acme.app" },
+    ]);
+  });
+
+  it("keeps a restart-app with launchArgs off iOS as a raw tool step", async () => {
+    const registry = createMockRegistry({
+      "restart-app": { result: { restarted: true } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "launch-android-args", project_root: tmpDir });
+    await tool.execute(
+      {},
+      {
+        name: "launch-android-args",
+        project_root: tmpDir,
+        command: "restart-app",
+        args: '{"udid":"emulator-5554","bundleId":"com.acme.app","launchArgs":["-Flag"]}',
+      }
+    );
+
+    expect(parseFlow(await onDisk("launch-android-args")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "restart-app",
+        args: { bundleId: "com.acme.app", launchArgs: ["-Flag"] },
+      },
+    ]);
+  });
+
   it("rejects a leading launch recorded into a prerequisite-bearing recording", async () => {
     const registry = createMockRegistry({
       "restart-app": { result: { restarted: true } },

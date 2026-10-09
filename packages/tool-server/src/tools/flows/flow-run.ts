@@ -34,6 +34,7 @@ import {
   chromiumLaunchSpec,
   flowNameCasingError,
   getFlowPath,
+  iosLaunchArgs,
   isBlockStep,
   parseFlow,
   precedesLeadingLaunch,
@@ -102,6 +103,8 @@ import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-elec
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
+import type { ArtifactHandle } from "../../artifacts";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -260,8 +263,12 @@ export interface StepReport {
    * runs' files apart.
    */
   snapshotRemote?: true;
-  /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
-  artifacts?: SnapshotArtifacts;
+  /**
+   * Snapshot-step artifacts (baseline/current/diff), or `screen` on any other
+   * step that failed: the device as it was when the step failed. Materializable
+   * handles.
+   */
+  artifacts?: SnapshotArtifacts | { screen: ArtifactHandle };
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   /**
@@ -681,9 +688,14 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
+  // An ios `{ app, args }` entry's args reach only an iOS device.
+  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
   let restart: unknown;
   try {
-    restart = await invokeOnDevice(env, "restart-app", { bundleId });
+    restart = await invokeOnDevice(env, "restart-app", {
+      bundleId,
+      ...(launchArgs ? { launchArgs } : {}),
+    });
   } catch (err) {
     // A cancellation makes the sub-tool reject; that rejection is the abort,
     // not an app failure, so it must not be attributed to restart-app.
@@ -1051,6 +1063,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   snapshotApps: Map<string, string>;
   /**
+   * True once a step carrying a `{{secret:…}}` placeholder ran. The value may
+   * still be on screen, so a later failure takes no screenshot.
+   */
+  secretTyped?: boolean;
+  /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
    * suspect for every later lock-shaped boot failure, even after the run moves
@@ -1303,9 +1320,11 @@ function fragmentLoadRefusal(
  * runner resolves, every `when:` branch included, since which branch runs is
  * decided on the device. A flow the client refused to send (outside its
  * roots, a link to a file that is not YAML, over the size cap) is listed with
- * the client's reason. A flow the client does not have is not: it fails at
- * its own step, which may never run. A flow that does not parse fails at its
- * step too. A `snapshot` step is self-contained with a closure too: the
+ * the client's reason, unless the runner never reads it: a `run:` past the
+ * depth limit fails with the depth error first, as it does on the host. A
+ * flow the client does not have is not listed: it fails at its own step,
+ * which may never run. A flow that does not parse fails at its step too. A
+ * `snapshot` step is self-contained with a closure too: the
  * client sent the run's baselines with it, and gets the new ones back in the
  * result. So is a `tool:` step whose file inputs are each one
  * {@link servedToolInput} accepts, a file argument at an absolute path: the
@@ -1351,6 +1370,8 @@ function assertUploadSelfContained(
     target: string,
     entry: { kind: "run" | "nested"; line: string }
   ): void => {
+    // The runner checks the depth of a `run:` step before it reads the target.
+    if (entry.kind === "run" && file.hop + 1 >= MAX_RUN_DEPTH) return;
     const key = flowMemberKey(anchorDir, target);
     if (closure === undefined || seen.has(key)) return;
     seen.add(key);
@@ -2320,10 +2341,36 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
+    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
+    if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
+      const screen = await captureFailureScreen(state);
+      if (screen) report.artifacts = { screen };
+    }
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
+  }
+}
+
+/**
+ * Screenshot of the device at a failed step, so the report shows what was on
+ * screen. Best-effort: no device, a cancelled run, a typed secret, or a
+ * capture that throws (the app or device is gone) all yield no image, and the
+ * step keeps its own failure either way.
+ */
+async function captureFailureScreen(state: ExecState): Promise<ArtifactHandle | undefined> {
+  if (!state.device || state.signal?.aborted || state.secretTyped) return undefined;
+  try {
+    // Full resolution: the image is a file in the report, never in an agent's
+    // context (the MCP client prints only its path).
+    const shot = (await invokeOnDevice(deviceEnv(state), "screenshot", {
+      scale: 1.0,
+      includeImageInContext: false,
+    })) as { image?: ArtifactHandle };
+    return shot.image;
+  } catch {
+    return undefined;
   }
 }
 
@@ -2550,7 +2597,12 @@ async function execRunStep(
   // carries untrusted content, an uploaded flow, never reads from this host:
   // assertUploadSelfContained refuses its `run:` steps unless the client sent
   // their fragments, and then the resolution above is a lookup of what the
-  // client resolved on its own disk, fenced to the roots the client chose.
+  // client resolved on its own disk, fenced to the roots the client chose: the
+  // project, its .argent/flows, the root flow's directory, and the project of a
+  // flow saved under .argent/flows. Over a link each layout above works alone,
+  // but a sideways fragment of a flows dir symlinked outside the project lands
+  // under none of those roots, so the client refuses it and the run stops
+  // before step 1.
   //
   // A missing file reports the same ENOENT shape on both sides, so a reason
   // reads the same whichever machine lacked the fragment.

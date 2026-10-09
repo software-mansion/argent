@@ -676,6 +676,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           alwaysLoad?: boolean;
           searchHint?: string;
           longRunning?: boolean;
+          hideFromMcp?: boolean;
         } = {
           name: def.id,
           description: def.description ?? "",
@@ -686,6 +687,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (def.alwaysLoad) entry.alwaysLoad = true;
         if (def.searchHint) entry.searchHint = def.searchHint;
         if (def.longRunning) entry.longRunning = true;
+        if (def.hideFromMcp) entry.hideFromMcp = true;
         return entry;
       });
     res.json({ tools });

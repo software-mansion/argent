@@ -63,10 +63,37 @@ export interface AXDescribeResponse {
   elements: AXDescribeElement[];
 }
 
+/** A `tree` node, in document order; `parentIndex` names its accessibility parent. */
+export interface AXTreeNode extends AXDescribeElement {
+  index: number;
+  parentIndex?: number;
+  roleDescription?: string;
+  covered?: boolean;
+  /** An XCUIElementType value. */
+  elementType?: number;
+  placeholder?: string;
+  /** The input shows its placeholder: it holds no text, and `value` is the placeholder. */
+  hintShowing?: boolean;
+  /** Roots only. */
+  bundleId?: string;
+}
+
+export interface AXTreeResponse {
+  alertVisible: boolean;
+  screenFrame?: { width: number; height: number };
+  nodes: AXTreeNode[];
+  truncated: boolean;
+  foregroundApp?: string;
+  /** 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId. */
+  treeVersion?: number;
+}
+
 export interface AXServiceApi {
   /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
+  /** The front app's full hierarchy; while a system alert shows, the system app first and the app under it second. */
+  tree(): Promise<AXTreeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
   /**
@@ -452,6 +479,30 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
+        };
+      },
+
+      async tree(): Promise<AXTreeResponse> {
+        let result: Partial<AXTreeResponse>;
+        try {
+          result = (await query("tree", 10_000)) as Partial<AXTreeResponse>;
+        } catch (err) {
+          // A daemon that predates `tree` answers an envelope-level error.
+          if (!(err instanceof Error) || err.message !== "unknown_command") throw err;
+          throw new FailureError("ax-service predates `tree`; update argent", {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_tree",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return {
+          alertVisible: result.alertVisible ?? false,
+          screenFrame: result.screenFrame,
+          nodes: result.nodes ?? [],
+          truncated: result.truncated === true,
+          foregroundApp: result.foregroundApp,
+          treeVersion: result.treeVersion,
         };
       },
 
