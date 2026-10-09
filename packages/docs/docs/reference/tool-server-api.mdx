@@ -132,14 +132,14 @@ When the environment of the client has `ARGENT_FLOW_FILES_LOG=1`, the client pri
 
 ### Baselines
 
-When the flow or a fragment that it reaches has a `snapshot:` step, the client also sends the baselines of the run. The baselines are in the directory `<dir>/__baselines__/<key>/`. `<dir>` is the directory of `canonical` of the flow file. `<key>` is the stem of `canonical`, or the flow name when that stem is not a valid flow name. The runner keys the baselines the same way.
+When the flow or a fragment that it reaches has a `snapshot:` step, the client also sends the baselines of the run. The baselines are in the directory `<dir>/__baselines__/<key>/`. `<dir>` is the directory of `canonical` of the flow file. `<key>` is the stem of `canonical`, or the stem of `path` when the first is not a valid flow name. The runner looks for the baselines at the same paths.
 
 | Run                     | Members                                                                                                                                                                                                                                           |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `updateBaselines: true` | One member with `state: "listed"` and no content for each `.png` file in the directory. The client remembers the directory as the only place where it writes a baseline of the call                                                               |
+| `updateBaselines: true` | One member with `state: "listed"` and no content for each `.png` file in the directory. The client writes the baselines of the result only into this directory                                                                                    |
 | Otherwise               | One member with the bytes for each `<name>__*.png` file in the directory, where `<name>` is a snapshot name of the flow or of a fragment. When `device` starts with `chromium-cdp-`, or the call sets `platform`, only the files of that platform |
 
-A baseline member has `role: "baseline"`, and its `key` and `path` are the absolute client path of the file. Its bytes travel as the bytes of a flow member: inline within the same 256 KiB, else through `POST /upload`. The client marks a baseline `refused` when its real path is outside the directories of the client policy, or when a `.png` name links to a file that is not a PNG file. The client marks a link to nothing `missing`, or `refused` in a run with `updateBaselines: true`.
+A baseline member has `role: "baseline"`, and its `key` and `path` are the absolute client path of the file. Its bytes travel as the bytes of a flow member: inline within the same 256 KiB, else through `POST /upload`. The client marks a baseline `refused` in the cases of the [client policy](#client-policy) table, with PNG in place of YAML. The client marks a link to nothing `missing`, or `refused` in a run with `updateBaselines: true`.
 
 The client sends nothing for a directory outside the directories of the client policy, and writes nothing there.
 
@@ -153,7 +153,7 @@ The MCP adapter does not send a call with a `members` field a second time, and i
 
 The tool-server reads the members before it validates the arguments:
 
-- The tool-server keeps the text of each flow member with bytes, and writes each baseline with bytes to a temporary file. It applies the 32 MiB cap and the size check of a file input. It reads an upload as for a `tar-upload` input.
+- The tool-server keeps the bytes of each member that has bytes. It applies the 32 MiB cap and the size check of a file input. It reads an upload as for a `tar-upload` input.
 - A member whose bytes fail a check, or whose upload the tool-server does not have, fails the call with the status 422, as a file input does.
 - A member that has no bytes and no `state` becomes `refused`.
 - The tool-server ignores a member with an unknown `role`, and a member whose `key` repeats.
@@ -165,11 +165,11 @@ The runner then uses the members as the files of the client:
 3. A `run:` step looks up its member by `key`. The runner applies the cycle guard, the depth limit and the refusal of a `case_folded` spelling. The runner never opens `canonical`. It uses the path as a key and in messages.
 4. A `missing` member makes its `run:` step report `could not load fragment "<target>": ENOENT: no such file or directory, open '<canonical>'`. A `run:` step in a `when:` block that does not run needs no file.
 5. A `snapshot:` step that compares reads its baseline from the members. When no member has the path of the baseline, the step fails as for a missing baseline. A `refused` baseline makes the step report `error` with the reason of the client.
-6. A `snapshot:` step with `updateBaselines` keeps the new baseline for the result. The client writes the file only when the result arrives. The step reports `baseline captured; the client updates it when the run ends (<path>)` when a member or an earlier step of the call has the same path, else `baseline captured; the client writes it when the run ends (<path>)`. `<path>` is the client path of the baseline. A later step of the call reads the new baseline.
+6. A `snapshot:` step with `updateBaselines` keeps the new baseline for the result. The step reports `baseline captured; the client writes it when the run ends (<path>)`. `<path>` is the client path of the baseline. When a member or an earlier step of the call has the same path, `writes` becomes `updates`. A `refused` baseline makes the step report `error` with the reason of the client.
 
 ## Baselines in the result
 
-The result of a run that wrote baselines has a `baselineWrites` list with one client-file directive for each baseline, with the last bytes for each path:
+The result of a run over a link that wrote baselines has a `baselineWrites` list. The list holds one client-file directive for each baseline path, with the last bytes for that path:
 
 ```json
 {
@@ -180,7 +180,7 @@ The result of a run that wrote baselines has a `baselineWrites` list with one cl
 }
 ```
 
-The client writes a directive with `encoding: "base64"` only when `path` ends in `.png`, has no `..`, and is directly in a directory that the client remembered for the call. The client replaces the file in one rename. The client refuses a link to nothing, a link out of the directory, a `.png` name that links to a file that is not a PNG file, and a file that is not a regular file. The client replaces each directive with the path that it wrote, or with `{ "path": "<path>", "error": "<reason>" }`. The client prints the reason of each baseline that it did not write. `argent flow run` then exits with code 1.
+The client writes a directive with `encoding: "base64"` only when `path` ends in `.png`, has no `..`, and is directly in the baseline directory of a call with `updateBaselines: true`. The client replaces the file in one rename. The client refuses a link to nothing, a link out of the directory, a `.png` name that links to a file that is not a PNG file, and a file that is not a regular file. The client replaces each directive with the path that it wrote, or with `{ "path": "<path>", "error": "<reason>" }`. The client prints the reason of each baseline that it did not write. `argent flow run` then exits with code 1. The MCP adapter adds the line `✗ baseline not written: <path>: <reason>` to the report.
 
 The client writes the baselines only when the result arrives. When the connection closes before the result, the client writes no baseline of that call.
 

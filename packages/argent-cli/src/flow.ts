@@ -134,10 +134,10 @@ counts the remaining flows skipped.
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
 either, the CLI uploads the flow file, the run: fragments it reaches and the
-run's snapshot baselines, and writes the new baselines the run returns. The
-tool-server rejects a flow before the first step when the flow or one of those
-fragments has script: steps, or tool: steps that take a file or record a flow.
-With neither, all step kinds run.
+snapshot baselines that the run compares. The CLI writes the new baselines
+that the run returns. The tool-server rejects a flow before the first step
+when the flow or one of those fragments has script: steps, or tool: steps that
+take a file or record a flow. With neither, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
