@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const ensureDeviceReady = vi.fn();
 const uninstallApp = vi.fn();
@@ -21,8 +24,15 @@ import {
 const UDID = "00008110-000978540290401E";
 const BUNDLE = "com.example.app";
 
+// A real bundle on disk: the handler validates the artifact before it uninstalls.
+const TMP_DIR = mkdtempSync(join(tmpdir(), "argent-ios-device-reinstall-"));
+const APP_PATH = join(TMP_DIR, "App.app");
+mkdirSync(APP_PATH);
+writeFileSync(join(APP_PATH, "Info.plist"), "");
+afterAll(() => rmSync(TMP_DIR, { recursive: true, force: true }));
+
 const SERVICES: ReinstallAppServices = {};
-const PARAMS: ReinstallAppParams = { udid: UDID, bundleId: BUNDLE, appPath: "/tmp/App.app" };
+const PARAMS: ReinstallAppParams = { udid: UDID, bundleId: BUNDLE, appPath: APP_PATH };
 // The handler ignores device/options; a stub satisfies the (services, params, device) arity.
 const DEVICE = { platform: "ios", kind: "device", udid: UDID } as unknown as DeviceInfo;
 
