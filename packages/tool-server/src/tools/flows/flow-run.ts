@@ -2459,7 +2459,12 @@ async function execRunStep(
   // carries untrusted content, an uploaded flow, never reads from this host:
   // assertUploadSelfContained refuses its `run:` steps unless the client sent
   // their fragments, and then the resolution above is a lookup of what the
-  // client resolved on its own disk, fenced to the roots the client chose.
+  // client resolved on its own disk, fenced to the roots the client chose: the
+  // project, its .argent/flows, the root flow's directory, and the project of a
+  // flow saved under .argent/flows. Over a link each layout above works alone,
+  // but a sideways fragment of a flows dir symlinked outside the project lands
+  // under none of those roots, so the client refuses it and the run stops
+  // before step 1.
   //
   // A missing file reports the same ENOENT shape on both sides, so a reason
   // reads the same whichever machine lacked the fragment.
