@@ -5,7 +5,7 @@
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
 
-**[Argent](https://argent.swmansion.com)** gives your AI assistant direct control of iOS simulators, Android emulators and devices, TVs (Apple TV, Android TV, Fire TV) and Electron/Chromium apps. Tap a button, profile a screen, reproduce a bug - without leaving the CLI.
+**[Argent](https://argent.swmansion.com)** gives your AI assistant direct control of iOS simulators, Android emulators and devices, HarmonyOS phones and emulators, TVs (Apple TV, Android TV, Fire TV) and Electron/Chromium apps. Tap a button, profile a screen, reproduce a bug - without leaving the CLI.
 
 ```bash
 npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest init

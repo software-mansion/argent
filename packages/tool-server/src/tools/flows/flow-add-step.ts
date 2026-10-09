@@ -40,7 +40,7 @@ import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
@@ -117,6 +117,18 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
 // both its trees are the iOS ones — it earns the iOS prose, not the fallback.
 function platformOf(udid: unknown): string | undefined {
   return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
+}
+
+/**
+ * Whether the runner has a tree to read on this device at all — the real
+ * platform, not the authoring one, because this asks about a machine.
+ *
+ * An indeterminate verdict means the source did not answer, and the repair
+ * turns on which kind of silence it was: a source that is DOWN can be brought
+ * back, one that does not exist cannot.
+ */
+function hasRunnerTree(udid: unknown): boolean {
+  return typeof udid === "string" && supportsFlowTree(resolveDevice(udid).platform);
 }
 
 /**
@@ -496,8 +508,8 @@ async function probeAgainstRunnerTree(
     return {};
   }
   if (typeof args.udid !== "string") return {}; // nothing to probe against
-  // No try/catch: a tree read that fails throws inside `fetchFlowTree`, which
-  // the probe already reports as indeterminate.
+  // No try/catch: a tree read that fails, or an id with no flow tree, throws
+  // inside `fetchFlowTree`, which the probe already reports as indeterminate.
   const device = resolveDevice(args.udid);
   // Giving up must STOP the loop, not just stop waiting for it. `settleWithin`
   // abandons the promise, but the loop keeps its tree read and then fires one
@@ -557,12 +569,15 @@ async function probeAgainstRunnerTree(
         `reads and nothing else. Whether it would convert to \`await:\`/\`assert:\` is UNKNOWN, ` +
         `not known-bad — ` +
         // A timeout and an outage need different next moves: "once that tree
-        // source is back" is nonsense for a source that never left.
+        // source is back" is nonsense for a source that never left, and for one
+        // that never existed.
         (timedOut
           ? `re-record this step when the device is quieter, or settle the conversion directly by ` +
             `putting the directive in a flow and running \`flow-execute\`, which has no such ` +
             `ceiling`
-          : `re-probe once that tree source is back before trusting the conversion` +
+          : (hasRunnerTree(args.udid)
+              ? `re-probe once that tree source is back before trusting the conversion`
+              : `this platform's runner has no tree to probe, so the conversion stays unverified`) +
             indeterminateReasonCaveat(args.udid)),
     };
   }

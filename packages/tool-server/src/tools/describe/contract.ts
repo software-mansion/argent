@@ -63,8 +63,9 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 // Where the tree came from. "ax-service" / "native-devtools": iOS.
 // "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
 // over Chrome DevTools Protocol. "vega-automation": the Vega on-device
-// automation toolkit. "tv-focus": the focus-driven view for a TV target (Apple
-// TV / Android TV), which reports focused / focusable elements rather than a
+// automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
+// dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
+// Android TV), which reports focused / focusable elements rather than a
 // tap-oriented tree.
 export type DescribeSource =
   | "ax-service"
@@ -73,9 +74,28 @@ export type DescribeSource =
   | "android-devtools"
   | "cdp-dom"
   | "vega-automation"
+  | "harmony-uitest"
   | "tv-focus"
   // Physical iOS: the XCUITest runner accessibility snapshot.
   | "xcuitest-runner";
+
+// Sources whose `hint` questions the tree just read: HarmonyOS keeps dumping the
+// last composited frame while the panel is suspended, so a matched element need
+// not be on the live screen; Chromium's walker stops at its node budget, so the
+// page is only partly there. Every other hint is a standing fact about the target
+// — not booted through argent, a tvOS / Android TV device, an app that cannot be
+// instrumented — as true before a wait as after, so on a success it reads as a
+// verdict on what the wait saw; iOS' ends "You MUST call boot-device with
+// force=true now", i.e. restart the simulator and lose the app state. Those stay
+// on the timeout note. Listing rather than excluding leaves a source added later
+// silent on success until someone judges its hint.
+//
+// Read by both wait tools, which owe the caveat for the same reason: each
+// answers off one describe read and reports what it saw as the current screen.
+export const READ_CAVEAT_SOURCES: ReadonlySet<DescribeSource> = new Set([
+  "harmony-uitest",
+  "cdp-dom",
+]);
 
 // Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
 // callers get `DescribeResult` below, i.e. only the rendered text.

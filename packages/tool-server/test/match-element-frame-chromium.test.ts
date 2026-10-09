@@ -1,10 +1,11 @@
 /**
  * Regression test: `captureElementFrame` must NOT dispatch the Android describe
- * adapter for a Chromium (CDP) device. Without the chromium guard, a
- * `chromium-cdp-<port>` udid falls into `describeAndroid`, which shells
- * `adb -s chromium-cdp-<port> ...` against a serial that does not exist —
- * pointless process spawn + misleading adb error (swallowed by the outer
- * try/catch, so the only observable symptom is the wasted adb call).
+ * adapter for a device adb cannot address — a Chromium (CDP) tab or a HarmonyOS
+ * device, which is reached over `hdc`. Without the guard, a `chromium-cdp-<port>`
+ * or `harmony-<connectKey>` udid falls into `describeAndroid`, which shells
+ * `adb -s <that> ...` against a serial that does not exist — pointless process
+ * spawn + misleading adb error (swallowed by the outer try/catch, so the only
+ * observable symptom is the wasted adb call).
  *
  * The guard short-circuits to `null` before any describe dispatch, so the test
  * asserts on the *side effect* (no adapter invoked) in addition to the null
@@ -34,13 +35,16 @@ beforeEach(() => {
   describeAndroidMock.mockReset();
 });
 
-describe("captureElementFrame — chromium guard", () => {
-  it("returns null for a chromium device WITHOUT dispatching any describe adapter", async () => {
-    const out = await captureElementFrame(fakeRegistry, "chromium-cdp-9222", match);
-    expect(out).toBeNull();
-    expect(describeAndroidMock).not.toHaveBeenCalled();
-    expect(describeIosMock).not.toHaveBeenCalled();
-  });
+describe("captureElementFrame — guard on devices adb cannot address", () => {
+  it.each(["chromium-cdp-9222", "harmony-127.0.0.1:5555"])(
+    "returns null for %s WITHOUT dispatching any describe adapter",
+    async (udid) => {
+      const out = await captureElementFrame(fakeRegistry, udid, match);
+      expect(out).toBeNull();
+      expect(describeAndroidMock).not.toHaveBeenCalled();
+      expect(describeIosMock).not.toHaveBeenCalled();
+    }
+  );
 
   it("still dispatches the Android adapter for a genuine Android serial", async () => {
     describeAndroidMock.mockResolvedValue({ tree: null });

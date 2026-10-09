@@ -5,13 +5,19 @@ import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
-import type { LaunchAppResult, LaunchAppVegaServices, LaunchAppIosServices } from "./types";
+import type {
+  LaunchAppResult,
+  LaunchAppVegaServices,
+  LaunchAppIosServices,
+  LaunchAppHarmonyServices,
+} from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { iosDeviceImpl } from "./platforms/ios-device";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
+import { harmonyImpl } from "./platforms/harmony";
 
 // The bundleId alphabet plus `/` as the package/activity separator, with `.`
 // allowed as the head so `.MainActivity` works. Leading `-` is excluded for the
@@ -22,19 +28,21 @@ const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, HarmonyOS id, or Chromium id)."
+    ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings). Chromium: any tag matching the same alphabet (letters, digits, '.', '_' and '-'); the call is a no-op since the renderer is already running."
+      "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings). HarmonyOS: bundle name as listed by `bm dump -a` (e.g. com.huawei.hmos.calculator). Chromium: any tag matching the same alphabet (letters, digits, '.', '_' and '-'); the call is a no-op since the renderer is already running."
     ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
     .describe(
-      "Android-only: fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). If omitted on Android, the app's default launcher activity is used. Ignored on iOS / Chromium."
+      "Android-only: fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). If omitted on Android, the app's default launcher activity is used. Ignored on iOS / Chromium / HarmonyOS (a HarmonyOS ability is resolved from the bundle's own `abilityInfos`)."
     ),
   launchArgs: z
     .array(z.string())
@@ -52,6 +60,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { device: true },
 };
 
 // native-devtools is resolved through `registry` inside the iOS handler rather
@@ -69,9 +78,9 @@ export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, 
       failedMsg: ({ params, failureSignal }) =>
         `Failed to launch ${params.bundleId}: ${failureSignal.error_code}`,
     },
-    description: `Open an app by its bundle id (iOS) or package name (Android), or confirm the running renderer (Chromium).
+    description: `Open an app by its bundle id (iOS, HarmonyOS) or package name (Android), or confirm the running renderer (Chromium).
 Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
-Returns { launched, bundleId, note? }. Fails if the app is not installed on the target device (iOS / Android). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.
+Returns { launched, bundleId, note? }. Fails if the app is not installed on the target device (iOS / Android / HarmonyOS). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
 On Vega (Fire TV), pass the interactive component app id from manifest.toml (e.g. com.example.app.main) as bundleId.
 
@@ -97,7 +106,8 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       LaunchAppResult,
       LaunchAppChromiumServices,
       LaunchAppVegaServices,
-      LaunchAppIosServices
+      LaunchAppIosServices,
+      LaunchAppHarmonyServices
     >({
       toolId: "launch-app",
       capability,
@@ -107,6 +117,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       android: androidImpl,
       chromium: chromiumImpl,
       vega: vegaImpl,
+      harmony: harmonyImpl,
     }),
   };
 }

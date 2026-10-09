@@ -15,9 +15,12 @@ import type {
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
-import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice, harmonyConnectKey } from "../../utils/device-info";
+import { InvalidToolInputError } from "../../utils/capability";
+import { captureHarmonyScreenshotPng } from "../../utils/harmony-screen";
 import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
+import { ensureDep } from "../../utils/check-deps";
 import { httpScreenshot, resolveCapturePanel } from "../../utils/simulator-client";
 import { foldablePostureHint } from "../../utils/foldable";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
@@ -41,7 +44,9 @@ const zodSchema = z
     udid: z
       .string()
       .min(1)
-      .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, or HarmonyOS id)."
+      ),
     captureBaseline: z.coerce
       .boolean()
       .optional()
@@ -58,7 +63,7 @@ const zodSchema = z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
       .describe(
-        "Orientation override for live baseline/current captures. Ignored on physical iPhones."
+        "Orientation override for live baseline/current captures. Rejected on HarmonyOS, which captures the display in its current orientation and has no override. Ignored on physical iPhones."
       ),
     outputDir: z
       .string()
@@ -88,6 +93,7 @@ type CaptureScreenshot = typeof httpScreenshot;
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
 };
 
 /**
@@ -108,15 +114,15 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend can be resolved.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device (iOS, Android or HarmonyOS). Always provide udid so the capture backend can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
 Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
+Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend, or \`hdc\` on HarmonyOS, is not reachable.`,
   searchHint:
-    "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
+    "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture harmony harmonyos",
   zodSchema,
   capability,
   fileInputs,
@@ -128,6 +134,9 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
     // touches the device.
     if (params.captureBaseline || params.captureCurrent) {
       const device = resolveDevice(params.udid);
+      // HarmonyOS has no simulator-server controller, so resolving the blueprint
+      // for one would throw before the capture path runs.
+      if (device.platform === "harmony") return {};
       if (isIosPhysicalDevice(device)) {
         return { iosDeviceRunner: iosDeviceRunnerRef(device) };
       }
@@ -271,8 +280,9 @@ async function resolveInputPaths(
   // What the live captures had to say: on a foldable whose panel could not be
   // resolved, that the capture is of the cover panel.
   const warnings: string[] = [];
-  // Physical iPhones capture through the on-device XCUITest runner. Simulators
-  // and Android capture through the simulator-server.
+  // Physical iPhones capture through the on-device XCUITest runner; every other
+  // platform goes through liveCapture (HarmonyOS on-device via `uitest`,
+  // simulators and Android via the simulator-server).
   const captureLive = async (name: "baseline" | "current"): Promise<string> => {
     const device = resolveDevice(params.udid);
     if (isIosPhysicalDevice(device)) {
@@ -283,14 +293,9 @@ async function resolveInputPaths(
       });
     }
     const captured = await captureLiveInput({
-      api: requireSimulatorServer(services),
-      device,
-      peekFor,
+      capture: liveCapture(services, params, options, captureScreenshot, peekFor),
       outputDir,
       name,
-      rotation: params.rotation,
-      signal: options?.signal,
-      captureScreenshot,
     });
     if (captured.warning !== undefined) warnings.push(captured.warning);
     return captured.path;
@@ -302,6 +307,91 @@ async function resolveInputPaths(
   const currentPath = params.captureCurrent ? await captureLive("current") : params.currentPath!;
 
   return { baselinePath, currentPath, warnings };
+}
+
+/** A live capture as a path on this host, plus what the capture had to say. */
+interface LiveCaptureResult {
+  path: string;
+  warning?: string;
+}
+
+/**
+ * How this device produces a live full-resolution PNG, as a path on this host.
+ *
+ * iOS and Android go through the simulator-server; HarmonyOS has no controller
+ * there and captures on-device with `uitest screenCap` instead, the same split
+ * the `screenshot` tool makes.
+ */
+function liveCapture(
+  services: Record<string, unknown>,
+  params: Params,
+  options: Partial<ToolContext> | undefined,
+  captureScreenshot: CaptureScreenshot,
+  peekFor?: (device: DeviceInfo) => RotationPeek
+): () => Promise<LiveCaptureResult> {
+  const device = resolveDevice(params.udid);
+
+  if (device.platform === "harmony") {
+    return async () => {
+      if (params.rotation) {
+        // Inside the capture rather than up front: for a static two-path diff
+        // rotation is inert on every platform, and rejecting it there would
+        // make HarmonyOS the one platform an unused argument fails. A
+        // per-ARGUMENT refusal (same class as the keyboard key guard), not a
+        // per-tool one — screenshot-diff works on every harmony device.
+        throw new InvalidToolInputError(
+          "rotation is not supported for a live HarmonyOS capture: `uitest screenCap` captures the display in its current orientation and has no override. Rotate the device itself, or drop the rotation parameter.",
+          {
+            error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+            failure_stage: "harmony_screenshot_diff_rotation",
+          }
+        );
+      }
+      await ensureDep("hdc");
+      return {
+        path: await captureHarmonyScreenshotPng({
+          connectKey: harmonyConnectKey(device.id),
+          scale: 1.0,
+        }),
+      };
+    };
+  }
+
+  return async () => {
+    const api = requireSimulatorServer(services);
+    // Full-res gives the best diff fidelity, but some Android emulators reject a
+    // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
+    // baselinePath + captureCurrent flow there. The server's default scale captures
+    // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
+    // comparable to a baseline saved at any scale. Captured upright so a rotated
+    // Android device does not diff at ~100% against an upright saved baseline.
+    // On a foldable the panel is resolved now, whoever moved the hinge, and
+    // handed to both attempts, so the retry is of the same panel.
+    const panel = await resolveCapturePanel(api);
+    const capturePanel: CaptureScreenshot = panel
+      ? (a, r, s, sc) => captureScreenshot(a, r, s, sc, panel.screen)
+      : captureScreenshot;
+    const captureAt = (scale: number | undefined) =>
+      captureScreenshotUpright(
+        api,
+        device,
+        params.rotation,
+        options?.signal,
+        scale,
+        capturePanel,
+        peekFor?.(device)
+      );
+    let capture: Awaited<ReturnType<CaptureScreenshot>>;
+    try {
+      capture = await captureAt(1.0);
+    } catch {
+      capture = await captureAt(undefined);
+    }
+    return {
+      path: capture.path,
+      ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
+    };
+  };
 }
 
 function validateInputSources(params: Params): void {
@@ -390,57 +480,26 @@ async function captureIosDeviceLiveInput(params: {
 }
 
 async function captureLiveInput(params: {
-  api: SimulatorServerApi;
-  // Needed so a live capture picks up the device's rotation the same way the
-  // `screenshot` tool does. Without it a rotated-Android `captureCurrent` would
-  // come back sideways and diff at ~100% against an upright saved baseline.
-  device: DeviceInfo;
-  peekFor?: (device: DeviceInfo) => RotationPeek;
+  capture: () => Promise<LiveCaptureResult>;
   outputDir: string;
   name: "baseline" | "current";
-  rotation?: Params["rotation"];
-  signal?: AbortSignal;
-  captureScreenshot: CaptureScreenshot;
-}): Promise<{ path: string; warning?: string }> {
-  // Full-res gives the best diff fidelity, but some Android emulators reject a
-  // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
-  // baselinePath + captureCurrent flow there. The server's default scale captures
-  // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
-  // comparable to a baseline saved at any scale.
-  // On a foldable the panel is resolved now, whoever moved the hinge, and
-  // handed to both attempts, so the retry is of the same panel.
-  const panel = await resolveCapturePanel(params.api);
-  const captureScreenshot: CaptureScreenshot = panel
-    ? (a, r, s, sc) => params.captureScreenshot(a, r, s, sc, panel.screen)
-    : params.captureScreenshot;
-  let capture: Awaited<ReturnType<CaptureScreenshot>>;
-  try {
-    capture = await captureScreenshotUpright(
-      params.api,
-      params.device,
-      params.rotation,
-      params.signal,
-      1.0,
-      captureScreenshot,
-      params.peekFor?.(params.device)
-    );
-  } catch {
-    capture = await captureScreenshotUpright(
-      params.api,
-      params.device,
-      params.rotation,
-      params.signal,
-      undefined,
-      captureScreenshot,
-      params.peekFor?.(params.device)
-    );
-  }
+}): Promise<LiveCaptureResult> {
+  const { path: capturedPath, warning } = await params.capture();
   const suffix = crypto.randomBytes(4).toString("hex");
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
-  await fs.mkdir(params.outputDir, { recursive: true });
-  await fs.copyFile(capture.path, destination);
-  return {
-    path: destination,
-    ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
-  };
+  // The capture is scratch, not an artifact: every backend writes a uniquely
+  // named PNG that nothing else prunes, so one per diff would accumulate in
+  // `tmpdir()` for the life of the process — and at `scale: 1.0`, which this
+  // path asks for, each is a full-resolution frame. `destination` is the copy
+  // that outlives the call, so the capture goes whether or not the copy worked.
+  // Same ownership `flow-pixels`' `capturePng` takes, and only reachable for a
+  // capture this function made: a caller-supplied `baselinePath`/`currentPath`
+  // never comes through here.
+  try {
+    await fs.mkdir(params.outputDir, { recursive: true });
+    await fs.copyFile(capturedPath, destination);
+  } finally {
+    await fs.rm(capturedPath, { force: true }).catch(() => {});
+  }
+  return { path: destination, ...(warning !== undefined ? { warning } : {}) };
 }

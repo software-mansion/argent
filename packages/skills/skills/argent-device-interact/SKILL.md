@@ -1,11 +1,11 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
+description: Interact with an iOS simulator, Android emulator, HarmonyOS device, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
 ---
 
 ## Unified tool surface
 
-All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
+All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, `harmony-<connectKey>` → HarmonyOS device, `harmony-emulator-<name>` → a boot target, anything else → Android adb serial). You use the same tool names on every platform.
 
 **Chromium (CDP) app** = an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. The same describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and storage differ — **read `references/chromium.md` before driving a `chromium` target.**
 
@@ -13,7 +13,7 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
-Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly — no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
+Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `ios-remote`, `android`, `chromium`, `vega`, or `harmony`); booted/ready devices come first. A `vega` target is a TV; drive it with `argent-tv-interact`. A `harmony` target with `kind: "device"` is a HarmonyOS phone on `hdc`: most of the tools in this skill drive it. `gesture-rotate`, `gesture-custom` and `rotate` are refused as unsupported on harmony — the device moves each contact along one straight line per call — and so are the app-scoped inspectors `native-describe-screen`, `native-view-at-point`, `native-user-interactable-view-at-point` and `debugger-component-tree`, which declare no harmony support and answer `Tool '<id>' is not supported on harmony device` before running, leaving `describe` and `screenshot` as the whole discovery surface there. Use `button` for home/back/power only. A `harmony` target with `kind: "emulator"` is a DevEco Studio instance that only `boot-device` accepts; boot it and drive the `harmony-<connectKey>` id it returns. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly — no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
@@ -76,13 +76,13 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
 
-| App type                          | Discovery tool            | What it returns                                                                                                                                                                                                                                     |
-| --------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target app discovery              | `describe`                | Accessibility element tree for the current device screen (iOS AX-service, Android uiautomator, or Chromium DOM walker) with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
-| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                                                                                       |
-| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                                                                                |
-| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls                                                                          |
-| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots                                                                                                              |
+| App type                          | Discovery tool            | What it returns                                                                                                                                                                                                                                                                                             |
+| --------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target app discovery              | `describe`                | Accessibility element tree for the current device screen (iOS AX-service, Android uiautomator, Chromium DOM walker, Vega automation toolkit, or HarmonyOS `uitest dumpLayout`) with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
+| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y). Not on HarmonyOS                                                                                                                                                                                                                             |
+| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`. Not on HarmonyOS                                                                                                                                                                                      |
+| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls                                                                                                                                  |
+| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots                                                                                                                                                                      |
 
 Point follow-up native diagnostics after you already have a candidate point:
 
@@ -91,12 +91,12 @@ Point follow-up native diagnostics after you already have a candidate point:
 
 ### If `describe` Tool Fails
 
-Read the exact error and choose the action that matches it:
+Read the exact error and choose the action that matches it. On HarmonyOS, `screenshot` is the only one of these fallbacks that exists — every `debugger-component-tree` / `native-*` route below is refused there (see § 1):
 
-- Error mentions `ax-service` not available or daemon startup failure:
+- Error mentions `ax-service` not available or daemon startup failure (iOS):
   the ax-service daemon could not start. Check that the simulator is booted. Use `screenshot` as a temporary fallback, or use `native-describe-screen` with an explicit `bundleId` if the app has native devtools injected.
 - `describe` returns an empty element list:
-  the screen may be blank, loading, or showing content without accessibility labels. Use `screenshot` to see what is visible, then retry after the content has loaded.
+  the screen may be blank, loading, or showing content without accessibility labels. Use `screenshot` to see what is visible, then retry after the content has loaded. On HarmonyOS the empty tree comes with a `hint` saying the layout dump contains no windows and the foreground app may still be starting — that is the expected read during app startup, so call `describe` again rather than switching tools.
 - `describe` succeeds but is not detailed enough for a React Native app:
   use `debugger-component-tree` next.
 - You need app-scoped inspection with full UIKit properties (`accessibilityIdentifier`, `viewClassName`):
@@ -169,9 +169,9 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 
 One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8) — `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12` — on HarmonyOS only `enter` (`return`), `backspace` (`delete`), `space`, `arrow-left` and `arrow-right` exist; any other key is refused with 400 KEYBOARD_KEY_UNSUPPORTED. Optional: `"delayMs": 100` between keystrokes (default 50ms) — applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on HarmonyOS (`uitest uiInput text` types in one shot), on Vega, and on TV targets.
 
-**Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
+**Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste` (not on HarmonyOS), `run-sequence` keyboard steps, and flow `type` steps):
 
 ```json
 { "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}" }
@@ -185,7 +185,7 @@ Where the value is read from, and the rules for using a placeholder — includin
 { "udid": "<UDID>", "text": "482913" }
 ```
 
-Puts `text` on the **device** clipboard and triggers the platform's paste shortcut. iOS simulator and Android emulator only; a TV target, a physical device, Chromium and Vega are rejected.
+Puts `text` on the **device** clipboard and triggers the platform's paste shortcut. iOS simulator and Android emulator only; a TV target, a physical device, Chromium, Vega and HarmonyOS are rejected.
 
 `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry — a search query, a login, a form field. Reach for `paste` only where a real user would paste: a 2FA / OTP code copied from another app, a long link or token, or to test how the app handles pasted input. It also carries what `keyboard` can't type on a given platform (multi-line text, non-ASCII on Android), but that alone is not a reason to paste — ask whether the user would.
 
@@ -233,6 +233,7 @@ Rules:
 The tool's own description carries the conditions, selector matching, defaults and return shape. What it does not tell you:
 
 - A `hidden` check that succeeds **immediately** may be a false pass — its `note` then says the selector never matched anything at all. Treat that as a failed check and fix the selector; do not read it as "the element went away".
+- Any `note` on `success: true` weakens the pass, so it is not clearance to act. On HarmonyOS it can mean a suspended panel is still serving its last frame: input tools refuse against it until `button` power wakes the panel.
 - The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
 - To disambiguate a loose selector, pin the `role` to a text role like `StaticText` — that skips a same-named button.
 - On a `text` timeout the `note` quotes the text of the element the check actually read, so you can see which match it landed on.
@@ -245,7 +246,7 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 { "udid": "<UDID>", "timeoutMs": 3000, "minStableMs": 250 }
 ```
 
-On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
+On local iOS, Android, Chromium, and HarmonyOS, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`, and read the `note` if one came with it — on `settled: true` it means the tree it settled on is not the whole live screen (a suspended HarmonyOS panel settles at once on its last frame, and taps land nowhere until `button` wakes it; a Chromium page past the walker's node budget settles on a partial tree), and on `settled: false` it says why the screen was never read rather than never still, which is what tells you a longer `timeoutMs` is not the answer. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
 
 Use it only for live diagnosis. Do not record it or put it in `run-sequence`. Flows use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 
@@ -271,7 +272,7 @@ When using `screenshot` for permission or native modal navigation:
 
 > **Prefer the dialog over the Settings tool.** When the app triggers its own permission prompt, answering it here is the real user path — do that. Reach for the `settings-permissions` tool only when you can't get to the change through the app: pre-authorize/deny a permission _before_ the app asks, re-enable one the user already denied (iOS won't re-prompt), or reset it so the prompt reappears. See the `argent-settings-permissions` skill.
 
-Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
+Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation. Not on HarmonyOS: `uitest screenCap` captures the display in its current orientation and has no override, so a `rotation` there is refused with 400 and no image comes back. Rotate the device itself, or drop the parameter.
 
 Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
 

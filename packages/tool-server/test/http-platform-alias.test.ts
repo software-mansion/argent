@@ -40,6 +40,16 @@ describe("http platform inference and the device alias", () => {
     expect(platformFromArgs({ device_id: "chromium-cdp-9222" })).toBe("chromium");
   });
 
+  it("attributes a boot that names an instance rather than a device", () => {
+    // The first call of any HarmonyOS session, and the only one with no id to
+    // classify: unattributed, it is the platform's own boot that goes missing
+    // from every per-platform view.
+    expect(platformFromArgs({ harmonyInstance: "argent_phone" })).toBe("harmony");
+    expect(platformFromArgs({ avdName: "Pixel_7" })).toBe("android");
+    // The connect key the boot hands back classifies by shape from then on.
+    expect(platformFromArgs({ udid: "harmony-127.0.0.1:5555" })).toBe("harmony");
+  });
+
   it("derives the device kind from the aliased id, not the opaque handle", () => {
     // A learned alias to a physical iPhone makes the debugger call count as
     // hardware; the 40-hex handle alone never would.
