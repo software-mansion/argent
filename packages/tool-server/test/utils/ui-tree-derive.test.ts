@@ -112,6 +112,28 @@ describe("deriveUniqueSelector", () => {
     expect(derive(root, 0.2, 0.12)).toEqual({ text: "Hubert Gancarczyk" });
   });
 
+  it("adds the role when a control's label repeats its row title", () => {
+    const root = screen([
+      leaf("AXStaticText", [0.1, 0.1, 0.3, 0.04], {
+        label: "Call volume",
+        identifier: "android:id/title",
+      }),
+      leaf("AXAdjustable", [0.1, 0.15, 0.8, 0.05], {
+        label: "Call volume",
+        identifier: "android:id/seekbar",
+      }),
+      leaf("AXStaticText", [0.1, 0.3, 0.3, 0.04], {
+        label: "Ring volume",
+        identifier: "android:id/title",
+      }),
+      leaf("AXAdjustable", [0.1, 0.35, 0.8, 0.05], {
+        label: "Ring volume",
+        identifier: "android:id/seekbar",
+      }),
+    ]);
+    expect(derive(root, 0.5, 0.37)).toEqual({ text: "Ring volume", role: "AXAdjustable" });
+  });
+
   it("returns null when no form singles the tapped element out", () => {
     const root = screen([
       leaf("AXButton", [0.1, 0.1, 0.2, 0.05], { label: "Add" }),

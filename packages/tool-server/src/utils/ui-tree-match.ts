@@ -777,7 +777,8 @@ export function deriveSelector(node: DescribeNode): Selector | null {
 
 // The own fields the recorder tries for a node, most stable first: an id,
 // then visible text (whitespace folded, so the YAML holds plain spaces), then
-// a non-generic role — each one alone. Label OR value individually — never
+// that text with a non-generic role (a slider labelled like its row title),
+// then the role alone. Label OR value individually — never
 // nodeText's joined form: matchNode compares a text selector against label
 // and value separately, so a joined "Volume 50%" would match nothing, not
 // even the node it came from. Label first: a value like "50%" is the volatile
@@ -790,7 +791,10 @@ function ownSelectors(node: DescribeNode): Selector[] {
     .map((t) => t?.replace(/\s+/g, " ").trim())
     .find((t) => t && hasVisibleText(t));
   if (text) out.push({ text });
-  if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) out.push({ role: node.role });
+  if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) {
+    if (text) out.push({ text, role: node.role });
+    out.push({ role: node.role });
+  }
   return out;
 }
 

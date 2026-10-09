@@ -112,7 +112,7 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 ### Taps
 
-`flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and tries `id`, then `text`, then `role`. Read the `recorded` line after every tap. It names the derived form - a selector map, or the kept point:
+`flow-add-step` cannot receive a flow selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and tries `id`, then `text`, then `text` with `role`, then `role`. Read the `recorded` line after every tap. It names the derived form - a selector map, or the kept point:
 
 1. **One field alone**, such as `tap: { id: ... }` or `tap: { text: ... }`. Only a `role` alone warns. An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen with a second control of that role can win the [ranking](flow-yaml.md#the-flow-tree-and-describe) and the tap reports a pass on the wrong control.
 2. **The same field with a scope**, when that field alone also matches other elements. For example, `tap: { text: Edit, within: { id: card-grace } }` or `tap: { text: Follow, next: { text: alice.bsky } }`. The scope is the smallest container with an id or text, else the nearest earlier element with a unique id or text.
