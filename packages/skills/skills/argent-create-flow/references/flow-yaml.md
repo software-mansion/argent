@@ -74,7 +74,7 @@ Flow selectors resolve against the flow tree. On some platforms, live discovery 
 
 On iOS, find selectors with `describe`. An `id`, `text`, or `role` that `describe` shows resolves at replay. Never use `native-full-hierarchy`, `native-find-views`, or `native-describe-screen` to find or verify a flow selector.
 
-On Android and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
+On Android and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role. On Android, a `text` or `role` that `describe` shows also resolves, but not inside a `within`, `after`, or `next` scope.
 
 The recorder rechecks each successful `await-ui-element` against the flow tree. Follow any `message` warning and replay each conversion. On iOS and Vega, a mismatch usually means the screen changed. A `text` check can also select different elements from the same source. See [Live waits and checks](live-authoring.md#live-waits-and-checks).
 

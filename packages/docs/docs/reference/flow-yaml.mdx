@@ -114,6 +114,8 @@ On an iOS simulator and on a physical iPhone, the runner and `describe` read one
 
 On Android and on Chromium, an id absent from `describe` can still resolve in a flow. Verify the id in a scratch fragment.
 
+On Android, a role and text copied from `describe` also resolve. If no element in the runner tree matches, the runner looks for a match in the elements that `describe` shows. These elements contain only text on the screen, not the contents of text fields. The runner does not look in these elements for a selector with `within`, `after` or `next`.
+
 ## Directives
 
 Each step contains one directive. A failed directive stops the flow.
