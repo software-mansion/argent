@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import * as net from "node:net";
 import type { ChildProcess } from "node:child_process";
-import type { DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import type { IosEndpoint } from "../../src/utils/ios-host";
 
 /**
@@ -39,7 +39,12 @@ function fakeDaemon(endpoint: IosEndpoint): ChildProcess {
       const { id, command } = JSON.parse(line) as { id: number; command: string };
       const answer = answers.get(command);
       if (answer === HANG) continue;
-      socket.write(JSON.stringify({ id, result: answer ?? { error: "unknown_command" } }) + "\n");
+      // A command the daemon does not know fails the whole envelope, as the real one does.
+      const reply =
+        answer === undefined
+          ? { id, error: "unknown_command", result: { error: "unknown_command" } }
+          : { id, result: answer };
+      socket.write(JSON.stringify(reply) + "\n");
     }
   });
   return proc;
@@ -113,5 +118,40 @@ describe("ax-service livePanel", () => {
     const failure = expect(read).rejects.toThrow(/timed out: live_panel/);
     await vi.advanceTimersByTimeAsync(2_000);
     await failure;
+  });
+});
+
+describe("ax-service tree", () => {
+  it("answers the daemon's nodes, alert state, truncation and front app", async () => {
+    answers.set("tree", {
+      alertVisible: true,
+      screenFrame: { width: 402, height: 874 },
+      nodes: [
+        { index: 0, label: "App" },
+        { index: 1, parentIndex: 0, covered: true },
+      ],
+      truncated: true,
+      foregroundApp: "com.example.app",
+      treeVersion: 2,
+    });
+    const api = await attach();
+    expect(await api.tree()).toEqual({
+      alertVisible: true,
+      screenFrame: { width: 402, height: 874 },
+      nodes: [
+        { index: 0, label: "App" },
+        { index: 1, parentIndex: 0, covered: true },
+      ],
+      truncated: true,
+      foregroundApp: "com.example.app",
+      treeVersion: 2,
+    });
+  });
+
+  it("asks for an argent update on a daemon that predates the command", async () => {
+    const api = await attach();
+    const err = await api.tree().catch((e: unknown) => e);
+    expect((err as Error).message).toBe("ax-service predates `tree`; update argent");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_QUERY_FAILED);
   });
 });
