@@ -17,29 +17,54 @@ Argent records the HTTP requests of the running app. The agent reads this record
 
 ## Capture layers
 
-Argent captures the traffic in three different layers.
+Argent captures traffic in four layers.
 
 | Layer                    | Platforms             | Content                                                         |
 | ------------------------ | --------------------- | --------------------------------------------------------------- |
 | JS runtime               | iOS, Android, Vega    | The `fetch()` calls of your JavaScript code                     |
 | Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers |
+| Native OkHttp            | Android               | OkHttp requests from a debuggable app                           |
 | Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets  |
 
 Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
 
-In React Native, Argent changes the `fetch()` function only. In React Native, the `fetch()` function uses `XMLHttpRequest`. If Argent changed both functions, it would count each request two times. Native code does not use the `fetch()` function. For native code, use the iOS native layer.
+In React Native, Argent changes the `fetch()` function only. In React Native, the `fetch()` function uses `XMLHttpRequest`. If Argent changed both functions, it would count each request two times. Native code does not use the `fetch()` function. For native code, use a native layer.
+
+## Native network capture on Android
+
+Argent calls the native OkHttp layer native network capture. Use a debuggable app on Android 8.0 or later. The app must run as `arm64-v8a` or `x86_64`.
+
+Ask the agent to start native network capture. Argent attaches an in-app agent to the running app. The in-app agent connects to Argent a short time after the agent starts the capture. Thus the agent asks Argent again until Argent reports that the capture is ready. Then repeat the action that sends the request. Argent captures OkHttp traffic, including React Native requests, Fresco images, and Expo `fetch()`.
+
+Native network capture follows the app. When the agent launches or restarts the app, Argent attaches the in-app agent to the new process. The launch steps of a flow do the same. The result of the launch tells the agent if Argent attached the in-app agent. A process can also start in a different way, for example from a launcher tap, from a link, or after a crash. Argent attaches the in-app agent to this process when the agent reads the list of requests the next time.
+
+Native network capture stays on until the agent stops it for the app. `stop-all-simulator-servers` also stops it for all apps of the device. After the capture stops, restart the app to remove the in-app agent from the app.
+
+Each request has an ID such as `android-3f9a-12`. The agent uses this ID to read headers and request or response bodies. An ID is valid only in the tool-server that listed it. An ID is not valid after the capture stops for the app or after the tool-server stops.
+
+Only the in-app agent that Argent attached can report requests to Argent.
+
+If native network capture is unavailable, use the JS runtime layer for `fetch()` requests.
 
 ## The request record
 
-First the agent reads the list of requests. Each line has this format:
+First the agent reads the list of requests. Then the agent reads the details of one request by its ID. The content of the list and of the details depends on the layer:
+
+| Layer                                  | List                                             | Details                                                                                     |
+| -------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| JS runtime, Chrome DevTools Protocol   | One line for each request                        | The request and response headers, the times, the initiator, the response body               |
+| Native `NSURLProtocol`                 | One entry for each event, with headers and times | Not available                                                                               |
+| Native OkHttp (native network capture) | A header line, then one entry for each request   | The headers sent on the wire, the redirects, the final URL, the request and response bodies |
+
+In the JS runtime layer and in the Chrome DevTools Protocol layer, a line has this format:
 
 ```
 {id: rn-net-4} "GET /v1/users" 200 OK Fetch 12.4 kB 143 ms
 ```
 
-Then the agent reads the details of one request. The details contain the headers of the request and of the response, the times, the initiator, and the body of the response.
+In native network capture, the header line tells if the capture is active, waits for the app to load OkHttp, or is unavailable. For an unavailable capture, the header line gives the reason. The headers sent on the wire include headers that the app code did not set, for example `Cookie` and `User-Agent`. The details do not contain an initiator.
 
-For the JS runtime and Chrome DevTools Protocol layers, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. Argent also shortens a body that is longer than 1000 characters. The message shows the initial length. The native `NSURLProtocol` layer does not redact headers. See the Limits section.
+Argent replaces secret header values with `[REDACTED]` in the JS runtime layer, in native network capture, and in the Chrome DevTools Protocol layer. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. Argent also shortens a body that is longer than 1000 characters. The message shows the initial length. The native `NSURLProtocol` layer does not redact headers. See the Limits section.
 
 Argent removes the bundle traffic and the HMR traffic of Metro from the record. Thus the record contains the requests of your app only.
 
@@ -49,14 +74,26 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the record. 
 - "Compare the payload of the request before and after my change."
 - "Show the requests that this screen sends at mount. Show their durations."
 - "Make sure that the app sends the second request after the error 500."
+- "Show the requests from the analytics SDK in my Android app."
 
 ## Limits
 
-- Argent starts the capture at one of these three moments: the debugger connects, Argent attaches to the Chromium app, or you activate the native inspection. Argent does not capture the earlier requests. Do the operation again after the agent connects.
-- The record keeps the most recent requests only. The limits are 2000 requests for the JS layer and 1000 requests for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native record holds fewer than 1000 requests.
+- Argent does not capture the requests before the capture starts. Do the operation again after the capture starts. The capture starts at a different moment in each layer:
+  - JS runtime: the debugger connects.
+  - Chrome DevTools Protocol: Argent attaches to the Chromium app.
+  - Native `NSURLProtocol`: the agent reads the requests of this layer for the first time.
+  - Native network capture: the in-app agent connects to Argent. This occurs a short time after Argent attaches the in-app agent to a process of the app.
+- The record keeps the most recent requests only:
+  - The JS runtime layer keeps 2000 requests.
+  - Native network capture keeps 2000 requests. It keeps fewer requests when the requests have very large headers or URLs.
+  - The Chrome DevTools Protocol layer keeps 1000 requests.
+  - The native `NSURLProtocol` layer keeps 1000 protocol events. A request produces several events, so this layer keeps fewer than 1000 requests.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
-- The `NSURLProtocol` layer is available on iOS only. On Android, use the JS layer.
+- Native network capture can miss startup requests. It can also miss the requests of a native module, for example a module that does not use OkHttp.
+- For WebSockets, native network capture records only the connection request.
+- Native network capture reads each body from the app process that sent the request. A relaunch or an emulator snapshot load ends that process. After that, a request body or a response body is available only if the agent read it before. Argent keeps a copy of only the 64 most recent bodies that the agent read.
+- Native network capture can slow the app. The launch results, the flow reports and the profiler start results tell the agent when native network capture is on. Before you profile, ask the agent to stop native network capture for the app. Then restart the app.
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a record of requests as you protect other data of the app.
-- On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a record of native requests as you protect other data of the app.
+- On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a record of this layer as you protect other data of the app.
 
 Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.

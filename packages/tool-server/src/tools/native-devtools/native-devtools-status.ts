@@ -66,7 +66,7 @@ export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   // verbatim (pinned by native-devtools-status.test.ts): the description must stay
   // a plain literal for scripts/extract-tools.mjs to read statically.
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
-Use when you need to verify native devtools readiness before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
+Use when you need to verify native devtools readiness on iOS before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
 
 Returns { envSetup, appRunning, connected, requiresRestart, state, message, nextLaunchWillBeInjected, injectable }:
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
@@ -78,7 +78,7 @@ Returns { envSetup, appRunning, connected, requiresRestart, state, message, next
 - nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place (always false for a non-injectable app)
 - injectable: whether this app is a supported target for Argent native devtools. Apple system apps (bundle ids under com.apple.) are not: they are never the app under test, so the native tools refuse to read one.
 
-Call this before using app-scoped native hierarchy tools or native-network-logs.
+Call this before using app-scoped native hierarchy tools or native-network-logs on iOS. On Android, call native-network-logs directly: it reports its own status, and this tool does not run there.
 If injectable is false: treat this as TERMINAL — the app is not a supported native-devtools target, and no relaunch changes that. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) — they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app once, then proceed with the native feature. Read state before acting on a second such reading — indeterminate reaches this rule too, and its line below bounds it at that one restart.

@@ -32,6 +32,7 @@ import {
   type BootstrapResult,
 } from "../../../utils/react-profiler/devtools-bootstrap";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
+import { nativeNetworkCaptureWarning } from "../../../utils/profiler-shared/network-capture-warning";
 
 /**
  * Shared with react-profiler-renders and react-profiler-fiber-tree so all
@@ -112,7 +113,7 @@ Delegates React commit capture to the in-app React DevTools backend (ri.startPro
 If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session, but BEFORE OVERTAKING - ask the user for approval first, see relevant skill for guidance.
 Before calling this, ask the user if they also want native profiling (native-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above. On Android, a warning names the apps with native network capture on (started by native-network-logs): Argent attaches its in-app agent to their processes, so their timings in the profile can differ.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     capability: RN_ONLY_TOOL_CAPABILITY,
@@ -373,11 +374,13 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
 
+      const warning = nativeNetworkCaptureWarning(deviceId ?? params.device_id, api.runtimeApp);
       return {
         started_at: new Date(startedAtEpochMs).toISOString(),
         startedAtEpochMs,
         hermes_version: api.hermesVersion,
         detected_architecture: api.detectedArchitecture,
+        ...(warning ? { warning } : {}),
       };
     },
   };

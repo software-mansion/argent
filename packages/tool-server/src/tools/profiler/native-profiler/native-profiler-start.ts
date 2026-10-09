@@ -10,6 +10,7 @@ import { ensureDeps } from "../../../utils/check-deps";
 import { startNativeProfilerIos } from "./platforms/ios";
 import { startNativeProfilerAndroid } from "./platforms/android";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
+import { nativeNetworkCaptureWarning } from "../../../utils/profiler-shared/network-capture-warning";
 
 const zodSchema = z.object({
   device_id: metroDeviceIdParam(
@@ -58,7 +59,7 @@ export { handleXctraceExit } from "./platforms/ios";
 
 export const nativeProfilerStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { status: "recording"; pid: number; traceFile: string }
+  { status: "recording"; pid: number; traceFile: string; warning?: string }
 > = {
   id: "native-profiler-start",
   interaction: {
@@ -72,7 +73,7 @@ export const nativeProfilerStartTool: ToolDefinition<
 Auto-detects the running app process unless app_process is explicitly provided.
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started.
+Returns { status, pid, traceFile } confirming the recording has started. On Android, a warning names the apps with native network capture on (started by native-network-logs): Argent attaches its in-app agent to their processes, so their timings in the profile can differ.
 Fails if no app is running on the device, or the profiler cannot attach to the process.`,
   zodSchema,
   services: (params) => ({
@@ -90,6 +91,8 @@ Fails if no app is running on the device, or the profiler cannot attach to the p
       return startNativeProfilerIos(api, params);
     }
     await ensureDeps(["adb"]);
-    return startNativeProfilerAndroid(api, params);
+    const started = await startNativeProfilerAndroid(api, params);
+    const warning = nativeNetworkCaptureWarning(params.device_id);
+    return warning ? { ...started, warning } : started;
   },
 };

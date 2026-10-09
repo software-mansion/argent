@@ -56,17 +56,31 @@ vi.mock("node:child_process", async () => {
   return { ...actual, spawn: () => spawnFake() };
 });
 
-vi.mock("../../src/utils/adb", () => ({
-  runAdb: vi.fn(async (args: string[]) => {
+vi.mock("../../src/utils/adb", () => {
+  const runAdb = vi.fn(async (args: string[]) => {
     adbCalls.push(args);
     if (args.includes("forward")) return { stdout: "45678\n", stderr: "" };
     if (args.includes("install") && installFails) throw new Error(installFails);
     return { stdout: "", stderr: "" };
-  }),
-  // The probe reports the bundled build as present, so every install here is
-  // one the repair path forced.
-  adbShell: vi.fn(async () => "package:com.argent.androiddevtools versionCode:1\n"),
-}));
+  });
+  return {
+    runAdb,
+    // Goes through runAdb above, as the real one does.
+    adbForward: vi.fn(async (serial: string, hostPort: number, devicePort: number) => {
+      const { stdout } = await runAdb([
+        "-s",
+        serial,
+        "forward",
+        `tcp:${hostPort}`,
+        `tcp:${devicePort}`,
+      ]);
+      return stdout.trim();
+    }),
+    // The probe reports the bundled build as present, so every install here is
+    // one the repair path forced.
+    adbShell: vi.fn(async () => "package:com.argent.androiddevtools versionCode:1\n"),
+  };
+});
 
 vi.mock("../../src/utils/android-binary", () => ({
   resolveAndroidBinary: vi.fn(async () => "/usr/bin/adb"),
