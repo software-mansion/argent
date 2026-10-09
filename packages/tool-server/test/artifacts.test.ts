@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { safeExtractArchive } from "@argent/archive";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
@@ -258,6 +259,38 @@ describe("GET /artifacts/:id", () => {
       const listing = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" });
       expect(listing).toContain("session.trace/top.txt");
       expect(listing).toContain("session.trace/sub/nested.txt");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("streams a zstd tar when the client's Accept lists application/zstd", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-bundle-"));
+    try {
+      const bundle = join(root, "session.trace");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "top.txt"), "top");
+
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: bundle,
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      const res = await supertest(handle.app)
+        .get(`/artifacts/${artifact.id}`)
+        .set("Accept", "application/zstd, application/gzip")
+        .buffer(true)
+        .parse(binaryParser as never);
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/zstd");
+      expect(res.headers["content-disposition"]).toContain("session.trace.tar.zst");
+      const archive = join(root, "out.archive");
+      await writeFile(archive, res.body);
+      const dest = await mkdtemp(join(root, "dest-"));
+      const member = await safeExtractArchive(archive, dest, "session.trace");
+      expect(await readFile(join(member, "top.txt"), "utf8")).toBe("top");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

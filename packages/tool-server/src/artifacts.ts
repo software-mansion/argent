@@ -1,6 +1,6 @@
 /**
  * Artifact HTTP transport: streams a registered file — or, for a directory
- * bundle, a gzipped tar on demand — to a remote client over `GET /artifacts/:id`.
+ * bundle, a compressed tar on demand — to a remote client over `GET /artifacts/:id`.
  * A co-located client never hits this route; it reads the file in place via the
  * handle's `hostPath`.
  *
@@ -12,7 +12,13 @@
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { createTarGzArgs } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  archiveFormatsFromAccept,
+  createCompressor,
+  createTarArgs,
+  pickArchiveFormat,
+} from "@argent/archive";
 import type { Request, Response } from "express";
 import type {
   Registry,
@@ -64,7 +70,7 @@ export function makeArtifactRoute(registry: Registry) {
     // download pays for zipping, since local clients use the directory in place
     // via the gate.
     if (entry.isDirectory) {
-      streamDirectoryAsTarGz(id, entry, res);
+      streamDirectoryAsArchive(id, entry, req, res);
       return;
     }
 
@@ -90,19 +96,27 @@ export function makeArtifactListRoute(registry: Registry) {
 }
 
 /**
- * Stream a directory as a gzipped tar via the system `tar`. `-C <parent> <base>`
- * keeps the bundle's own directory as the single top-level entry, so the client
- * unpacks it back to `<dir>/<base>`.
+ * Stream a directory as a compressed tar: zstd when the request's `Accept` lists
+ * `application/zstd`, else gzip. `-C <parent> <base>` keeps the bundle's own
+ * directory as the single top-level entry, so the client unpacks it back to
+ * `<dir>/<base>`.
  */
-function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response): void {
-  res.setHeader("Content-Type", "application/gzip");
-  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.tar.gz"`);
+function streamDirectoryAsArchive(
+  id: string,
+  entry: ArtifactEntry,
+  req: Request,
+  res: Response
+): void {
+  const format = pickArchiveFormat(archiveFormatsFromAccept(req.headers.accept));
+  const ext = format === "zstd" ? "tar.zst" : "tar.gz";
+  res.setHeader("Content-Type", ARCHIVE_CONTENT_TYPES[format]);
+  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.${ext}"`);
 
   // stderr is ignored, not piped: an unread pipe can fill its buffer (e.g.
   // tar's "file changed as we read it" on a live trace) and deadlock the child.
   // A truncated archive from a non-zero exit is caught client-side, where
   // extraction fails and the artifact resolves to null.
-  const child = spawn("tar", createTarGzArgs(entry.path, "-"), {
+  const child = spawn("tar", createTarArgs(entry.path), {
     stdio: ["ignore", "pipe", "ignore"],
   });
   child.on("error", (err) => {
@@ -119,5 +133,7 @@ function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response)
       child.kill("SIGTERM");
     }
   });
-  child.stdout.pipe(res);
+  const compressor = createCompressor(format);
+  compressor.on("error", () => res.destroy());
+  child.stdout.pipe(compressor).pipe(res);
 }
