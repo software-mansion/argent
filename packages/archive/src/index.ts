@@ -52,8 +52,13 @@ export function archiveFormatsFromAccept(accept: string | undefined): ArchiveFor
   return ARCHIVE_FORMATS.filter((f) => types.includes(ARCHIVE_CONTENT_TYPES[f]));
 }
 
+// zlib's default 16 KiB chunks make piping a large tar 2-3x slower.
+const CHUNK_BYTES = 1 << 20;
+
 export function createCompressor(format: ArchiveFormat): zlib.Gzip | zlib.ZstdCompress {
-  return format === "zstd" ? zlib.createZstdCompress() : zlib.createGzip();
+  return format === "zstd"
+    ? zlib.createZstdCompress({ chunkSize: CHUNK_BYTES })
+    : zlib.createGzip({ chunkSize: CHUNK_BYTES });
 }
 
 /**
@@ -155,15 +160,47 @@ async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void>
   }
 }
 
-/** Decompress `archivePath` into a plain tar at `tarPath`. */
-async function decompressToTar(archivePath: string, tarPath: string): Promise<void> {
-  const format = await sniffFormat(archivePath);
-  if (format === "zstd") await assertSingleCompleteZstdFrame(archivePath);
-  await pipeline(
-    createReadStream(archivePath),
-    format === "zstd" ? zlib.createZstdDecompress() : zlib.createGunzip(),
-    createWriteStream(tarPath)
+interface Archive {
+  path: string;
+  format: ArchiveFormat;
+}
+
+/** A pipe `tar` closed because it stopped reading, which isn't a failure by itself. */
+function isClosedPipe(err: NodeJS.ErrnoException): boolean {
+  return err.code === "EPIPE" || err.code === "ERR_STREAM_PREMATURE_CLOSE";
+}
+
+/**
+ * Run `tar <args>` over `archive`, returning stdout. gzip goes to `tar -z`;
+ * zstd is decompressed here and piped in, since stock `tar` can't read it.
+ */
+async function runTar(archive: Archive, args: string[]): Promise<string> {
+  if (archive.format === "gzip") {
+    const { stdout } = await execFileAsync("tar", [...args, "-zf", archive.path]);
+    return stdout;
+  }
+  const child = spawn("tar", [...args, "-f", "-"], { stdio: ["pipe", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (d: string) => (stdout += d));
+  child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+  const exited = new Promise<number | null>((res, rej) => {
+    child.on("error", rej);
+    child.on("close", res);
+  });
+  const fed = pipeline(
+    createReadStream(archive.path, { highWaterMark: CHUNK_BYTES }),
+    zlib.createZstdDecompress({ chunkSize: CHUNK_BYTES }),
+    child.stdin
+  ).then(
+    () => null,
+    (err: NodeJS.ErrnoException) => err
   );
+  const [code, feedError] = await Promise.all([exited, fed]);
+  if (feedError && !isClosedPipe(feedError)) throw feedError;
+  if (code !== 0)
+    throw new Error(`tar ${args.join(" ")} exited with code ${code}: ${stderr.trim()}`);
+  return stdout;
 }
 
 function normalizeTarMemberPath(memberPath: string): string {
@@ -185,8 +222,8 @@ function isSafeTarMember(memberPath: string, destDir: string): boolean {
 }
 
 /** List an archive's members without extracting, so they can be vetted first. */
-async function listTarMembers(tarPath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("tar", ["-tf", tarPath]);
+async function listTarMembers(archive: Archive): Promise<string[]> {
+  const stdout = await runTar(archive, ["-t"]);
   return stdout
     .split("\n")
     .map((line) => line.trim())
@@ -203,11 +240,11 @@ function isEscapingLinkTarget(target: string): boolean {
  * Reject members that could write or link outside `destDir`. Regular files and
  * directories pass; symlinks pass only when their target stays inside (a `.app`
  * carries internal ones like `Current -> A`); every other type (hardlink,
- * device, fifo, …) is refused. Only `tar -tvf`'s type char and ` -> <target>`
+ * device, fifo, …) is refused. Only `tar -tv`'s type char and ` -> <target>`
  * are read — the column-formatted name is not stable across tar variants.
  */
-async function assertSafeMemberTypes(tarPath: string): Promise<void> {
-  const { stdout } = await execFileAsync("tar", ["-tvf", tarPath]);
+async function assertSafeMemberTypes(archive: Archive): Promise<void> {
+  const stdout = await runTar(archive, ["-tv"]);
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const type = line[0];
@@ -232,10 +269,10 @@ async function assertSafeMemberTypes(tarPath: string): Promise<void> {
 }
 
 /** Throw {@link ArchiveError} unless every member is safe to extract into `destDir`. */
-async function assertSafeArchive(tarPath: string, destDir: string): Promise<void> {
+async function assertSafeArchive(archive: Archive, destDir: string): Promise<void> {
   let members: string[];
   try {
-    members = await listTarMembers(tarPath);
+    members = await listTarMembers(archive);
   } catch (err) {
     throw new ArchiveError(
       `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
@@ -249,7 +286,7 @@ async function assertSafeArchive(tarPath: string, destDir: string): Promise<void
       throw new ArchiveError(`Archive contains an unsafe path "${member}" — refusing extraction.`);
     }
   }
-  await assertSafeMemberTypes(tarPath);
+  await assertSafeMemberTypes(archive);
 }
 
 /**
@@ -284,21 +321,16 @@ export async function safeExtractArchive(
   destDir: string,
   expectedName: string
 ): Promise<string> {
-  // Decompressed once, then listed twice and extracted, rather than three
-  // decompressions through `tar`.
-  const tarPath = `${archivePath}.tar`;
+  let archive: Archive;
   try {
-    try {
-      await decompressToTar(archivePath, tarPath);
-    } catch (err) {
-      throw new ArchiveError(
-        `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-    await assertSafeArchive(tarPath, destDir);
-    await execFileAsync("tar", ["-xf", tarPath, "-C", destDir]);
-  } finally {
-    await rm(tarPath, { force: true }).catch(() => {});
+    archive = { path: archivePath, format: await sniffFormat(archivePath) };
+    if (archive.format === "zstd") await assertSingleCompleteZstdFrame(archivePath);
+  } catch (err) {
+    throw new ArchiveError(
+      `Could not read archive: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
+  await assertSafeArchive(archive, destDir);
+  await runTar(archive, ["-x", "-C", destDir]);
   return resolveMember(destDir, expectedName);
 }
