@@ -31,7 +31,13 @@ run_phase() {
   # shared install, pass `devices`.
   if server_running; then
     run_tool stop-all-simulator-servers '{}' >/dev/null 2>&1 && pass "$P" stop-all-simulator-servers teardown || skip "$P" stop-all-simulator-servers teardown "none running"
-    run_tool stop-metro '{}' >/dev/null 2>&1 && pass "$P" stop-metro teardown || skip "$P" stop-metro teardown "no metro"
+    # stop-metro kills whatever serves the port, so only a Metro this run
+    # started may be stopped: one already running belongs to someone else.
+    if [ -n "${E2E_METRO_PID:-}" ]; then
+      run_tool stop-metro '{}' >/dev/null 2>&1 && pass "$P" stop-metro teardown || skip "$P" stop-metro teardown "no metro"
+    else
+      skip "$P" stop-metro teardown "this run started no Metro"
+    fi
   else
     skip "$P" stop-all-simulator-servers teardown "no reachable tool-server"
     skip "$P" stop-metro teardown "no reachable tool-server"
