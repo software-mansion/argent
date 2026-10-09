@@ -311,10 +311,11 @@ async function installHelper(serial: string, options: { force?: boolean }): Prom
  * Install the helper, start it, and — when the device answers that the
  * instrumentation is not there — reinstall it once and start it again.
  *
- * The install probe cannot see that case coming: it accepts any build at the
- * manifest's versionCode, which is pinned at 1, so a wiped or snapshot-restored
- * emulator and a foreign same-version APK both read as installed. `am
- * instrument` is what finds out, and by then only a forced reinstall helps.
+ * The install probe cannot see that case coming: it accepts any build at or
+ * above the manifest's versionCode, so a wiped or snapshot-restored emulator
+ * and a foreign APK with the same or a higher versionCode both read as
+ * installed. `am instrument` is what finds out, and by then only a forced
+ * reinstall helps.
  *
  * Only that fault is repaired. A missing `adb`, a ready timeout or an
  * unexpected `adb forward` reply are all reported as they were.
