@@ -147,7 +147,8 @@ describe("text matches: execution", () => {
     }
   }, 10_000);
 
-  it("does not pass an empty-matchable pattern before the selected element has text", async () => {
+  // An element with no text reads as "", so `'^$'` can check an empty field.
+  it("passes an empty-matchable pattern on an element with no text", async () => {
     currentTree = () =>
       screen([
         n({
@@ -170,7 +171,7 @@ describe("text matches: execution", () => {
 
     const result = await run("empty-status");
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it("passes unanchored on a partial match (the contains analog)", async () => {
