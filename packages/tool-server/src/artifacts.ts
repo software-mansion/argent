@@ -140,7 +140,10 @@ function streamDirectoryAsArchive(
   // client's download fails instead of extracting a partial bundle.
   let tail = Buffer.alloc(0);
   child.stdout.on("data", (chunk: Buffer) => {
-    tail = Buffer.concat([tail, chunk]).subarray(-TAR_TRAILER_BYTES);
+    tail =
+      chunk.length >= TAR_TRAILER_BYTES
+        ? chunk.subarray(-TAR_TRAILER_BYTES)
+        : Buffer.concat([tail, chunk]).subarray(-TAR_TRAILER_BYTES);
   });
   const tarClosed = new Promise<number | null>((resolve) => child.on("close", resolve));
   const compressor = createCompressor(format);
@@ -154,4 +157,3 @@ function streamDirectoryAsArchive(
   });
   child.stdout.pipe(compressor).pipe(res, { end: false });
 }
-
