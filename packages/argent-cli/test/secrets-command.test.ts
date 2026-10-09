@@ -139,6 +139,17 @@ describe("argent secrets", () => {
     expect(out).toContain("gitignore this file");
   });
 
+  it.each([
+    [["list", "--jsno"], "Unknown flag: --jsno"],
+    [["--json", "--jsno"], "Unknown flag: --jsno"],
+    [["list", "extra"], 'Unexpected argument "extra"'],
+  ])("rejects %j with exit 2 instead of listing", async (argv, message) => {
+    await expect(secrets(argv)).rejects.toThrow(ExitError);
+    expect(process.exit).toHaveBeenCalledWith(2);
+    expect(errSpy.mock.calls.join(" ")).toContain(message);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown subcommand", async () => {
     await expect(secrets(["frobnicate"])).rejects.toThrow(ExitError);
     expect(errSpy.mock.calls.join(" ")).toContain('unknown subcommand "secrets frobnicate"');

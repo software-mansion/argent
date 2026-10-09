@@ -1432,6 +1432,18 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   }
 
   if (sub === "list") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      printHelp();
+      return;
+    }
+    try {
+      const { positionals } = parseCommandArgs(rest, {});
+      if (positionals.length > 0) throw new UsageError(`Unexpected argument "${positionals[0]}"`);
+    } catch (err) {
+      if (!(err instanceof UsageError)) throw err;
+      console.error(`Error: ${err.message}. Run \`argent flow --help\`.`);
+      return exitAfterFlush(2);
+    }
     const dir = path.join(process.cwd(), FLOWS_DIR);
     try {
       // One final sort over full relative paths, not per-directory: the

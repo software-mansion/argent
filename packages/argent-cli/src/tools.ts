@@ -1,4 +1,5 @@
 import { createToolsClient, type ToolsServerPaths } from "@argent/tools-client";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import { formatSchemaUsage, type JsonSchema } from "./flag-parser.js";
 
 export interface ToolsCommandOptions {
@@ -11,6 +12,11 @@ function summarize(description: string | undefined, max = 80): string {
   if (firstLine.length <= max) return firstLine;
   return firstLine.slice(0, max - 1).trimEnd() + "…";
 }
+
+const TOOLS_OPTIONS = {
+  json: { kind: "boolean" },
+  help: { kind: "boolean", alias: "h" },
+} as const satisfies OptionSpecs;
 
 export async function tools(argv: string[], options: ToolsCommandOptions): Promise<void> {
   const { fetchTool, fetchTools } = createToolsClient({ paths: options.paths });
@@ -66,14 +72,24 @@ Listing tools contacts the argent tool-server, starting one if none is running.
 `);
   }
 
-  const json = argv.includes("--json");
-  // Checked before contacting the tool-server, and only in the subcommand slot so
-  // `argent tools describe <name> --help` still reaches describeTool's flag output.
-  const isHelpFlag = (a: string) => a === "--help" || a === "-h";
-  const positional = argv.filter((a) => !a.startsWith("--") || isHelpFlag(a));
-  const sub = positional[0];
+  const usageError = (message: string): never => {
+    console.error(`Error: ${message}\n`);
+    printUsage();
+    process.exit(2);
+  };
+  let parsed: ReturnType<typeof parseCommandArgs>;
+  try {
+    parsed = parseCommandArgs(argv, TOOLS_OPTIONS);
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    return usageError(err.message);
+  }
+  const [sub, name, extra] = parsed.positionals;
+  const json = parsed.options.json === true;
 
-  if (sub !== undefined && isHelpFlag(sub)) {
+  // `argent tools describe <name> --help` asks for that tool's flags, which
+  // describeTool prints.
+  if (parsed.options.help === true && !(sub === "describe" && name !== undefined)) {
     printUsage();
     return;
   }
@@ -84,11 +100,11 @@ Listing tools contacts the argent tool-server, starting one if none is running.
   }
 
   if (sub === "describe") {
-    const name = positional[1];
     if (!name) {
       console.error("Usage: argent tools describe <tool-name>");
       process.exit(1);
     }
+    if (extra !== undefined) usageError(`Unexpected argument "${extra}"`);
     await describeTool(name, json);
     return;
   }

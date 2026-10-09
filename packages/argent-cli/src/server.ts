@@ -464,37 +464,96 @@ function signalNumber(signal: NodeJS.Signals): number | null {
   return map[signal] ?? null;
 }
 
+const SUBCOMMAND_HELP = {
+  status: `Usage: argent server status [--json]
+
+Show the pid, port, and health of this install's tool-server.
+
+Flags:
+  --json                  Print machine-readable JSON.
+  --help, -h              Show this help.
+`,
+  stop: `Usage: argent server stop
+
+Terminate this install's tool-server.
+
+Flags:
+  --help, -h              Show this help.
+`,
+  logs: `Usage: argent server logs [-f]
+
+Print the tool-server log (${LOG_FILE}).
+
+Flags:
+  --follow, -f            Keep printing new lines until Ctrl-C.
+  --help, -h              Show this help.
+`,
+};
+
+const STATUS_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
+const STOP_OPTIONS = {} as const satisfies OptionSpecs;
+const LOGS_OPTIONS = { follow: { kind: "boolean", alias: "f" } } as const satisfies OptionSpecs;
+
+/**
+ * The options of `status`, `stop` or `logs`, or null when `--help` printed the
+ * help instead. Bad input exits 2 before the subcommand acts.
+ */
+function parseSubcommandArgs(
+  sub: keyof typeof SUBCOMMAND_HELP,
+  argv: string[],
+  specs: OptionSpecs
+): Record<string, string | boolean | undefined> | null {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(SUBCOMMAND_HELP[sub]);
+    return null;
+  }
+  try {
+    const { positionals, options } = parseCommandArgs(argv, specs);
+    if (positionals.length > 0) throw new UsageError(`Unexpected argument "${positionals[0]}"`);
+    return options;
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}\n`);
+    console.log(SUBCOMMAND_HELP[sub]);
+    process.exit(2);
+  }
+}
+
 export async function server(
   argv: string[],
   options?: { paths?: ToolsServerPaths }
 ): Promise<void> {
-  const sub = argv[0];
-  const json = argv.includes("--json");
-  const follow = argv.includes("-f") || argv.includes("--follow");
+  const [sub, ...rest] = argv;
 
   if (!sub || sub === "--help" || sub === "-h") {
     console.log(`Usage:
-  argent server start [flags]     Spawn a long-lived tool-server (see --help)
+  argent server start [flags]     Spawn a long-lived tool-server
   argent server status [--json]   Show tool-server pid, port, and health
   argent server stop              Terminate the running tool-server
   argent server logs [-f]         Print (or follow) the tool-server log
+
+Run \`argent server <subcommand> --help\` for its flags.
 `);
     return;
   }
 
   switch (sub) {
     case "start":
-      await startCmd(argv.slice(1), options?.paths);
+      await startCmd(rest, options?.paths);
       return;
-    case "status":
-      await statusCmd(json, options?.paths);
+    case "status": {
+      const parsed = parseSubcommandArgs("status", rest, STATUS_OPTIONS);
+      if (parsed) await statusCmd(parsed.json === true, options?.paths);
       return;
+    }
     case "stop":
-      await stopCmd(options?.paths);
+      if (parseSubcommandArgs("stop", rest, STOP_OPTIONS)) await stopCmd(options?.paths);
       return;
-    case "logs":
-      logsCmd(follow);
+    case "logs": {
+      const parsed = parseSubcommandArgs("logs", rest, LOGS_OPTIONS);
+      if (parsed) logsCmd(parsed.follow === true);
       return;
+    }
     default:
       console.error(`Unknown subcommand: server ${sub}`);
       process.exit(1);

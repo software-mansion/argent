@@ -45,18 +45,40 @@ describe("argent tools --help", () => {
   // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
   // takes only argv[0], which duplicates the two-flag rows' names and reads as a claim about
   // a bare `--json` — which prints no usage and does hit the server.
-  it.each([[["--help"]], [["-h"]], [["--help", "--json"]], [["--json", "--help"]]])(
-    "prints usage for %j without contacting the tool-server",
-    async (argv) => {
-      await invoke(argv);
+  it.each([
+    [["--help"]],
+    [["-h"]],
+    [["--help", "--json"]],
+    [["--json", "--help"]],
+    [["describe", "--help"]],
+  ])("prints usage for %j without contacting the tool-server", async (argv) => {
+    await invoke(argv);
 
-      expect(output()).toContain("argent tools describe <name>");
-      expect(output()).toContain("--help, -h");
-      // The defect: help used to start a tool-server just to list tools.
-      expect(toolsClientMock.fetchTools).not.toHaveBeenCalled();
-      expect(toolsClientMock.fetchTool).not.toHaveBeenCalled();
+    expect(output()).toContain("argent tools describe <name>");
+    expect(output()).toContain("--help, -h");
+    // The defect: help used to start a tool-server just to list tools.
+    expect(toolsClientMock.fetchTools).not.toHaveBeenCalled();
+    expect(toolsClientMock.fetchTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [["--jsno"], "Unknown flag: --jsno"],
+    [["describe", "gesture-tap", "--jsno"], "Unknown flag: --jsno"],
+    [["describe", "gesture-tap", "extra"], 'Unexpected argument "extra"'],
+  ])("rejects %j with exit 2 without contacting the tool-server", async (argv, message) => {
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${code}`);
+    }) as never);
+    try {
+      await expect(invoke(argv)).rejects.toThrow("process.exit:2");
+    } finally {
+      exit.mockRestore();
     }
-  );
+
+    expect((errSpy.mock.calls as unknown[][]).join("\n")).toContain(message);
+    expect(toolsClientMock.fetchTools).not.toHaveBeenCalled();
+    expect(toolsClientMock.fetchTool).not.toHaveBeenCalled();
+  });
 
   it("still lists tools when no subcommand is given", async () => {
     await invoke([]);
