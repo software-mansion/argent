@@ -90,15 +90,20 @@ export interface FileInputWire {
  * `POST /upload`), or `state` says why it carries none.
  */
 export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_MARKER | "members"> {
-  role: "flow";
+  role: "flow" | "baseline";
   /**
    * How the tool-server looks the member up. For `flow`: the directory of the
    * file that names the target, a NUL, and the target as written, which is
-   * exactly the pair the runner resolves.
+   * exactly the pair the runner resolves. For `baseline`: the absolute client
+   * path `<dir>/__baselines__/<key>/<name>.png`.
    */
   key: string;
-  /** No bytes: `missing` = nothing at `canonical`; `refused` = the client does not send it (`error` says why). */
-  state?: "missing" | "refused";
+  /**
+   * No bytes: `missing` = nothing at `canonical`; `refused` = the client does
+   * not send it (`error` says why); `listed` = a baseline sent by name only,
+   * for a run that updates baselines and never reads them.
+   */
+  state?: "missing" | "refused" | "listed";
   error?: string;
 }
 
@@ -162,9 +167,10 @@ export interface FileInputSpec {
   unwrapWhenSet?: string;
   /**
    * `"flow"`: the file is a flow, and over a link the client also sends, on
-   * the same wire, every flow file its `run:` steps reach
-   * ({@link FileInputWire.members}). The call's `project_root` bounds what the
-   * client sends. Clients that do not know the field send the file alone.
+   * the same wire, every flow file its `run:` steps reach and the snapshot
+   * baselines of its run ({@link FileInputWire.members}). The call's
+   * `project_root` bounds what the client sends. Clients that do not know the
+   * field send the file alone.
    */
   collect?: "flow";
 }
@@ -172,11 +178,14 @@ export interface FileInputSpec {
 /** A {@link FileInputMember} as the tool-server resolved it. */
 export interface ResolvedMember {
   role: FileInputMember["role"];
-  /** `present`: the bytes arrived (`text` for a flow). */
-  state: "present" | "missing" | "refused";
-  canonical: string;
-  spelling: OnDiskSpelling;
+  /** `present`: the bytes arrived (`text` for a flow, `hostPath` for a baseline). */
+  state: "present" | "missing" | "refused" | "listed";
+  /** Set for a flow: its real path and spelling on the client. */
+  canonical?: string;
+  spelling?: OnDiskSpelling;
   text?: string;
+  /** A baseline's bytes, materialized on this host. */
+  hostPath?: string;
   error?: string;
 }
 
@@ -239,6 +248,8 @@ export interface ClientFileDirective {
   /** Absolute CLIENT-side destination path (the client validates it before writing). */
   path: string;
   content: string;
+  /** `base64`: `content` is binary (a snapshot baseline); absent: UTF-8 text. */
+  encoding?: "base64";
 }
 
 export function isFileInputWire(value: unknown): value is FileInputWire {

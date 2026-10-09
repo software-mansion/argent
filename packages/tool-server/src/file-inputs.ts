@@ -16,11 +16,11 @@
  * - `kind: "directory"` is used in place, and fails with remote-mode guidance
  *   when absent here (a tree can't ride in a tool call).
  * - `kind: "probe"` passes through and only reports presence.
- * - A `collect` spec's `members` (a flow's `run:` closure, sent with the flow
- *   by a linked client) are decoded with the same checks, each into its own
- *   state: a member that the client did not send fails only where it is used.
- *   A member whose bytes fail those checks fails the call, as a declared
- *   input does.
+ * - A `collect` spec's `members` (a flow's `run:` closure and its run's
+ *   snapshot baselines, sent with the flow by a linked client) are decoded
+ *   with the same checks, each into its own state: a member that the client
+ *   did not send fails only where it is used. A member whose bytes fail those
+ *   checks fails the call, as a declared input does.
  *
  * Plain string args (older clients, direct invocations) pass through untouched.
  */
@@ -228,9 +228,10 @@ function errorText(err: unknown): string {
 }
 
 /**
- * Add a member's bytes to the total of its flow before they are read. The text
- * of each member stays in memory for the whole run, so the members of a flow
- * get the limit of one file together, however many the call names.
+ * Add a flow member's bytes to the total of its call before they are read. The
+ * text of each flow member stays in memory for the whole run, so the flow
+ * members of a call get the limit of one file together, however many the call
+ * names. A baseline is written to a temp file, so it does not count.
  */
 function countMemberBytes(member: FileInputMember, taken: { bytes: number }, bytes: number): void {
   taken.bytes += bytes;
@@ -243,11 +244,33 @@ function countMemberBytes(member: FileInputMember, taken: { bytes: number }, byt
 }
 
 /**
- * One member's bytes, read the way a declared file input's are, or undefined
- * when the client sent neither content nor an upload for it. Bytes that fail
- * a check, or an upload that is gone, throw the {@link FileInputError} of a
- * declared input.
+ * Where one member's bytes land on this host, checked the way a declared file
+ * input's are, or undefined when the client sent neither content nor an
+ * upload for it. Bytes that fail a check, or an upload that is gone, throw the
+ * {@link FileInputError} of a declared input.
  */
+async function materializeMember(
+  member: FileInputMember,
+  tempDirs: string[],
+  lookupUpload: UploadLookup | undefined
+): Promise<string | undefined> {
+  const wire = member as unknown as FileInputWire;
+  if (typeof member.content === "string") {
+    const { filePath, dir } = await materializeUpload(wire);
+    tempDirs.push(dir);
+    return filePath;
+  }
+  if (typeof member.uploadId !== "string") return undefined;
+  const unused: ResolvedFileInput = {
+    clientPath: member.path,
+    presentOnHost: false,
+    viaUpload: true,
+  };
+  const { value } = await extractTarUpload(wire, member.uploadId, unused, tempDirs, lookupUpload);
+  return value;
+}
+
+/** A flow member's text: decoded in memory when inline (see {@link materializeMember}). */
 async function memberText(
   member: FileInputMember,
   tempDirs: string[],
@@ -259,14 +282,8 @@ async function memberText(
     countMemberBytes(member, taken, data.length);
     return data.toString("utf8");
   }
-  if (typeof member.uploadId !== "string") return undefined;
-  const unused: ResolvedFileInput = {
-    clientPath: member.path,
-    presentOnHost: false,
-    viaUpload: true,
-  };
-  const wire = member as unknown as FileInputWire;
-  const { value } = await extractTarUpload(wire, member.uploadId, unused, tempDirs, lookupUpload);
+  const file = await materializeMember(member, tempDirs, lookupUpload);
+  if (file === undefined) return undefined;
   const unreadable = (err: unknown): never => {
     throw new FileInputError(
       `Could not read the uploaded file "${member.path}": ${errorText(err)}`
@@ -274,10 +291,10 @@ async function memberText(
   };
   // A small archive can expand to far more than the limit, so the size on disk
   // is checked before the bytes are read into memory.
-  const { size } = await stat(value).catch(unreadable);
+  const { size } = await stat(file).catch(unreadable);
   checkUploadSize(member, size);
   countMemberBytes(member, taken, size);
-  return readFile(value, "utf8").catch(unreadable);
+  return readFile(file, "utf8").catch(unreadable);
 }
 
 /**
@@ -286,9 +303,11 @@ async function memberText(
  * that needs it fails, and nothing else. An entry whose transfer failed (its
  * bytes fail the checks of a declared input, or its upload is gone) fails the
  * call with that upload error, as a declared input does: the flow is fine,
- * its transfer is not. So does an entry that takes the members past the limit
- * of one file together. An entry of a role this server does not know is left
- * out, as is a repeated key after its first entry.
+ * its transfer is not. So does a flow entry that takes the flow members past
+ * the limit of one file together. An entry of a role this server does not know
+ * is left out, as is a repeated key after its first entry. A flow is kept as
+ * text; a baseline is written to a temp file (`hostPath`), or kept as `listed`
+ * when the client sent its name only.
  */
 async function resolveMembers(
   members: unknown[],
@@ -301,13 +320,17 @@ async function resolveMembers(
     if (typeof raw !== "object" || raw === null) continue;
     const member = raw as FileInputMember;
     if (
-      member.role !== "flow" ||
+      (member.role !== "flow" && member.role !== "baseline") ||
       typeof member.key !== "string" ||
       Object.hasOwn(out, member.key)
     ) {
       continue;
     }
-    if (typeof member.canonical !== "string" || !isSpelling(member.spelling)) {
+    const flow = member.role === "flow";
+    if (
+      (flow && (typeof member.canonical !== "string" || !isSpelling(member.spelling))) ||
+      (flow && member.state === "listed")
+    ) {
       out[member.key] = {
         role: member.role,
         state: "refused",
@@ -317,9 +340,11 @@ async function resolveMembers(
       };
       continue;
     }
-    const base = { role: member.role, canonical: member.canonical, spelling: member.spelling };
-    if (member.state === "missing") {
-      out[member.key] = { ...base, state: "missing" };
+    const base: Pick<ResolvedMember, "role" | "canonical" | "spelling"> = flow
+      ? { role: member.role, canonical: member.canonical, spelling: member.spelling }
+      : { role: member.role };
+    if (member.state === "missing" || member.state === "listed") {
+      out[member.key] = { ...base, state: member.state };
     } else if (member.state === "refused") {
       out[member.key] = {
         ...base,
@@ -327,11 +352,13 @@ async function resolveMembers(
         error: typeof member.error === "string" ? member.error : "the client did not send it",
       };
     } else {
-      const text = await memberText(member, tempDirs, lookupUpload, taken);
+      const sent = flow
+        ? { text: await memberText(member, tempDirs, lookupUpload, taken) }
+        : { hostPath: await materializeMember(member, tempDirs, lookupUpload) };
       out[member.key] =
-        text === undefined
+        sent.text === undefined && sent.hostPath === undefined
           ? { ...base, state: "refused", error: `the client sent no content for "${member.path}"` }
-          : { ...base, state: "present", text };
+          : { ...base, state: "present", ...sent };
     }
   }
   return out;

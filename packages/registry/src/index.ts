@@ -46,6 +46,7 @@ export type {
   ClientFileDirective,
 } from "./file-inputs";
 export {
+  baselineKeyFor,
   canonicalFlowPath,
   classifyOnDiskSpelling,
   collectFlowRequests,

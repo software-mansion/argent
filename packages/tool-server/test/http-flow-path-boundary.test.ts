@@ -5,6 +5,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PNG } from "pngjs";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
@@ -18,6 +19,12 @@ vi.mock("../src/utils/update-checker", () => ({
   suppressUpdateNote: vi.fn(),
 }));
 
+// The step registry serves no describe tree, so a snapshot's settle would poll to its deadline.
+vi.mock("../src/tools/flows/flow-actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tools/flows/flow-actions")>()),
+  settleTree: vi.fn(async () => ({})),
+}));
+
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 
 /** The registry flow-execute dispatches its steps through — never the flow source. */
@@ -25,6 +32,7 @@ function stepRegistry(): Registry {
   return {
     invokeTool: vi.fn(async (id: string) => {
       if (id === "list-devices") return { devices: [] };
+      if (id === "screenshot") return { image: { hostPath: path.join(tmpDir, "capture.png") } };
       return { ok: true };
     }),
     getTool: vi.fn(() => undefined),
@@ -743,12 +751,13 @@ describe("flow-execute over a link, from the real argent client", () => {
     return file;
   }
 
-  /** The step reports of a run of `flowPath`; `beforeSend` sees the body once the client built it. */
+  /** The step reports and written baselines of a run of `flowPath`; `beforeSend` sees the built body. */
   async function callFlow(
     remote: boolean,
     flowPath: string,
-    beforeSend?: (body: string) => Promise<void>
-  ): Promise<Omit<FlowRunResult["steps"][number], "durationMs">[]> {
+    beforeSend?: (body: string) => Promise<void>,
+    extra: { updateBaselines?: boolean } = {}
+  ): Promise<{ steps: Omit<FlowRunResult["steps"][number], "durationMs">[]; writes?: unknown }> {
     const { createToolsClient } = (await import(clientSrc)) as {
       createToolsClient(options: object): {
         callTool(name: string, args: unknown): Promise<{ data: unknown }>;
@@ -765,8 +774,10 @@ describe("flow-execute over a link, from the real argent client", () => {
       flow_path: flowPath,
       project_root: projectRoot,
       device: DEVICE,
+      ...extra,
     });
-    return (data as FlowRunResult).steps.map(({ durationMs: _, ...step }) => step);
+    const { steps, baselineWrites } = data as FlowRunResult;
+    return { steps: steps.map(({ durationMs: _, ...step }) => step), writes: baselineWrites };
   }
 
   it("runs the run: closure the client sent as the co-located run does, with the project gone from this host", async () => {
@@ -780,10 +791,12 @@ describe("flow-execute over a link, from the real argent client", () => {
     await write("shared/branch.yaml", "steps:\n  - run: common.yaml\n");
     await write("shared/common.yaml", "steps:\n  - echo: common\n");
 
-    const colocated = await callFlow(false, root);
+    const { steps: colocated } = await callFlow(false, root);
     // Once the client has read the project it leaves this host, so every
     // fragment the linked run reads came with the call.
-    const linked = await callFlow(true, root, () => fs.rename(projectRoot, `${projectRoot}-moved`));
+    const { steps: linked } = await callFlow(true, root, () =>
+      fs.rename(projectRoot, `${projectRoot}-moved`)
+    );
 
     expect(linked).toEqual(colocated);
     expect(colocated.map((s) => `${s.status} ${s.flow}`)).toEqual([
@@ -819,6 +832,55 @@ describe("flow-execute over a link, from the real argent client", () => {
     ]);
   });
 
+  it("updates baselines on the client from their names, then compares against its snapshots' baselines only", async () => {
+    const capture = new PNG({ width: 30, height: 60 });
+    capture.data.fill(200);
+    await fs.writeFile(path.join(tmpDir, "capture.png"), PNG.sync.write(capture));
+    const root = await write(
+      ".argent/flows/root.yaml",
+      "steps:\n  - snapshot: title\n  - snapshot: fresh\n  - snapshot: fresh\n"
+    );
+    const dir = path.join(await fs.realpath(path.dirname(root)), "__baselines__", "root");
+    const [title, fresh] = ["title", "fresh"].map((n) => path.join(dir, `${n}__ios-30x60.png`));
+    // Not PNGs: a compare that read either would fail.
+    await write(".argent/flows/__baselines__/root/title__ios-30x60.png", "stale");
+    await write(".argent/flows/__baselines__/root/other__ios-30x60.png", "another snapshot");
+    let members: { key: string; state?: string; content?: string }[] = [];
+    const keep = async (body: string) => {
+      members = JSON.parse(body).flow_path.members;
+    };
+
+    const update = await callFlow(true, root, keep, { updateBaselines: true });
+
+    expect(members.map((m) => [path.basename(m.key), m.state, m.content])).toEqual([
+      ["other__ios-30x60.png", "listed", undefined],
+      ["title__ios-30x60.png", "listed", undefined],
+    ]);
+    expect(update.steps.map((s) => s.reason)).toEqual([
+      `baseline captured; the client updates it when the run ends (${title})`,
+      `baseline captured; the client writes it when the run ends (${fresh})`,
+      // The capture this call already took is the file the second one replaces.
+      `baseline captured; the client updates it when the run ends (${fresh})`,
+    ]);
+    expect(update.writes).toEqual([title, fresh]);
+
+    // The project leaves this host, so the compare reads the baselines the call carried.
+    const compare = await callFlow(true, root, async (body) => {
+      await keep(body);
+      await fs.rename(projectRoot, `${projectRoot}-moved`);
+    });
+
+    expect(members.map((m) => [path.basename(m.key), typeof m.content])).toEqual([
+      ["fresh__ios-30x60.png", "string"],
+      ["title__ios-30x60.png", "string"],
+    ]);
+    expect(compare.steps.map((s) => s.reason)).toEqual([
+      "diff 0.00% ≤ 0.5% (title__ios-30x60.png)",
+      "diff 0.00% ≤ 0.5% (fresh__ios-30x60.png)",
+      "diff 0.00% ≤ 0.5% (fresh__ios-30x60.png)",
+    ]);
+  });
+
   it("finds nothing past a missing directory and its .., as the co-located run, and sends nothing", async () => {
     // The kernel stops at the missing `x`, so no `..` after it leads back. A
     // lexical collapse would land on a .yaml link to a .env, on a file behind
@@ -842,10 +904,10 @@ describe("flow-execute over a link, from the real argent client", () => {
       );
       let members: { state?: string; content?: string }[] = [];
 
-      const linked = await callFlow(true, root, async (body) => {
+      const { steps: linked } = await callFlow(true, root, async (body) => {
         members = JSON.parse(body).flow_path.members;
       });
-      const colocated = await callFlow(false, root);
+      const { steps: colocated } = await callFlow(false, root);
 
       expect(linked).toEqual(colocated);
       expect(colocated[1]!.reason).toBe(
@@ -991,8 +1053,8 @@ describe("flow-execute over a link, from the real argent client", () => {
     const root = path.join(projectRoot, ".argent/flows/n0.yaml");
     let members: { key: string; state?: string }[] = [];
 
-    const colocated = await callFlow(false, root);
-    const linked = await callFlow(true, root, async (body) => {
+    const { steps: colocated } = await callFlow(false, root);
+    const { steps: linked } = await callFlow(true, root, async (body) => {
       members = JSON.parse(body).flow_path.members;
     });
 

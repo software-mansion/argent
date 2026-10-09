@@ -2,11 +2,11 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  baselineKeyFor,
   canonicalFlowPath,
   classifyOnDiskSpelling,
   FAILURE_CODES,
   FailureError,
-  FLOW_NAME_PATTERN,
   getFailureSignal,
   interpolateFileInputPath,
   flowMemberKey,
@@ -15,6 +15,7 @@ import {
   wrapFailure,
 } from "@argent/registry";
 import type {
+  ClientFileDirective,
   DeviceInfo,
   FailureSignal,
   FileInputSpec,
@@ -119,7 +120,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file and its run: fragments, and the tool-server runs those copies. Keep run: fragments under project_root or beside the flow file. Over a link, the flow and its fragments must not have script: or snapshot: steps, or tool: steps that take a file or record a flow. Without a link, the tool-server reads the files in place and all step kinds run."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, its run: fragments and the snapshot baselines that the run compares, and the tool-server runs those copies. Keep run: fragments under project_root or beside the flow file. With updateBaselines, the client writes the new baselines when the run ends. Over a link, the flow and its fragments must not have script: steps, or tool: steps that take a file or record a flow. Without a link, the tool-server reads the files in place and all step kinds run."
       ),
     device: z
       .string()
@@ -291,6 +292,12 @@ export interface FlowRunResult {
   steps: StepReport[];
   startedAt: number;
   durationMs: number;
+  /**
+   * The snapshot baselines a run over a link wrote, as base64 client-file
+   * directives: the client writes each into the run's baseline directory and
+   * puts its path, or `{ path, error }`, in its place.
+   */
+  baselineWrites?: ClientFileDirective[];
 }
 
 export interface FlowPrerequisiteNotice {
@@ -959,8 +966,9 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   deviceIsExplicit: boolean;
   /**
    * The ROOT flow file's canonical (realpath'd) directory — the anchor for
-   * snapshot baselines and a chromium launch's relative app path, so a
-   * symlinked root flow anchors beside its real file. `run:` targets instead
+   * snapshot baselines on this host ({@link clientFlowPath} anchors them on
+   * the client) and a chromium launch's relative app path, so a symlinked root
+   * flow anchors beside its real file. `run:` targets instead
    * anchor to the containing flow file's own directory ({@link scopeFlowDir}).
    */
   flowsDir: string;
@@ -969,12 +977,21 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * dir — a launch step's relative chromium app path can't be anchored there.
    */
   viaUpload: boolean;
-  /** Where this run's `run:` targets resolve and read: this host, or the files the client sent. */
+  /**
+   * Where this run's `run:` targets resolve and its snapshot baselines are read
+   * and written: this host, or the files the client sent.
+   */
   project: ProjectAccess;
   /**
+   * The real CLIENT path of the root flow, set only when {@link project} is the
+   * client: snapshot baselines anchor and key beside it there, as they do
+   * beside {@link flowsDir} on this host.
+   */
+  clientFlowPath?: string;
+  /**
    * The `__baselines__/<segment>` this run's snapshots key their store under —
-   * the ROOT flow's CANONICAL stem, so the key agrees with {@link flowsDir}
-   * (see {@link baselineKeyFor}). Deliberately NOT the run's caller-visible
+   * the ROOT flow's CANONICAL stem, so the key agrees with {@link flowsDir}, or
+   * with {@link clientFlowPath} in client mode (see {@link baselineKeyFor}). Deliberately NOT the run's caller-visible
    * identity: the report's `flow`, the runStack seed's display name, and the
    * CLI's `--output` directory all keep the as-written name.
    */
@@ -1295,8 +1312,10 @@ function toolStepFilePaths(registry: Registry, tool: string, args: Record<string
  * depth limit fails with the depth error first, as it does on the host. A
  * fragment the client does not have is not listed: it fails at its own `run:`
  * step, which may never run. A fragment that does not parse fails at its step
- * too. Without a closure (an older client), every `run:` step is refused, and
- * the error says that an updated client gets it run.
+ * too. A `snapshot` step is self-contained with a closure too: the client sent
+ * the run's baselines with it, and gets the new ones back in the result.
+ * Without a closure (an older client), every `run:` and `snapshot` step is
+ * refused, and the error says that an updated client gets it run.
  *
  * Every offending step is listed, in walk order, so the author sees the whole
  * repair at once rather than one step per run. The stage is the first
@@ -1326,7 +1345,7 @@ function assertUploadSelfContained(
         const member = closure.project.member(anchorDir, step.flow);
         if (member?.state === "refused") {
           offending.push({ kind: "run", line: `${where}: run: ${step.flow} (${member.error})` });
-        } else if (member?.state === "present") {
+        } else if (member?.state === "present" && member.canonical !== undefined) {
           let fragment: FlowFile;
           try {
             fragment = parseFlow(member.text ?? "");
@@ -1343,6 +1362,7 @@ function assertUploadSelfContained(
       } else if (step.kind === "script") {
         offending.push({ kind: "script", line: `${where}: script: { path: ${step.path} }` });
       } else if (step.kind === "snapshot") {
+        if (closure) continue;
         offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
       } else if (step.kind === "tool" && step.name === "flow-execute") {
         offending.push({
@@ -1366,9 +1386,17 @@ function assertUploadSelfContained(
     }
   }
   if (offending.length === 0) return;
+  const servable = [
+    ...(!closure && offending.some((o) => o.kind === "run")
+      ? ["run: steps for a client that sends their fragments with the call"]
+      : []),
+    ...(!closure && offending.some((o) => o.kind === "snapshot")
+      ? ["snapshot: steps for a client that sends their baselines with the call"]
+      : []),
+  ];
   const updateHint =
-    !closure && offending.some((o) => o.kind === "run")
-      ? ` This tool-server runs run: steps for a client that sends their fragments with the call. Update the argent CLI or MCP adapter on the client.`
+    servable.length > 0
+      ? ` This tool-server runs ${servable.join(", and ")}. Update the argent CLI or MCP adapter on the client.`
       : "";
   throw new FailureError(
     `This flow is not self-contained, and it arrived as an upload. The steps below read ` +
@@ -1583,7 +1611,15 @@ Returns a per-step report: the first failure stops the run and the rest report a
         flowsDir,
         viaUpload,
         project,
-        baselineKey: baselineKeyFor(canonicalPath, flowName),
+        // In client mode the baselines live beside the root flow's real file
+        // on the client, so they anchor and key on that path: the stem of the
+        // temp copy is the sanitized basename of the client's spelling, which
+        // a symlinked root flow does not share with its real file.
+        ...(project.mode === "client" ? { clientFlowPath: rootEntry.canonical } : {}),
+        baselineKey: baselineKeyFor(
+          project.mode === "client" ? rootEntry.canonical : canonicalPath,
+          flowName
+        ),
         updateBaselines: Boolean(params.updateBaselines),
         reports: [],
         stopped: false,
@@ -1623,7 +1659,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // The starting device: a run that switched says so on the launch step.
       // Empty when the flow needed no device — the run is not attributed to one
       // it never touched.
-      return summarize(
+      const result = summarize(
         flowName,
         device?.id ?? "",
         flow.executionPrerequisite,
@@ -1631,6 +1667,10 @@ Returns a per-step report: the first failure stops the run and the rest report a
         aborted,
         { startedAt: runStartedAt, durationMs: Date.now() - runStartedAt }
       );
+      // The baselines this run wrote go back with the result: the client
+      // writes them into the run's baseline directory.
+      const baselineWrites = clientProject?.baselineDirectives() ?? [];
+      return baselineWrites.length > 0 ? { ...result, baselineWrites } : result;
     },
   };
 }
@@ -1765,10 +1805,12 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
 /**
  * Where the root flow REALLY lives on the client — what a co-located run gets
  * from `canonicalFlowPath` before it anchors anything. The client's spelling
- * may be a symlink, and a `run:` target resolves beside the real file, so the
- * client sends the root's real path and its spelling with the root itself.
- * Read only when the flow composes at all: a flow with no `run:` step never
- * reads the anchor.
+ * may be a symlink, and a `run:` target and the snapshot baselines resolve
+ * beside the real file, so the client sends the root's real path and its
+ * spelling with the root itself. Read only when the flow reads the anchor at
+ * all, through a `run:` or a `snapshot` step. A snapshot in a fragment needs
+ * no case of its own, since a fragment exists only behind a `run:` step and
+ * keys to the root.
  *
  * The spelling says how the client's listing spells the root's basename. A
  * case-folded match is refused with the error a co-located run gives for the
@@ -1781,8 +1823,10 @@ function clientRootCanonical(
   name: string | undefined,
   flow: FlowFile
 ): string {
-  const composes = [...walkSteps(flow.steps)].some(({ step }) => step.kind === "run");
-  if (!composes) return root.clientPath;
+  const anchors = [...walkSteps(flow.steps)].some(
+    ({ step }) => step.kind === "run" || step.kind === "snapshot"
+  );
+  if (!anchors) return root.clientPath;
   if (root.spelling?.state === "case_folded") {
     throw name === undefined
       ? flowPathCasingError(root.clientPath, root.spelling)
@@ -1803,7 +1847,7 @@ function clientRootCanonical(
 async function leadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[],
-  env: Pick<ExecState, "registry" | "ctx" | "project">
+  env: Pick<ExecState, "registry" | "project">
 ): Promise<{ app: Launch; flow: string } | null> {
   const found = await scanLeadingLaunch(flow, stack, env);
   return found === NO_EXECUTABLE_STEP ? null : found;
@@ -2379,38 +2423,6 @@ async function execWhenStep(
   await execSteps(state, step.steps, inner);
 }
 
-/**
- * The `__baselines__/<segment>` a run's snapshots key their baseline store
- * under. The store is `<flowsDir>/__baselines__/<key>` and `flowsDir` is the
- * CANONICAL root flow's directory, so the key must name the canonical file too.
- * With the as-written stem it does not, and the disagreement merges distinct
- * flows: two projects whose `.argent/flows/smoke.yaml` are symlinks into one
- * shared vault (`vault/a-smoke.yaml`, `vault/b-smoke.yaml`) both anchor at
- * `vault/` and both key "smoke", so a single `vault/__baselines__/smoke/` holds
- * one PNG the two flows silently overwrite in turn while each
- * `--update-baselines` run reports "baseline updated". For a root flow that is a
- * regular file the canonical stem IS the as-written one, so only symlinked roots
- * move.
- *
- * The canonical stem is the symlink TARGET's filename, which nothing validates:
- * `assertSafeFlowName` and `classifyOnDiskSpelling` only run against the
- * as-written spelling, so a vault file may legitimately be called `...yaml` —
- * whose stem after `.yaml` is `..`, and
- * `path.join(flowsDir, "__baselines__", "..")` IS `flowsDir`, so every baseline
- * would land beside the flow files themselves (the escape
- * `flow-path-baseline-escape.test.ts` pins for the as-written spelling). Hence
- * the pattern check, against the same charset every other flow name is held to.
- * An unsafe stem falls back to the always-validated `flowName` rather than
- * throwing: an unusually named vault file is not the caller's error to fix
- * mid-run.
- */
-function baselineKeyFor(canonicalPath: string, flowName: string): string {
-  // path.basename leaves a bare ".yaml" intact (stripping it would leave
-  // nothing) — the pattern rejects that spelling too, so it falls back as well.
-  const stem = path.basename(canonicalPath, ".yaml");
-  return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
-}
-
 async function execRunStep(
   state: ExecState,
   step: Extract<FlowStep, { kind: "run" }>,
@@ -2532,7 +2544,8 @@ async function execRunStep(
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
   // becomes the anchor for `run:` paths inside it; baselines stay anchored to
-  // the root flow (state.flowsDir / state.baselineKey).
+  // the root flow (state.flowsDir, or state.clientFlowPath, and
+  // state.baselineKey).
   pushReport(state, {
     index,
     kind: "run",
@@ -2741,6 +2754,8 @@ async function execLeafStep(
         const r = await runSnapshot(deviceEnv(state), {
           flowsDir: state.flowsDir,
           flowName: state.baselineKey,
+          project: state.project,
+          ...(state.clientFlowPath !== undefined ? { clientFlowPath: state.clientFlowPath } : {}),
           name: step.name,
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
@@ -3153,8 +3168,9 @@ export async function resolveFlowSource(
     // client's spelling still names the flow (report, __baselines__/,
     // --output), so it is held to the same shape rules as a host path. What
     // the upload cannot supply is the directory beside the file: execute()
-    // refuses a flow whose steps read it (assertUploadSelfContained), and the
-    // temp dir is the flowsDir the run gets.
+    // reads it through the client when the client serves it, and otherwise
+    // refuses a flow whose steps read it (assertUploadSelfContained). The temp
+    // dir is the flowsDir the run gets.
     if (flowPathInput?.viaUpload) {
       const clientPath = flowPathInput.clientPath;
       assertFlowPathShape(clientPath);

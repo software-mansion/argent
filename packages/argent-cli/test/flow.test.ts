@@ -1276,6 +1276,19 @@ describe("argent flow run", () => {
     expect(out).toContain("FAIL — 1 passed, 1 failed, 0 errored, 1 skipped");
   });
 
+  it("exits 1 on a passing run over a link whose baselines were not all written, naming each", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+      }),
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+    expect(logs.join("\n")).toContain(
+      "✗ baseline not written: /p/b.png: EACCES: permission denied"
+    );
+  });
+
   it("renders legacy warnings with the ⚠ glyph and counts them in the summary", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({

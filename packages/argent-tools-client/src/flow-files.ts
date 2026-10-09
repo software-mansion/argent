@@ -2,12 +2,12 @@
  * The flow half of the INPUT-side file boundary: the files a `collect: "flow"`
  * file input sends with the flow over a link (see `file-inputs.ts` for the
  * generic wire, upload and directive code). {@link collectFlowMembers} walks
- * the flow's `run:` closure on THIS machine and returns it as the wire's
- * `members`, each one inline, uploaded, or with the state that tells the
- * tool-server why it was not sent.
+ * the flow's `run:` closure and its run's snapshot baselines on THIS machine
+ * and returns them as the wire's `members`, each one inline, uploaded, listed
+ * by name, or with the state that tells the tool-server why it was not sent.
  */
 
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import { parse as parseYaml } from "yaml";
@@ -16,6 +16,7 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   MAX_RUN_DEPTH,
+  baselineKeyFor,
   canonicalFlowPath,
   classifyOnDiskSpelling,
   collectFlowRequests,
@@ -205,41 +206,159 @@ async function readFlowMember(
   if (!/\.ya?ml$/i.test(path.basename(canonical))) {
     return refuse(`${target} links to a file that is not a YAML file`);
   }
-  const read = await readFileInputWire(canonical, { includeContent: true });
+  const sent = await sendBytes(member, canonical, budget, opts);
+  return { ...sent, text: sent.bytes?.toString("utf8") };
+}
+
+/** The platform whose baselines a compare run reads, when the call names it. */
+function callPlatform(args: Record<string, unknown>): string | undefined {
+  if (typeof args.device === "string" && args.device.startsWith("chromium-cdp-")) return "chromium";
+  if (typeof args.platform !== "string") return undefined;
+  // The baseline key folds a remote simulator into `ios` (authoringPlatform).
+  return args.platform === "ios-remote" ? "ios" : args.platform;
+}
+
+/**
+ * What a baseline at `file` (an entry of a baseline directory) is to this
+ * client: `ok` (`real` is its real path), `missing` (a link to nothing), or
+ * `refused` with the reason. Outside the roots, a `.png` name that links to
+ * another kind of file, and, for a read, a directory are refused; for a
+ * write, a link to nothing and anything but a regular file are refused too.
+ */
+async function baselineEntry(
+  file: string,
+  roots: string[],
+  forWrite: boolean
+): Promise<
+  { state: "ok"; real: string } | { state: "missing" } | { state: "refused"; error: string }
+> {
+  const { canonical, error } = await landing(file);
+  if (!roots.some((root) => isWithin(canonical, root))) {
+    return {
+      state: "refused",
+      error: `${file} is outside every root this client serves (${roots.join(", ")})`,
+    };
+  }
+  if (error !== undefined) return { state: "refused", error };
+  const st = await stat(canonical).catch((err: NodeJS.ErrnoException) => err);
+  if (st instanceof Error) {
+    if (st.code !== "ENOENT") return { state: "refused", error: st.message };
+    return forWrite
+      ? { state: "refused", error: `${file} is a symbolic link to a missing file` }
+      : { state: "missing" };
+  }
+  if (!canonical.endsWith(".png")) {
+    return { state: "refused", error: `${file} links to a file that is not a PNG file` };
+  }
+  if (forWrite && !st.isFile()) return { state: "refused", error: `${file} is not a regular file` };
+  if (st.isDirectory()) {
+    return { state: "refused", error: "EISDIR: illegal operation on a directory, read" };
+  }
+  return st.isFile() ? { state: "ok", real: canonical } : { state: "missing" };
+}
+
+/**
+ * A member's bytes, read from `real`: inline while the call's inline budget
+ * lasts, else through `POST /upload`. A file over the 32 MiB cap, or one that
+ * cannot be read, is a `refused` member with the reason.
+ */
+async function sendBytes(
+  member: FileInputMember,
+  real: string,
+  budget: { inline: number },
+  opts: PrepareFileInputsOptions
+): Promise<{ member: FileInputMember; sent: string; bytes?: Buffer }> {
+  const read = await readFileInputWire(real, { includeContent: true });
   if (read?.contentOmitted) {
-    return refuse(`${canonical} is larger than the 32 MiB cap on a file sent to the tool-server`);
+    const error = `${real} is larger than the 32 MiB cap on a file sent to the tool-server`;
+    return { member: { ...member, state: "refused", error }, sent: `refused (${error})` };
   }
   if (read?.content === undefined) {
     // The wire read keeps no error; read once more for the one a host read
     // would report (EACCES and the like).
-    return refuse(
-      await readFile(canonical).then(
-        () => `${canonical} could not be read on this client`,
-        (err: unknown) => (err instanceof Error ? err.message : String(err))
-      )
+    const error = await readFile(real).then(
+      () => `${real} could not be read on this client`,
+      (err: unknown) => (err instanceof Error ? err.message : String(err))
     );
+    return { member: { ...member, state: "refused", error }, sent: `refused (${error})` };
   }
-  const text = Buffer.from(read.content, "base64").toString("utf8");
+  const bytes = Buffer.from(read.content, "base64");
   const size = read.size ?? 0;
   if (budget.inline + size <= INLINE_MEMBERS_BYTES || !opts.uploadEndpoint) {
     budget.inline += size;
-    return { member: { ...member, ...read }, text, sent: `inline ${size}` };
+    return { member: { ...member, ...read }, sent: `inline ${size}`, bytes };
   }
-  const uploaded = await uploadFile(canonical, opts.uploadEndpoint, opts.signal);
+  const uploaded = await uploadFile(real, opts.uploadEndpoint, opts.signal);
   return {
     member: { ...member, size: read.size, mtimeMs: read.mtimeMs, ...uploaded },
-    text,
     sent: `upload ${size}`,
+    bytes,
   };
 }
 
 /**
- * The `run:` closure of the flow at `rootPath`, sent with its wire: every
- * file a `run:` step of the flow or of a file it reaches names, in breadth
- * order, each resolution once, as deep as the runner resolves
- * ({@link MAX_RUN_DEPTH}). Every branch of a `when:` counts, since which one
- * runs is decided on the device. The targets come from the registry's
- * {@link collectFlowRequests}; the tool-server's
+ * The snapshot baselines of the run of the root flow at `canonical`, from
+ * `<its dir>/__baselines__/<key>/`, where the runner keys them
+ * ({@link baselineKeyFor}). A run that updates baselines never reads one, so
+ * each `.png` there goes by name only (`listed`), for the runner to say
+ * whether a write replaced one; its directory is the only place a baseline
+ * in the result may be written. A run that compares gets the bytes of the
+ * baselines of its own snapshots only (`<snapshot>__*.png`, crops included),
+ * of one platform when the call names it ({@link callPlatform}). A directory
+ * outside the roots sends nothing and takes no write.
+ */
+async function collectBaselineMembers(
+  canonical: string,
+  flowName: string,
+  snapshots: string[],
+  args: Record<string, unknown>,
+  roots: string[],
+  budget: { inline: number },
+  opts: PrepareFileInputsOptions,
+  emit: (member: FileInputMember, sent: string) => void
+): Promise<void> {
+  const dir = path.join(
+    path.dirname(canonical),
+    "__baselines__",
+    baselineKeyFor(canonical, flowName)
+  );
+  const real = (await landing(dir)).canonical;
+  if (!roots.some((root) => isWithin(real, root))) return;
+  const updates = args.updateBaselines === true;
+  if (updates) opts.baselineDirs?.push(dir);
+  const platform = callPlatform(args);
+  const prefixes = snapshots.map(
+    (name) => `${name}__${platform === undefined ? "" : `${platform}-`}`
+  );
+  const names = await readdir(dir).catch(() => [] as string[]);
+  for (const name of names.sort()) {
+    if (!name.endsWith(".png")) continue;
+    if (!updates && !prefixes.some((prefix) => name.startsWith(prefix))) continue;
+    const file = path.join(dir, name);
+    const member: FileInputMember = { role: "baseline", key: file, path: file };
+    const entry = await baselineEntry(file, roots, updates);
+    if (entry.state === "refused") {
+      emit({ ...member, state: "refused", error: entry.error }, `refused (${entry.error})`);
+    } else if (entry.state === "missing") {
+      emit({ ...member, state: "missing" }, "missing");
+    } else if (updates) {
+      emit({ ...member, state: "listed" }, "listed");
+    } else {
+      const sent = await sendBytes(member, entry.real, budget, opts);
+      emit(sent.member, sent.sent);
+    }
+  }
+}
+
+/**
+ * The project files the flow at `rootPath` makes the runner read, sent with
+ * its wire. Its `run:` closure: every file a `run:` step of the flow or of a
+ * file it reaches names, in breadth order, each resolution once, as deep as
+ * the runner resolves ({@link MAX_RUN_DEPTH}). Every branch of a `when:`
+ * counts, since which one runs is decided on the device. Then the snapshot
+ * baselines of its run ({@link collectBaselineMembers}), for the snapshots of
+ * the flow and of its closure. The targets and snapshot names come from the
+ * registry's {@link collectFlowRequests}; the tool-server's
  * test/flows/flow-collect-parity.test.ts holds this walk to the runner's parse.
  * `canonical` and `spelling` describe the root flow itself. Nothing is
  * collected for arguments the tool-server refuses ({@link namesValidFlow}).
@@ -260,9 +379,15 @@ export async function collectFlowMembers(
   const roots = await closureRoots(rootPath, canonical, args.project_root);
   const members: FileInputMember[] = [];
   const seen = new Set<string>();
+  const snapshots = new Set<string>();
   const budget = { inline: 0 };
   const logging = process.env[FLOW_FILES_LOG_ENV] === "1";
   const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
+  const emit = (member: FileInputMember, sent: string): void => {
+    members.push(member);
+    const subject = member.role === "flow" ? member.canonical : member.key;
+    if (logging) log(printable(`[flow-files] ${member.role} ${subject}: ${sent}`));
+  };
   const queue = [{ canonical, text: rootBytes.toString("utf8"), hop: 0 }];
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
     let doc: unknown;
@@ -272,18 +397,32 @@ export async function collectFlowMembers(
     } catch {
       continue;
     }
+    const requests = collectFlowRequests(doc);
+    for (const name of requests.snapshots) snapshots.add(name);
     const anchorDir = path.dirname(file.canonical);
-    for (const target of collectFlowRequests(doc).runTargets) {
+    for (const target of requests.runTargets) {
       const key = flowMemberKey(anchorDir, target);
       if (seen.has(key)) continue;
       seen.add(key);
       const { member, text, sent } = await readFlowMember(anchorDir, target, roots, budget, opts);
-      members.push(member);
-      if (logging) log(printable(`[flow-files] flow ${member.canonical}: ${sent}`));
+      emit(member, sent);
       if (text !== undefined && file.hop + 1 < MAX_RUN_DEPTH) {
         queue.push({ canonical: member.canonical!, text, hop: file.hop + 1 });
       }
     }
+  }
+  if (snapshots.size > 0) {
+    const flowName = path.basename(rootPath, ".yaml");
+    await collectBaselineMembers(
+      canonical,
+      flowName,
+      [...snapshots],
+      args,
+      roots,
+      budget,
+      opts,
+      emit
+    );
   }
   return { canonical, spelling, members };
 }

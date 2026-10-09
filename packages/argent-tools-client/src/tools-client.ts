@@ -80,7 +80,8 @@ export interface CreateToolsClientOptions {
   ) => Promise<Response>;
   /**
    * Receives each diagnostic line of the client, without a trailing newline:
-   * today the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on.
+   * the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on, and each
+   * snapshot baseline a run returned that could not be written here.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
    */
@@ -148,7 +149,25 @@ async function consumeToolStream(
   };
 
   const decoder = new TextDecoder();
-  let buffered = "";
+  // The pieces of the line that has not ended yet, joined once its newline
+  // arrives. The result line can carry baselines as base64, tens of MB:
+  // adding each chunk to one string and searching that string again would
+  // copy and scan the whole line once per chunk.
+  let pieces: string[] = [];
+  const take = (text: string): void => {
+    let start = 0;
+    let newline: number;
+    while ((newline = text.indexOf("\n", start)) !== -1) {
+      // fetch errors the body on abort, but not a chunk it already handed over.
+      signal?.throwIfAborted();
+      pieces.push(text.slice(start, newline));
+      const line = pieces.join("");
+      pieces = [];
+      start = newline + 1;
+      handleLine(line);
+    }
+    if (start < text.length) pieces.push(text.slice(start));
+  };
   try {
     for (;;) {
       let chunk: ReadableStreamReadResult<Uint8Array>;
@@ -161,18 +180,11 @@ async function consumeToolStream(
       }
       const { done, value } = chunk;
       if (done) break;
-      buffered += decoder.decode(value, { stream: true });
-      let newline: number;
-      while ((newline = buffered.indexOf("\n")) !== -1) {
-        // fetch errors the body on abort, but not a chunk it already handed over.
-        signal?.throwIfAborted();
-        const line = buffered.slice(0, newline);
-        buffered = buffered.slice(newline + 1);
-        handleLine(line);
-      }
+      take(decoder.decode(value, { stream: true }));
     }
-    buffered += decoder.decode();
-    if (buffered.trim()) handleLine(buffered);
+    take(decoder.decode());
+    const last = pieces.join("");
+    if (last.trim()) handleLine(last);
   } catch (err) {
     // Release the stream before surfacing the error.
     void reader.cancel().catch(() => {});
@@ -184,9 +196,7 @@ async function consumeToolStream(
   if (!final) {
     throw brokenStream(name, "the stream ended without a result", progress);
   }
-  // File boundary, inbound: same directive handling as the buffered path.
-  const { result: data } = await applyClientFileDirectives(final.data);
-  return { data, note: final.note };
+  return { data: final.data, note: final.note };
 }
 
 /**
@@ -340,16 +350,33 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // server can read them in place (local) or from inlined content (routed).
     let finalArgs = args;
     const meta = await fetchTool(name, { signal: opts?.signal });
+    // Where a baseline the result returns may be written (see file-inputs.ts).
+    const baselineDirs: string[] = [];
     if (meta?.fileInputs?.length) {
       if (remote) assertRequiredPresent(meta, args);
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
         includeContent: remote,
         uploadEndpoint: remote ? { url, token } : undefined,
         log: diagnose,
+        baselineDirs,
         collectMembers: collectFlowMembers,
         signal: opts?.signal,
       });
     }
+    // File boundary, inbound: persist client-write directives (recorded flow
+    // YAMLs, a run's new baselines) and rewrite them to the written paths. A
+    // baseline that could not be written is said here, and stays in the
+    // result as `{ path, error }`.
+    const settle = async (data: unknown): Promise<unknown> => {
+      const applied = await applyClientFileDirectives(data, { allowedDirs: baselineDirs });
+      for (const { path: file, error } of applied.failed) {
+        diagnose(`The baseline ${file} was not written on this client: ${error}`);
+      }
+      if (process.env.ARGENT_FLOW_FILES_LOG === "1") {
+        for (const file of applied.written) diagnose(`[flow-files] baseline ${file}: written`);
+      }
+      return applied.result;
+    };
 
     // A call that sends a flow's closure runs that flow over a link, and its
     // progress lines keep the connection busy through a proxy's idle timeout.
@@ -389,7 +416,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         opts?.onProgress ?? (() => {}),
         opts?.signal
       );
-      return { ...streamed, outputHint: meta?.outputHint };
+      return {
+        data: await settle(streamed.data),
+        note: streamed.note,
+        outputHint: meta?.outputHint,
+      };
     }
     let json: {
       data?: unknown;
@@ -426,10 +457,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       });
     }
     opts?.signal?.throwIfAborted();
-    // File boundary, inbound: persist client-write directives (e.g. recorded
-    // flow YAMLs) and rewrite them to the written paths.
-    const { result: data } = await applyClientFileDirectives(json.data);
-    return { data, note: json.note, outputHint: meta?.outputHint };
+    return { data: await settle(json.data), note: json.note, outputHint: meta?.outputHint };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };

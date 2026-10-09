@@ -9,12 +9,24 @@
  *
  * {@link applyClientFileDirectives} is the reverse: a `__argentClientFile`
  * directive (e.g. a recorded flow YAML) is written here, constrained to
- * `.argent/flows/*.yaml` so a misbehaving tool-server cannot write elsewhere.
+ * `.argent/flows/*.yaml` so a misbehaving tool-server cannot write elsewhere,
+ * or, for a base64 snapshot baseline, to the baseline directories the client
+ * itself computed for the call.
  */
 
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, rmSync } from "node:fs";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { constants, tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -46,7 +58,10 @@ export interface FileInputSpec {
    * it (the tool's own validation diagnoses dual-source calls).
    */
   skipWhenSet?: string;
-  /** Over a link, also send the flow's `run:` closure as `members` (see `collectMembers`). */
+  /**
+   * Over a link, also send the flow's `run:` closure and its run's snapshot
+   * baselines as `members` (see `collectMembers`).
+   */
   collect?: "flow";
 }
 
@@ -70,6 +85,8 @@ export interface ClientFileDirective {
   [CLIENT_FILE_MARKER]: true;
   path: string;
   content: string;
+  /** `base64`: a snapshot baseline, written only into a baseline directory of the call. */
+  encoding?: "base64";
 }
 
 /**
@@ -98,6 +115,12 @@ export interface PrepareFileInputsOptions {
    * one for each member a `collect` spec sends. Defaults to stderr.
    */
   log?: (line: string) => void;
+  /**
+   * Filled with the baseline directory of each run a `collect` call updates
+   * baselines for: the only places {@link applyClientFileDirectives} writes a
+   * baseline the result returns (its `allowedDirs`).
+   */
+  baselineDirs?: string[];
   /**
    * Builds the `members` of a `collect` spec over a link (the tools client
    * passes flow-files.ts's collector). Without it the spec sends its file only.
@@ -393,17 +416,23 @@ export async function prepareFileInputs(
 }
 
 export interface AppliedClientFiles {
-  /** The result with every directive replaced by the written path (or null). */
+  /**
+   * The result with every directive replaced by the written path (or null);
+   * a baseline that was not written by `{ path, error }`.
+   */
   result: unknown;
   /** Paths actually written on this machine. */
   written: string[];
+  /** Baselines that were not written, and why. */
+  failed: { path: string; error: string }[];
 }
 
 /**
  * Trust boundary: the directive path is authored by the tool-server. Flow
- * recording is the only producer today, so writes are confined to an absolute
- * path ending `.argent/flows/<name>.yaml`, with no `..` anywhere. Widen
- * deliberately (and equally conservatively) if another tool needs this channel.
+ * recording is the only producer of text directives, so they are confined to
+ * an absolute path ending `.argent/flows/<name>.yaml`, with no `..` anywhere.
+ * Widen deliberately (and equally conservatively) if another tool needs this
+ * channel.
  */
 function isAllowedClientFilePath(p: string): boolean {
   if (!path.isAbsolute(p)) return false;
@@ -425,15 +454,102 @@ function isClientFileDirective(value: unknown): value is ClientFileDirective {
 }
 
 /**
- * Deep-walk a tool result, writing every client-file directive to disk and
- * rewriting it to the written path. A directive that fails validation or the
- * write resolves to null, mirroring how the artifact materializer signals a
- * missing file.
+ * Replace `target` in one step: write a temporary file beside it, give that
+ * file the mode of the one it replaces, and rename it over `target`. A client
+ * killed mid-write leaves the old file whole, and at worst a stray dotfile.
+ * The temporary file is removed when a step fails. Its name does not grow
+ * with the baseline's, so a name near the length limit still gets one.
  */
-export async function applyClientFileDirectives(result: unknown): Promise<AppliedClientFiles> {
+async function replaceFile(target: string, bytes: Buffer, mode: number | undefined): Promise<void> {
+  const temp = path.join(path.dirname(target), `.baseline-${randomUUID()}.tmp`);
+  try {
+    await writeFile(temp, bytes, { flag: "wx" });
+    if (mode !== undefined) await chmod(temp, mode & 0o777);
+    await rename(temp, target);
+  } catch (err) {
+    await rm(temp, { force: true });
+    throw err;
+  }
+}
+
+/**
+ * Write one baseline the result returns, or say why not. Only a `.png` file
+ * directly inside one of `allowedDirs`, the baseline directories the client
+ * computed for the call, in normal form with no `..`. A `.png` name that is a
+ * link must lead to a PNG file in the same real directory; a link to nothing
+ * and anything but a regular file are refused, as a host write would not
+ * replace them. The file is replaced in one rename, over its real path.
+ */
+async function writeBaselineFile(
+  file: string,
+  bytes: Buffer,
+  allowedDirs: readonly string[]
+): Promise<string | null> {
+  if (
+    !path.isAbsolute(file) ||
+    path.normalize(file) !== file ||
+    file.split(/[\\/]/).includes("..") ||
+    !file.endsWith(".png") ||
+    !allowedDirs.includes(path.dirname(file))
+  ) {
+    return allowedDirs.length === 0
+      ? "this call writes no baselines"
+      : `${file} is not a baseline of this call (${allowedDirs.map((d) => `${d}/<name>.png`).join(", ")})`;
+  }
+  if (bytes.length > MAX_CONTENT_BYTES) {
+    return `${file}: the baseline is larger than the 32 MiB cap on a file this client writes`;
+  }
+  const dir = path.dirname(file);
+  await mkdir(dir, { recursive: true });
+  const link = await lstat(file).catch(() => null);
+  const real = link === null ? null : await realpath(file).catch(() => null);
+  if (link !== null && real === null) return `${file} is a symbolic link to a missing file`;
+  if (real !== null) {
+    if (!real.endsWith(".png")) return `${file} links to a file that is not a PNG file`;
+    if (path.dirname(real) !== (await realpath(dir))) {
+      return `${file} links outside its baseline directory`;
+    }
+  }
+  const existing = real === null ? null : await stat(real);
+  if (existing !== null && !existing.isFile()) return `${file} is not a regular file`;
+  await replaceFile(
+    real ?? path.join(await realpath(dir), path.basename(file)),
+    bytes,
+    existing?.mode
+  );
+  return null;
+}
+
+/**
+ * Deep-walk a tool result, writing every client-file directive to disk and
+ * rewriting it to the written path. A text directive that fails validation or
+ * the write resolves to null, mirroring how the artifact materializer signals
+ * a missing file. A base64 directive is a snapshot baseline: written only
+ * into `opts.allowedDirs` ({@link writeBaselineFile}), and one that is not
+ * written becomes `{ path, error }` and an entry of `failed`, so the caller
+ * can report it.
+ */
+export async function applyClientFileDirectives(
+  result: unknown,
+  opts: { allowedDirs?: readonly string[] } = {}
+): Promise<AppliedClientFiles> {
   const written: string[] = [];
+  const failed: { path: string; error: string }[] = [];
 
   async function walk(value: unknown): Promise<unknown> {
+    if (isClientFileDirective(value) && value.encoding === "base64") {
+      const error = await writeBaselineFile(
+        value.path,
+        Buffer.from(value.content, "base64"),
+        opts.allowedDirs ?? []
+      ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
+      if (error !== null) {
+        failed.push({ path: value.path, error });
+        return { path: value.path, error };
+      }
+      written.push(value.path);
+      return value.path;
+    }
     if (isClientFileDirective(value)) {
       if (!isAllowedClientFilePath(value.path)) return null;
       try {
@@ -446,7 +562,10 @@ export async function applyClientFileDirectives(result: unknown): Promise<Applie
       }
     }
     if (Array.isArray(value)) {
-      return Promise.all(value.map(walk));
+      // One at a time, so the writes and their reports keep the result's order.
+      const out: unknown[] = [];
+      for (const item of value) out.push(await walk(item));
+      return out;
     }
     if (value && typeof value === "object") {
       const out: Record<string, unknown> = {};
@@ -459,5 +578,5 @@ export async function applyClientFileDirectives(result: unknown): Promise<Applie
   }
 
   const rewritten = await walk(result);
-  return { result: rewritten, written };
+  return { result: rewritten, written, failed };
 }

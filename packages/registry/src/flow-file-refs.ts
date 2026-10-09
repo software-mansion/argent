@@ -8,7 +8,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { FLOW_FILE_NAME_PATTERN } from "./file-inputs";
+import { FLOW_FILE_NAME_PATTERN, FLOW_NAME_PATTERN } from "./file-inputs";
 
 /**
  * The input must arrive with any `..` segments intact (no path.resolve/join
@@ -84,16 +84,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The project files a parsed flow document makes the runner read: today the
- * `run:` targets of its steps and of the steps of its block directives
- * (`when:`), taken or not, spelled as the runner keeps them (extension
- * completed). A value the runner's parse refuses names nothing. Pure: it walks
- * a document the caller parsed, with no YAML or file-system dependency. The
+ * The project files a parsed flow document makes the runner read: the `run:`
+ * targets of its steps and of the steps of its block directives (`when:`),
+ * taken or not, spelled as the runner keeps them (extension completed), and
+ * the names of its `snapshot` steps, whose baselines the run reads or writes.
+ * A value the runner's parse refuses names nothing. Pure: it walks a document
+ * the caller parsed, with no YAML or file-system dependency. The
  * tool-server's test/flows/flow-collect-parity.test.ts holds the client's walk
  * over it to the runner's parse.
  */
-export function collectFlowRequests(doc: unknown): { runTargets: string[] } {
+export function collectFlowRequests(doc: unknown): { runTargets: string[]; snapshots: string[] } {
   const runTargets = new Set<string>();
+  const snapshots = new Set<string>();
   const seen = new Set<unknown>();
   const visit = (steps: unknown, depth: number): void => {
     if (!Array.isArray(steps) || depth > MAX_BLOCK_NESTING || seen.has(steps)) return;
@@ -110,11 +112,43 @@ export function collectFlowRequests(doc: unknown): { runTargets: string[] } {
         const target = completeRunExtension(run);
         if (FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) runTargets.add(target);
       }
+      const snapshot = isRecord(step.snapshot) ? step.snapshot.name : step.snapshot;
+      if (typeof snapshot === "string" && FLOW_NAME_PATTERN.test(snapshot)) snapshots.add(snapshot);
       visit(step.steps, depth + 1);
     }
   };
   if (isRecord(doc)) visit(doc.steps, 0);
-  return { runTargets: [...runTargets] };
+  return { runTargets: [...runTargets], snapshots: [...snapshots] };
+}
+
+/**
+ * The `__baselines__/<segment>` a run's snapshots key their baseline store
+ * under. The store is `<dir>/__baselines__/<key>` beside the CANONICAL root
+ * flow, so the key must name the canonical file too. With the as-written stem
+ * it does not, and the disagreement merges distinct flows: two projects whose
+ * `.argent/flows/smoke.yaml` are symlinks into one shared vault
+ * (`vault/a-smoke.yaml`, `vault/b-smoke.yaml`) both anchor at `vault/` and
+ * both key "smoke", so a single `vault/__baselines__/smoke/` holds one PNG the
+ * two flows silently overwrite in turn while each `--update-baselines` run
+ * reports "baseline updated". For a root flow that is a regular file the
+ * canonical stem IS the as-written one, so only symlinked roots move.
+ *
+ * The canonical stem is the symlink TARGET's filename, which nothing
+ * validates: a vault file may legitimately be called `...yaml`, whose stem
+ * after `.yaml` is `..`, and `<dir>/__baselines__/..` IS the flow directory,
+ * so every baseline would land beside the flow files themselves (the escape
+ * `flow-path-baseline-escape.test.ts` pins for the as-written spelling). Hence
+ * the pattern check, against the same charset every other flow name is held
+ * to. An unsafe stem falls back to the always-validated `flowName` rather than
+ * throwing: an unusually named vault file is not the caller's error to fix
+ * mid-run. Shared by the runner and the argent client, which sends a linked
+ * run's baselines from the same directory.
+ */
+export function baselineKeyFor(canonicalPath: string, flowName: string): string {
+  // path.basename leaves a bare ".yaml" intact (stripping it would leave
+  // nothing) — the pattern rejects that spelling too, so it falls back as well.
+  const stem = path.basename(canonicalPath, ".yaml");
+  return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
 }
 
 /** The key of a `run:` resolution: the directory the target resolves against, and the target as written. */

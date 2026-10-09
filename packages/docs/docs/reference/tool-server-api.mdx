@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: plug
 ---
 
-This page shows how a client sends the files of a flow run to a tool-server over a link. The `argent` CLI and the MCP server are clients. The flow runs on the tool-server. The project files stay on the client. The client sends the flow file and its `run:` fragments in the file input of the call. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
+This page shows how a client sends the files of a flow run to a tool-server over a link. The `argent` CLI and the MCP server are clients. The flow runs on the tool-server. The project files stay on the client. The client sends the flow file, its `run:` fragments and its snapshot baselines in the file input of the call. The tool-server returns each new baseline in the result. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
 
 ## `collect` in `GET /tools`
 
@@ -35,7 +35,7 @@ The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `flo
 }
 ```
 
-`"collect": "flow"` tells the client that the file is a flow. Over a link, the client then also sends each flow file that the `run:` steps of the flow reach. A client that does not know the field sends only the flow file.
+`"collect": "flow"` tells the client that the file is a flow. Over a link, the client then also sends each flow file that the `run:` steps of the flow reach, and the snapshot baselines of the run. A client that does not know the field sends only the flow file.
 
 ## The flow file input
 
@@ -65,11 +65,11 @@ Over a link, the client replaces the file argument with a file-input object. Thi
 }
 ```
 
-| Field       | Value                                                                                                    |
-| ----------- | -------------------------------------------------------------------------------------------------------- |
-| `canonical` | The real path of `path` on the client. The `run:` targets of the flow resolve beside this file           |
-| `spelling`  | How the directory of `path` on the client lists the basename of `path`. See [Spelling](#spelling)        |
-| `members`   | One entry for each `run:` target that the flow and its fragments reach. Empty when no `run:` step exists |
+| Field       | Value                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `canonical` | The real path of `path` on the client. The `run:` targets of the flow resolve beside this file                                                                           |
+| `spelling`  | How the directory of `path` on the client lists the basename of `path`. See [Spelling](#spelling)                                                                        |
+| `members`   | One entry for each `run:` target that the flow and its fragments reach, and one for each baseline that the client sends. Empty when no `run:` or `snapshot:` step exists |
 
 The client sends these fields only when it can read the flow file.
 
@@ -83,20 +83,20 @@ The client collects the members before the call:
 
 The client resolves each pair of directory and target one time. The client stops at 20 levels, the maximum depth of a `run:` chain. A cycle stops when a pair repeats.
 
-| Field         | Value                                                                                                                                          |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role`        | `flow`                                                                                                                                         |
-| `key`         | The real directory of the file that names the target, a NUL character, and the target as written. The tool-server finds the member by this key |
-| `path`        | The real directory of the file that names the target, a path separator, and the target as written                                              |
-| `canonical`   | The real path of the target on the client. For a missing file, the real path of the nearest directory that exists, with the rest of the path   |
-| `spelling`    | How the directory of `path` lists the basename of the target                                                                                   |
-| `content`     | The file as base64, when the file is in the call body                                                                                          |
-| `uploadId`    | The id that `POST /upload` returned, when the client sent the file to `POST /upload`. Set together with `contentHash`                          |
-| `contentHash` | The SHA-256 digest of the uploaded archive                                                                                                     |
-| `size`        | The size of the file in bytes                                                                                                                  |
-| `mtimeMs`     | The modification time of the file in epoch milliseconds                                                                                        |
-| `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. Not set when the member has its bytes              |
-| `error`       | The reason, when `state` is `refused`                                                                                                          |
+| Field         | Value                                                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`        | `flow`. For a baseline, see [Baselines](#baselines)                                                                                                                                           |
+| `key`         | The real directory of the file that names the target, a NUL character, and the target as written. The tool-server finds the member by this key                                                |
+| `path`        | The real directory of the file that names the target, a path separator, and the target as written                                                                                             |
+| `canonical`   | The real path of the target on the client. For a missing file, the real path of the nearest directory that exists, with the rest of the path                                                  |
+| `spelling`    | How the directory of `path` lists the basename of the target                                                                                                                                  |
+| `content`     | The file as base64, when the file is in the call body                                                                                                                                         |
+| `uploadId`    | The id that `POST /upload` returned, when the client sent the file to `POST /upload`. Set together with `contentHash`                                                                         |
+| `contentHash` | The SHA-256 digest of the uploaded archive                                                                                                                                                    |
+| `size`        | The size of the file in bytes                                                                                                                                                                 |
+| `mtimeMs`     | The modification time of the file in epoch milliseconds                                                                                                                                       |
+| `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. `listed` when the client sends only the name of a baseline. Not set when the member has its bytes |
+| `error`       | The reason, when `state` is `refused`                                                                                                                                                         |
 
 The client puts the members in the call body until they are 256 KiB in total. The client sends each other member to `POST /upload` as one gzipped tar, as for an input of kind `tar-upload`. Thus the body limit of a reverse proxy applies to the flow file with up to 256 KiB of members, and to one member at a time. When a proxy refuses an upload with the status 413, the client does not send the call. The error gives the body size that the proxy must accept on `POST /upload`, for example with `client_max_body_size` in nginx.
 
@@ -130,7 +130,20 @@ The client marks a member `refused` in these cases:
 
 The client does the directory check first. Thus a missing file outside these directories is `refused`, not `missing`.
 
-When the environment of the client has `ARGENT_FLOW_FILES_LOG=1`, the client prints one line on stderr for each member before the call: `[flow-files] flow <canonical>: inline <bytes>`, `: upload <bytes>`, `: missing` or `: refused (<reason>)`. The line never holds the content. With `argent flow run --json`, each line is a warning object on stderr.
+When the environment of the client has `ARGENT_FLOW_FILES_LOG=1`, the client prints one line on stderr for each member before the call: `[flow-files] flow <canonical>: inline <bytes>`, `: upload <bytes>`, `: missing` or `: refused (<reason>)`. A baseline line starts with `[flow-files] baseline <key>` and can also end with `: listed`. After the call, the client prints `[flow-files] baseline <path>: written` for each baseline that it wrote. A line never holds the content. With `argent flow run --json`, each line is a warning object on stderr.
+
+### Baselines
+
+When the flow or a fragment that it reaches has a `snapshot:` step, the client also sends the baselines of the run. The baselines are in the directory `<dir>/__baselines__/<key>/`. `<dir>` is the directory of `canonical` of the flow file. `<key>` is the stem of `canonical`, or the stem of `path` when the first is not a valid flow name. The runner looks for the baselines at the same paths.
+
+| Run                     | Members                                                                                                                                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `updateBaselines: true` | One member with `state: "listed"` and no content for each `.png` file in the directory. The client writes the baselines of the result only into this directory                                                                                    |
+| Otherwise               | One member with the bytes for each `<name>__*.png` file in the directory, where `<name>` is a snapshot name of the flow or of a fragment. When `device` starts with `chromium-cdp-`, or the call sets `platform`, only the files of that platform |
+
+A baseline member has `role: "baseline"`, and its `key` and `path` are the absolute client path of the file. Its bytes travel as the bytes of a flow member: inline within the same 256 KiB, else through `POST /upload`. The client marks a baseline `refused` in the cases of the [client policy](#client-policy) table, with PNG in place of YAML. The client marks a link to nothing `missing`, or `refused` in a run with `updateBaselines: true`.
+
+The client sends nothing for a directory outside the directories of the client policy, and writes nothing there.
 
 ## The call
 
@@ -144,24 +157,43 @@ The client sends a call with a `members` field only one time. When the connectio
 
 The tool-server reads the members before it validates the arguments:
 
-- The tool-server keeps the text of each member that has bytes. It applies the 32 MiB limit and the size check of a file input. It also applies the 32 MiB limit to the total size of the members of the call. It reads an upload as for a `tar-upload` input.
+- The tool-server keeps the bytes of each member that has bytes. It applies the 32 MiB limit and the size check of a file input. It also applies the 32 MiB limit to the total size of the flow members of the call. It reads an upload as for a `tar-upload` input.
 - When the bytes of a member fail a check, or the tool-server does not have its upload, the call fails with the status 422. A file input fails in the same way.
 - The tool-server deletes each upload that the call names before the flow starts, also when the call fails. An `uploadId` is valid for one call only.
-- A member becomes `refused` when it has no bytes and no `state`, or when its `canonical` or `spelling` is not valid.
+- A member becomes `refused` when it has no bytes and no `state`. A flow member also becomes `refused` when its `canonical` or `spelling` is not valid.
 - The tool-server ignores a member with an unknown `role`, and a member with a `key` that it already has.
 
 Then the runner uses the members as the files of the client:
 
-1. Before the first step, the runner checks the flow and each member that it can reach, to the maximum depth of a `run:` chain. Each of these stops the run: a `script:` or `snapshot:` step, a `tool:` step that takes a file or records a flow, and a `refused` member. The error lists each such step, for example `step 1 in /work/proj/.argent/flows/inner-script.yaml: script: { path: ../../scripts/hello.mjs }`. The error code is `FLOW_FILE_INVALID`.
-2. When the flow has a `run:` step, the `run:` targets of the flow resolve beside the `canonical` path of the flow file. A `case_folded` spelling of the flow file stops the run, as it does without a link.
+1. Before the first step, the runner checks the flow and each member that it can reach, to the maximum depth of a `run:` chain. Each of these stops the run: a `script:` step, a `tool:` step that takes a file or records a flow, and a `refused` flow member. The error lists each such step, for example `step 1 in /work/proj/.argent/flows/inner-script.yaml: script: { path: ../../scripts/hello.mjs }`. The error code is `FLOW_FILE_INVALID`.
+2. When the flow has a `run:` or `snapshot:` step, the `run:` targets and the baselines of the flow resolve beside the `canonical` path of the flow file. A `case_folded` spelling of the flow file stops the run, as it does without a link.
 3. A `run:` step finds its member by `key`. The step fails when no member has that key. The runner applies the same checks as without a link: a cycle, a chain deeper than 20 levels, and a `case_folded` spelling each fail the step. The runner never opens the `canonical` path. It uses the path only as a key and in messages.
 4. A `missing` member makes its `run:` step report `could not load fragment "<target>": ENOENT: no such file or directory, open '<canonical>'`. A `run:` step in a `when:` block that does not run needs no file.
+5. A `snapshot:` step that compares reads its baseline from the members. When no member has the path of the baseline, the step fails as for a missing baseline. A `refused` baseline makes the step report `error` with the reason of the client.
+6. A `snapshot:` step with `updateBaselines` keeps the new baseline for the result. The step reports `baseline captured; the client writes it when the run ends (<path>)`. `<path>` is the client path of the baseline. When a member or an earlier step of the call has the same path, `writes` becomes `updates`. A `refused` baseline makes the step report `error` with the reason of the client.
+
+## Baselines in the result
+
+The result of a run over a link that wrote baselines has a `baselineWrites` list. The list holds one client-file directive for each baseline path, with the last bytes for that path:
+
+```json
+{
+  "__argentClientFile": true,
+  "path": "/work/proj/.argent/flows/__baselines__/withsnap/home__chromium-1000x800.png",
+  "content": "<base64>",
+  "encoding": "base64"
+}
+```
+
+The client writes a directive with `encoding: "base64"` only when `path` ends in `.png`, has no `..`, and is directly in the baseline directory of a call with `updateBaselines: true`. The client replaces the file in one rename. The client refuses a link to nothing, a link out of the directory, a `.png` name that links to a file that is not a PNG file, and a file that is not a regular file. The client replaces each directive with the path that it wrote, or with `{ "path": "<path>", "error": "<reason>" }`. The client prints the reason of each baseline that it did not write. `argent flow run` then exits with code 1. The MCP server adds the line `✗ baseline not written: <path>: <reason>` to the report.
+
+The client writes the baselines only when the result arrives. When the connection closes before the result, the client writes no baseline of that call.
 
 ## Older clients and tool-servers
 
-| Client                | Tool-server           | Result for a `run:` step over a link                                                                                                                                                                           |
-| --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sends members         | Reads members         | The runner reads the fragments from the members                                                                                                                                                                |
-| Sends members         | Does not read members | The listing has no `collect`. The client sends only the flow file. The tool-server rejects the flow before the first step                                                                                      |
-| Does not send members | Reads members         | The tool-server rejects the flow before the first step and adds: "This tool-server runs run: steps for a client that sends their fragments with the call. Update the argent CLI or MCP adapter on the client." |
-| Does not send members | Does not read members | The tool-server rejects the flow before the first step                                                                                                                                                         |
+| Client                | Tool-server           | Result for a `run:` or `snapshot:` step over a link                                                                                                                                                                                                                                                                     |
+| --------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sends members         | Reads members         | The runner reads the fragments and the baselines from the members                                                                                                                                                                                                                                                       |
+| Sends members         | Does not read members | The listing has no `collect`. The client sends only the flow file. The tool-server rejects the flow before the first step                                                                                                                                                                                               |
+| Does not send members | Reads members         | The tool-server rejects the flow before the first step and adds: "This tool-server runs run: steps for a client that sends their fragments with the call. Update the argent CLI or MCP adapter on the client." For a `snapshot:` step, it names "snapshot: steps for a client that sends their baselines with the call" |
+| Does not send members | Does not read members | The tool-server rejects the flow before the first step                                                                                                                                                                                                                                                                  |
