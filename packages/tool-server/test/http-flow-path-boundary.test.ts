@@ -854,4 +854,60 @@ describe("flow-execute over a link, from the real argent client", () => {
       expect(members.map((m) => [m.state, m.content])).toEqual([["missing", undefined]]);
     }
   });
+
+  it("sends no fragment for arguments the tool-server refuses, and gets its error", async () => {
+    // Each call names a flow whose run: target lies outside the project. The
+    // roots taken from such arguments (the directory a bad name climbs to, a
+    // project_root with "..", the filesystem root for a relative flow_path)
+    // would reach it, so they must not be taken before the arguments pass.
+    await write(".argent/flows/keep.yaml", "steps:\n  - echo: keep\n");
+    await write(".argent/flows/relative.yaml", "steps:\n  - run: ../../../sib/frag.yaml\n");
+    const nested = await write("e2e/root.yaml", "steps:\n  - run: ../../sib/frag.yaml\n");
+    const above = path.join(tmpDir, "above.yaml");
+    await fs.writeFile(above, "steps:\n  - run: sib/frag.yaml\n");
+    await fs.mkdir(path.join(tmpDir, "sib"));
+    await fs.writeFile(path.join(tmpDir, "sib/frag.yaml"), "steps:\n  - echo: outside\n");
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+
+    const originalCwd = process.cwd();
+    process.chdir(projectRoot);
+    try {
+      for (const [args, error] of [
+        [{ name: "../../../above" }, 'Invalid flow name "../../../above"'],
+        [
+          { flow_path: nested, project_root: `${projectRoot}/e2e/../..` },
+          'project_root must not contain ".." segments',
+        ],
+        [{ flow_path: ".argent/flows/relative.yaml" }, "flow paths must be absolute"],
+        [{ name: "keep", flow_path: above }, "Pass exactly one flow source: name or flow_path."],
+      ] as const) {
+        let wire: { content?: string; members?: unknown } | undefined;
+        const client = createToolsClient({
+          baseUrl: async () => ({ url, token: "", remote: true }),
+          fetchImpl: async (target: string, init: RequestInit) => {
+            if (target.endsWith("/tools/flow-execute")) {
+              const body = JSON.parse(String(init.body));
+              wire = body.flow_path ?? body.flow_file;
+            }
+            return fetch(target, init);
+          },
+        });
+
+        const err = await client
+          .callTool("flow-execute", { project_root: projectRoot, device: DEVICE, ...args })
+          .catch((e: unknown) => e);
+
+        expect(String(err)).toContain(error);
+        // The flow itself went out, so only the argument check kept its run: target back.
+        expect(wire?.content).toBeDefined();
+        expect(wire?.members).toBeUndefined();
+      }
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
 });

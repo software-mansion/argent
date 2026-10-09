@@ -14,6 +14,7 @@ import { parse as parseYaml } from "yaml";
 
 import {
   FLOW_FILE_NAME_PATTERN,
+  FLOW_NAME_PATTERN,
   MAX_RUN_DEPTH,
   canonicalFlowPath,
   classifyOnDiskSpelling,
@@ -52,8 +53,35 @@ function printable(text: string): string {
     .join("");
 }
 
-/** `<P>` for a file under `<P>/.argent/flows/`, the innermost such `<P>`. */
+/** An absolute path with no `..` segment, as the tool-server requires. */
+function isResolvedAbsolute(value: unknown): value is string {
+  return (
+    typeof value === "string" && path.isAbsolute(value) && !value.split(/[\\/]+/).includes("..")
+  );
+}
+
+/**
+ * The tool-server's own shape rules for the flow a call names: `project_root`
+ * absolute with no `..` segment, and exactly one of `flow_path` (the same,
+ * named `<flow-name>.yaml`) and `name` (a flow name). The tool-server refuses
+ * any other call before step 1, and roots taken from its arguments could
+ * reach past the project, so such a call sends none of the flow's files.
+ */
+function namesValidFlow(args: Record<string, unknown>): boolean {
+  const { project_root, flow_path, name } = args;
+  if (!isResolvedAbsolute(project_root)) return false;
+  if (name === undefined) {
+    return isResolvedAbsolute(flow_path) && FLOW_FILE_NAME_PATTERN.test(path.basename(flow_path));
+  }
+  return flow_path === undefined && typeof name === "string" && FLOW_NAME_PATTERN.test(name);
+}
+
+/**
+ * `<P>` for a file under `<P>/.argent/flows/`, the innermost such `<P>`. Null
+ * for a relative path, where an empty `<P>` is not the filesystem root.
+ */
 function savedFlowProject(file: string): string | null {
+  if (!path.isAbsolute(file)) return null;
   const parts = file.split(path.sep);
   for (let i = parts.length - 3; i >= 0; i--) {
     if (parts[i] === ".argent" && parts[i + 1] === "flows") {
@@ -213,6 +241,8 @@ async function readFlowMember(
  * runs is decided on the device. The targets come from the registry's
  * {@link collectFlowRequests}, which the tool-server's own tests hold to the
  * runner's parse. `canonical` and `spelling` describe the root flow itself.
+ * Nothing is collected for arguments the tool-server refuses
+ * ({@link namesValidFlow}).
  */
 export async function collectFlowMembers(
   rootPath: string,
@@ -220,6 +250,7 @@ export async function collectFlowMembers(
   args: Record<string, unknown>,
   opts: PrepareFileInputsOptions
 ): Promise<Pick<FileInputWire, "canonical" | "spelling" | "members">> {
+  if (!namesValidFlow(args)) return {};
   const canonical = await canonicalFlowPath(rootPath);
   const spelling = await classifyOnDiskSpelling(
     path.dirname(rootPath),

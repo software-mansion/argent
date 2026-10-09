@@ -232,7 +232,9 @@ describe("createToolsClient options", () => {
       fetchImpl,
     });
 
-    await expect(callTool("run-flow", { flow_path: flowPath })).rejects.toThrow(
+    await expect(
+      callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME })
+    ).rejects.toThrow(
       "The connection to the tool-server closed before run-flow finished (fetch failed). " +
         "The tool may have run; check its effect before you run it again."
     );
@@ -255,7 +257,9 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: true }),
     });
 
-    await expect(callTool("run-flow", { flow_path: flowPath })).rejects.toThrow(
+    await expect(
+      callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME })
+    ).rejects.toThrow(
       /^Upload to .+\/upload failed: 413 .+ The proxy must accept a body of at least 1 MB on POST \/upload, for example client_max_body_size 1m in nginx$/
     );
     expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
