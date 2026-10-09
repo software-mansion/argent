@@ -98,7 +98,7 @@ The client resolves each pair of directory and target once. It stops at the dept
 | `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. Absent when the member has its bytes        |
 | `error`       | The reason, when `state` is `refused`                                                                                                   |
 
-The client puts the bytes of the members in the call body up to 256 KiB in total. The client sends each other member to `POST /upload`, one gzipped tar for each file, as for an input of kind `tar-upload`. A body limit of a reverse proxy therefore sees at most the flow file and 256 KiB of members.
+The client puts the bytes of the members in the call body up to 256 KiB in total. The client sends each other member to `POST /upload`, one gzipped tar for each file, as for an input of kind `tar-upload`. A body limit of a reverse proxy therefore sees at most the flow file and 256 KiB of members. When a proxy refuses an upload with the status 413, the client does not send the call. The error gives the body size that the proxy must accept on `POST /upload`, for example with `client_max_body_size` in nginx.
 
 ### Spelling
 
@@ -132,16 +132,17 @@ When the environment of the client has `ARGENT_FLOW_FILES_LOG=1`, the client pri
 
 ## The call
 
-A call with at least one member is a stream. The client sends `Accept: application/x-ndjson` and `Accept-Encoding: identity` also when no progress consumer waits for the lines. The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines. The result does not change.
+A call with a `members` field is a stream, also when the list is empty. The client sends `Accept: application/x-ndjson` and `Accept-Encoding: identity` also when no progress consumer waits for the lines. The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines. The result does not change.
 
-The MCP adapter does not send a call with members a second time, and it sets no timeout for that call.
+The MCP adapter does not send a call with a `members` field a second time, and it sets no timeout for that call. When the connection closes before the result arrives, the client does not send the call again. The error says that the tool may have run, for example `The connection to the tool-server closed before flow-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
 
 ## What the tool-server does with the members
 
-The tool-server reads the members before it validates the arguments. A member never fails the call:
+The tool-server reads the members before it validates the arguments:
 
 - The tool-server keeps the text of each member with bytes. It applies the 32 MiB cap and the size check of a file input. It reads an upload as for a `tar-upload` input.
-- A member that fails a check, or that has no bytes and no `state`, becomes `refused` with the reason.
+- A member whose bytes fail a check, or whose upload the tool-server does not have, fails the call with the status 422, as a file input does.
+- A member that has no bytes and no `state` becomes `refused`.
 - The tool-server ignores a member with an unknown `role`, and a member whose `key` repeats.
 
 The runner then uses the members as the files of the client:

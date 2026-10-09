@@ -463,7 +463,7 @@ The tool-server then rejects the flow before the first step, and the error gives
 
 The other rows of the table still need a run without a link. The tool-server rejects such a step before the first step, in the flow file and in each fragment that the CLI uploads.
 
-The CLI puts small fragments in the call, up to 256 KiB in total. The CLI sends each other fragment in its own request to `POST /upload`. A body limit of a reverse proxy therefore applies to one fragment at a time. With `ARGENT_FLOW_FILES_LOG=1`, the CLI prints one line for each fragment before the call.
+The CLI puts small fragments in the call, up to 256 KiB in total. The CLI sends each other fragment in its own request to `POST /upload`. A body limit of a reverse proxy therefore applies to one fragment at a time. When the proxy refuses a fragment with the status 413, the flow does not run. The error gives the body size that the proxy must accept on `POST /upload`. With `ARGENT_FLOW_FILES_LOG=1`, the CLI prints one line for each fragment before the call.
 
 For each rejection in the table, the error lists the steps that caused it.
 
