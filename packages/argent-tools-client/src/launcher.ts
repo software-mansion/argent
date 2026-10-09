@@ -327,7 +327,7 @@ export function spawnToolsServer(
         reject(
           new Error(
             err.code === "ENOENT" && nodeBin === "node"
-              ? "Could not start the argent tool-server: `node` was not found on PATH. Install Node.js 20+ or add it to PATH."
+              ? "Could not start the argent tool-server: `node` was not found on PATH. Install Node.js 22.15+ or add it to PATH."
               : `Could not start the argent tool-server: ${err.message}`
           )
         )
