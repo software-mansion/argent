@@ -8,6 +8,7 @@ import {
   type FileInputSpec,
   type FileInputWire,
 } from "./file-inputs.js";
+import { collectFlowMembers } from "./flow-files.js";
 
 export interface ToolMeta {
   name: string;
@@ -352,6 +353,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         includeContent: remote,
         uploadEndpoint: remote ? { url, token } : undefined,
         log: diagnose,
+        collectMembers: collectFlowMembers,
       });
     }
 

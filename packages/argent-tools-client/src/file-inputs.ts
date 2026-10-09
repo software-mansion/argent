@@ -25,8 +25,6 @@ import {
   type OnDiskSpelling,
 } from "@argent/registry";
 
-import { collectFlowMembers } from "./flow-files.js";
-
 /** Must match the wire contract in `@argent/registry`'s file-inputs.ts. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
 export const CLIENT_FILE_MARKER = "__argentClientFile" as const;
@@ -45,7 +43,7 @@ export interface FileInputSpec {
    * it (the tool's own validation diagnoses dual-source calls).
    */
   skipWhenSet?: string;
-  /** Over a link, also send the flow's `run:` closure as `members` (see {@link collectFlowMembers}). */
+  /** Over a link, also send the flow's `run:` closure as `members` (see `collectMembers`). */
   collect?: "flow";
 }
 
@@ -97,6 +95,16 @@ export interface PrepareFileInputsOptions {
    * one for each member a `collect` spec sends. Defaults to stderr.
    */
   log?: (line: string) => void;
+  /**
+   * Builds the `members` of a `collect` spec over a link (the tools client
+   * passes flow-files.ts's collector). Without it the spec sends its file only.
+   */
+  collectMembers?: (
+    rootPath: string,
+    rootBytes: Buffer,
+    args: Record<string, unknown>,
+    opts: PrepareFileInputsOptions
+  ) => Promise<Pick<FileInputWire, "canonical" | "spelling" | "members">>;
 }
 
 /**
@@ -332,10 +340,15 @@ export async function prepareFileInputs(
       if (read) Object.assign(wire, read);
       // Only a routed call sends the closure: co-located, the tool-server
       // reads every file in place.
-      if (spec.collect === "flow" && opts.includeContent && wire.content !== undefined) {
+      if (
+        spec.collect === "flow" &&
+        opts.includeContent &&
+        wire.content !== undefined &&
+        opts.collectMembers
+      ) {
         Object.assign(
           wire,
-          await collectFlowMembers(filePath, Buffer.from(wire.content, "base64"), record, opts)
+          await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), record, opts)
         );
       }
     }
