@@ -1,14 +1,16 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  buildAppStateMessage,
+  adviseOnUninjectedApp,
   isInjectableBundleId,
   nativeDevtoolsRef,
   buildInitFailedResult,
   precheckNativeDevtools,
+  INJECTION_FAILED_RECOVERY,
   type NativeDevtoolsApi,
   type NativeDevtoolsAppState,
   type NativeDevtoolsInitFailedResult,
+  type NativeDevtoolsInjectionFailedResult,
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
@@ -21,6 +23,7 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 type Result =
   | NativeDevtoolsInitFailedResult
+  | NativeDevtoolsInjectionFailedResult
   | {
       envSetup: boolean;
       appRunning: boolean;
@@ -82,10 +85,11 @@ Call this before using app-scoped native hierarchy tools or native-network-logs.
 If injectable is false: treat this as TERMINAL — the app is not a supported native-devtools target, and no relaunch changes that. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) — they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app once, then proceed with the native feature. Read state before acting on a second such reading — indeterminate reaches this rule too, and its line below bounds it at that one restart.
-If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (\`argent server stop && argent server start --detach\`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use \`describe\` or \`screenshot\` and drive by coordinate.
+If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate — unless the message says this tool-server no longer owns the simulator's devtools socket, which names both steps in the order they work. Restart the tool-server (\`argent server stop && argent server start --detach\`), then retry. If it reads unregistered again after that restart, stop: the process carries argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use \`describe\` or \`screenshot\` and drive by coordinate.
 If state is connecting: do NOT restart the app — launching it is what starts the connection, so a relaunch discards the one in progress and returns this same state. Wait a few seconds and repeat this call.
 If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again — the service is stale rather than the app uninjected, so restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.
 Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment failed to initialize.
+Returns { status: "injection_failed", message } instead once this app has been told to restart, has done so, and the fresh process still never connected — the dylib reaches the process but nothing ever dials. Do NOT restart the app again and do NOT restart the tool-server: no restart on either side changes this. Follow the message — it names the likely cause and the one passive re-check that can still clear this verdict — then read the screen with \`describe\` or \`screenshot\`.
 Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
@@ -172,6 +176,16 @@ Fails if the simulator server is not running for the given UDID.`,
     }
     const envSetup = envSetupReading(api, connected);
 
+    // The remedy for the settled state, and the record of the one hand-out that
+    // later readings judge against. Reporting the terminal block in place of the
+    // record mirrors init_failed above: the record's whole point is to route the
+    // agent to `state`'s remedy, and this is the case where there is none left.
+    const advice =
+      state === "connected"
+        ? null
+        : adviseOnUninjectedApp(api, params.bundleId, state, INJECTION_FAILED_RECOVERY);
+    if (advice?.terminal) return { status: "injection_failed", message: advice.message };
+
     return {
       envSetup,
       appRunning,
@@ -187,9 +201,9 @@ Fails if the simulator server is not running for the given UDID.`,
       state,
       // The booleans cannot express "one restart, then stop" — the shape
       // `indeterminate` needs, and the only one ios-remote can report for a
-      // running app. The shared prose puts that escape in front of an agent who
-      // never read this tool's description.
-      ...(state === "connected" ? {} : { message: buildAppStateMessage(params.bundleId, state) }),
+      // running app. Carrying the same prose as every other consumer keeps that
+      // escape off the agent having read this tool's description.
+      ...(advice === null ? {} : { message: advice.message }),
       nextLaunchWillBeInjected: envSetup,
       injectable: true,
     };
