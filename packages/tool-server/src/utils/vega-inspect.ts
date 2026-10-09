@@ -7,12 +7,18 @@
  */
 import { request } from "node:http";
 import { runAdb } from "./adb";
+import { withKeyedLock } from "./keyed-lock";
 import { emulatorSerial } from "./vega-automation";
 
 const TOOLKIT_DEVICE_PORT = 8383;
 // Derived from the console port so repeated calls reuse one idempotent
 // `adb forward` instead of leaking ports.
 const HOST_PORT_OFFSET = 10_000;
+
+// Keyed by adb serial. Overlapping `getPageSource` requests fail ("socket hang
+// up") and can wedge the toolkit until the VVD reboots; a timed-out wait tool
+// leaves its read running into the next describe.
+const pageSourceLocks = new Map<string, Promise<unknown>>();
 
 /**
  * Raw page-source XML from the on-device automation toolkit; describe parses it
@@ -21,8 +27,16 @@ const HOST_PORT_OFFSET = 10_000;
  */
 export async function fetchVegaPageSource(timeoutMs = 15_000): Promise<string> {
   const { serial, consolePort } = await emulatorSerial();
-  const hostPort = consolePort + HOST_PORT_OFFSET;
+  return withKeyedLock(pageSourceLocks, serial, () =>
+    fetchPageSource(serial, consolePort + HOST_PORT_OFFSET, timeoutMs)
+  );
+}
 
+async function fetchPageSource(
+  serial: string,
+  hostPort: number,
+  timeoutMs: number
+): Promise<string> {
   await runAdb(["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${TOOLKIT_DEVICE_PORT}`], {
     timeoutMs: 10_000,
   });

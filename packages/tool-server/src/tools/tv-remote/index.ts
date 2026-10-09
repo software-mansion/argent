@@ -88,7 +88,7 @@ export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, T
 A TV is navigated with a directional remote, not touch — use this instead of gesture-tap/swipe (which do not apply on a TV). Move focus with up/down/left/right, confirm with select, go back with back/menu, exit with home, and use playPause/rewind/fastForward/next/previous/volumeUp/volumeDown/mute for the corresponding remote keys. (On the Apple TV simulator the media-transport and volume keys are rejected — its HID stack ignores them; they work on Android TV and Vega.)
 Single press: { button: "down" }. Repeat the same button: { button: "down", repeat: 3 }.
 Multi-step navigation: pass a path as { button: ["up","right","right","select"] } — it runs in one tool call, far cheaper than separate presses.
-Read the screen with \`describe\` before and after to see where focus landed.
+Call \`describe\` before the first press to find the cursor. Read where focus landed from the element tree in this result, or call \`describe\` again when it is missing.
 Returns { pressed, count }.`,
     alwaysLoad: true,
     // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses, sent

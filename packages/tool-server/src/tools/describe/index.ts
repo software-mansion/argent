@@ -152,7 +152,7 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
 system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
-covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
+covers only the app registered by launch-app. On Android, reads the UI hierarchy through the android-devtools helper, falling back to \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
@@ -182,7 +182,7 @@ For React Native apps, debugger-component-tree returns React component names wit
 On a TV target (Apple TV / Android TV — a \`list-devices\` entry with runtimeKind 'tv') this returns
 the focus-driven view instead: the currently FOCUSED element and the list of FOCUSABLE elements,
 since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\` (up/down/left/right/select/
-back/menu/home), then call describe again to confirm where focus landed.`,
+back/menu/home), then read where focus landed from the tree in its result, or call describe again when it is missing.`,
     alwaysLoad: true,
     searchHint:
       "accessibility element tree ui hierarchy tap coordinates ios android chromium vega dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
