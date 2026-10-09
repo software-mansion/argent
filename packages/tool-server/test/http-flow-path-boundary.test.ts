@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import * as fs from "node:fs/promises";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
-import { createRunFlowTool } from "../src/tools/flows/flow-run";
+import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequisite";
 import { serializeFlow } from "../src/tools/flows/flow-utils";
 
@@ -712,5 +714,107 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ flow: "remote", executionPrerequisite: "be logged in" });
+  });
+});
+
+describe("flow-execute over a link, from the real argent client", () => {
+  // The client's own source: the client collects the flow's run: closure and
+  // sends it, this route resolves it, and the runner reads it.
+  const clientSrc = path.resolve(__dirname, "../../argent-tools-client/src/tools-client.ts");
+  let server: Server;
+  let url: string;
+
+  beforeEach(async () => {
+    server = handle.app.listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  async function write(rel: string, text: string): Promise<string> {
+    const file = path.join(projectRoot, rel);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, text, "utf8");
+    return file;
+  }
+
+  /** The step reports of a run of `flowPath`; `beforeSend` sees the body once the client built it. */
+  async function callFlow(
+    remote: boolean,
+    flowPath: string,
+    beforeSend?: (body: string) => Promise<void>
+  ): Promise<Omit<FlowRunResult["steps"][number], "durationMs">[]> {
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote }),
+      fetchImpl: async (target: string, init: RequestInit) => {
+        if (target.endsWith("/tools/flow-execute")) await beforeSend?.(String(init.body));
+        return fetch(target, init);
+      },
+    });
+    const { data } = await client.callTool("flow-execute", {
+      flow_path: flowPath,
+      project_root: projectRoot,
+      device: DEVICE,
+    });
+    return (data as FlowRunResult).steps.map(({ durationMs: _, ...step }) => step);
+  }
+
+  it("runs the run: closure the client sent as the co-located run does, with the project gone from this host", async () => {
+    const root = await write(
+      ".argent/flows/root.yaml",
+      "steps:\n  - echo: start\n  - run: login\n  - when: { platform: ios }\n    steps:\n" +
+        "      - run: ../../shared/branch.yaml\n  - run: gone.yaml\n  - echo: never\n"
+    );
+    await write(".argent/flows/login.yaml", "steps:\n  - echo: logged in\n");
+    // A fragment of a fragment, beside the file that names it.
+    await write("shared/branch.yaml", "steps:\n  - run: common.yaml\n");
+    await write("shared/common.yaml", "steps:\n  - echo: common\n");
+
+    const colocated = await callFlow(false, root);
+    // Once the client has read the project it leaves this host, so every
+    // fragment the linked run reads came with the call.
+    const linked = await callFlow(true, root, () => fs.rename(projectRoot, `${projectRoot}-moved`));
+
+    expect(linked).toEqual(colocated);
+    expect(colocated.map((s) => `${s.status} ${s.flow}`)).toEqual([
+      ...["pass root", "pass login", "pass login", "pass root", "pass branch"],
+      ...["pass common", "pass common", "error gone", "skip root"],
+    ]);
+    expect(colocated[7]!.reason).toMatch(/^could not load fragment "gone.yaml": ENOENT/);
+  });
+
+  it("refuses before step 1 a fragment outside the project and a .yaml link to a .env, sending neither", async () => {
+    await fs.writeFile(path.join(tmpDir, "outside.yaml"), "steps:\n  - echo: outside\n");
+    const fenced = await write(
+      ".argent/flows/fenced.yaml",
+      "steps:\n  - echo: first\n  - run: ../../../outside.yaml\n  - run: secret.yaml\n"
+    );
+    const env = await write(".env", "TOKEN=hunter2\n");
+    await fs.symlink(env, path.join(path.dirname(fenced), "secret.yaml"));
+    let members: { state?: string; content?: string }[] = [];
+
+    const err = await callFlow(true, fenced, async (body) => {
+      members = JSON.parse(body).flow_path.members;
+    }).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      "run: ../../../outside.yaml (../../../outside.yaml is outside every root this client serves"
+    );
+    expect(String(err)).toContain(
+      "run: secret.yaml (secret.yaml links to a file that is not a YAML file)"
+    );
+    expect(members.map((m) => [m.state, m.content])).toEqual([
+      ["refused", undefined],
+      ["refused", undefined],
+    ]);
   });
 });
