@@ -2,9 +2,10 @@
  * The flow half of the INPUT-side file boundary: the files a `collect: "flow"`
  * file input sends with the flow over a link (see `file-inputs.ts` for the
  * generic wire, upload and directive code). {@link collectFlowMembers} walks
- * the flow's `run:` closure and its run's snapshot baselines on THIS machine
- * and returns them as the wire's `members`, each one inline, uploaded, listed
- * by name, or with the state that tells the tool-server why it was not sent.
+ * the flow's `run:` closure, the file arguments of its `tool:` steps and its
+ * run's snapshot baselines on THIS machine and returns them as the wire's
+ * `members`, each one inline, uploaded, listed by name, or with the state that
+ * tells the tool-server why it was not sent.
  */
 
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
@@ -16,11 +17,15 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   MAX_RUN_DEPTH,
+  TOOL_FILE_EXTENSIONS,
   baselineKeyFor,
   canonicalFlowPath,
   classifyOnDiskSpelling,
   collectFlowRequests,
   flowMemberKey,
+  hasToolFileExtension,
+  isClientFileArgument,
+  toolStepFiles,
   type FileInputMember,
 } from "@argent/registry";
 
@@ -210,6 +215,42 @@ async function readFlowMember(
   return { ...sent, text: sent.bytes?.toString("utf8") };
 }
 
+/**
+ * A file argument of a `tool:` step, read as the step spells it. Sent only
+ * from inside `roots`, and only when the file it really is also has a
+ * {@link TOOL_FILE_EXTENSIONS} name, so a link named like an image cannot send
+ * a `.env`. Nothing there, or a file where a directory should be, is a
+ * `missing` member; a directory or a file that cannot be read is `refused`.
+ */
+async function readToolMember(
+  file: string,
+  roots: string[],
+  budget: { inline: number },
+  opts: PrepareFileInputsOptions
+): Promise<{ member: FileInputMember; sent: string }> {
+  const member: FileInputMember = { role: "tool", key: file, path: file };
+  const refuse = (reason: string) => ({
+    member: { ...member, state: "refused" as const, error: reason },
+    sent: `refused (${reason})`,
+  });
+  const { canonical } = await landing(file);
+  if (!roots.some((root) => isWithin(canonical, root))) {
+    return refuse(`${file} is outside every root this client serves (${roots.join(", ")})`);
+  }
+  if (!hasToolFileExtension(canonical)) {
+    return refuse(`${file} links to a file that is not one of ${TOOL_FILE_EXTENSIONS.join(", ")}`);
+  }
+  const st = await stat(canonical).catch((err: NodeJS.ErrnoException) => err);
+  if (st instanceof Error) {
+    if (st.code === "ENOENT" || st.code === "ENOTDIR") {
+      return { member: { ...member, state: "missing" }, sent: "missing" };
+    }
+    return refuse(st.message);
+  }
+  if (st.isDirectory()) return refuse("EISDIR: illegal operation on a directory, read");
+  return sendBytes(member, canonical, budget, opts);
+}
+
 /** The platform whose baselines a compare run reads, when the call names it. */
 function callPlatform(args: Record<string, unknown>): string | undefined {
   if (typeof args.device === "string" && args.device.startsWith("chromium-cdp-")) return "chromium";
@@ -305,7 +346,8 @@ async function sendBytes(
  * in the result may be written. A run that compares gets the bytes of the
  * baselines of its own snapshots only (`<snapshot>__*.png`, crops included),
  * of one platform when the call names it ({@link callPlatform}). A directory
- * outside the roots sends nothing and takes no write.
+ * outside the roots sends nothing and takes no write. A baseline already in
+ * `sent`, as the file argument of a `tool:` step, is not sent twice.
  */
 async function collectBaselineMembers(
   canonical: string,
@@ -315,6 +357,7 @@ async function collectBaselineMembers(
   roots: string[],
   budget: { inline: number },
   opts: PrepareFileInputsOptions,
+  sent: ReadonlySet<string>,
   emit: (member: FileInputMember, sent: string) => void
 ): Promise<void> {
   const dir = path.join(
@@ -335,6 +378,7 @@ async function collectBaselineMembers(
     if (!name.endsWith(".png")) continue;
     if (!updates && !prefixes.some((prefix) => name.startsWith(prefix))) continue;
     const file = path.join(dir, name);
+    if (sent.has(file)) continue;
     const member: FileInputMember = { role: "baseline", key: file, path: file };
     const entry = await baselineEntry(file, roots, updates);
     if (entry.state === "refused") {
@@ -355,13 +399,17 @@ async function collectBaselineMembers(
  * its wire. Its `run:` closure: every file a `run:` step of the flow or of a
  * file it reaches names, in breadth order, each resolution once, as deep as
  * the runner resolves ({@link MAX_RUN_DEPTH}). Every branch of a `when:`
- * counts, since which one runs is decided on the device. Then the snapshot
- * baselines of its run ({@link collectBaselineMembers}), for the snapshots of
- * the flow and of its closure. The targets and snapshot names come from the
- * registry's {@link collectFlowRequests}; the tool-server's
- * test/flows/flow-collect-parity.test.ts holds this walk to the runner's parse.
- * `canonical` and `spelling` describe the root flow itself. Nothing is
- * collected for arguments the tool-server refuses ({@link namesValidFlow}).
+ * counts, since which one runs is decided on the device. The file arguments
+ * of the `tool:` steps of those files ({@link readToolMember}): the arguments
+ * that the tool declares as a `file` input, at an absolute path with a
+ * {@link TOOL_FILE_EXTENSIONS} name, each path once, as spelled. Then the
+ * snapshot baselines of its run ({@link collectBaselineMembers}), for the
+ * snapshots of the flow and of its closure. The targets, snapshot names and
+ * tool steps come from the registry's {@link collectFlowRequests}; the
+ * tool-server's test/flows/flow-collect-parity.test.ts holds this walk to the
+ * runner's parse. `canonical` and `spelling` describe the root flow itself.
+ * Nothing is collected for arguments the tool-server refuses
+ * ({@link namesValidFlow}).
  */
 export async function collectFlowMembers(
   rootPath: string,
@@ -399,6 +447,20 @@ export async function collectFlowMembers(
     }
     const requests = collectFlowRequests(doc);
     for (const name of requests.snapshots) snapshots.add(name);
+    for (const step of requests.toolSteps) {
+      // A nested flow is not a file argument the runner reads for its tool.
+      if (step.tool === "flow-execute") continue;
+      for (const file of toolStepFiles(opts.toolFileInputs?.(step.tool), step.args)) {
+        // An input whose superseding param is also set stays unread: the
+        // tool's own validation refuses the call.
+        const { unwrapWhenSet } = file.spec;
+        if (unwrapWhenSet !== undefined && step.args[unwrapWhenSet] !== undefined) continue;
+        if (!isClientFileArgument(file) || seen.has(file.path)) continue;
+        seen.add(file.path);
+        const read = await readToolMember(file.path, roots, budget, opts);
+        emit(read.member, read.sent);
+      }
+    }
     const anchorDir = path.dirname(file.canonical);
     for (const target of requests.runTargets) {
       const key = flowMemberKey(anchorDir, target);
@@ -421,6 +483,7 @@ export async function collectFlowMembers(
       roots,
       budget,
       opts,
+      seen,
       emit
     );
   }

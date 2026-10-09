@@ -59,8 +59,9 @@ export interface FileInputSpec {
    */
   skipWhenSet?: string;
   /**
-   * Over a link, also send the flow's `run:` closure and its run's snapshot
-   * baselines as `members` (see `collectMembers`).
+   * Over a link, also send the flow's `run:` closure, its run's snapshot
+   * baselines and the file arguments of its `tool:` steps as `members` (see
+   * `collectMembers`).
    */
   collect?: "flow";
 }
@@ -131,6 +132,12 @@ export interface PrepareFileInputsOptions {
     args: Record<string, unknown>,
     opts: PrepareFileInputsOptions
   ) => Promise<Pick<FileInputWire, "canonical" | "spelling" | "members">>;
+  /**
+   * The file inputs a tool declares, from the same `GET /tools` listing, so a
+   * `collect` call sends the file arguments of the flow's `tool:` steps.
+   * Without it, no `tool:` step sends a file.
+   */
+  toolFileInputs?: (tool: string) => readonly FileInputSpec[] | undefined;
   /** Stops the upload. */
   signal?: AbortSignal;
 }

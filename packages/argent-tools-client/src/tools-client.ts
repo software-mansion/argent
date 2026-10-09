@@ -349,7 +349,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
     let finalArgs = args;
-    const meta = await fetchTool(name, { signal: opts?.signal });
+    const tools = await fetchTools({ signal: opts?.signal });
+    const meta = tools.find((t) => t.name === name) ?? null;
     // Where a baseline the result returns may be written (see file-inputs.ts).
     const baselineDirs: string[] = [];
     if (meta?.fileInputs?.length) {
@@ -360,6 +361,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         log: diagnose,
         baselineDirs,
         collectMembers: collectFlowMembers,
+        toolFileInputs: (tool) => tools.find((t) => t.name === tool)?.fileInputs,
         signal: opts?.signal,
       });
     }

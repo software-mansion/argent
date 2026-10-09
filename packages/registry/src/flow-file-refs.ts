@@ -86,16 +86,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * The project files a parsed flow document makes the runner read: the `run:`
  * targets of its steps and of the steps of its block directives (`when:`),
- * taken or not, spelled as the runner keeps them (extension completed), and
- * the names of its `snapshot` steps, whose baselines the run reads or writes.
- * A value the runner's parse refuses names nothing. Pure: it walks a document
- * the caller parsed, with no YAML or file-system dependency. The
- * tool-server's test/flows/flow-collect-parity.test.ts holds the client's walk
- * over it to the runner's parse.
+ * taken or not, spelled as the runner keeps them (extension completed), the
+ * names of its `snapshot` steps, whose baselines the run reads or writes, and
+ * its `tool:` steps, whose file arguments the run reads (which arguments are
+ * files depends on the tool's declaration: {@link toolStepFiles}). A value the
+ * runner's parse refuses names nothing. Pure: it walks a document the caller
+ * parsed, with no YAML or file-system dependency. The tool-server's
+ * test/flows/flow-collect-parity.test.ts holds the client's walk over it to
+ * the runner's parse.
  */
-export function collectFlowRequests(doc: unknown): { runTargets: string[]; snapshots: string[] } {
+export function collectFlowRequests(doc: unknown): {
+  runTargets: string[];
+  snapshots: string[];
+  toolSteps: { tool: string; args: Record<string, unknown> }[];
+} {
   const runTargets = new Set<string>();
   const snapshots = new Set<string>();
+  const toolSteps: { tool: string; args: Record<string, unknown> }[] = [];
   const seen = new Set<unknown>();
   const visit = (steps: unknown, depth: number): void => {
     if (!Array.isArray(steps) || depth > MAX_BLOCK_NESTING || seen.has(steps)) return;
@@ -114,11 +121,14 @@ export function collectFlowRequests(doc: unknown): { runTargets: string[]; snaps
       }
       const snapshot = isRecord(step.snapshot) ? step.snapshot.name : step.snapshot;
       if (typeof snapshot === "string" && FLOW_NAME_PATTERN.test(snapshot)) snapshots.add(snapshot);
+      if (typeof step.tool === "string") {
+        toolSteps.push({ tool: step.tool, args: isRecord(step.args) ? step.args : {} });
+      }
       visit(step.steps, depth + 1);
     }
   };
   if (isRecord(doc)) visit(doc.steps, 0);
-  return { runTargets: [...runTargets], snapshots: [...snapshots] };
+  return { runTargets: [...runTargets], snapshots: [...snapshots], toolSteps };
 }
 
 /**

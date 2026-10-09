@@ -135,11 +135,15 @@ counts the remaining flows skipped.
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
 a link, the CLI uploads the flow file, the run: fragments that it reaches and
-the snapshot baselines that the run compares. The CLI writes the new baselines
-that the run returns. The tool-server rejects the flow before the first step
-when the flow or a fragment has one of these steps:
-  - script:
-  - a tool: step that takes a file or records a flow
+the snapshot baselines that the run compares. It also uploads each .png or
+.yaml file that a tool: step takes as a file argument by an absolute path. The
+CLI writes the new baselines that the run returns. The tool-server rejects the
+flow before the first step when the flow or a fragment has one of these steps:
+  - a script: step
+  - a tool: step that runs or records a flow
+  - a tool: step that takes a directory, an app or an output directory
+  - a tool: step whose tool builds a file path from several arguments
+  - a tool: step that names a relative path or a file other than .png or .yaml
 Without a link, all step kinds run.
 
 Subcommands:

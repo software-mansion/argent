@@ -6,7 +6,8 @@
  * server-readable string *before* zod validation, so tools always execute
  * against a local path:
  *
- * - `kind: "file"`: inlined content (sent only by a linked client) is
+ * - `kind: "file"`: inlined content (sent only by a linked client, or built
+ *   by the flow runner from the bytes a client sent for a `tool:` step) is
  *   materialized into a temp file, even when the path also matches on this
  *   host; without content, a path that matches on this host's own filesystem
  *   is used in place — zero copies.
@@ -16,11 +17,12 @@
  * - `kind: "directory"` is used in place, and fails with remote-mode guidance
  *   when absent here (a tree can't ride in a tool call).
  * - `kind: "probe"` passes through and only reports presence.
- * - A `collect` spec's `members` (a flow's `run:` closure and its run's
- *   snapshot baselines, sent with the flow by a linked client) are decoded
- *   with the same checks, each into its own state: a member that the client
- *   did not send fails only where it is used. A member whose bytes fail those
- *   checks fails the call, as a declared input does.
+ * - A `collect` spec's `members` (a flow's `run:` closure, its run's snapshot
+ *   baselines and its `tool:` steps' file arguments, sent with the flow by a
+ *   linked client) are decoded with the same checks, each into its own state:
+ *   a member that the client did not send fails only where it is used. A
+ *   member whose bytes fail those checks fails the call, as a declared input
+ *   does.
  *
  * Plain string args (older clients, direct invocations) pass through untouched.
  */
@@ -231,7 +233,7 @@ function errorText(err: unknown): string {
  * Add a flow member's bytes to the total of its call before they are read. The
  * text of each flow member stays in memory for the whole run, so the flow
  * members of a call get the limit of one file together, however many the call
- * names. A baseline is written to a temp file, so it does not count.
+ * names. A baseline or a tool file is written to a temp file, so it does not count.
  */
 function countMemberBytes(member: FileInputMember, taken: { bytes: number }, bytes: number): void {
   taken.bytes += bytes;
@@ -306,8 +308,8 @@ async function memberText(
  * its transfer is not. So does a flow entry that takes the flow members past
  * the limit of one file together. An entry of a role this server does not know
  * is left out, as is a repeated key after its first entry. A flow is kept as
- * text; a baseline is written to a temp file (`hostPath`), or kept as `listed`
- * when the client sent its name only.
+ * text; a baseline or a tool file is written to a temp file (`hostPath`), or
+ * kept as `listed` when the client sent its name only.
  */
 async function resolveMembers(
   members: unknown[],
@@ -320,7 +322,7 @@ async function resolveMembers(
     if (typeof raw !== "object" || raw === null) continue;
     const member = raw as FileInputMember;
     if (
-      (member.role !== "flow" && member.role !== "baseline") ||
+      (member.role !== "flow" && member.role !== "baseline" && member.role !== "tool") ||
       typeof member.key !== "string" ||
       Object.hasOwn(out, member.key)
     ) {

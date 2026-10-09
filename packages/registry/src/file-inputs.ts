@@ -90,12 +90,15 @@ export interface FileInputWire {
  * `POST /upload`), or `state` says why it carries none.
  */
 export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_MARKER | "members"> {
-  role: "flow" | "baseline";
+  role: "flow" | "baseline" | "tool";
   /**
    * How the tool-server looks the member up. For `flow`: the directory of the
    * file that names the target, a NUL, and the target as written, which is
    * exactly the pair the runner resolves. For `baseline`: the absolute client
-   * path `<dir>/__baselines__/<key>/<name>.png`.
+   * path `<dir>/__baselines__/<key>/<name>.png`. For `tool`: a file argument
+   * of a `tool:` step ({@link isClientFileArgument}), as the step spells it.
+   * One path is sent once: a `tool` member also serves as the baseline at
+   * that path.
    */
   key: string;
   /**
@@ -167,10 +170,10 @@ export interface FileInputSpec {
   unwrapWhenSet?: string;
   /**
    * `"flow"`: the file is a flow, and over a link the client also sends, on
-   * the same wire, every flow file its `run:` steps reach and the snapshot
-   * baselines of its run ({@link FileInputWire.members}). The call's
-   * `project_root` bounds what the client sends. Clients that do not know the
-   * field send the file alone.
+   * the same wire, every flow file its `run:` steps reach, the snapshot
+   * baselines of its run, and the file arguments of its `tool:` steps
+   * ({@link FileInputWire.members}). The call's `project_root` bounds what the
+   * client sends. Clients that do not know the field send the file alone.
    */
   collect?: "flow";
 }
@@ -178,13 +181,13 @@ export interface FileInputSpec {
 /** A {@link FileInputMember} as the tool-server resolved it. */
 export interface ResolvedMember {
   role: FileInputMember["role"];
-  /** `present`: the bytes arrived (`text` for a flow, `hostPath` for a baseline). */
+  /** `present`: the bytes arrived (`text` for a flow, `hostPath` for a baseline or a tool file). */
   state: "present" | "missing" | "refused" | "listed";
   /** Set for a flow: its real path and spelling on the client. */
   canonical?: string;
   spelling?: OnDiskSpelling;
   text?: string;
-  /** A baseline's bytes, materialized on this host. */
+  /** A baseline's or a tool file's bytes, materialized on this host. */
   hostPath?: string;
   error?: string;
 }
@@ -291,4 +294,57 @@ export function interpolateFileInputPath(
     return v;
   });
   return missing ? null : out;
+}
+
+/**
+ * The names a file argument of a `tool:` step may have to travel over a link,
+ * in any case of letters: the files the tools take (`screenshot-diff` PNGs, a
+ * `flow_path`). The tool-server refuses another one before the first step,
+ * and the client sends no other one.
+ */
+export const TOOL_FILE_EXTENSIONS = [".png", ".yaml"] as const;
+
+export function hasToolFileExtension(file: string): boolean {
+  const name = file.toLowerCase();
+  return TOOL_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+/** A file input a `tool:` step fills, and the path its args fill in. */
+export interface ToolStepFile {
+  spec: FileInputSpec;
+  path: string;
+}
+
+/**
+ * The file inputs of `specs` (a tool's declaration) that a `tool:` step's args
+ * fill in: a spec applies when every `${param}` it names is a non-empty string
+ * and no superseding source is set, as when the client wraps a call.
+ */
+export function toolStepFiles(
+  specs: readonly FileInputSpec[] | undefined,
+  args: Record<string, unknown>
+): ToolStepFile[] {
+  const files: ToolStepFile[] = [];
+  for (const spec of specs ?? []) {
+    if (spec.skipWhenSet !== undefined && args[spec.skipWhenSet] !== undefined) continue;
+    const filled = interpolateFileInputPath(spec.path, args);
+    if (filled !== null) files.push({ spec, path: filled });
+  }
+  return files;
+}
+
+/**
+ * A file the client sends for a `tool:` step over a link: a `file` input whose
+ * path is one argument of the step as written (not a path the tool builds out
+ * of several, such as `flow_file`), absolute, with a
+ * {@link TOOL_FILE_EXTENSIONS} name. The client and the runner both decide it
+ * here, so the runner finds every file it reads among the members.
+ */
+export function isClientFileArgument({ spec, path }: ToolStepFile): boolean {
+  return (
+    spec.kind === "file" &&
+    spec.path === `\${${spec.target}}` &&
+    path.startsWith("/") &&
+    hasToolFileExtension(path)
+  );
 }

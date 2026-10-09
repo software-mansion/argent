@@ -32,9 +32,13 @@ export {
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
   SCRIPT_FILE_NAME_PATTERN,
+  TOOL_FILE_EXTENSIONS,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,
+  hasToolFileExtension,
+  isClientFileArgument,
+  toolStepFiles,
 } from "./file-inputs";
 export type {
   FileInputWire,
@@ -44,6 +48,7 @@ export type {
   ResolvedFileInput,
   ResolvedMember,
   ClientFileDirective,
+  ToolStepFile,
 } from "./file-inputs";
 export {
   baselineKeyFor,

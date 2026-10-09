@@ -37,7 +37,8 @@ export interface ResolvedFlowFile {
  *
  * In client mode every path is a CLIENT path: `canonical` serves the runner as
  * a key (the `run:` cycle guard) and for display, and the snapshot baselines
- * are the client's files, never files on this host.
+ * and the file arguments of `tool:` steps are the client's files, never files
+ * on this host.
  */
 export interface ProjectAccess {
   readonly mode: "host" | "client";
@@ -133,11 +134,12 @@ function clientRefusal(subject: string, reason: string, verb = "send"): FailureE
  * resolved each `run:` target of its flow on its own disk before the call,
  * named it as the host implementation names it (`canonicalFlowPath`), and sent
  * what it found, and it sent the run's snapshot baselines by their client
- * paths. A `run:` pair the client did not send is refused here. A pair it
- * refused to send still names where the target landed, and its read fails
- * with the client's reason, as a directory fails only at the read on the host:
- * the runner's guards decide first, so a target past the depth limit fails as
- * it does on the host.
+ * paths and the file arguments of its `tool:` steps as the steps spell them. A
+ * `run:` pair the client did not send is refused here. A pair it refused to
+ * send still names where the target landed, and its read fails with the
+ * client's reason, as a directory fails only at the read on the host: the
+ * runner's guards decide first, so a target past the depth limit fails as it
+ * does on the host.
  *
  * A baseline this call writes goes into an in-call overlay, which later reads
  * see first, and travels back to the client in the result
@@ -172,20 +174,26 @@ export class ClientProjectAccess implements ProjectAccess {
     };
   }
 
-  private baseline(filePath: string): ResolvedMember | undefined {
+  /**
+   * A file the client sent by its path: a baseline, or a file argument of a
+   * `tool:` step. The client sends one path once, so a tool file at a
+   * baseline's path stands for that baseline too.
+   */
+  private file(filePath: string): ResolvedMember | undefined {
     const member = Object.hasOwn(this.members, filePath) ? this.members[filePath] : undefined;
-    return member?.role === "baseline" ? member : undefined;
+    return member?.role === "baseline" || member?.role === "tool" ? member : undefined;
   }
 
   /**
-   * A baseline of this run: the bytes this call wrote there, else the file
-   * the client sent, else null, the "no baseline" outcome: a compare run gets
-   * every baseline of its snapshots the client has.
+   * A baseline of this run or a file argument of a `tool:` step: the bytes
+   * this call wrote there, else the file the client sent, else null, the "no
+   * baseline" outcome: a compare run gets every baseline of its snapshots the
+   * client has, and every file a `tool:` step names.
    */
   async readFile(filePath: string): Promise<Buffer | null> {
     const written = this.overlay.get(filePath);
     if (written !== undefined) return written;
-    const member = this.baseline(filePath);
+    const member = this.file(filePath);
     if (member === undefined || member.state === "missing") return null;
     if (member.state === "present" && member.hostPath !== undefined) {
       return fs.readFile(member.hostPath);
@@ -214,7 +222,7 @@ export class ClientProjectAccess implements ProjectAccess {
         }
       );
     }
-    const member = this.baseline(filePath);
+    const member = this.file(filePath);
     if (member?.state === "refused") {
       throw clientRefusal(filePath, member.error ?? "refused", "write");
     }

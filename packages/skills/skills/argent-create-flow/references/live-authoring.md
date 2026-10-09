@@ -268,7 +268,15 @@ Run `flow-execute` on the complete YAML with the absolute project root. For a fr
 
 `flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`.
 
-Over `argent link` or `ARGENT_TOOLS_URL`, `run:` fragments work when they are under `project_root`, under its `.argent/flows/`, or beside the flow file. Keep fragments there. `snapshot:` steps work in the flow and in its fragments, and the baselines stay in the project. With `updateBaselines: true`, the client writes each new baseline when the run ends. A `baseline not written` line in the report means that the client did not save that baseline: fix the reason in the line and run again. These steps do not work over a link, in the flow or in a fragment that it reaches: `script:`, and a `tool:` step that takes a file (such as `screenshot-diff`, `reinstall-app`, or `flow-execute`) or records a flow.
+Over `argent link` or `ARGENT_TOOLS_URL`, `run:` fragments work when they are under `project_root`, under its `.argent/flows/`, or beside the flow file. Keep fragments there. `snapshot:` steps work in the flow and in its fragments, and the baselines stay in the project. With `updateBaselines: true`, the client writes each new baseline when the run ends. A `baseline not written` line in the report means that the client did not save that baseline: fix the reason in the line and run again.
+
+A `tool:` step works when its file argument is an absolute path to a `.png` or `.yaml` file, such as `baselinePath` of `screenshot-diff`. Keep the real file under the project root or beside the flow file, not behind a symlink to another place. Otherwise the step reports `error` when it runs, after the earlier steps acted. These steps do not work over a link, in the flow or in a fragment that it reaches:
+
+- `script:`
+- `tool: flow-execute`, and a `tool:` step that records a flow
+- a `tool:` step that takes a directory, an app or an output directory, such as `reinstall-app`, `gather-workspace-data`, or `screenshot-diff` with `outputDir`
+- a `tool:` step with a relative file path, or a file other than `.png` or `.yaml`
+- a `tool:` step whose tool builds the file path from several arguments, such as `flow-read-prerequisite` with `name`
 
 The tool-server checks the flow and its fragments before the first step. The error lists each step that does not work over a link, and each `run:` step whose fragment the client could not send, with the reason. A fragment that does not exist fails its `run:` step when the step runs. Run a flow that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
 
