@@ -515,6 +515,7 @@ describe("argent flow run", () => {
   it.each([
     [["run", "checkout", "--json", "--device"], "--device requires a value"],
     [["run", "checkout", "--json", "--bogus"], "Unknown flag: --bogus"],
+    [["run", "checkout", "--json=true"], "--json does not take a value"],
     [
       ["run", "--json"],
       "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.",
@@ -1423,6 +1424,14 @@ describe("argent flow run", () => {
     expect(logs).toEqual([]);
     expect(errs.join("\n")).toContain("Usage: argent flow");
     expect(errs.join("\n")).toContain("--json-stream");
+  });
+
+  it("keeps help off stdout for --json --help", async () => {
+    await flow(["run", checkoutPath, "--json", "--help"], opts);
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    expect(errs.join("\n")).toContain("Usage: argent flow");
   });
 
   it("emits a structured error for a pre-flight refusal in streaming mode", async () => {

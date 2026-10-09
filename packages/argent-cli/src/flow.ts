@@ -1454,9 +1454,9 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   }
 
   // The output mode is read off raw argv, since parsing can fail on a later
-  // token. Once streaming is requested stdout belongs exclusively to NDJSON,
-  // so help goes to stderr as the diagnostic it is. --json reads stderr as
-  // records, so a usage error there is the record alone, with no help.
+  // token. Either flag claims stdout for machine-readable output, so help goes
+  // to stderr as the diagnostic it is. --json reads stderr as records, so a
+  // usage error there is the record alone, with no help.
   const flagGiven = (flag: string): boolean =>
     rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
   const jsonStream = flagGiven("--json-stream");
@@ -1465,7 +1465,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp(jsonStream);
+    printHelp(jsonStream || json);
     return;
   }
   const usageError = (message: string, prose: string): Promise<never> => {
