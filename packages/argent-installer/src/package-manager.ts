@@ -28,6 +28,53 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
+// Where pnpm, yarn and bun keep global packages, as path fragments with `/`
+// separators. npm has no fragment of its own: its root is
+// `<prefix>/lib/node_modules` or `%APPDATA%\npm\node_modules`, so npm is what
+// remains once the others are ruled out.
+const GLOBAL_ROOT_MARKERS: ReadonlyArray<readonly [PackageManager, string]> = [
+  ["pnpm", "/pnpm/global/"],
+  ["pnpm", "/.pnpm/"],
+  ["yarn", "/yarn/global/node_modules/"],
+  ["yarn", "/yarn/data/global/node_modules/"],
+  ["bun", "/.bun/install/global/"],
+];
+
+// The package manager that owns a global install, read from where the install
+// lives (#1207). npm_config_user_agent names whoever LAUNCHED `argent` — empty
+// for a bare `argent update`, and the runner's for `npx` or `pnpm dlx` — so it
+// is used only when there is no global install to look at.
+export function detectGlobalPackageManager(
+  packageRoot: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): PackageManager {
+  if (packageRoot === null) return detectPackageManager();
+  // Windows paths are case-insensitive; POSIX paths are not.
+  const normalize = (p: string): string => {
+    const slashed = p.split("\\").join("/").replace(/\/+$/, "");
+    return platform === "win32" ? slashed.toLowerCase() : slashed;
+  };
+  const root = normalize(packageRoot);
+  // Global dirs moved by an environment variable. Settings kept in
+  // bunfig.toml or .yarnrc files are not read.
+  const configuredDirs: Array<readonly [PackageManager, string | undefined]> = [
+    ["pnpm", env.PNPM_HOME],
+    ["bun", env.BUN_INSTALL_GLOBAL_DIR],
+    ["bun", env.BUN_INSTALL && `${env.BUN_INSTALL}/install/global`],
+  ];
+  for (const [pm, dir] of configuredDirs) {
+    if (!dir) continue;
+    const home = normalize(dir);
+    if (root === home || root.startsWith(`${home}/`)) return pm;
+  }
+  const rootWithSlash = `${root}/`;
+  for (const [pm, marker] of GLOBAL_ROOT_MARKERS) {
+    if (rootWithSlash.includes(marker)) return pm;
+  }
+  return "npm";
+}
+
 function asKnownPm(name: unknown): PackageManager | null {
   return name === "npm" || name === "yarn" || name === "pnpm" || name === "bun" ? name : null;
 }
