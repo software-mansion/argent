@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { MAX_RUN_DEPTH, type FileInputMember } from "@argent/registry";
 import {
   prepareFileInputs,
   applyClientFileDirectives,
@@ -9,7 +10,9 @@ import {
   CLIENT_FILE_MARKER,
   type FileInputSpec,
   type FileInputWire,
+  type PrepareFileInputsOptions,
 } from "../src/file-inputs.js";
+import { collectFlowMembers } from "../src/flow-files.js";
 
 let tmpDir: string;
 
@@ -298,6 +301,98 @@ describe("prepareFileInputs — tar-upload kind", () => {
       mtimeMs: expect.any(Number),
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("prepareFileInputs — collect: flow", () => {
+  const specs: FileInputSpec[] = [
+    { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+  ];
+  let project: string;
+  let flows: string;
+
+  beforeEach(async () => {
+    // realpath: members name real paths, and macOS spells the temp dir through /var.
+    project = await fs.realpath(tmpDir);
+    flows = path.join(project, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const flowYaml = (...steps: string[]): string =>
+    `steps:\n${steps.map((step) => `  - ${step}`).join("\n")}\n`;
+
+  /** The members sent with the flow `root` in the flows dir over a link. */
+  async function membersOf(
+    root: string,
+    opts: Partial<PrepareFileInputsOptions> = {}
+  ): Promise<FileInputMember[]> {
+    const out = (await prepareFileInputs(
+      specs,
+      { flow_path: path.join(flows, root), project_root: project },
+      { includeContent: true, collectMembers: collectFlowMembers, ...opts }
+    )) as Record<string, FileInputWire>;
+    return out.flow_path!.members!;
+  }
+
+  const names = (members: FileInputMember[]): string[] =>
+    members.map((member) => path.basename(member.canonical!));
+
+  it("sends a run: chain as deep as the runner resolves it, and no deeper", async () => {
+    const last = MAX_RUN_DEPTH + 1;
+    for (let i = 0; i <= last; i++) {
+      await fs.writeFile(
+        path.join(flows, `n${i}.yaml`),
+        i < last ? flowYaml(`echo: n${i}`, `run: n${i + 1}.yaml`) : flowYaml("echo: bottom")
+      );
+    }
+
+    // The runner resolves n20 only to check for a cycle, then stops for depth,
+    // so a cycle that closes there is reported as one; it never asks for n21.
+    expect(names(await membersOf("n0.yaml"))).toEqual(
+      Array.from({ length: MAX_RUN_DEPTH }, (_, i) => `n${i + 1}.yaml`)
+    );
+  });
+
+  it("sends each resolution once, so a cycle ends", { timeout: 5_000 }, async () => {
+    // Each file names the other two, so a walk that repeats a resolution
+    // doubles at every hop and does not end in time.
+    await fs.writeFile(path.join(flows, "a.yaml"), flowYaml("run: b.yaml", "run: c.yaml"));
+    await fs.writeFile(path.join(flows, "b.yaml"), flowYaml("run: a.yaml", "run: c.yaml"));
+    await fs.writeFile(path.join(flows, "c.yaml"), flowYaml("run: a.yaml", "run: b.yaml"));
+
+    // b names a, so the runner resolves a again to see the cycle: a is a member too.
+    expect(names(await membersOf("a.yaml"))).toEqual(["b.yaml", "c.yaml", "a.yaml"]);
+  });
+
+  it("sums the inline bytes over the closure, and uploads the members past 256 KiB", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ uploadId: "u-1" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    // A YAML comment pads each fragment to 100 KiB: two fit the budget, the third does not.
+    for (const name of ["f1", "f2", "f3"]) {
+      await fs.writeFile(
+        path.join(flows, `${name}.yaml`),
+        `${flowYaml(`echo: ${name}`)}# ${"x".repeat(100 * 1024)}\n`
+      );
+    }
+    await fs.writeFile(
+      path.join(flows, "main.yaml"),
+      flowYaml("run: f1.yaml", "run: f2.yaml", "run: f3.yaml")
+    );
+
+    const members = await membersOf("main.yaml", {
+      uploadEndpoint: { url: "https://sim.example", token: "tok" },
+    });
+
+    expect(members.map((m) => (m.content !== undefined ? "inline" : m.uploadId))).toEqual([
+      "inline",
+      "inline",
+      "u-1",
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 
