@@ -77,8 +77,9 @@ describe("flow-execute with await-ui-element gating", () => {
       )
     );
 
-    // gesture-tap + await-ui-element ran; the trailing tap did NOT (skipped).
-    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    // gesture-tap + await-ui-element ran, then the failure screenshot; the
+    // trailing tap did NOT (skipped).
+    expect(registry.invokeTool).toHaveBeenCalledTimes(3);
     const executed = result.steps.filter((s) => s.kind === "tool" && s.status !== "skip");
     expect(executed).toHaveLength(2);
     const last = executed[1];

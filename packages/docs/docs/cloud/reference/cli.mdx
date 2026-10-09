@@ -49,6 +49,52 @@ sim-remote [OPTIONS] <COMMAND>
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `sim-remote simctl [ARGS...]`         | Run `xcrun simctl` on the machine with the same arguments. `sim-remote` reproduces the stdout, the stderr and the exit code of `simctl`. Without arguments, `simctl` prints its own usage. See [simctl passthrough](/docs/cloud/reference/simctl) for the subcommands that use local files |
 | `sim-remote input tap <UDID> <X> <Y>` | Tap the screen at a point. `X` and `Y` are fractions of the screen size from `0.0` to `1.0`. `0.5 0.5` is the centre of the screen                                                                                                                                                         |
+| `sim-remote logs <UDID>`              | Download the crash reports and the logs of a simulator. See [The logs command](#the-logs-command)                                                                                                                                                                                          |
+
+### The logs command
+
+```
+sim-remote logs <UDID> [--kind <KIND>]... [--process <NAME>]... [--last <DURATION>] [--archive <FILE>]
+```
+
+`logs` collects the logs of one simulator on the machine and downloads them as one bundle. See [Get crash reports and logs](/docs/cloud/guides/logs).
+
+| Option              | Description                                                                                                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--kind <KIND>`     | A kind of logs to collect: `crash`, `system` or `unified`. Repeat the option for more kinds. Without the option, `logs` collects all kinds                                                                               |
+| `--process <NAME>`  | Keep only the crash reports and the unified log records of one app. `NAME` is a bundle identifier or the name of an executable. Repeat the option for more apps. A name with `"`, `\` or a control character is rejected |
+| `--last <DURATION>` | The time range of the unified log: `90s`, `30m`, `2h`, or a number of seconds. The default is `10m`. The machine rounds the value up to full minutes. `0` and other units are rejected                                   |
+| `--archive <FILE>`  | Save the bundle as a `.tar.gz` file at `FILE` and do not unpack it. Prints `Wrote logs to: <FILE>`                                                                                                                       |
+
+The kinds have these sources and these directories in the bundle:
+
+| Kind      | Directory  | Content                                                                                                                                    |
+| --------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `crash`   | `crash/`   | The crash reports (`.ips` files) of the processes of the simulator. A report that macOS retired has the prefix `Retired-` in its file name |
+| `system`  | `system/`  | The log directory of the simulator, with `system.log`, the install logs and the asset logs. `--process` does not filter this kind          |
+| `unified` | `unified/` | `log.txt`, the output of `log show --style compact` for the time range. The simulator must be booted                                       |
+
+`logs` resolves a bundle identifier to the executable of the app on the machine. The crash reports and the log records carry the name of the executable.
+
+Without `--archive`, `logs` unpacks the bundle into a new directory with the prefix `sim-remote-logs-` in the temporary directory of your computer. The first line of the output is the path of the directory. Each of the next lines starts with two spaces and names one file, or one kind that `logs` skipped:
+
+```
+<DIRECTORY>
+  crash/<FILE>.ips  (<PROCESS>)
+  system/<FILE>
+  unified/log.txt
+  <KIND>: skipped — <REASON>
+```
+
+A kind without logs does not fail the command. `logs` skips the unified log of a simulator that is not booted. When the text of the unified log is larger than 64 MiB, the machine keeps the most recent 64 MiB, and the line of `unified/log.txt` says so.
+
+The bundle contains the manifest `.sim-remote-logs.json`:
+
+| Field     | Description                                                                                                                                                                      |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`    | The UDID of the simulator                                                                                                                                                        |
+| `entries` | One object per file: `kind`, `entry` (the path in the bundle), `process` (the process of a crash report) and `note` (a remark about the file). `process` and `note` are optional |
+| `skipped` | One object per kind that `logs` skipped: `kind` and `reason`. The field is absent when `logs` skipped no kind                                                                    |
 
 ## Tunnel commands
 

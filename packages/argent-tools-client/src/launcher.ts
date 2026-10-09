@@ -306,7 +306,12 @@ export function spawnToolsServer(
       logFd = fs.openSync("/dev/null", "w");
     }
 
-    const child = spawn("node", [paths.bundlePath, "start"], {
+    // Reuse the running Node binary while it still exists; Bun, Deno and
+    // Electron (whose execPath launches the app itself) fall back to `node` on PATH.
+    const { bun, deno, electron } = process.versions;
+    const nodeBin =
+      !(bun || deno || electron) && fs.existsSync(process.execPath) ? process.execPath : "node";
+    const child = spawn(nodeBin, [paths.bundlePath, "start"], {
       detached: true,
       stdio: ["ignore", "pipe", logFd],
       env: buildToolsServerEnv(paths, port, process.env, options),
@@ -316,7 +321,17 @@ export function spawnToolsServer(
 
     const pid = child.pid;
     if (!pid) {
-      reject(new Error("Failed to get PID of spawned tools server"));
+      // A failed spawn emits `error` (ENOENT/EACCES) on the next tick; with no
+      // listener it is an unhandled event that crashes the host process.
+      child.once("error", (err: NodeJS.ErrnoException) =>
+        reject(
+          new Error(
+            err.code === "ENOENT" && nodeBin === "node"
+              ? "Could not start the argent tool-server: `node` was not found on PATH. Install Node.js 20+ or add it to PATH."
+              : `Could not start the argent tool-server: ${err.message}`
+          )
+        )
+      );
       return;
     }
 
@@ -575,12 +590,20 @@ async function terminatePid(pid: number, stillOurs?: () => boolean): Promise<voi
 /**
  * Terminate the tracked tool-server and drop its record. With `bundlePath`,
  * THAT install's server; without, the legacy single-slot record only.
+ * Resolves true when a live tool-server was stopped, false when the record was
+ * missing or stale. A live pid that is not verifiably our tool-server (a
+ * recycled pid) is left alone, and its record kept, as in
+ * killToolServerForInstallDir.
  */
-export async function killToolServer(bundlePath?: string): Promise<void> {
+export async function killToolServer(bundlePath?: string): Promise<boolean> {
   const state = await readState(bundlePath);
-  if (!state) return;
-  await terminatePid(state.pid);
+  if (!state) return false;
+  const stillOurs = () => couldBeOurToolServer(state.pid, state.bundlePath);
+  const alive = isProcessAlive(state.pid);
+  if (alive && !stillOurs()) return false;
+  if (alive) await terminatePid(state.pid, stillOurs);
   await clearToolsServerState(bundlePath ?? state.bundlePath);
+  return alive;
 }
 
 function isPathWithin(child: string, parent: string): boolean {
@@ -647,16 +670,25 @@ const PS_BIN = ["/bin/ps", "/usr/bin/ps"].find((p) => fs.existsSync(p)) ?? "ps";
 // the live server. Same flag tool-server's vega-process PS_ARGS uses.
 const PS_WIDTH_FLAGS = ["-ww"] as const;
 
+// Outside a UTF-8 locale ps escapes every non-ASCII byte (`M-E` on macOS, `?`
+// on procps), so a bundle path under e.g. `/Users/Łukasz` never matches its own
+// marker and the guard vetoes the kill. A launchd-, systemd- or container-
+// spawned process often has no locale at all. macOS always ships en_US.UTF-8;
+// Linux ships C.UTF-8 as a locale file, which a stripped image can lack.
+const PS_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+
 /**
  * `pid`'s full command line from `ps`. Throws whatever `ps` failed with, its
  * stderr included. `flags` replaces the width flags, so a caller can measure
- * what this host's `ps` truncates without them.
+ * what this host's `ps` truncates without them. `env` replaces the UTF-8 one.
  */
 export function readProcessCommandLine(
   pid: number,
-  flags: readonly string[] = PS_WIDTH_FLAGS
+  flags: readonly string[] = PS_WIDTH_FLAGS,
+  env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: PS_LOCALE }
 ): string {
   return execFileSync(PS_BIN, [...flags, "-p", String(pid), "-o", "command="], {
+    env,
     encoding: "utf8",
     timeout: 2_000,
     // A recycled pid can sit on a process with an argv past Node's 1 MiB exec
@@ -681,25 +713,40 @@ function couldBeOurToolServer(pid: number, marker: string | undefined): boolean 
   // false would veto every kill and leave the servers running. Callers there
   // decide on the record alone.
   if (process.platform === "win32") return true;
-  let cmd: string;
-  try {
-    cmd = readProcessCommandLine(pid);
-  } catch (err) {
-    // Say why: a rejected flag, or a bare-`"ps"` ENOENTing under a sanitized
-    // PATH, orphans every live server — silently, without this.
-    process.stderr.write(
-      `[launcher] ps could not read pid ${pid}'s command line; leaving it alone: ${String(err)}\n`
-    );
-    return false;
-  }
-  if (!cmd) return false;
-  // Our servers run `node <bundlePath> start`. Requiring the path at an
+  // Our servers run `<any node path> <bundlePath> start`. Requiring the path at an
   // argument boundary followed by `start` keeps a mention that is not being run
   // from matching, though a command line embedding the pair mid-argv — a
   // `sh -c` wrapper — still does; matching the raw command string rather than
-  // split argv keeps bundle paths containing spaces working.
+  // split argv keeps bundle paths containing spaces working. Only ASCII
+  // whitespace is a boundary: ps joins argv with spaces, and the UTF-8 read must
+  // not turn a no-break space inside some other argv into one.
   const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|\\s)${escaped} start(?:\\s|$)`).test(cmd);
+  const ours = new RegExp(`(?:^|[\\t\\n\\v\\f\\r ])${escaped} start(?:[\\t\\n\\v\\f\\r ]|$)`);
+  // The UTF-8 read, then the read in the caller's own locale that this guard
+  // made before: a host without PS_LOCALE renders a non-ASCII path escaped where
+  // the caller's locale may not, and a failed UTF-8 read may work without it. An
+  // ASCII path renders the same in every locale, so one read answers for it.
+  const nonAscii = [...marker].some((c) => c.charCodeAt(0) > 0x7f);
+  let failure: string | undefined;
+  for (const env of [undefined, process.env]) {
+    try {
+      if (ours.test(readProcessCommandLine(pid, PS_WIDTH_FLAGS, env))) return true;
+      failure = undefined;
+      if (!nonAscii) break;
+    } catch (err) {
+      failure = String(err);
+      // A ps that timed out once would time out again.
+      if ((err as NodeJS.ErrnoException).code === "ETIMEDOUT") break;
+    }
+  }
+  if (failure !== undefined) {
+    // Say why: a rejected flag, or a bare-`"ps"` ENOENTing under a sanitized
+    // PATH, orphans every live server — silently, without this.
+    process.stderr.write(
+      `[launcher] ps could not read pid ${pid}'s command line; leaving it alone: ${failure}\n`
+    );
+  }
+  return false;
 }
 
 // ensureToolsServer's "is there a healthy server? no → spawn one" is a
