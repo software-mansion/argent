@@ -832,16 +832,41 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
            <node index="0" class="android.widget.TextView" resource-id="com.acme.app:id/continue-label" text="Continue" package="com.acme.app" bounds="[60,410][600,470]" />
          </node>`;
 
-  it("Android: warns when the trim's collapse gave the runner's node no text", async () => {
+  it("Android: records clean when the trim's borrowed label is the runner's too", async () => {
     const wait: WaitArgs = {
       udid: ANDROID,
       condition: "text",
       selector: { identifier: "com.acme.app:id/continue-row" },
       expectedText: "Continue",
     };
+    serveTree(androidRunnerTree(ANDROID_ROW), "android-devtools");
+    await startRecording("android");
+
+    const result = await recordWait("android", wait);
+
+    expect(warningOf(result, "android")).toBeUndefined();
+    expect(await recordedSteps("android")).toHaveLength(1);
+  });
+
+  // Android: a labelled RN `Pressable` around a decorative icon and a bare
+  // clickable view of its own bounds. The TRIM drops the icon, then collapses
+  // the wrapper onto the view and hands it the label. The FLOW parse copies a
+  // wrapper's label only down a chain of single children, so its view has none.
+  const ANDROID_ICON_BUTTON = `<node index="0" class="android.view.ViewGroup" content-desc="Continue" clickable="true" focusable="true" package="com.acme.app" bounds="[40,400][1040,480]">
+           <node index="0" class="android.widget.ImageView" package="com.acme.app" bounds="[60,410][120,470]" />
+           <node index="1" class="android.widget.Button" clickable="true" package="com.acme.app" bounds="[40,400][1040,480]" />
+         </node>`;
+
+  it("Android: warns when the trim's collapse gave the runner's node no text", async () => {
+    const wait: WaitArgs = {
+      udid: ANDROID,
+      condition: "text",
+      selector: { role: "Button" },
+      expectedText: "Continue",
+    };
 
     // The premise, on the same dump: the LIVE side really does pass.
-    const recorderTree = androidRecorderTree(ANDROID_ROW);
+    const recorderTree = androidRecorderTree(ANDROID_ICON_BUTTON);
     expect(
       evaluateMatches(
         wait as Parameters<typeof evaluateMatches>[0],
@@ -849,7 +874,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       )
     ).toBe(true);
 
-    serveTree(androidRunnerTree(ANDROID_ROW), "android-devtools");
+    serveTree(androidRunnerTree(ANDROID_ICON_BUTTON), "android-devtools");
     await startRecording("android");
 
     const result = await recordWait("android", wait);
