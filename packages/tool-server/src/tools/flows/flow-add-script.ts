@@ -142,6 +142,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
   // untouched, so a call that fails some other way is still re-POSTed.
   longRunning: true,
   zodSchema,
+  gatedOperations: () => ["flow-scripts"],
   services: () => ({}),
   async execute(_services, params, ctx) {
     const session = await requireRecordingSession(params.project_root, params.name);

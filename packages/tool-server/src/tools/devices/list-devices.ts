@@ -18,6 +18,7 @@ import {
   type VegaDevice,
 } from "../../utils/vega-devices";
 import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
+import { hasDeviceAllowlist, isDeviceAllowed } from "../../server-policy";
 type IosDevice = IosSimulator & { platform: "ios" };
 
 /**
@@ -393,6 +394,23 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
-    return { devices, avds, ...(external.length > 0 ? { hint: EXTERNAL_DEVICES_HINT } : {}) };
+    const hint = external.length > 0 ? { hint: EXTERNAL_DEVICES_HINT } : {};
+    if (!hasDeviceAllowlist()) return { devices, avds, ...hint };
+    // A server policy that pins device ids hides every other device, every
+    // device without an id (a stopped VVD), and every AVD: launching by AVD or
+    // VVD image is denied under it.
+    const allowed = devices.filter((d) => {
+      const id = listedDeviceId(d);
+      return id !== null && isDeviceAllowed(id);
+    });
+    return { devices: allowed, avds: [], ...hint };
   },
 };
+
+/** The id tools accept for a listed device: an external one is addressed by its `ext:` id. */
+function listedDeviceId(device: ListedDevice): string | null {
+  if ("external" in device) return device.id;
+  if ("udid" in device) return device.udid;
+  if ("serial" in device) return device.serial;
+  return device.id;
+}

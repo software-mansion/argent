@@ -9,6 +9,7 @@ import {
   FAILURE_CODES,
   FailureError,
   ServiceNotFoundError,
+  getFailureSignal,
   type Registry,
   type ToolCapability,
   type ToolDefinition,
@@ -50,6 +51,7 @@ import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
 import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
+import { assertOperationAllowed } from "../../server-policy";
 
 const execFileAsync = promisify(execFile);
 
@@ -309,7 +311,8 @@ function killDetachedEmulator(child: import("node:child_process").ChildProcess):
  */
 async function assertScreencapAlive(
   serial: string,
-  budgetMs: number = STAGE_BUDGET.firstRealFrameHot
+  budgetMs: number = STAGE_BUDGET.firstRealFrameHot,
+  options: { preexisting?: boolean } = {}
 ): Promise<void> {
   const deadline = Date.now() + budgetMs;
   // Success only on "1": empty output (no screencap binary, nothing captured)
@@ -326,6 +329,9 @@ async function assertScreencapAlive(
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, 1_500));
   }
+  // An emulator that ran before this call is not this call's to shut down when
+  // the server policy denies device-shutdown: refuse instead of cold-booting.
+  if (options.preexisting) assertOperationAllowed("device-shutdown");
   await killEmulatorQuietly(serial);
   throw new FailureError(
     `hot-boot composite did not restore within ${budgetMs / 1000}s — \`screencap\` last returned ` +
@@ -996,14 +1002,17 @@ async function bootAndroidImpl(params: {
       // would keep handing back that wedged serial. On failure the helper kills
       // the emulator and we fall through to the boot pipeline below.
       try {
-        await assertScreencapAlive(alreadyRunning.serial);
+        await assertScreencapAlive(alreadyRunning.serial, undefined, { preexisting: true });
         return {
           platform: "android",
           serial: alreadyRunning.serial,
           avdName: params.avdName,
           booted: true,
         };
-      } catch (_err) {
+      } catch (err) {
+        // A policy refusal left the emulator running; booting the same AVD
+        // again would collide with it.
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.SERVER_POLICY_DENIED) throw err;
         // assertScreencapAlive already killed the emulator; refresh the snapshot
         // so the killed serial is in serialsBefore and the upcoming spawn's
         // "new serial" diff stays correct.
@@ -1351,6 +1360,8 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
       "boot start launch simulator emulator avd device session ios android vega vvd firetv cold hot",
     zodSchema,
     capability,
+    // `force` restarts a running device, which shuts it down first.
+    gatedOperations: (params) => (params.force ? ["device-shutdown"] : []),
     services: () => ({}),
     async execute(_services, params) {
       const hasUdid = Boolean(params.udid);

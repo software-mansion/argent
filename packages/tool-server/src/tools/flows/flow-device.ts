@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { DEVICE_BIND_KEYS, DEVICE_BIND_LIST_KEYS } from "../../utils/device-param-keys";
 import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils";
 
 /**
@@ -10,35 +11,6 @@ import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils
  * a run can select, never something a flow file names.
  */
 export type FlowPlatform = SelectablePlatform;
-
-/**
- * Arg names that mean "the device to act on". Stripped from every recorded step
- * and re-injected with the resolved run device, so a name here must mean a
- * device id on EVERY tool that declares one — the strip is schema-blind.
- * `device` is `flow-execute`'s own, so a nested flow inherits the run device
- * instead of pinning the one it was recorded on (#607).
- *
- * `platform` is deliberately absent: it is not device-specific on every tool
- * (`react-profiler-analyze` declares its own, which a blind strip would
- * retarget), and it is read only when no device was given, so binding it would
- * change nothing.
- */
-const DEVICE_BIND_KEYS = ["udid", "device_id", "device"] as const;
-
-/**
- * Args keys holding a LIST of device ids. Same treatment as
- * {@link DEVICE_BIND_KEYS}, but rebound to `[deviceId]`, since a run resolves
- * exactly one device and a flow that named several would be naming the
- * recording host's.
- *
- * `stop-all-simulator-servers`' `devices` is the only such key, and it is a
- * scope rather than a target: a recording of the UNSCOPED sweep rebinds to the
- * run device (binding can only narrow, and the replay must not reap devices
- * another agent is mid-session on), while a recorded scope is the flow's own
- * statement of what to reap and is overridden only by an explicit `device` —
- * see {@link bindDeviceArgs}, where the two cases part.
- */
-const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
 
 /**
  * Keys that mean a tool needs a device to act on at all — the TARGET keys, and

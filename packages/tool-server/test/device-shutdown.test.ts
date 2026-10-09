@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the callback-style execFile that device-shutdown promisifies, plus the
 // device classifier, so this unit test asserts the platform dispatch + argv +
@@ -21,6 +21,7 @@ import {
   shutdownOwnedDevices,
   shutdownDevice,
 } from "../src/utils/device-shutdown";
+import { installServerPolicy, parseServerPolicy } from "../src/server-policy";
 
 // Default: exec succeeds (callback style: (file, args, options, cb) => cb(err, {stdout,stderr})).
 function execSucceeds() {
@@ -160,5 +161,37 @@ describe("shutdownDevice (surfaces the outcome)", () => {
     execFails("simctl: boom");
     const r = await shutdownDevice("UDID-1");
     expect(r).toEqual({ ok: false, error: "simctl: boom" });
+  });
+});
+
+describe("operator server policy", () => {
+  afterEach(() => installServerPolicy(undefined));
+
+  it("leaves devices running when the policy denies device-shutdown", async () => {
+    installServerPolicy(
+      parseServerPolicy(
+        { version: 1, operations: { deny: ["device-shutdown"] } },
+        "/etc/argent/policy.json"
+      )
+    );
+    resolveDeviceMock.mockReturnValue({ platform: "ios", kind: "simulator" });
+
+    await shutdownOwnedDevice("UDID-1");
+    const result = await shutdownDevice("UDID-1");
+
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("device-shutdown") });
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to shut down a device outside the allowlist", async () => {
+    installServerPolicy(
+      parseServerPolicy({ version: 1, devices: { allow: ["UDID-1"] } }, "/etc/argent/policy.json")
+    );
+    resolveDeviceMock.mockReturnValue({ platform: "ios", kind: "simulator" });
+
+    const result = await shutdownDevice("UDID-2");
+
+    expect(result.ok).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 });

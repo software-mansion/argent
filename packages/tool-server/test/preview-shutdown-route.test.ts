@@ -18,6 +18,7 @@ vi.mock("@argent/configuration-core", () => ({ isFlagEnabled: vi.fn(() => true) 
 import { createPreviewRouter } from "../src/preview";
 import { variantProposalStore } from "../src/utils/variant-proposals";
 import { isFlagEnabled } from "@argent/configuration-core";
+import { installServerPolicy, parseServerPolicy } from "../src/server-policy";
 
 const mockFlag = vi.mocked(isFlagEnabled);
 
@@ -86,5 +87,26 @@ describe("POST /preview/shutdown/:udid", () => {
     expect(shutdownDevice).not.toHaveBeenCalled();
     // Ownership untouched — the gate rejected before any state change.
     expect(variantProposalStore.isDeviceOwned(IOS_UDID)).toBe(true);
+  });
+});
+
+describe("operator server policy on /preview/:udid routes", () => {
+  it("refuses a device outside the allowlist before the route runs", async () => {
+    installServerPolicy(
+      parseServerPolicy({ version: 1, devices: { allow: [IOS_UDID] } }, "/etc/argent/policy.json")
+    );
+    try {
+      const { app } = harness([
+        { platform: "ios", udid: IOS_UDID, state: "Booted" },
+        { platform: "ios", udid: IOS_UDID_2, state: "Booted" },
+      ]);
+
+      const res = await request(app).post(`/shutdown/${IOS_UDID_2}`);
+
+      expect(res.status).toBe(403);
+      expect(shutdownDevice).not.toHaveBeenCalled();
+    } finally {
+      installServerPolicy(undefined);
+    }
   });
 });

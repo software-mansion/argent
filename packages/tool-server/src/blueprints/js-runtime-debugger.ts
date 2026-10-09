@@ -27,6 +27,7 @@ import { LogFileWriter } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
+import { assertMetroDebuggingAllowed } from "../server-policy";
 
 export const JS_RUNTIME_DEBUGGER_NAMESPACE = "JsRuntimeDebugger";
 
@@ -184,6 +185,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         error_kind: "validation",
       });
     }
+
+    // Metro, not the device id, decides which runtime this attaches to: a port
+    // serving one device is used whatever device_id was asked for. Nothing in
+    // Metro's target binds it to a device id, so a server policy that pins
+    // device ids cannot admit it.
+    assertMetroDebuggingAllowed();
 
     // A remote (cloud) sim reaches the developer's LOCAL Metro over a sim-remote
     // reverse tunnel: the sim's localhost:<port> is forwarded out to this host.

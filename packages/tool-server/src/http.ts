@@ -63,6 +63,7 @@ import {
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
+import { admitToolInvocation, isDeviceAllowed } from "./server-policy";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -547,6 +548,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   app.use("/chromium-server/:deviceId", async (req: Request, res: Response, next) => {
     idleTimer.touch();
     const deviceId = req.params.deviceId as string;
+    if (!isDeviceAllowed(deviceId)) {
+      res.status(403).json({
+        error: `Device id "${deviceId}" is not allowed by this tool-server's operator policy.`,
+      });
+      return;
+    }
     const device = resolveDevice(deviceId);
     if (device.platform !== "chromium") {
       res.status(400).json({
@@ -801,6 +808,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         parsedData = parseResult.data;
       }
 
+      // The operator's server policy refuses before the gates below act on the
+      // named device (capability resolution, external grant revocation).
+      // `Registry.invokeTool` admits again, for the nested dispatch paths.
+      try {
+        admitToolInvocation(def, parsedData);
+      } catch (err) {
+        const signal = getFailureSignal(err);
+        if (signal) emitHttpFailure(signal, parsedData);
+        res.status(403).json({
+          error: err instanceof Error ? err.message : String(err),
+          ...errorSignalFields(err),
+        });
+        return;
+      }
+
       // Capability gate fires BEFORE the global requires preflight: an android
       // serial calling an iOS-only tool should get a clean "unsupported on android"
       // error, not a misleading "xcrun missing". Cross-platform tools re-check
@@ -1050,6 +1072,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: attribute(err.message), ...errorSignalFields(err) });
+          return;
+        }
+        if (getFailureSignal(err)?.error_code === FAILURE_CODES.SERVER_POLICY_DENIED) {
+          res
+            .status(403)
+            .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
           return;
         }
         // Walk the cause chain so a ToolExecutionError wrapping a

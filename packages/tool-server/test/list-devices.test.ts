@@ -103,6 +103,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { installServerPolicy, parseServerPolicy } from "../src/server-policy";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import {
   __resetExternalDeviceCacheForTesting,
@@ -155,6 +156,45 @@ beforeEach(() => {
 });
 
 describe("list-devices", () => {
+  it("lists only the devices an operator server policy allows, and no AVDs", async () => {
+    installServerPolicy(
+      parseServerPolicy(
+        { version: 1, devices: { allow: ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"] } },
+        "/etc/argent/policy.json"
+      )
+    );
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl" && args[1] === "list") {
+        return { stdout: simctlJson(), stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        const shellCmd = args[3] ?? "";
+        if (shellCmd.includes("ro.product.model")) return { stdout: "Pixel_3a\n", stderr: "" };
+        if (shellCmd.includes("ro.build.version.sdk")) return { stdout: "34\n", stderr: "" };
+        if (shellCmd.includes("ro.kernel.qemu.avd_name"))
+          return { stdout: "Pixel_3a_API_34\n", stderr: "" };
+      }
+      if (cmd === "emulator" && args[0] === "-list-avds") {
+        return { stdout: "Pixel_3a_API_34\nPixel_7_API_34\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    try {
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(
+        result.devices.map((d) => ("udid" in d ? d.udid : "serial" in d ? d.serial : d.id))
+      ).toEqual(["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]);
+      expect(result.avds).toEqual([]);
+    } finally {
+      installServerPolicy(undefined);
+    }
+  });
+
   it("merges iOS simulators and Android devices into a single tagged array", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "xcrun" && args[0] === "simctl" && args[1] === "list") {

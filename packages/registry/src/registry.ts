@@ -48,6 +48,13 @@ export class Registry {
    */
   private readonly isFlagEnabled: (flag: string) => boolean;
   /**
+   * Injected for the same reason as `isFlagEnabled`: the tool-server wires its
+   * operator policy here, so every dispatch path (HTTP, flow-execute,
+   * flow-add-step, run-sequence) is admitted against the validated params. It
+   * throws to refuse; the default admits everything.
+   */
+  private readonly admitInvocation: (definition: ToolDefinition, params: unknown) => void;
+  /**
    * Host files produced by tools, served by the tool-server's `/artifacts/:id`
    * route. Owned per registry rather than as a module singleton, so the tool
    * path and the HTTP route see the same store.
@@ -55,8 +62,14 @@ export class Registry {
   public readonly artifacts = new ArtifactStore();
   public readonly events = new TypedEventEmitter<RegistryEvents>();
 
-  constructor(options: { isFlagEnabled?: (flag: string) => boolean } = {}) {
+  constructor(
+    options: {
+      isFlagEnabled?: (flag: string) => boolean;
+      admitInvocation?: (definition: ToolDefinition, params: unknown) => void;
+    } = {}
+  ) {
     this.isFlagEnabled = options.isFlagEnabled ?? (() => true);
+    this.admitInvocation = options.admitInvocation ?? (() => {});
   }
 
   registerBlueprint<T, C>(blueprint: ServiceBlueprint<T, C>): void {
@@ -149,6 +162,7 @@ export class Registry {
         }
         effectiveParams = parsed.data;
       }
+      this.admitInvocation(definition as ToolDefinition, effectiveParams);
 
       // Computed up front because the URNs are needed to know which services to
       // recover if the tool fails against a dead-but-cached instance.
