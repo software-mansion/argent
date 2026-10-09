@@ -259,7 +259,8 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "into a passthrough and drops the node carrying the id, while borrowing a descendant's " +
       "text into an unlabelled clickable's own label — where the flow adapter keeps every view " +
       "with a `resource-id` or a label, and asks for 12000 nodes against the helper's 5000 " +
-      "default. So each holds elements the other drops." +
+      "default. So each holds elements the other drops. The runner retries a selector without " +
+      "a `within`, `after` or `next` scope on `describe`'s labels." +
       SCREEN_MAY_HAVE_MOVED
     );
   }

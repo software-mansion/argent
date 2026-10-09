@@ -1,7 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DescribeFrame, DescribeNode } from "../../contract";
 
-interface ParsedXmlNode {
+export interface ParsedXmlNode {
   tag: string;
   attrs: Record<string, string>;
   children: ParsedXmlNode[];
@@ -689,6 +689,16 @@ export function parseUiAutomatorDump(
       error_kind: "subprocess",
     });
   }
+  return describeUiAutomatorRoot(root, screenW, screenH, options);
+}
+
+/** The trim `parseUiAutomatorDump` applies, over an already parsed dump. */
+export function describeUiAutomatorRoot(
+  root: ParsedXmlNode,
+  screenW: number,
+  screenH: number,
+  options: { includeSystem?: boolean } = {}
+): DescribeNode {
   const includeSystem = options.includeSystem === true;
   const opts: PruneOptions = { screenW, screenH, includeSystem };
   const topChildren: DescribeNode[] = [];
