@@ -10,6 +10,9 @@ import type {
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { describeTvFocus } from "../describe/platforms/tv-focus";
+import { resolveTvApi } from "../tv/tv-service";
+import type { TvControlApi } from "../../blueprints/tv-control-types";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
@@ -322,7 +325,8 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     params: Params,
     services: Record<string, unknown>,
     isTvOs: boolean,
-    androidIsTv: boolean
+    androidIsTv: boolean,
+    tvApi: TvControlApi | null
   ): Promise<DescribeTreeData> {
     // ios-remote reads the same AX tree through describeIos: the ax-service
     // blueprint routes it over the sim-remote tunnel, so only the preflight dep
@@ -332,6 +336,9 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
       if (device.kind === "device") {
         return describeIosDevice(registry, device);
       }
+      // Apple TV: match against the focus view; describeIos short-circuits tvOS
+      // to an empty tree, so no selector could ever resolve (#620).
+      if (isTvOs && tvApi) return describeTvFocus(tvApi);
       return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
     }
     if (device.platform === "android") {
@@ -369,7 +376,7 @@ case-insensitive substrings of the element's label/value and role; identifier ma
 also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
 It polls the same accessibility / DOM tree as \`describe\`
 (iOS simulator AXRuntime, physical-iOS runner snapshot, Android uiautomator, Chromium CDP,
-Vega automation toolkit) every pollIntervalMs
+Apple TV focus engine, Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 
 Returns { success: boolean, elapsed: number, note?, cause? } — success=false means the wait ended without the
@@ -403,6 +410,10 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
       const isTvOs =
         device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
+      // Resolved before the clock starts: the first resolution spawns the tvOS
+      // daemons and can take seconds. A failure is infrastructure, so it throws
+      // rather than reporting an unmet condition.
+      const tvApi = isTvOs ? await resolveTvApi(registry, device.id) : null;
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
 
       // Clock starts after setup so its fixed cost isn't charged to timeoutMs.
@@ -426,7 +437,7 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       let lastTrustedReadAt: number | undefined;
 
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
+        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv, tvApi),
         timeoutMs,
         pollIntervalMs,
         signal,
