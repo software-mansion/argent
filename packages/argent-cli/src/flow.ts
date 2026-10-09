@@ -132,18 +132,18 @@ does not mark as validation, or a reply that is not a report stops the batch and
 counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
-automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
-either, the CLI uploads the flow file, the run: fragments it reaches and the
-run's snapshot baselines. It also uploads each .png or .yaml file that a tool:
-step takes as a file argument by an absolute path. It writes the new baselines
-that the run returns. The tool-server rejects a flow before the first step when
-the flow or one of those fragments has one of these steps:
+automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
+a link, the CLI uploads the flow file, the run: fragments that it reaches and
+the snapshot baselines that the run compares. It also uploads each .png or
+.yaml file that a tool: step takes as a file argument by an absolute path. The
+CLI writes the new baselines that the run returns. The tool-server rejects the
+flow before the first step when the flow or a fragment has one of these steps:
   - a script: step
   - a tool: step that runs or records a flow
   - a tool: step that takes a directory, an app or an output directory
   - a tool: step whose tool builds a file path from several arguments
   - a tool: step that names a relative path or a file other than .png or .yaml
-With neither argent link nor ARGENT_TOOLS_URL, all step kinds run.
+Without a link, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
