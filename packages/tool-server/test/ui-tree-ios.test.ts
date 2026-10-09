@@ -72,8 +72,8 @@ describe("ui-tree iOS adapter", () => {
     expect(field).toMatchObject({ editable: true, focused: true, value: "a@b.c" });
     expect(field!.password).toBeUndefined();
     expect(search!.editable).toBe(true);
-    expect(on!.checked).toBe(true);
-    expect(off!.checked).toBe(false);
+    expect(on).toMatchObject({ role: "AXSwitch", checked: true });
+    expect(off).toMatchObject({ role: "AXSwitch", checked: false });
     expect(mixed!.checked).toBeUndefined();
     // Not clamped.
     expect(plain!.frame).toEqual({ x: -0.5, y: 0.1, width: 2, height: 0.1 });

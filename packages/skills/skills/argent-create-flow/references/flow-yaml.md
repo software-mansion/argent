@@ -65,14 +65,14 @@ Use single quotes for anchored, case-sensitive regexes:
 
 Flow selectors resolve against the flow tree. On some platforms, live discovery shows a different view of the screen:
 
-| Platform | Flow tree                                                 | `describe` / `await-ui-element` | Important difference                                                                                        |
-| -------- | --------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| iOS      | accessibility tree                                        | same tree                       | The flow tree drops elements out of view or under a system alert, and keeps unlabelled scrolling containers |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes                                                         |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)                                                       |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                                                              |
+| Platform | Flow tree                                                 | `describe` / `await-ui-element` | Important difference                                                                                                                                   |
+| -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| iOS      | accessibility tree                                        | same tree                       | The flow tree drops elements out of view or under a system alert, and keeps unlabelled scrolling containers and unlabelled containers that carry an id |
+| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes                                                                                                    |
+| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)                                                                                                  |
+| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                                                                                                         |
 
-On iOS, find selectors with `describe`. An `id`, `text`, or `role` that `describe` shows resolves at replay. Never use `native-full-hierarchy`, `native-find-views`, or `native-describe-screen` to find or verify a flow selector.
+On iOS, find selectors with `describe`. An `id`, `text`, or `role` that `describe` shows resolves at replay. An unlabelled container that carries an id also resolves, but `describe` does not print it. Never use `native-full-hierarchy`, `native-find-views`, or `native-describe-screen` to find or verify a flow selector.
 
 On Android and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 

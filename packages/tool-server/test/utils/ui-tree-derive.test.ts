@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DescribeNode } from "../../src/tools/describe/contract";
-import { deriveUniqueSelector, nodeAtPoint } from "../../src/utils/ui-tree-match";
+import { deriveUniqueSelector, nodeAtPoint, selectorToFrame } from "../../src/utils/ui-tree-match";
 
 type Leaf = Partial<DescribeNode> & { frame: DescribeNode["frame"] };
 
@@ -132,6 +132,52 @@ describe("deriveUniqueSelector", () => {
       }),
     ]);
     expect(derive(root, 0.5, 0.37)).toEqual({ text: "Ring volume", role: "AXAdjustable" });
+  });
+
+  describe("a Settings switch row", () => {
+    // iOS 27 Settings > General > Keyboards, as the flow tree flattens it: the
+    // Cell carries the id, the row element repeats it with the label and the
+    // state, the title is a button with the same id, and the switch itself has
+    // only its state ("0"/"1"), which flips with every tap.
+    function row(id: string, title: string, on: boolean, y: number, titleWidth: number): Leaf[] {
+      const value = on ? "1" : "0";
+      return [
+        leaf("AXGroup", [0.05, y, 0.9, 0.061], { identifier: id }),
+        leaf("AXSwitch", [0.09, y + 0.014, 0.821, 0.032], {
+          label: title,
+          value,
+          identifier: id,
+          checked: on,
+        }),
+        leaf("AXButton", [0.09, y + 0.018, titleWidth, 0.023], { label: title, identifier: id }),
+        leaf("AXSwitch", [0.759, y + 0.014, 0.157, 0.032], { value, checked: on }),
+      ];
+    }
+    const keyboards = screen([
+      ...row("KeyboardAllowPaddle", "Character Preview", true, 0.415, 0.347),
+      ...row("KeyboardVisceral", "Haptic Feedback", false, 0.476, 0.321),
+      // A short title: smaller than the switch, so it must not win a replay.
+      ...row("keyboard-audio", "Sound", true, 0.536, 0.122),
+    ]);
+
+    it("records the switch by role within its row, not by its state", () => {
+      expect(derive(keyboards, 0.8375, 0.506)).toEqual({
+        role: "AXSwitch",
+        within: { identifier: "KeyboardVisceral" },
+      });
+    });
+
+    it("records the switch of a row whose title is smaller than the switch", () => {
+      const sel = derive(keyboards, 0.8375, 0.567)!;
+      expect(sel).toEqual({ role: "AXSwitch", within: { identifier: "keyboard-audio" } });
+      // Replay taps the switch, not the title or the row.
+      expect(selectorToFrame(keyboards, sel)).toEqual({
+        x: 0.759,
+        y: 0.536 + 0.014,
+        width: 0.157,
+        height: 0.032,
+      });
+    });
   });
 
   it("returns null when no form singles the tapped element out", () => {

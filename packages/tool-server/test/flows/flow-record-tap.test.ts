@@ -14,6 +14,10 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 }));
 
 import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
+import type { AXTreeNode } from "../../src/blueprints/ax-service";
+import { adaptAxTree } from "../../src/tools/ui-tree/ios";
+import { adaptIosUiTreeForFlows } from "../../src/tools/flows/flow-ios-tree";
+import { selectorToFrame, type Selector } from "../../src/utils/ui-tree-match";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
@@ -303,6 +307,93 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([
       { kind: "tap", selector: { text: "On", next: { text: "Bluetooth" } } },
     ]);
+  });
+
+  it("records a Settings switch by role within its row, and replays it after the flip", async () => {
+    // Settings > General > Keyboards on iOS 27, as the accessibility service
+    // serves it. The switch has no label and no id: its value is its state.
+    const settings = (haptic: boolean) => {
+      const nodes: AXTreeNode[] = [
+        { index: 0, label: "Settings", bundleId: "com.apple.Preferences" },
+        { index: 1, parentIndex: 0, elementType: 26, frame: { x: 0, y: 0, width: 1, height: 1 } },
+      ];
+      const row = (id: string, title: string, on: boolean, y: number) => {
+        const i = nodes.length;
+        const value = on ? "1" : "0";
+        const band = (x: number, width: number) => ({ x, y: y + 0.014, width, height: 0.032 });
+        nodes.push(
+          {
+            index: i,
+            parentIndex: 1,
+            identifier: id,
+            elementType: 75,
+            frame: { x: 0.05, y, width: 0.9, height: 0.061 },
+          },
+          {
+            index: i + 1,
+            parentIndex: i,
+            label: title,
+            value,
+            identifier: id,
+            traits: ["button", "staticText", "toggleButton"],
+            elementType: 40,
+            frame: band(0.09, 0.821),
+          },
+          {
+            index: i + 2,
+            parentIndex: i + 1,
+            label: title,
+            identifier: id,
+            traits: ["button", "staticText"],
+            elementType: 9,
+            frame: band(0.09, 0.321),
+          },
+          {
+            index: i + 3,
+            parentIndex: i + 1,
+            value,
+            traits: ["button", "toggleButton"],
+            elementType: 40,
+            frame: band(0.759, 0.157),
+          }
+        );
+      };
+      row("KeyboardAllowPaddle", "Character Preview", true, 0.415);
+      row("KeyboardVisceral", "Haptic Feedback", haptic, 0.476);
+      nodes.push({
+        index: nodes.length,
+        parentIndex: 1,
+        label: "Vertical scroll bar, 3 pages",
+        value: "0%",
+        traits: ["adjustable"],
+        elementType: 0,
+        frame: { x: 0.918, y: 0.133, width: 0.075, height: 0.796 },
+      });
+      return adaptIosUiTreeForFlows(
+        adaptAxTree({
+          alertVisible: false,
+          nodes,
+          truncated: false,
+          foregroundApp: "com.apple.Preferences",
+          interfaceOrientation: "portrait",
+          treeVersion: 3,
+        })
+      );
+    };
+    currentTreeData = () => ({ tree: settings(false), source: "ax-service" });
+
+    const result = await recordTap({ x: 0.8375, y: 0.506 });
+
+    const selector: Selector = { role: "AXSwitch", within: { identifier: "KeyboardVisceral" } };
+    expect(result.message).not.toContain("—");
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector }]);
+    // With the switch on, the selector still taps the same switch.
+    expect(selectorToFrame(settings(true), selector)).toEqual({
+      x: 0.759,
+      y: 0.476 + 0.014,
+      width: 0.157,
+      height: 0.032,
+    });
   });
 
   it("flags a role-only selector rather than recording the downgrade silently", async () => {

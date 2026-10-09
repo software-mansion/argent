@@ -25,7 +25,7 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 Work this gate as soon as capture warns that it kept a raw point or recorded a role alone. Keep the source screen available and do these checks:
 
-1. **iOS:** use `describe`. A selector that `describe` shows resolves in the flow. If `describe` does not show the element, no selector reaches it. Try a scope or a different element before coordinates. Never use `native-find-views`, `native-full-hierarchy`, or `native-describe-screen` for flow selectors.
+1. **iOS:** use `describe` first. An id or text that `describe` shows resolves in the flow. An unlabelled container that carries an id also resolves, but `describe` does not print it. Try a scope or a different element before coordinates. Never use `native-find-views`, `native-full-hierarchy`, or `native-describe-screen` for flow selectors.
 2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
 3. Test each candidate in a scratch fragment with `assert: { visible: <candidate> }` on the valid screen. Inspect every failure before trying a better id, label, app, or container.
 4. If source is available, inspect its `testID`, `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
