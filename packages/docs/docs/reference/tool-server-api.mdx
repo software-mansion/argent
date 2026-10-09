@@ -98,7 +98,7 @@ The client resolves each pair of directory and target once. It stops at the dept
 | `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. Absent when the member has its bytes        |
 | `error`       | The reason, when `state` is `refused`                                                                                                   |
 
-The client puts the bytes of the members in the call body up to 256 KiB in total. The client sends each other member to `POST /upload`, one gzipped tar for each file, as for an input of kind `tar-upload`. A body limit of a reverse proxy therefore sees at most the flow file and 256 KiB of members.
+The client puts the bytes of the members in the call body up to 256 KiB in total. The client sends each other member to `POST /upload`, one gzipped tar for each file, as for an input of kind `tar-upload`. A body limit of a reverse proxy therefore sees at most the flow file and 256 KiB of members. When a proxy refuses an upload with the status 413, the client does not send the call. The error gives the body size that the proxy must accept on `POST /upload`, for example with `client_max_body_size` in nginx.
 
 ### Spelling
 
@@ -151,16 +151,17 @@ A tool file member has `role: "tool"`, and its `key` and `path` are the argument
 
 ## The call
 
-A call with at least one member, or a call with `updateBaselines` for a flow with a `snapshot:` step, is a stream. The client sends `Accept: application/x-ndjson` and `Accept-Encoding: identity` also when no progress consumer waits for the lines. The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines. The result does not change.
+A call with a `members` field is a stream, also when the list is empty. The client sends `Accept: application/x-ndjson` and `Accept-Encoding: identity` also when no progress consumer waits for the lines. The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. `X-Accel-Buffering: no` turns off buffering only in the nginx that receives the header. When an nginx that terminates TLS sits in front of a second nginx, set `proxy_buffering off` in each nginx. A proxy that holds the stream delays the progress lines. The result does not change.
 
-The MCP adapter does not send such a call a second time, and it sets no timeout for that call.
+The MCP adapter does not send a call with a `members` field a second time, and it sets no timeout for that call. When the connection closes before the result arrives, the client does not send the call again. The error says that the tool may have run, for example `The connection to the tool-server closed before flow-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
 
 ## What the tool-server does with the members
 
-The tool-server reads the members before it validates the arguments. A member never fails the call:
+The tool-server reads the members before it validates the arguments:
 
-- The tool-server keeps the text of each flow member with bytes, and writes each baseline with bytes to a temporary file. It applies the 32 MiB cap and the size check of a file input. It reads an upload as for a `tar-upload` input.
-- A member that fails a check, or that has no bytes and no `state`, becomes `refused` with the reason.
+- The tool-server keeps the text of each flow member with bytes, and writes each baseline and each tool file with bytes to a temporary file. It applies the 32 MiB cap and the size check of a file input. It reads an upload as for a `tar-upload` input.
+- A member whose bytes fail a check, or whose upload the tool-server does not have, fails the call with the status 422, as a file input does.
+- A member that has no bytes and no `state` becomes `refused`.
 - The tool-server ignores a member with an unknown `role`, and a member whose `key` repeats.
 
 The runner then uses the members as the files of the client:
@@ -170,7 +171,7 @@ The runner then uses the members as the files of the client:
 3. A `run:` step looks up its member by `key`. The runner applies the cycle guard, the depth limit and the refusal of a `case_folded` spelling. The runner never opens `canonical`. It uses the path as a key and in messages.
 4. A `missing` member makes its `run:` step report `could not load fragment "<target>": ENOENT: no such file or directory, open '<canonical>'`. A `run:` step in a `when:` block that does not run needs no file.
 5. A `snapshot:` step that compares reads its baseline from the members. When no member has the path of the baseline, the step fails as for a missing baseline. A `refused` baseline makes the step report `error` with the reason of the client.
-6. A `snapshot:` step with `updateBaselines` keeps the new baseline for the result. The step reports `baseline updated` when a member or an earlier step of the call has the same path, else `baseline written`. A later step of the call reads the new baseline.
+6. A `snapshot:` step with `updateBaselines` keeps the new baseline for the result. The client writes the file only when the result arrives. The step reports `baseline captured; the client updates it when the run ends (<path>)` when a member or an earlier step of the call has the same path, else `baseline captured; the client writes it when the run ends (<path>)`. `<path>` is the client path of the baseline. A later step of the call reads the new baseline.
 7. A `tool:` step looks up each file argument by the path as written: a baseline that an earlier step of the call wrote first, then the members. The tool gets the bytes in a temporary file, as for a direct call. A `missing` member, or no member, makes the step report `error`: `the client has no file at "<path>" (argument <name> of <tool>)`. A `refused` member makes the step report `error` with the reason of the client.
 
 ## Baselines in the result

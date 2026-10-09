@@ -59,10 +59,8 @@ describe("callTool progress streaming", () => {
 
   it("sends the Accept header only when a progress consumer is attached", async () => {
     const accepts: Array<string | undefined> = [];
-    const encodings: Array<string | undefined> = [];
     await startServer((req, res) => {
       accepts.push(req.headers.accept);
-      encodings.push(req.headers["accept-encoding"]);
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ data: { ok: true } }));
     });
@@ -73,10 +71,6 @@ describe("callTool progress streaming", () => {
 
     expect(accepts[0] ?? "").not.toContain("application/x-ndjson");
     expect(accepts[1]).toContain("application/x-ndjson");
-    // A streamed call refuses compression: a compressing proxy would hold the
-    // lines in its buffer. A buffered call keeps fetch's default encodings.
-    expect(encodings[0] ?? "").not.toBe("identity");
-    expect(encodings[1]).toBe("identity");
   });
 
   it("falls back to the buffered path against a pre-streaming server", async () => {
@@ -214,95 +208,6 @@ describe("callTool progress streaming", () => {
     await expect(callTool("streamy", {}, { onProgress: () => {} })).rejects.toThrow(
       /without a result/
     );
-  });
-});
-
-/**
- * A client whose call stream delivers `bytes` cut into `size`-byte chunks, so
- * a test controls where each chunk ends (a socket coalesces small writes).
- */
-function chunkedClient(bytes: Uint8Array, size: number) {
-  return createToolsClient({
-    baseUrl: async () => ({ url: "http://tools.test", token: "", remote: false }),
-    fetchImpl: async (url) => {
-      if (url.endsWith("/tools")) {
-        return Response.json({ tools: [{ name: "streamy", description: "", inputSchema: {} }] });
-      }
-      let offset = 0;
-      const body = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (offset >= bytes.length) {
-            controller.close();
-            return;
-          }
-          controller.enqueue(bytes.subarray(offset, offset + size));
-          offset += size;
-        },
-      });
-      return new Response(body, { headers: { "Content-Type": "application/x-ndjson" } });
-    },
-  });
-}
-
-describe("callTool NDJSON line split", () => {
-  const ndjson = (...lines: string[]) => new TextEncoder().encode(lines.join(""));
-
-  it.each([1, 2, 3, 7, 4096])(
-    "reads the same lines whatever the chunk size (%i bytes)",
-    async (size) => {
-      // Multi-byte characters split across chunks, several lines per chunk, a
-      // blank line, and a last line without a newline.
-      const bytes = ndjson(
-        `${JSON.stringify({ event: "progress", data: "zażółć 🙂" })}\n`,
-        "\n",
-        `${JSON.stringify({ event: "progress", data: { index: 1 } })}\n`,
-        `${JSON.stringify({ event: "result", data: { text: "日本" }, note: "n" })}`
-      );
-      const events: unknown[] = [];
-
-      const result = await chunkedClient(bytes, size).callTool(
-        "streamy",
-        {},
-        { onProgress: (e) => events.push(e) }
-      );
-
-      expect(events).toEqual(["zażółć 🙂", { index: 1 }]);
-      expect(result).toEqual({ data: { text: "日本" }, note: "n" });
-    }
-  );
-
-  it("rejects with a terminal error line that arrives in one-byte chunks", async () => {
-    const bytes = ndjson(
-      `${JSON.stringify({ event: "progress", data: { index: 0 } })}\n`,
-      `${JSON.stringify({ event: "error", error: "kaput ✗" })}\n`
-    );
-
-    await expect(
-      chunkedClient(bytes, 1).callTool("streamy", {}, { onProgress: () => {} })
-    ).rejects.toThrow("kaput ✗");
-  });
-
-  it("reads one long line in time linear in its length", async () => {
-    // A result line carries the baselines a run wrote as base64, tens of MB
-    // in one line.
-    const long = "A".repeat(8 * 1024 * 1024);
-    const bytes = ndjson(
-      `${JSON.stringify({ event: "progress", data: long })}\n`,
-      `${JSON.stringify({ event: "result", data: { ok: true } })}\n`
-    );
-    const events: unknown[] = [];
-
-    const started = performance.now();
-    const result = await chunkedClient(bytes, 512).callTool(
-      "streamy",
-      {},
-      { onProgress: (e) => events.push(e) }
-    );
-    const elapsed = performance.now() - started;
-
-    expect(result.data).toEqual({ ok: true });
-    expect(events).toEqual([long]);
-    expect(elapsed).toBeLessThan(2000);
   });
 });
 

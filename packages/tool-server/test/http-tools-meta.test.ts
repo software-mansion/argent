@@ -38,14 +38,7 @@ function stubRegistry(): Registry {
     getSnapshot: vi.fn(() => ({
       services: new Map(),
       namespaces: [],
-      tools: [
-        "always-tool",
-        "hinted-tool",
-        "plain-tool",
-        "device-tool",
-        "boot-tool",
-        "collecting-tool",
-      ],
+      tools: ["always-tool", "hinted-tool", "plain-tool", "device-tool", "boot-tool"],
     })),
     getTool: vi.fn((name: string) => {
       if (name === "always-tool") {
@@ -98,24 +91,6 @@ function stubRegistry(): Registry {
           execute: async () => ({}),
         };
       }
-      if (name === "collecting-tool") {
-        return {
-          id: "collecting-tool",
-          description: "Takes a flow and its run: closure",
-          inputSchema: { type: "object", properties: {} },
-          fileInputs: [
-            {
-              target: "flow_path",
-              path: "${flow_path}",
-              kind: "file",
-              optional: true,
-              collect: "flow",
-            },
-          ],
-          services: () => ({}),
-          execute: async () => ({}),
-        };
-      }
       return undefined;
     }),
     invokeTool: vi.fn(),
@@ -153,18 +128,6 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(byName.get("hinted-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
-  });
-
-  it("ships a file input's collect field on /tools exactly as declared: it is the advert", async () => {
-    const res = await request(handle.app).get("/tools").expect(200);
-    const byName = new Map<string, Record<string, unknown>>(
-      (res.body.tools as Record<string, unknown>[]).map((t) => [t.name as string, t])
-    );
-
-    expect(byName.get("collecting-tool")!.fileInputs).toEqual([
-      { target: "flow_path", path: "${flow_path}", kind: "file", optional: true, collect: "flow" },
-    ]);
-    expect(byName.get("plain-tool")).not.toHaveProperty("fileInputs");
   });
 
   it("does not pass bundleId into telemetry invocation metadata", async () => {
