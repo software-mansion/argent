@@ -82,7 +82,7 @@ export const flowStartRecordingTool: ToolDefinition<
   description: `Start recording a new flow, resetting .argent/flows/<name>.yaml to an empty flow and replacing any existing one.
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same flow was discarded.
-Without a link, it creates that file and fails if the .argent/flows/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), it writes nothing, and \`savedTo\` is a directive your client applies (a null \`savedTo\` back means it did not).
+Without a link, it creates that file and fails if the .argent/flows/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), your client writes the file, and \`savedTo\` is its path on your computer, or null when that write failed.
 
 Several flows can be recorded at once — each keyed by the \`name\` + \`project_root\`
 that every subsequent recording tool repeats — and one recording's steps never
@@ -105,10 +105,10 @@ Call flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, edit the .yaml file directly to
 remove or reorder steps - after flow-finish-recording, not during the
-recording. Over a link the in-memory copy is authoritative and
-every write serializes it over your edit; without a link the recorder re-reads
-the file before each append, so a mid-recording edit renumbers the steps and
-costs the finish the cross-tree verdicts anchored to them.`,
+recording. Over a link, the next recorded step writes over your edit.
+Without a link, the recorder reads the file again before each step, but an
+edit that renumbers the steps drops the warnings that flow-finish-recording
+reports for those steps.`,
   zodSchema,
   fileInputs,
   services: () => ({}),

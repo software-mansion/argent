@@ -232,7 +232,7 @@ The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ 
 
 A `run:` target is a YAML path resolved against the directory of the flow file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
 
-`run:` steps and `tool: flow-execute` steps make one chain of flows. A step that closes a cycle in that chain, such as a flow that runs itself through `tool: flow-execute`, fails with `cyclic flow reference: ...`. A chain longer than 20 flows fails with `max run depth exceeded`.
+`run:` steps and `tool: flow-execute` steps make one chain of flows. A step that closes a cycle in that chain, such as a flow that runs itself through `tool: flow-execute`, fails with a reason that contains `cyclic flow reference:`. A step that makes the chain longer than 20 flows fails with a reason that contains `max run depth exceeded`.
 
 - iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
 - Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
@@ -252,7 +252,7 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 - **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
-Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `flow-add-script` is refused, and a replay refuses a `script:` step. Record and replay a flow with a script only without a link.
+Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `flow-add-script` refuses the call, and a replay rejects a flow with a `script:` step. Record and replay a flow with a script without a link.
 
 If a script fails, check its changes before you retry.
 

@@ -133,15 +133,22 @@ counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. With
-either, the CLI uploads the flow file, the run: fragments it reaches, each
-flow that a tool: flow-execute step names with name, the snapshot baselines of
-each run and the .png and .yaml files that tool: steps name by an absolute
-path, and writes the new baselines the run returns. The tool-server rejects a
-flow before the first step when the flow or one of those flows has script:
-steps, or tool: steps that name another file or a relative path, build a file
-path from several arguments, take a directory, an app or an output directory,
-run a flow other than by name with an absolute project_root, or record a
-flow. With neither, all step kinds run.
+either, the CLI uploads these files and writes the new baselines that the run
+returns:
+  - the flow file and the run: fragments that it reaches
+  - each flow that a tool: flow-execute step names with name (a nested flow)
+  - the snapshot baselines of each run
+  - the .png and .yaml files that tool: steps name by an absolute path
+The tool-server rejects a flow before the first step when the flow, a fragment
+or a nested flow has one of these steps:
+  - a script: step
+  - a tool: step that names another file or a relative path, builds a file
+    path from several arguments, or takes a directory, an app or an output
+    directory
+  - a tool: flow-execute step that does not name its flow with name and an
+    absolute project_root that has no .. segment
+  - a tool: step that records a flow
+With neither, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or

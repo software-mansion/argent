@@ -30,7 +30,7 @@ The agent adds a label between the steps. A label explains what the step does an
 
 When the agent has recorded the last step, the agent finishes the recording. Argent writes the flow to a file in the project.
 
-`argent link` and the `ARGENT_TOOLS_URL` variable send the tool calls of the agent to a tool-server. Both are a link. Over a link, Argent writes the flow file into the project on the computer of the agent. This is also true when the tool-server runs on the same computer. It is also true when the computer of the tool-server has a directory at the same path. An argent client that is older than the tool-server is an exception. With such a client, Argent writes the flow file on the computer of the tool-server when that computer has a directory at the same path.
+`argent link` and the `ARGENT_TOOLS_URL` variable send the tool calls of the agent to a tool-server. Both are a link. Over a link, Argent writes the flow file into the project on the computer of the agent. This is also true when the tool-server runs on the same computer, or when its computer has a directory at the same path.
 
 Argent makes a recorded tap portable. When the tapped element has a stable text or identifier, Argent records the element instead of the coordinates. During a replay, Argent finds the element on the screen again. When the element has no stable text or identifier, Argent records the coordinates and adds a warning.
 
@@ -78,6 +78,6 @@ A flow also runs without an agent. The `argent flow run` command replays a flow 
 - A replay needs the same connected instrumentation as the recording. When the agent cannot read the UI tree, a step that still uses coordinates sends the tap anyway and adds a warning. A step that uses a stable identifier fails instead, because it has no coordinates to fall back on.
 - Over a link, the agent cannot record a local script, and a replay rejects a flow with a local script. Record and replay such a flow without a link.
 - Over a link, the agent cannot record a step that a replay over the same link rejects. The agent also cannot record a step that runs a different flow when that flow fails. In both cases, Argent records no step.
-- An argent client that is older than the tool-server can record a step that a replay over the same link rejects. Keep the argent client and the tool-server at the same version. The [Tool-server API reference](/docs/reference/tool-server-api#the-x-argent-linked-header) gives the details.
+- An argent client that is older than the tool-server can write the flow file on the computer of the tool-server. It can also record a step that a replay over the same link rejects. Keep the argent client and the tool-server at the same version. The [Tool-server API reference](/docs/reference/tool-server-api#the-x-argent-linked-header) gives the details.
 
 Argent does this with the `flow-start-recording`, `flow-add-step`, `flow-add-echo`, `flow-add-script`, `flow-finish-recording`, `flow-read-prerequisite` and `flow-execute` tools, and with the `argent flow` command. The [tools reference](/docs/reference/tools) contains all tools. The [Flow YAML reference](/docs/reference/flow-yaml) contains the file format and the command options.

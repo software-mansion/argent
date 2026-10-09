@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: plug
 ---
 
-This page documents how the argent client sends the files of a flow run to a tool-server over a link. The argent CLI and the MCP adapter are clients. The runner stays on the tool-server. The project stays on the client. The client sends the flow file, its `run:` fragments, the flows that its `tool: flow-execute` steps run, the snapshot baselines of each run and the file arguments of its `tool:` steps with the call, through the file inputs of the call. The tool-server returns each new baseline in the result. While the agent records a flow, the client sends the files of each recorded step in the same way. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
+This page documents how the argent client sends the files of a flow run to a tool-server over a link. The argent CLI and the MCP adapter are clients. The runner stays on the tool-server. The project stays on the client. The client sends the files of the run with the call, through the file inputs of the call. These are the flow file, its `run:` fragments, the flows that its `tool: flow-execute` steps run, the snapshot baselines of each run and the file arguments of its `tool:` steps. The tool-server returns each new baseline in the result. While the agent records a flow, the client sends the files of each recorded step in the same way. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
 
 ## Advertisement: `collect` in `GET /tools`
 
@@ -48,7 +48,7 @@ The `project_root` input of `flow-add-step` carries `"collect": "step"`:
 }
 ```
 
-`"collect": "step"` tells the client to send the files that the one recorded step reads. See [Members of a recorded step](#members-of-a-recorded-step).
+`"collect": "step"` tells the client to send the files that the recorded step makes the tool-server read. See [Members of a recorded step](#members-of-a-recorded-step).
 
 ## The flow file input
 
@@ -96,7 +96,7 @@ The client collects the members before the call:
 
 The client resolves each pair of directory and target once. It stops at the depth where the runner stops a `run:` chain (20 levels). A cycle ends when the pair repeats.
 
-The client also follows each `tool: flow-execute` step that names its flow with `name` and an absolute `project_root` without a `..` segment, in each flow that it found. Such a flow is a nested flow. The client sends it as a member with the directory `<project_root>/.argent/flows` of the step and the target `<name>.yaml`, and collects its members in the same way. A nested flow counts as one level of the same depth limit. The client does not follow a step that names its flow with `flow_path`.
+The client also follows each `tool: flow-execute` step that names its flow with `name` and an absolute `project_root` without a `..` segment, in each flow that it found. The flow that such a step names is a nested flow. The client sends it as a member with the directory `<project_root>/.argent/flows` of the step and the target `<name>.yaml`, and collects its members in the same way. A nested flow counts as one level of the same depth limit. The client does not follow a step that names its flow with `flow_path`.
 
 A flow member has these fields:
 
@@ -156,7 +156,7 @@ When the flow or a fragment that it reaches has a `snapshot:` step, the client a
 | A run that updates baselines  | One member with `state: "listed"` and no content for each `.png` file in the directory. The client remembers the directory as a place where it writes a baseline of the call                                                                      |
 | A run that compares baselines | One member with the bytes for each `<name>__*.png` file in the directory, where `<name>` is a snapshot name of the flow or of a fragment. When `device` starts with `chromium-cdp-`, or the call sets `platform`, only the files of that platform |
 
-The call updates baselines when it sets `updateBaselines: true`. A nested run updates baselines when its step sets `updateBaselines: true`. It also updates them when its step does not set `updateBaselines` and the run that starts it updates baselines. A nested run reads the baselines of the platform of the run that starts it, because the runner gives the nested step the device of that run. When two runs of the call use the same directory, the client sends the bytes of each file that a run that compares reads. It sends each other file by name.
+The call updates baselines when it sets `updateBaselines: true`. A nested run updates baselines when its step sets `updateBaselines: true`. It also updates them when its step does not set `updateBaselines` and the run that starts it updates baselines. For a nested run, the client applies the platform filter of the call. It ignores the `device` and `platform` of the step. When a run that compares and a run that updates use the same directory, the client sends the bytes of each file that the run that compares reads. It sends each other `.png` file of the directory by name.
 
 A baseline member has `role: "baseline"`, and its `key` and `path` are the absolute client path of the file. Its bytes travel as the bytes of a flow member: inline within the same 256 KiB, else through `POST /upload`. The client marks a baseline `refused` when its real path is outside the directories of the client policy, or when a `.png` name links to a file that is not a PNG file. The client marks a link to nothing `missing`, or `refused` in a run with `updateBaselines: true`.
 
@@ -224,7 +224,7 @@ The `project_root` input of `flow-add-step` has the kind `probe` and carries `"c
 
 The recording file is `<project_root>/.argent/flows/<name>.yaml`, with the `project_root` and the `name` of the call. The [client policy](#client-policy) applies, with the recording file in place of the flow file.
 
-The run of a recorded `flow-execute` step updates baselines only when the step sets `updateBaselines: true`. The result of `flow-add-step` then has a `baselineWrites` list, as the result of a run. A step that reads no file sends an empty `members` list, and the call is not a stream. A call without a valid `name`, without an absolute `project_root`, or with `args` that are not the JSON text of an object also sends an empty list.
+The run of a recorded `flow-execute` step updates baselines only when the step sets `updateBaselines: true`. The result of `flow-add-step` then has a `baselineWrites` list, as the result of a run. A step that reads no file sends an empty `members` list. The call is still a stream, as [The call](#the-call) describes. A call without a valid `name`, without an absolute `project_root`, or with `args` that are not the JSON text of an object also sends an empty list.
 
 ## The `x-argent-linked` header
 
@@ -239,7 +239,7 @@ Without the header, `flow-start-recording` keeps the file on the client only whe
 
 An argent client that is older than the tool-server sends no header and no members of a recorded step. The result depends on the place of the recording file:
 
-- The tool-server writes the file over a link to `127.0.0.1`, or when the `project_root` path also exists on its computer. The recorder then applies no refusal. Such a client can record steps that a replay over that link rejects, a `script:` step among them.
+- The tool-server writes the file over a link to `127.0.0.1`, or when the `project_root` path also exists on its computer. The recorder then applies none of the refusals above. Such a client can record steps that a replay over that link rejects, a `script:` step among them.
 - The client keeps the file when the `project_root` path does not exist on the computer of the tool-server. The recorder applies the refusals. It also refuses these steps, because such a client sends no file with the call, and the error tells you to update the argent CLI or the MCP adapter:
   - a `flow-execute` step with `name`
   - a `flow-execute` step with the `flow_path` of a flow beside the recording

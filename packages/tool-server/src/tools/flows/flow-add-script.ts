@@ -132,7 +132,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use this tool only when the user requests a local script in the flow. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call.`,
+  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use when the user requests a local script in the flow, and only then. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such a flow with no link.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a
