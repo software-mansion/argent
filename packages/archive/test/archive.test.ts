@@ -52,6 +52,9 @@ describe("format negotiation", () => {
       "gzip",
     ]);
     expect(archiveFormatsFromAccept("Application/ZSTD;q=0.9")).toEqual(["zstd"]);
+    expect(archiveFormatsFromAccept("application/zstd; q=0, application/gzip")).toEqual(["gzip"]);
+    expect(archiveFormatsFromAccept("application/zstd;q=0.000")).toEqual([]);
+    expect(archiveFormatsFromAccept("application/zstd;q=0.01")).toEqual(["zstd"]);
     expect(archiveFormatsFromAccept("*/*")).toEqual([]);
     expect(archiveFormatsFromAccept(undefined)).toEqual([]);
   });
@@ -120,6 +123,24 @@ describe("safeExtractArchive input", () => {
   });
 });
 
+describe("createArchiveFile (zstd)", () => {
+  it("writes a checksum, so extraction reports corruption", async () => {
+    const dir = path.join(tmpDir, "C.app");
+    await fs.mkdir(dir);
+    // Incompressible, so the payload is stored verbatim and only a checksum
+    // notices a flipped byte.
+    await fs.writeFile(path.join(dir, "random.bin"), randomBytes(4 * 1024 * 1024));
+    const archivePath = path.join(tmpDir, "c.archive");
+    await createArchiveFile(dir, archivePath, "zstd");
+    const bytes = await fs.readFile(archivePath);
+    bytes[bytes.length >> 1] ^= 1;
+    await fs.writeFile(archivePath, bytes);
+    await expect(
+      safeExtractArchive(archivePath, await fs.mkdtemp(path.join(tmpDir, "dest-")), "C.app")
+    ).rejects.toThrow();
+  });
+});
+
 describe("safeExtractArchive zstd framing", () => {
   // A tar of incompressible + compressible data, so the frame spans several
   // blocks of different types.
@@ -154,6 +175,15 @@ describe("safeExtractArchive zstd framing", () => {
   it("rejects a second frame carrying data", async () => {
     const tar = await plainTar();
     const bytes = Buffer.concat([zlib.zstdCompressSync(tar), zlib.zstdCompressSync(tar)]);
+    await expect(extract(bytes)).rejects.toThrow("Could not read archive: multi-frame zstd");
+  });
+
+  it("rejects a data frame after an empty one", async () => {
+    const tar = await plainTar();
+    const bytes = Buffer.concat([
+      zlib.zstdCompressSync(Buffer.alloc(0)),
+      zlib.zstdCompressSync(tar),
+    ]);
     await expect(extract(bytes)).rejects.toThrow("Could not read archive: multi-frame zstd");
   });
 
@@ -198,6 +228,18 @@ describe.each(ARCHIVE_FORMATS)(
       const member = await extractInto(tarPath, "app.apk");
       expect(await fs.readFile(member, "utf8")).toBe("apk-bytes");
     });
+
+    it("extracts a bundle whose member listing exceeds 1 MiB", async () => {
+      const appDir = path.join(tmpDir, "Big.app");
+      await fs.mkdir(appDir);
+      const names = Array.from({ length: 4000 }, (_, i) => `${"m".repeat(240)}-${i}`);
+      await Promise.all(names.map((n) => fs.writeFile(path.join(appDir, n), "")));
+      const tarPath = path.join(tmpDir, "big.archive");
+      await createArchiveFile(appDir, tarPath, format);
+
+      const member = await extractInto(tarPath, "Big.app");
+      expect((await fs.readdir(member)).length).toBe(names.length);
+    }, 30_000);
   }
 );
 

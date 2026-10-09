@@ -95,6 +95,9 @@ export function makeArtifactListRoute(registry: Registry) {
   };
 }
 
+/** A complete tar ends with two zero-filled 512-byte blocks. */
+const TAR_TRAILER_BYTES = 1024;
+
 /**
  * Stream a directory as a compressed tar: zstd when the request's `Accept` lists
  * `application/zstd`, else gzip. `-C <parent> <base>` keeps the bundle's own
@@ -114,8 +117,6 @@ function streamDirectoryAsArchive(
 
   // stderr is ignored, not piped: an unread pipe can fill its buffer (e.g.
   // tar's "file changed as we read it" on a live trace) and deadlock the child.
-  // A truncated archive from a non-zero exit is caught client-side, where
-  // extraction fails and the artifact resolves to null.
   const child = spawn("tar", createTarArgs(entry.path), {
     stdio: ["ignore", "pipe", "ignore"],
   });
@@ -133,7 +134,24 @@ function streamDirectoryAsArchive(
       child.kill("SIGTERM");
     }
   });
+  // A non-zero exit can still leave a whole archive (that live-trace warning);
+  // one tar abandoned lacks the trailing zero blocks. The compressor would close
+  // a valid frame around either, so cut the response off for the latter and the
+  // client's download fails instead of extracting a partial bundle.
+  let tail = Buffer.alloc(0);
+  child.stdout.on("data", (chunk: Buffer) => {
+    tail = Buffer.concat([tail, chunk]).subarray(-TAR_TRAILER_BYTES);
+  });
+  const tarClosed = new Promise<number | null>((resolve) => child.on("close", resolve));
   const compressor = createCompressor(format);
   compressor.on("error", () => res.destroy());
-  child.stdout.pipe(compressor).pipe(res);
+  compressor.on("end", () => {
+    void tarClosed.then((code) => {
+      const whole = tail.length === TAR_TRAILER_BYTES && tail.every((b) => b === 0);
+      if (code === 0 || whole) res.end();
+      else res.destroy();
+    });
+  });
+  child.stdout.pipe(compressor).pipe(res, { end: false });
 }
+

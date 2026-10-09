@@ -46,9 +46,13 @@ export function pickArchiveFormat(peerFormats: readonly string[] | undefined): A
   return ARCHIVE_FORMATS.find((f) => peerFormats?.includes(f)) ?? "gzip";
 }
 
-/** The archive formats an HTTP `Accept` header lists by content type. */
+/** The archive formats an HTTP `Accept` header lists by content type, minus any at `q=0`. */
 export function archiveFormatsFromAccept(accept: string | undefined): ArchiveFormat[] {
-  const types = (accept ?? "").split(",").map((t) => t.split(";")[0]!.trim().toLowerCase());
+  const types = (accept ?? "")
+    .split(",")
+    .map((t) => t.split(";").map((p) => p.trim().toLowerCase()))
+    .filter(([, ...params]) => !params.some((p) => /^q=0(\.0*)?$/.test(p)))
+    .map(([type]) => type);
   return ARCHIVE_FORMATS.filter((f) => types.includes(ARCHIVE_CONTENT_TYPES[f]));
 }
 
@@ -57,7 +61,11 @@ const CHUNK_BYTES = 1 << 20;
 
 export function createCompressor(format: ArchiveFormat): zlib.Gzip | zlib.ZstdCompress {
   return format === "zstd"
-    ? zlib.createZstdCompress({ chunkSize: CHUNK_BYTES })
+    ? zlib.createZstdCompress({
+        chunkSize: CHUNK_BYTES,
+        // Corruption check, like gzip's CRC; Node's decoder verifies it.
+        params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 },
+      })
     : zlib.createGzip({ chunkSize: CHUNK_BYTES });
 }
 
@@ -114,10 +122,10 @@ async function sniffFormat(archivePath: string): Promise<ArchiveFormat> {
 const ZSTD_FRAME_MAGIC = 0xfd2fb528;
 
 /**
- * Throw unless `archivePath` is complete zstd frames with data in at most the
- * first, by walking frame and block headers (RFC 8878 §3.1.1). Node's decoder
- * silently accepts a truncated frame (nodejs/node#64592, fixed in 24.21) and
- * drops a later frame (nodejs/node#64741, fixed in 26.11); gzip's reports both.
+ * Throw unless `archivePath` is complete zstd frames of which only the first
+ * carries data, by walking frame and block headers (RFC 8878 §3.1.1). Node's
+ * decoder silently accepts a truncated frame (nodejs/node#64592, fixed in 24.21)
+ * and drops a later frame (nodejs/node#64741, fixed in 26.11).
  */
 async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void> {
   const fh = await open(archivePath, "r");
@@ -130,8 +138,7 @@ async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void>
       if (bytesRead < n) throw new ArchiveError("truncated zstd frame");
       return buf;
     };
-    let framesWithData = 0;
-    while (pos < size) {
+    for (let frame = 0; pos < size; frame++) {
       const header = await read(5);
       if (header.readUInt32LE(0) !== ZSTD_FRAME_MAGIC) throw new ArchiveError("bad zstd frame");
       const descriptor = header[4]!;
@@ -152,7 +159,7 @@ async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void>
         pos += 3 + (type === 1 ? 1 : blockSize); // an RLE block stores one byte
       }
       if ((descriptor >> 2) & 1) pos += 4; // content checksum
-      if (hasData && ++framesWithData > 1) throw new ArchiveError("multi-frame zstd");
+      if (hasData && frame > 0) throw new ArchiveError("multi-frame zstd");
     }
     if (pos !== size) throw new ArchiveError("truncated zstd frame");
   } finally {
@@ -176,7 +183,9 @@ function isClosedPipe(err: NodeJS.ErrnoException): boolean {
  */
 async function runTar(archive: Archive, args: string[]): Promise<string> {
   if (archive.format === "gzip") {
-    const { stdout } = await execFileAsync("tar", [...args, "-zf", archive.path]);
+    const { stdout } = await execFileAsync("tar", [...args, "-zf", archive.path], {
+      maxBuffer: Infinity, // a bundle with ~13k members lists past the 1 MiB default
+    });
     return stdout;
   }
   const child = spawn("tar", [...args, "-f", "-"], { stdio: ["pipe", "pipe", "pipe"] });

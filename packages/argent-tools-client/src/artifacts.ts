@@ -513,7 +513,10 @@ export async function materializeArtifacts(
       try {
         const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
           headers: value.archive
-            ? { ...authHeaders, Accept: ARCHIVE_FORMATS.map((f) => ARCHIVE_CONTENT_TYPES[f]).join(", ") }
+            ? {
+                ...authHeaders,
+                Accept: ARCHIVE_FORMATS.map((f) => ARCHIVE_CONTENT_TYPES[f]).join(", "),
+              }
             : authHeaders,
           signal: ctx.signal,
         });
