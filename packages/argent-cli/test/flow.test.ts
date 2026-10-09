@@ -92,6 +92,33 @@ const caseInsensitiveFs = ((): boolean => {
   }
 })();
 
+/** What fetch rejects with when nothing listens at the tool-server's address. */
+function connectRefused(): TypeError {
+  return new TypeError("fetch failed", {
+    cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:47899"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
+  });
+}
+
+const UNREACHABLE_ENV_MESSAGE =
+  "Could not reach the tool-server at http://127.0.0.1:47899 (set by ARGENT_TOOLS_URL): " +
+  "connection refused.\nStart that tool-server, or unset ARGENT_TOOLS_URL to use the local one.";
+
+const UPLOAD_REFUSED_MESSAGE =
+  "Upload to http://127.0.0.1:47899/upload failed: 413 Request Entity Too Large. A proxy " +
+  "between the client and the tool-server limits the size of a request body. The proxy must " +
+  "accept a body of at least 1 MB on POST /upload, for example client_max_body_size 1m in nginx";
+
+/** What the tools client throws when a proxy refuses a fragment's upload, before it sends the flow. */
+function uploadRefused(): ToolInvocationError {
+  return new ToolInvocationError(UPLOAD_REFUSED_MESSAGE, {
+    errorCode: "FILE_INPUT_UPLOAD_FAILED",
+    errorKind: "validation",
+  });
+}
+
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const steps: StepFixture[] = [{ index: 0, kind: "tap", status: "pass" }];
   return {
@@ -480,6 +507,24 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain(
       "requires a flow name, a YAML file path, or a directory path"
     );
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  // A --json reader parses stderr as records, so a usage error there is one
+  // record and no help, whichever token the parser stopped at.
+  it.each([
+    [["run", "checkout", "--json", "--device"], "--device requires a value"],
+    [["run", "checkout", "--json", "--bogus"], "Unknown flag: --bogus"],
+    [
+      ["run", "--json"],
+      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.",
+    ],
+  ])("writes only an error record for the usage error in %j", async (argv, message) => {
+    await expect(flow(argv, opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.join("\n").split("\n")).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({ event: "error", error: message });
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
@@ -982,44 +1027,19 @@ describe("argent flow run", () => {
     }
   );
 
-  it.each([
-    ["env", "Unset ARGENT_TOOLS_URL"],
-    ["link", "argent unlink"],
-  ] as const)("rejects %s routing without invoking flow-execute", async (source, recovery) => {
-    getResolvedToolsUrlMock.mockResolvedValue({
-      url: "http://example.test:4141",
-      source,
+  it("sends flow_path and project_root to flow-execute", async () => {
+    // The tool-server decides what a run can do, local or over a link: an
+    // uploaded flow that is self-contained runs, one that reads beside its
+    // file is refused there.
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("flow-execute");
+    expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
+      flow_path: checkoutPath,
+      project_root: process.cwd(),
+      prerequisiteAcknowledged: true,
     });
-
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
-
-    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
-    expect(errs.join("\n")).toContain(recovery);
-    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-  });
-
-  it("names both recoveries when env routing shadows an existing link", async () => {
-    // Unsetting only ARGENT_TOOLS_URL would re-route through the shadowed link
-    // and produce a second refusal — the message must instruct both steps.
-    getResolvedToolsUrlMock.mockResolvedValue({
-      url: "http://example.test:4141",
-      source: "env",
-      shadowedLink: {
-        url: "http://linked.test:5252",
-        host: "linked.test",
-        port: 5252,
-        createdAt: "2026-07-31T00:00:00.000Z",
-      },
-    });
-
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
-
-    const out = errs.join("\n");
-    expect(out).toContain("requires the auto-started local tool server; env routing is configured");
-    expect(out).toContain("Unset ARGENT_TOOLS_URL");
-    expect(out).toContain("argent unlink");
-    expect(out).toContain("http://linked.test:5252");
-    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
   it("lists runnable YAML paths without consulting remote routing", async () => {
@@ -1348,6 +1368,28 @@ describe("argent flow run", () => {
     expect(errs).toEqual(["invalid flow"]);
   });
 
+  it("prints a JSON error object on stderr when the server rejects the flow under --json", async () => {
+    // --json owns stdout for the report alone, so a run with no report leaves
+    // it empty and carries the same record --json-stream would, on stderr.
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("invalid flow", {
+        errorCode: "FLOW_FILE_INVALID",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual([]);
+    expect(errs).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error: "invalid flow",
+      error_code: "FLOW_FILE_INVALID",
+      error_kind: "validation",
+    });
+  });
+
   it("rejects --json with --json-stream without writing human text to stdout", async () => {
     await expect(flow(["run", checkoutPath, "--json", "--json-stream"], opts)).rejects.toThrow(
       "process.exit:2"
@@ -1562,6 +1604,190 @@ describe("argent flow run", () => {
 
     await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
     expect(errs.join("\n")).toContain("tool-server unreachable");
+  });
+
+  // A routed tool-server that refuses the connection ran nothing, so the run
+  // is a setup error (exit 2) that names the address and where it came from,
+  // not undici's bare "fetch failed".
+  it("reports a routed tool-server that refuses the connection as unreachable", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual(['Flow "checkout"', "  ✗ not run (tool-server unreachable)"]);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+  });
+
+  it.each([
+    [
+      "a link",
+      { url: "http://10.0.0.5:4141", source: "link" },
+      "ENOTFOUND",
+      "Could not reach the tool-server at http://10.0.0.5:4141 (set by argent link): host not found.\n" +
+        "Start the tool-server on the linked machine, or run `argent unlink`.",
+    ],
+    [
+      "ARGENT_TOOLS_URL over a link",
+      {
+        url: "http://127.0.0.1:47899",
+        source: "env",
+        shadowedLink: {
+          url: "http://10.0.0.5:4141",
+          host: "10.0.0.5",
+          port: 4141,
+          createdAt: "2026-10-01T00:00:00.000Z",
+        },
+      },
+      "UND_ERR_CONNECT_TIMEOUT",
+      "Could not reach the tool-server at http://127.0.0.1:47899 (set by ARGENT_TOOLS_URL): timed out.\n" +
+        "Start that tool-server, or unset ARGENT_TOOLS_URL and run `argent unlink` to use the local one. " +
+        "A link to http://10.0.0.5:4141 is also configured and takes over once the env var is unset.",
+    ],
+  ] as const)(
+    "names where the unreachable address came from for %s",
+    async (_case, routing, code, message) => {
+      getResolvedToolsUrlMock.mockResolvedValue(routing);
+      toolsClientMock.callTool.mockRejectedValue(
+        new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) })
+      );
+
+      await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+      expect(errs).toEqual([message]);
+    }
+  );
+
+  it("writes an unreachable tool-server as a record a script can branch on under --json", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UNREACHABLE_ENV_MESSAGE,
+        error_code: "TOOL_SERVER_UNREACHABLE",
+        error_kind: "network",
+      },
+    ]);
+  });
+
+  it("ends the stream on an unreachable tool-server with the same record under --json-stream", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UNREACHABLE_ENV_MESSAGE,
+        error_code: "TOOL_SERVER_UNREACHABLE",
+        error_kind: "network",
+      },
+    ]);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+  });
+
+  // A refused upload ends the call before the tool-server gets the flow, so
+  // nothing ran: the flow is rejected with its own verdict and code.
+  it("reports a refused fragment upload as a flow that did not run", async () => {
+    toolsClientMock.callTool.mockRejectedValue(uploadRefused());
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual(['Flow "checkout"', "  ✗ not run (upload failed)"]);
+    expect(errs).toEqual([UPLOAD_REFUSED_MESSAGE]);
+  });
+
+  it("writes a refused fragment upload as a record with its code under --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(uploadRefused());
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UPLOAD_REFUSED_MESSAGE,
+        error_code: "FILE_INPUT_UPLOAD_FAILED",
+        error_kind: "validation",
+      },
+    ]);
+  });
+
+  // Not every refused connect is a missing tool-server: with no routing it is
+  // the auto-started local one, and an open socket can end with the same
+  // codes after the run started. Both stay run errors, and a failure that is
+  // not a connect never reads the routing.
+  it.each([
+    [
+      "a refused connect to the local tool-server",
+      { url: null, source: "none" },
+      "ECONNREFUSED",
+      "connect",
+      true,
+    ],
+    [
+      "a timeout on an open socket",
+      { url: "http://127.0.0.1:47899", source: "env" },
+      "ETIMEDOUT",
+      "read",
+      false,
+    ],
+  ] as const)("keeps %s a run error", async (_case, routing, code, syscall, readsRouting) => {
+    getResolvedToolsUrlMock.mockResolvedValue(routing);
+    toolsClientMock.callTool.mockRejectedValue(
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error(`${syscall} ${code}`), { code, syscall }),
+      })
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual(['Flow "checkout"', "  ✗ did not finish (run error)"]);
+    expect(errs).toEqual(["fetch failed"]);
+    expect(getResolvedToolsUrlMock).toHaveBeenCalledTimes(readsRouting ? 1 : 0);
+  });
+
+  // fail()'s message-only call sites hand it no error object, and under
+  // --json each must still reach stderr as a record, never as prose.
+  it("writes a missing flow file as an error record under --json", async () => {
+    const missing = path.join(tempRoot, "missing.yaml");
+
+    await expect(flow(["run", missing, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: `Flow file not found: ${missing}` },
+    ]);
+  });
+
+  it("writes a wrong flow extension as an error record under --json", async () => {
+    const yml = path.join(tempRoot, "checkout.yml");
+
+    await expect(flow(["run", yml, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: `Flow path must end in .yaml: ${yml}` },
+    ]);
+  });
+
+  it("writes a reply that is not a run report as an error record under --json", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: { flow: "checkout", notice: "x" } });
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: '"checkout" did not produce a run report.' },
+    ]);
   });
 
   it("exits 2 when the result is not a run report (e.g. a prerequisite notice)", async () => {
@@ -1786,9 +2012,7 @@ describe("argent flow run", () => {
       "filename (minus .yaml) names the run's report and artifacts"
     );
     expect(logs.join("\n")).toContain('contain only letters, numbers, "_", or "-"');
-    expect(logs.join("\n")).toContain(
-      "ARGENT_TOOLS_URL and `argent link` routing are not supported"
-    );
+    expect(logs.join("\n")).toContain("the one that `argent link` or ARGENT_TOOLS_URL names");
     expect(logs.join("\n")).toContain("--json-stream");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -2201,6 +2425,40 @@ describe("argent flow run <dir>", () => {
       status: "fail",
       error: '"a-login.yaml" did not produce a run report.',
     });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: '"a-login.yaml" did not produce a run report.' },
+    ]);
+  });
+
+  it("writes a rejected flow's message on stderr as a record under --json", async () => {
+    const message =
+      "This flow is not self-contained, and it arrived as an upload. The steps below read or " +
+      "write project files, which stay on the client:\n" +
+      "  - step 1: run: frag.yaml\n" +
+      "Run the flow on the computer that runs the tool-server, with no link and no " +
+      "ARGENT_TOOLS_URL, so that the tool-server reads the files in place.";
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(message, {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: false, passed: 1, failed: 1 });
+    // Every stderr line parses: the multi-line prose arrives escaped inside one record.
+    const lines = errs.join("\n").split("\n");
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: message,
+        error_code: "FLOW_FILE_INVALID",
+        error_kind: "validation",
+      },
+    ]);
   });
 
   // A report the renderers cannot walk costs the batch twice over: the throw
@@ -2241,6 +2499,87 @@ describe("argent flow run <dir>", () => {
     const lines = logs.join("\n").split("\n");
     expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ did not finish (run error)");
     expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("stops at the first flow when the routed tool-server is unreachable, exiting 2", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe(
+      "  ✗ not run (tool-server unreachable)"
+    );
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toBe("  · not run (batch stopped)");
+    const recap = lines.slice(lines.indexOf("Failed flows (1)"));
+    expect(recap).toContain("  ✗ a-login.yaml › not run (tool-server unreachable)");
+    for (const line of UNREACHABLE_ENV_MESSAGE.split("\n")) expect(recap).toContain(`    ${line}`);
+    expect(lines.at(-1)).toMatch(/^FAIL — 2 flows: 0 passed, 1 failed, 1 skipped /);
+  });
+
+  it("carries an unreachable tool-server into the --json aggregate and stderr record", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const signal = { error_code: "TOOL_SERVER_UNREACHABLE", error_kind: "network" };
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({
+      ok: false,
+      failed: 1,
+      skipped: 1,
+      flows: [
+        { path: "a-login.yaml", status: "fail", error: UNREACHABLE_ENV_MESSAGE, ...signal },
+        { path: "b-checkout.yaml", status: "skip" },
+      ],
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: UNREACHABLE_ENV_MESSAGE, ...signal },
+    ]);
+  });
+
+  // A refused upload depends on the size of that flow's own fragments. Each
+  // later flow sends its own files, so the batch goes on.
+  it("continues past a flow whose fragment upload is refused", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(uploadRefused())
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs).toEqual([UPLOAD_REFUSED_MESSAGE]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ not run (upload failed)");
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toMatch(/^ {2}PASS /);
+    expect(lines).toContain("  ✗ a-login.yaml › not run (upload failed)");
+    expect(lines.at(-1)).toMatch(/^FAIL — 2 flows: 1 passed, 1 failed, 0 skipped /);
+  });
+
+  it("carries a refused fragment upload into the --json aggregate and runs the next flow", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(uploadRefused())
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    const signal = { error_code: "FILE_INPUT_UPLOAD_FAILED", error_kind: "validation" };
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({
+      ok: false,
+      passed: 1,
+      failed: 1,
+      skipped: 0,
+      flows: [
+        { path: "a-login.yaml", status: "fail", error: UPLOAD_REFUSED_MESSAGE, ...signal },
+        { path: "b-checkout.yaml", status: "pass" },
+      ],
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: UPLOAD_REFUSED_MESSAGE, ...signal },
+    ]);
   });
 
   it("treats a non-report result as a failure that stops the batch", async () => {
@@ -2533,13 +2872,59 @@ describe("argent flow run <dir>", () => {
     expect(errs.join("\n")).not.toContain("subdirectories");
   });
 
-  it("rejects remote routing before running any flow in the directory", async () => {
-    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://example.test:4141", source: "env" });
+  it("prints a JSON error object on stderr for a directory with no flows under --json", async () => {
+    const emptyDir = path.join(tempRoot, "empty-json");
+    await fsp.mkdir(emptyDir, { recursive: true });
 
-    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+    await expect(flow(["run", emptyDir, "--json"], opts)).rejects.toThrow("process.exit:2");
 
-    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
+    expect(logs).toEqual([]);
+    expect(errs).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error: `No flows found in ${emptyDir}\nPass -r/--recursive to include subdirectories.`,
+    });
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  // Skipped as root / on Windows, where a mode-000 directory is still
+  // listable. See canDenyRead.
+  it.skipIf(!canDenyRead).each([
+    ["human", [], (dir: string) => `Could not read flow directory: ${dir}`],
+    [
+      "--json",
+      ["--json"],
+      (dir: string) =>
+        JSON.stringify({ event: "error", error: `Could not read flow directory: ${dir}` }),
+    ],
+  ] as const)(
+    "exits 2 on a directory it cannot list, in %s mode",
+    async (_mode, flags, expected) => {
+      const lockedDir = path.join(tempRoot, `unlistable-${flags.length}`);
+      await fsp.mkdir(lockedDir, { recursive: true });
+      await fsp.writeFile(path.join(lockedDir, "a.yaml"), "steps: []\n");
+      await fsp.chmod(lockedDir, 0o000);
+      try {
+        await expect(flow(["run", lockedDir, ...flags], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        await fsp.chmod(lockedDir, 0o755);
+      }
+
+      expect(logs).toEqual([]);
+      expect(errs).toEqual([expected(lockedDir)]);
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sends every flow in the directory to flow-execute", async () => {
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(toolsClientMock.callTool.mock.calls.map((c) => c[0])).toEqual([
+      "flow-execute",
+      "flow-execute",
+    ]);
+    expect(logs.join("\n")).toContain("2 passed");
   });
 
   it("prints only the aggregate object with --json, tagging infra failures and skips", async () => {

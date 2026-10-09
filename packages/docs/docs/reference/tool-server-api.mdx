@@ -1,0 +1,167 @@
+---
+sidebar_position: 8
+sidebar_label: Tool-server API
+title: Tool-server API reference
+sidebar_custom_props:
+  icon: plug
+---
+
+This page shows how a client sends the files of a flow run to a tool-server over a link. The `argent` CLI and the MCP server are clients. The flow runs on the tool-server. The project files stay on the client. The client sends the flow file and its `run:` fragments in the file input of the call. For the user-facing behavior, see [Flows over a link](/docs/reference/flow-yaml#flows-over-a-link).
+
+## `collect` in `GET /tools`
+
+The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `flow_path` and `flow_file` inputs of `flow-execute` have `"collect": "flow"`:
+
+```json
+{
+  "name": "flow-execute",
+  "fileInputs": [
+    {
+      "target": "flow_path",
+      "path": "${flow_path}",
+      "kind": "file",
+      "optional": true,
+      "unwrapWhenSet": "name",
+      "collect": "flow"
+    },
+    {
+      "target": "flow_file",
+      "path": "${project_root}/.argent/flows/${name}.yaml",
+      "kind": "file",
+      "skipWhenSet": "flow_path",
+      "collect": "flow"
+    }
+  ]
+}
+```
+
+`"collect": "flow"` tells the client that the file is a flow. Over a link, the client then also sends each flow file that the `run:` steps of the flow reach. A client that does not know the field sends only the flow file.
+
+## The flow file input
+
+Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. For an input with `collect`, the object has three more fields:
+
+```json
+{
+  "__argentFileInput": true,
+  "path": "/work/proj/.argent/flows/withrun.yaml",
+  "size": 64,
+  "mtimeMs": 1791300000000,
+  "content": "<base64>",
+  "canonical": "/work/proj/.argent/flows/withrun.yaml",
+  "spelling": { "state": "listed" },
+  "members": [
+    {
+      "role": "flow",
+      "key": "/work/proj/.argent/flows\u0000frag-echo.yaml",
+      "path": "/work/proj/.argent/flows/frag-echo.yaml",
+      "canonical": "/work/proj/.argent/flows/frag-echo.yaml",
+      "spelling": { "state": "listed" },
+      "size": 33,
+      "mtimeMs": 1791300000000,
+      "content": "<base64>"
+    }
+  ]
+}
+```
+
+| Field       | Value                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------- |
+| `canonical` | The real path of `path` on the client. The `run:` targets of the flow resolve beside this file           |
+| `spelling`  | How the directory of `path` on the client lists the basename of `path`. See [Spelling](#spelling)        |
+| `members`   | One entry for each `run:` target that the flow and its fragments reach. Empty when no `run:` step exists |
+
+The client sends these fields only when it can read the flow file.
+
+## Members
+
+The client collects the members before the call:
+
+1. The client reads the `run:` targets of the flow file, in all steps and in all `when:` blocks.
+2. The client resolves each target beside the real file that names it. The runner on the tool-server uses the same rule.
+3. The client reads the `run:` targets of each fragment that it finds, and continues in the same way.
+
+The client resolves each pair of directory and target one time. The client stops at 20 levels, the maximum depth of a `run:` chain. A cycle stops when a pair repeats.
+
+| Field         | Value                                                                                                                                          |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`        | `flow`                                                                                                                                         |
+| `key`         | The real directory of the file that names the target, a NUL character, and the target as written. The tool-server finds the member by this key |
+| `path`        | The real directory of the file that names the target, a path separator, and the target as written                                              |
+| `canonical`   | The real path of the target on the client. For a missing file, the real path of the nearest directory that exists, with the rest of the path   |
+| `spelling`    | How the directory of `path` lists the basename of the target                                                                                   |
+| `content`     | The file as base64, when the file is in the call body                                                                                          |
+| `uploadId`    | The id that `POST /upload` returned, when the client sent the file to `POST /upload`. Set together with `contentHash`                          |
+| `contentHash` | The SHA-256 digest of the uploaded archive                                                                                                     |
+| `size`        | The size of the file in bytes                                                                                                                  |
+| `mtimeMs`     | The modification time of the file in epoch milliseconds                                                                                        |
+| `state`       | `missing` when no file is at `canonical`. `refused` when the client does not send the file. Not set when the member has its bytes              |
+| `error`       | The reason, when `state` is `refused`                                                                                                          |
+
+The client puts the members in the call body until they are 256 KiB in total. The client sends each other member to `POST /upload` as one gzipped tar, as for an input of kind `tar-upload`. Thus the body limit of a reverse proxy applies to the flow file with up to 256 KiB of members, and to one member at a time. When a proxy refuses an upload with the status 413, the client does not send the call. The error gives the body size that the proxy must accept on `POST /upload`, for example with `client_max_body_size` in nginx.
+
+### Spelling
+
+`spelling` has one of three shapes:
+
+| Shape                                                                   | Meaning                                                                                                                                          |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `{ "state": "listed" }`                                                 | The directory lists the basename as written. The client also sends `listed` when it cannot read the directory                                    |
+| `{ "state": "case_folded", "actual": "<name>", "addressable": <bool> }` | The directory lists the name with a different case. `actual` is the listed name. `addressable` is `true` when `actual` is a valid flow file name |
+| `{ "state": "absent" }`                                                 | The directory lists no name that matches, in any case                                                                                            |
+
+### Client policy
+
+The client sends a member only when the real path of the member is under one of these directories, by their real location:
+
+- `project_root` and its `.argent/flows` directory
+- the directory of the flow file and the directory of its real file
+- the project `<P>` of a flow file under `<P>/.argent/flows/`, by its path or by its real path
+
+The client marks a member `refused` in these cases:
+
+| Case                                               | `error`                                                                       |
+| -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The real path is outside all the directories above | `<target> is outside every root this client serves (<directories>)`           |
+| A `.yaml` name links to a file that is not YAML    | `<target> links to a file that is not a YAML file`                            |
+| The path is a directory                            | `EISDIR: illegal operation on a directory, read`                              |
+| The file is larger than 32 MiB                     | `<canonical> is larger than the 32 MiB cap on a file sent to the tool-server` |
+| The client cannot read the file, or resolve a link | The error of the operating system, for example `EACCES` or `ELOOP`            |
+
+The client does the directory check first. Thus a missing file outside these directories is `refused`, not `missing`.
+
+When the environment of the client has `ARGENT_FLOW_FILES_LOG=1`, the client prints one line on stderr for each member before the call: `[flow-files] flow <canonical>: inline <bytes>`, `: upload <bytes>`, `: missing` or `: refused (<reason>)`. The line never holds the content. With `argent flow run --json`, each line is a warning object on stderr.
+
+## The call
+
+The client asks for a stream for each call with a `members` field, also when the list is empty. It sends `Accept: application/x-ndjson` and `Accept-Encoding: identity`.
+
+The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. A proxy that holds the stream delays the progress lines, but the result does not change. The tool-server sends a progress line after each step. A proxy ends the response when no data arrives from the tool-server within its read timeout. The default is 60 seconds in nginx. Thus a step that runs longer than this timeout fails the call.
+
+The client sends a call with a `members` field only one time. When the connection closes before the result arrives, the client does not send the call again. The MCP server sets no timeout for this call. The error says that the tool possibly ran, for example `The connection to the tool-server closed before flow-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
+
+## What the tool-server does with the members
+
+The tool-server reads the members before it validates the arguments:
+
+- The tool-server keeps the text of each member that has bytes. It applies the 32 MiB limit and the size check of a file input. It also applies the 32 MiB limit to the total size of the members of the call. It reads an upload as for a `tar-upload` input.
+- When the bytes of a member fail a check, or the tool-server does not have its upload, the call fails with the status 422. A file input fails in the same way.
+- The tool-server deletes each upload that the call names before the flow starts, also when the call fails. An `uploadId` is valid for one call only.
+- A member becomes `refused` when it has no bytes and no `state`, or when its `canonical` or `spelling` is not valid.
+- The tool-server ignores a member with an unknown `role`, and a member with a `key` that it already has.
+
+Then the runner uses the members as the files of the client:
+
+1. Before the first step, the runner checks the flow and each member that it can reach, to the maximum depth of a `run:` chain. Each of these stops the run: a `script:` or `snapshot:` step, a `tool:` step that takes a file or records a flow, and a `refused` member. The error lists each such step, for example `step 1 in /work/proj/.argent/flows/inner-script.yaml: script: { path: ../../scripts/hello.mjs }`. The error code is `FLOW_FILE_INVALID`.
+2. When the flow has a `run:` step, the `run:` targets of the flow resolve beside the `canonical` path of the flow file. A `case_folded` spelling of the flow file stops the run, as it does without a link.
+3. A `run:` step finds its member by `key`. The step fails when no member has that key. The runner applies the same checks as without a link: a cycle, a chain deeper than 20 levels, and a `case_folded` spelling each fail the step. The runner never opens the `canonical` path. It uses the path only as a key and in messages.
+4. A `missing` member makes its `run:` step report `could not load fragment "<target>": ENOENT: no such file or directory, open '<canonical>'`. A `run:` step in a `when:` block that does not run needs no file.
+
+## Older clients and tool-servers
+
+| Client                | Tool-server           | Result for a `run:` step over a link                                                                                                                                                                           |
+| --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sends members         | Reads members         | The runner reads the fragments from the members                                                                                                                                                                |
+| Sends members         | Does not read members | The listing has no `collect`. The client sends only the flow file. The tool-server rejects the flow before the first step                                                                                      |
+| Does not send members | Reads members         | The tool-server rejects the flow before the first step and adds: "This tool-server runs run: steps for a client that sends their fragments with the call. Update the argent CLI or MCP adapter on the client." |
+| Does not send members | Does not read members | The tool-server rejects the flow before the first step                                                                                                                                                         |

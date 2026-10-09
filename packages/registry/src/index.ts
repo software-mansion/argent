@@ -40,9 +40,21 @@ export type {
   FileInputWire,
   FileInputKind,
   FileInputSpec,
+  FileInputMember,
   ResolvedFileInput,
+  ResolvedMember,
   ClientFileDirective,
 } from "./file-inputs";
+export {
+  canonicalFlowPath,
+  classifyOnDiskSpelling,
+  collectFlowRequests,
+  completeRunExtension,
+  flowMemberKey,
+  MAX_RUN_DEPTH,
+  resolveFlowRelativeFile,
+} from "./flow-file-refs";
+export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

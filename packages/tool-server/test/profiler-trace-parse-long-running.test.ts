@@ -1,10 +1,11 @@
 /**
  * The MCP adapter aborts a tool call at FETCH_TIMEOUT_MS (30 s) unless the tool
- * declares `longRunning`, then replays the same POST up to MAX_RETRIES times
- * (packages/argent-mcp/src/mcp-server.ts). The tool-server never cancels the
- * work an aborted request started, so every profiler tool that can re-parse a
- * whole native trace must opt out of that abort - otherwise each replay
- * re-parses from scratch and the report is never returned.
+ * declares `longRunning` or the call carries an upload, then replays the same
+ * POST up to MAX_RETRIES times (packages/argent-mcp/src/tool-caller.ts). The
+ * tool-server never cancels the work an aborted request started, so every
+ * profiler tool that can re-parse a whole native trace must opt out of that
+ * abort - otherwise each replay re-parses from scratch and the report is never
+ * returned.
  */
 import { describe, expect, it } from "vitest";
 import { nativeProfilerAnalyzeTool } from "../src/tools/profiler/native-profiler/native-profiler-analyze";

@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import * as fs from "node:fs/promises";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
-import { createRunFlowTool } from "../src/tools/flows/flow-run";
+import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequisite";
 import { serializeFlow } from "../src/tools/flows/flow-utils";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({ updateInstallable: false, currentVersion: "1.0.0" })),
@@ -439,6 +442,160 @@ describe("flow-execute flow_path over HTTP", () => {
     const dispatched = (steps.invokeTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     expect(dispatched).toContain("tap");
   });
+
+  /** A wrapper for a client file that does not exist on this host, content and all. */
+  function uploadedWrapper(clientPath: string, yaml: string): Record<string, unknown> {
+    return {
+      __argentFileInput: true,
+      path: clientPath,
+      size: Buffer.byteLength(yaml, "utf8"),
+      mtimeMs: 1_790_000_000_000,
+      content: Buffer.from(yaml, "utf8").toString("base64"),
+    };
+  }
+
+  it("runs an uploaded self-contained flow_path", async () => {
+    // The whole remote chain: the boundary finds no host file, materializes
+    // the content, and resolveFlowSource runs the copy under the client's
+    // flow name — the same contract an uploaded `name` run has.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "uploaded" },
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: uploadedWrapper("/client/.argent/flows/remote.yaml", yaml),
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      flow: "remote",
+      steps: [
+        { kind: "echo", status: "pass", message: "uploaded" },
+        { kind: "tool", status: "pass", tool: "tap" },
+      ],
+    });
+    const dispatched = (steps.invokeTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(dispatched).toContain("tap");
+  });
+
+  it("rejects an uploaded flow_path that composes", async () => {
+    // The files beside the client's flow stayed on the client, so the run is
+    // refused before step 1 with the list of steps that would read them.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "before" },
+        { kind: "run", flow: "frag.yaml" },
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: uploadedWrapper("/client/.argent/flows/composed.yaml", yaml),
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error_code).toBe("FLOW_FILE_INVALID");
+    expect(res.body.error).toMatch(/not self-contained/);
+    expect(res.body.error).toContain("  - step 2: run: frag.yaml");
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "names a Windows client path instead of calling it relative",
+    async () => {
+      // `C:\...` is absolute on the client that wrote it, so "must be
+      // absolute" would send its user hunting for a mistake they did not make.
+      const yaml = serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } }],
+      });
+      const wrapper = uploadedWrapper("C:\\work\\proj\\.argent\\flows\\basic.yaml", yaml);
+
+      for (const [root, quoted] of [
+        ["C:\\work\\proj", `project_root "C:\\work\\proj"`],
+        [projectRoot, `flow_path "C:\\work\\proj\\.argent\\flows\\basic.yaml"`],
+      ] as const) {
+        const res = await supertest(handle.app)
+          .post("/tools/flow-execute")
+          .send({ project_root: root, device: DEVICE, flow_path: wrapper });
+
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain(`${quoted} is a Windows path`);
+        expect(res.body.error).not.toMatch(/must be an absolute|must be absolute/);
+      }
+      expect(steps.invokeTool).not.toHaveBeenCalled();
+    }
+  );
+
+  /** A flow on this host plus the wrapper a client with a mirrored copy of it sends. */
+  async function mirroredUpload(hostYaml: string, clientYaml: string) {
+    const hostPath = path.join(projectRoot, ".argent", "flows", "mirrored.yaml");
+    await fs.mkdir(path.dirname(hostPath), { recursive: true });
+    await fs.writeFile(hostPath, hostYaml, "utf8");
+    const st = await fs.stat(hostPath);
+    return {
+      __argentFileInput: true,
+      path: hostPath,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      content: Buffer.from(clientYaml, "utf8").toString("base64"),
+    };
+  }
+
+  it("runs the uploaded content, not a host copy that matches its size and mtime", async () => {
+    const flowWith = (message: string) =>
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message }] });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        flow_path: await mirroredUpload(flowWith("server"), flowWith("client")),
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      flow: "mirrored",
+      steps: [{ kind: "echo", status: "pass", message: "client" }],
+    });
+  });
+
+  it("rejects an uploaded flow that composes even when this host has a mirrored copy of it", async () => {
+    // The fragment beside the host copy may be older than the client's, so
+    // a matching root file is no reason to run this host's siblings.
+    const yaml = serializeFlow({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "frag.yaml" },
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+      ],
+    });
+    const wire = await mirroredUpload(yaml, yaml);
+    await fs.writeFile(
+      path.join(path.dirname(wire.path), "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "stale" }] }),
+      "utf8"
+    );
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({ project_root: projectRoot, device: DEVICE, flow_path: wire });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error_code).toBe("FLOW_FILE_INVALID");
+    expect(res.body.error).toContain("  - step 1: run: frag.yaml");
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("flow-read-prerequisite flow_path over HTTP", () => {
@@ -537,5 +694,432 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       flow: "saved-only",
       executionPrerequisite: "App on home screen",
     });
+  });
+
+  it("reads an uploaded flow_path, as flow-execute runs one", async () => {
+    // Over a link both tools get the same uploaded copy, so the prerequisite an
+    // agent reads belongs to the flow that will run.
+    const yaml = serializeFlow({ executionPrerequisite: "be logged in", steps: [] });
+    const res = await supertest(handle.app)
+      .post("/tools/flow-read-prerequisite")
+      .send({
+        project_root: projectRoot,
+        flow_path: {
+          __argentFileInput: true,
+          path: "/client/.argent/flows/remote.yaml",
+          size: Buffer.byteLength(yaml, "utf8"),
+          mtimeMs: 1_790_000_000_000,
+          content: Buffer.from(yaml, "utf8").toString("base64"),
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ flow: "remote", executionPrerequisite: "be logged in" });
+  });
+});
+
+describe("flow-execute over a link, from the real argent client", () => {
+  // The client's own source: the client collects the flow's run: closure and
+  // sends it, this route resolves it, and the runner reads it.
+  const clientSrc = path.resolve(__dirname, "../../argent-tools-client/src/tools-client.ts");
+  let server: Server;
+  let url: string;
+
+  beforeEach(async () => {
+    server = handle.app.listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  async function write(rel: string, text: string): Promise<string> {
+    const file = path.join(projectRoot, rel);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, text, "utf8");
+    return file;
+  }
+
+  /** The step reports of a run of `flowPath`; `beforeSend` sees the body once the client built it. */
+  async function callFlow(
+    remote: boolean,
+    flowPath: string,
+    beforeSend?: (body: string) => Promise<void>
+  ): Promise<Omit<FlowRunResult["steps"][number], "durationMs">[]> {
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote }),
+      fetchImpl: async (target: string, init: RequestInit) => {
+        if (target.endsWith("/tools/flow-execute")) await beforeSend?.(String(init.body));
+        return fetch(target, init);
+      },
+    });
+    const { data } = await client.callTool("flow-execute", {
+      flow_path: flowPath,
+      project_root: projectRoot,
+      device: DEVICE,
+    });
+    return (data as FlowRunResult).steps.map(({ durationMs: _, ...step }) => step);
+  }
+
+  it("runs the run: closure the client sent as the co-located run does, with the project gone from this host", async () => {
+    const root = await write(
+      ".argent/flows/root.yaml",
+      "steps:\n  - echo: start\n  - run: login\n  - when: { platform: ios }\n    steps:\n" +
+        "      - run: ../../shared/branch.yaml\n  - run: gone.yaml\n  - echo: never\n"
+    );
+    await write(".argent/flows/login.yaml", "steps:\n  - echo: logged in\n");
+    // A fragment of a fragment, beside the file that names it.
+    await write("shared/branch.yaml", "steps:\n  - run: common.yaml\n");
+    await write("shared/common.yaml", "steps:\n  - echo: common\n");
+
+    const colocated = await callFlow(false, root);
+    // Once the client has read the project it leaves this host, so every
+    // fragment the linked run reads came with the call.
+    const linked = await callFlow(true, root, () => fs.rename(projectRoot, `${projectRoot}-moved`));
+
+    expect(linked).toEqual(colocated);
+    expect(colocated.map((s) => `${s.status} ${s.flow}`)).toEqual([
+      ...["pass root", "pass login", "pass login", "pass root", "pass branch"],
+      ...["pass common", "pass common", "error gone", "skip root"],
+    ]);
+    expect(colocated[7]!.reason).toMatch(/^could not load fragment "gone.yaml": ENOENT/);
+  });
+
+  it("refuses before step 1 a fragment outside the project and a .yaml link to a .env, sending neither", async () => {
+    await fs.writeFile(path.join(tmpDir, "outside.yaml"), "steps:\n  - echo: outside\n");
+    const fenced = await write(
+      ".argent/flows/fenced.yaml",
+      "steps:\n  - echo: first\n  - run: ../../../outside.yaml\n  - run: secret.yaml\n"
+    );
+    const env = await write(".env", "TOKEN=hunter2\n");
+    await fs.symlink(env, path.join(path.dirname(fenced), "secret.yaml"));
+    let members: { state?: string; content?: string }[] = [];
+
+    const err = await callFlow(true, fenced, async (body) => {
+      members = JSON.parse(body).flow_path.members;
+    }).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      "run: ../../../outside.yaml (../../../outside.yaml is outside every root this client serves"
+    );
+    expect(String(err)).toContain(
+      "run: secret.yaml (secret.yaml links to a file that is not a YAML file)"
+    );
+    expect(members.map((m) => [m.state, m.content])).toEqual([
+      ["refused", undefined],
+      ["refused", undefined],
+    ]);
+  });
+
+  it("finds nothing past a missing directory and its .., as the co-located run, and sends nothing", async () => {
+    // The kernel stops at the missing `x`, so no `..` after it leads back. A
+    // lexical collapse would land on a .yaml link to a .env, on a file behind
+    // a directory link out of the project, and on a flow that does exist.
+    await write(".argent/flows/login.yaml", "steps:\n  - echo: logged in\n");
+    const env = await write(".env", "TOKEN=hunter2\n");
+    await fs.symlink(env, path.join(projectRoot, ".argent/flows/secret.yaml"));
+    await fs.mkdir(path.join(tmpDir, "outside"));
+    await fs.writeFile(path.join(tmpDir, "outside/private.yaml"), "steps:\n  - echo: outside\n");
+    await fs.symlink(path.join(tmpDir, "outside"), path.join(projectRoot, "linkout"));
+    const flowsDir = await fs.realpath(path.join(projectRoot, ".argent/flows"));
+
+    for (const target of [
+      "x/../secret.yaml",
+      "../../x/../linkout/private.yaml",
+      "nonexist/../login.yaml",
+    ]) {
+      const root = await write(
+        ".argent/flows/root.yaml",
+        `steps:\n  - echo: start\n  - run: ${target}\n`
+      );
+      let members: { state?: string; content?: string }[] = [];
+
+      const linked = await callFlow(true, root, async (body) => {
+        members = JSON.parse(body).flow_path.members;
+      });
+      const colocated = await callFlow(false, root);
+
+      expect(linked).toEqual(colocated);
+      expect(colocated[1]!.reason).toBe(
+        `could not load fragment "${target}": ENOENT: no such file or directory, ` +
+          `open '${flowsDir}${path.sep}${target}'`
+      );
+      expect(members.map((m) => [m.state, m.content])).toEqual([["missing", undefined]]);
+    }
+  });
+
+  it("sends no fragment for arguments the tool-server refuses, and gets its error", async () => {
+    // Each call names a flow whose run: target lies outside the project. The
+    // roots taken from such arguments (the directory a bad name climbs to, a
+    // project_root with "..", the filesystem root for a relative flow_path)
+    // would reach it, so they must not be taken before the arguments pass.
+    await write(".argent/flows/keep.yaml", "steps:\n  - echo: keep\n");
+    await write(".argent/flows/relative.yaml", "steps:\n  - run: ../../../sib/frag.yaml\n");
+    const nested = await write("e2e/root.yaml", "steps:\n  - run: ../../sib/frag.yaml\n");
+    const above = path.join(tmpDir, "above.yaml");
+    await fs.writeFile(above, "steps:\n  - run: sib/frag.yaml\n");
+    await fs.mkdir(path.join(tmpDir, "sib"));
+    await fs.writeFile(path.join(tmpDir, "sib/frag.yaml"), "steps:\n  - echo: outside\n");
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+
+    const originalCwd = process.cwd();
+    process.chdir(projectRoot);
+    try {
+      for (const [args, error] of [
+        [{ name: "../../../above" }, 'Invalid flow name "../../../above"'],
+        [
+          { flow_path: nested, project_root: `${projectRoot}/e2e/../..` },
+          'project_root must not contain ".." segments',
+        ],
+        [{ flow_path: ".argent/flows/relative.yaml" }, "flow paths must be absolute"],
+        [{ name: "keep", flow_path: above }, "Pass exactly one flow source: name or flow_path."],
+      ] as const) {
+        let wire: { content?: string; members?: unknown } | undefined;
+        const client = createToolsClient({
+          baseUrl: async () => ({ url, token: "", remote: true }),
+          fetchImpl: async (target: string, init: RequestInit) => {
+            if (target.endsWith("/tools/flow-execute")) {
+              const body = JSON.parse(String(init.body));
+              wire = body.flow_path ?? body.flow_file;
+            }
+            return fetch(target, init);
+          },
+        });
+
+        const err = await client
+          .callTool("flow-execute", { project_root: projectRoot, device: DEVICE, ...args })
+          .catch((e: unknown) => e);
+
+        expect(String(err)).toContain(error);
+        // The flow itself went out, so only the argument check kept its run: target back.
+        expect(wire?.content).toBeDefined();
+        expect(wire?.members).toBeUndefined();
+      }
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  /** A flow whose first step acts on the device, then runs `target`. */
+  function tapThenRun(target: string): Promise<string> {
+    return write(
+      ".argent/flows/root.yaml",
+      `steps:\n  - tool: tap\n    args: { x: 0.5, y: 0.5 }\n  - run: ${target}\n`
+    );
+  }
+
+  it("refuses before step 1 a script: step in a fragment the client sent", async () => {
+    const root = await tapThenRun("seed.yaml");
+    const seed = await write(".argent/flows/seed.yaml", "steps:\n  - script: { path: seed.mjs }\n");
+
+    const err = await callFlow(true, root).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      `step 1 in ${await fs.realpath(seed)}: script: { path: seed.mjs }`
+    );
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses before step 1 a fragment outside the project that a sent fragment names", async () => {
+    await fs.writeFile(path.join(tmpDir, "outside.yaml"), "steps:\n  - echo: outside\n");
+    const root = await tapThenRun("mid.yaml");
+    const mid = await write(".argent/flows/mid.yaml", "steps:\n  - run: ../../../outside.yaml\n");
+
+    const err = await callFlow(true, root).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      `step 1 in ${await fs.realpath(mid)}: run: ../../../outside.yaml ` +
+        "(../../../outside.yaml is outside every root this client serves"
+    );
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("tells a client that sends a run: flow without its fragments to update", async () => {
+    const root = await tapThenRun("frag.yaml");
+    await write(".argent/flows/frag.yaml", "steps:\n  - echo: frag\n");
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote: true }),
+      fetchImpl: async (target: string, init: RequestInit) => {
+        if (!target.endsWith("/tools/flow-execute")) return fetch(target, init);
+        // An older client sends the flow file alone, with no members.
+        const body = JSON.parse(String(init.body));
+        const { members: _m, canonical: _c, spelling: _s, ...wire } = body.flow_path;
+        return fetch(target, { ...init, body: JSON.stringify({ ...body, flow_path: wire }) });
+      },
+    });
+
+    const err = await client
+      .callTool("flow-execute", { flow_path: root, project_root: projectRoot, device: DEVICE })
+      .catch((e: unknown) => e);
+
+    expect(String(err)).toContain("  - step 2: run: frag.yaml\n");
+    expect(String(err)).toContain(
+      "This tool-server runs run: steps for a client that sends their fragments with the call. " +
+        "Update the argent CLI or MCP adapter on the client."
+    );
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("runs a chain that ends past the depth limit as the co-located run does, whatever its last target is", async () => {
+    // The runner stops the 20th run: before it reads the target, so the client
+    // may refuse that target (here a directory) and the run still goes as deep.
+    await write(".argent/flows/n0.yaml", "steps:\n  - echo: n0\n  - run: n1.yaml\n");
+    for (let hop = 1; hop < 20; hop++) {
+      await write(
+        `.argent/flows/n${hop}.yaml`,
+        `steps:\n  - echo: n${hop}\n  - run: n${hop + 1}.yaml\n`
+      );
+    }
+    await fs.mkdir(path.join(projectRoot, ".argent/flows/n20.yaml"));
+    const root = path.join(projectRoot, ".argent/flows/n0.yaml");
+    let members: { key: string; state?: string }[] = [];
+
+    const colocated = await callFlow(false, root);
+    const linked = await callFlow(true, root, async (body) => {
+      members = JSON.parse(body).flow_path.members;
+    });
+
+    expect(linked).toEqual(colocated);
+    expect(colocated.at(-1)).toMatchObject({
+      kind: "run",
+      status: "error",
+      target: "n20.yaml",
+      reason: "max run depth exceeded",
+    });
+    expect(members.at(-1)).toMatchObject({
+      key: expect.stringMatching(/n20\.yaml$/),
+      state: "refused",
+    });
+  });
+});
+
+describe("flow-execute with run: fragments sent through POST /upload", () => {
+  // The client inlines members up to 256 KiB in all, so each fragment this
+  // size goes to POST /upload.
+  const PADDING = `#${"x".repeat(300 * 1024)}\n`;
+  const clientSrc = path.resolve(__dirname, "../../argent-tools-client/src/tools-client.ts");
+  let server: Server;
+  let url: string;
+  let scratch: string;
+
+  beforeEach(async () => {
+    server = handle.app.listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    // Uploads and their extract dirs go to os.tmpdir(), so one that stays shows here.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "http-flow-upload-"));
+    scratch = dir;
+    const restoreTmpdir = redirectTmpdir(dir);
+    return async () => {
+      restoreTmpdir();
+      await fs.rm(dir, { recursive: true, force: true });
+    };
+  });
+
+  afterEach(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  async function uploadsLeft(): Promise<string[]> {
+    return (await fs.readdir(scratch)).filter(
+      (entry) => entry.startsWith("argent-upload-") || entry.startsWith("argent-tar-upload-")
+    );
+  }
+
+  async function writeFlows(files: Record<string, string>): Promise<string> {
+    const flows = path.join(projectRoot, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+    for (const [name, text] of Object.entries(files)) {
+      await fs.writeFile(path.join(flows, name), text, "utf8");
+    }
+    return path.join(flows, "root.yaml");
+  }
+
+  type Body = { flow_path: { members: Record<string, unknown>[] } };
+
+  /** Run `flowPath` over a link. `tamper` edits the body after the client built it. */
+  async function callLinked(flowPath: string, tamper?: (body: Body) => void) {
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+    let sent: Body | undefined;
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote: true }),
+      fetchImpl: async (target: string, init: RequestInit) => {
+        if (!target.endsWith("/tools/flow-execute")) return fetch(target, init);
+        sent = JSON.parse(String(init.body)) as Body;
+        const body = JSON.parse(String(init.body)) as Body;
+        tamper?.(body);
+        return fetch(target, { ...init, body: JSON.stringify(body) });
+      },
+    });
+    const outcome = await client
+      .callTool("flow-execute", { flow_path: flowPath, project_root: projectRoot, device: DEVICE })
+      .then(
+        ({ data }) => (data as FlowRunResult).steps.map((step) => `${step.status} ${step.flow}`),
+        (err: unknown) => err
+      );
+    return { outcome, sent: sent! };
+  }
+
+  it("runs a fragment that came through POST /upload", async () => {
+    const root = await writeFlows({
+      "root.yaml": "steps:\n  - run: big.yaml\n  - echo: done\n",
+      "big.yaml": `steps:\n  - echo: from the upload\n${PADDING}`,
+    });
+
+    const { outcome, sent } = await callLinked(root);
+
+    expect(sent.flow_path.members.map((m) => [typeof m.uploadId, m.content])).toEqual([
+      ["string", undefined],
+    ]);
+    expect(outcome).toEqual(["pass big", "pass big", "pass root"]);
+    // The extract dir goes once the response has closed.
+    await vi.waitFor(async () => expect(await uploadsLeft()).toEqual([]));
+  });
+
+  it.each([
+    ["an archive that is not the one uploaded", { contentHash: "0".repeat(64) }, /hash mismatch/],
+    ["a size that is not the size of the file", { size: 5 }, /but the client recorded 5/],
+  ])("fails the call on %s and keeps none of its uploads", async (_case, change, error) => {
+    const root = await writeFlows({
+      "root.yaml": "steps:\n  - run: a.yaml\n  - run: b.yaml\n",
+      "a.yaml": `steps:\n  - echo: a\n${PADDING}`,
+      "b.yaml": `steps:\n  - echo: b\n${PADDING}`,
+    });
+
+    const { outcome, sent } = await callLinked(root, (body) => {
+      Object.assign(body.flow_path.members[0]!, change);
+    });
+
+    expect(String(outcome)).toMatch(error);
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+    expect(await uploadsLeft()).toEqual([]);
+    // The upload of the second fragment is gone, not only its file.
+    const again = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({ ...sent, flow_path: { ...sent.flow_path, members: [sent.flow_path.members[1]] } });
+    expect(again.status).toBe(422);
+    expect(again.body.error).toMatch(/was not found on the tool-server/);
   });
 });

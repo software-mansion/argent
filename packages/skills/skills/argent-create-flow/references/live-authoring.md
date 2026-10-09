@@ -52,7 +52,7 @@ Obey these lifecycle rules:
 2. Record a plain `restart-app` as the first action that is neither an echo nor a script. Pass only the device id and app id. The recorder converts it to `launch:`.
 3. Record `await-ui-element` for the real first screen immediately after restart.
 
-Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment.
+Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment. On iOS, `launchArgs` is the exception: it records as `launch: { native: <app id>, ios: { app, args } }`.
 
 Do not use splash content as a selector or landmark. Wait for the first real screen.
 
@@ -266,7 +266,11 @@ Resolve every hit and confirm:
 
 Run `flow-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
 
-`flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`. `run:` targets and baselines resolve on the tool server's filesystem, beside the YAML it actually reads. `flow_path` therefore requires the agent and the tool server to share a filesystem and is refused when they do not. `name` still runs remotely, but the server receives only that one YAML in a fresh temp directory. It checks the whole flow first and refuses a `run:`, `script:`, or `snapshot:` step at any depth, naming the missing co-location rather than a missing fragment, script, or baseline. Replay self-contained flows remotely; a composing, scripting, or snapshotting flow needs one shared filesystem.
+`flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`.
+
+Over `argent link` or `ARGENT_TOOLS_URL`, `run:` fragments work when they are under `project_root`, under its `.argent/flows/`, or beside the flow file. Keep fragments there. These steps do not work over a link, in the flow or in a fragment that it reaches: `script:`, `snapshot:`, and a `tool:` step that takes a file (such as `screenshot-diff`, `reinstall-app`, or `flow-execute`) or records a flow.
+
+The tool-server checks the flow and its fragments before the first step. The error lists each step that does not work over a link, and each `run:` step whose fragment the client could not send, with the reason. A fragment that does not exist fails its `run:` step when the step runs. Run a flow that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
 
 Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason — most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
 

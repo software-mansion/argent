@@ -40,6 +40,8 @@ function mockRegistry(calls: Array<{ tool: string; args: Record<string, unknown>
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
+      // A failed step's screenshot (flow-failure-screen.test.ts) is not a step's action.
+      if (id === "screenshot") return {};
       calls.push({ tool: id, args });
       return { ok: true };
     }),

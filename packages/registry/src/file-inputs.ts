@@ -11,15 +11,18 @@
  * The client replaces each declared arg with a {@link FileInputWire} carrying
  * the path, its stat, and (only when routed to a remote tool-server) the
  * base64 content. The tool-server resolves it back to a server-readable path
- * *before* zod validation: used in place when the path on its own disk matches
- * the recorded stat (co-located ⇒ zero copies, mirroring the artifact gate),
- * otherwise materialized from the inlined content. Tools therefore always
- * execute against a plain local path.
+ * *before* zod validation: materialized from the inlined content whenever the
+ * client sent it (a linked client), otherwise used in place when the path on
+ * its own disk matches the recorded stat (an unlinked client ⇒ zero copies,
+ * mirroring the artifact gate). Tools therefore always execute against a plain
+ * local path.
  *
  * {@link ClientFileDirective} is the reverse: a tool whose output belongs in
  * the *client's* project (e.g. a recorded flow YAML) returns the content plus
  * the client-side destination path, and the client writes it.
  */
+
+import type { OnDiskSpelling } from "./flow-file-refs";
 
 /** Discriminant key identifying a client-file wrapper inside tool args. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
@@ -31,7 +34,7 @@ export interface FileInputWire {
    * Absolute path on the CLIENT machine. Also probed on the tool-server's own
    * filesystem — a hit (existence for directories, size/mtime match for files)
    * means client and server are co-located (or share a checkout) and the path
-   * is used in place with no copy.
+   * is used in place with no copy, unless the wrapper carries `content`.
    */
   path: string;
   /** stat of `path` on the client, for the server-side co-location probe. */
@@ -40,7 +43,8 @@ export interface FileInputWire {
   /**
    * Base64 file bytes, inlined only when the client is routed to an external
    * tool-server (`argent link` / ARGENT_TOOLS_URL), so unlinked local calls
-   * never pay the encoding cost.
+   * never pay the encoding cost. When present, the server uses these bytes
+   * even if a host file at `path` matches the stat.
    */
   content?: string;
   /**
@@ -63,6 +67,39 @@ export interface FileInputWire {
    * `POST /upload` and rejects a mismatch before extraction.
    */
   contentHash?: string;
+  /**
+   * The client's real path of `path`, sent with `members` (a `collect` spec
+   * routed to a remote tool-server): the runner anchors the flow's `run:`
+   * targets beside it, as a co-located run anchors them beside its realpath.
+   */
+  canonical?: string;
+  /** How `path`'s basename is spelled in its directory on the client, sent with {@link canonical}. */
+  spelling?: OnDiskSpelling;
+  /**
+   * The project files the file at `path` makes the tool-server read, collected
+   * by the client for a `collect` spec, and sent only when the call is routed
+   * to a remote tool-server. Absent from an older client, and from every call
+   * without a link.
+   */
+  members?: FileInputMember[];
+}
+
+/**
+ * One project file sent with a `collect` wire: its bytes travel like a
+ * file input's (inline `content`, or `uploadId` + `contentHash` through
+ * `POST /upload`), or `state` says why it carries none.
+ */
+export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_MARKER | "members"> {
+  role: "flow";
+  /**
+   * How the tool-server looks the member up. For `flow`: the directory of the
+   * file that names the target, a NUL, and the target as written, which is
+   * exactly the pair the runner resolves.
+   */
+  key: string;
+  /** No bytes: `missing` = nothing at `canonical`; `refused` = the client does not send it (`error` says why). */
+  state?: "missing" | "refused";
+  error?: string;
 }
 
 /**
@@ -123,6 +160,24 @@ export interface FileInputSpec {
    * field.
    */
   unwrapWhenSet?: string;
+  /**
+   * `"flow"`: the file is a flow, and over a link the client also sends, on
+   * the same wire, every flow file its `run:` steps reach
+   * ({@link FileInputWire.members}). The call's `project_root` bounds what the
+   * client sends. Clients that do not know the field send the file alone.
+   */
+  collect?: "flow";
+}
+
+/** A {@link FileInputMember} as the tool-server resolved it. */
+export interface ResolvedMember {
+  role: FileInputMember["role"];
+  /** `present`: the bytes arrived (`text` for a flow). */
+  state: "present" | "missing" | "refused";
+  canonical: string;
+  spelling: OnDiskSpelling;
+  text?: string;
+  error?: string;
 }
 
 /** Per-target resolution outcome, passed to the tool via `ctx.fileInputs`. */
@@ -140,6 +195,11 @@ export interface ResolvedFileInput {
    * (which `presentOnHost` deliberately still accepts).
    */
   statVerified?: boolean;
+  /** From a `collect` wire: the client's real path and spelling of `clientPath`. */
+  canonical?: string;
+  spelling?: OnDiskSpelling;
+  /** From a `collect` wire: each member by its key. Present (possibly empty) only when the wire had members. */
+  members?: Record<string, ResolvedMember>;
 }
 
 /** Path-safe flow-name charset: no separators, no "..", no spaces. */

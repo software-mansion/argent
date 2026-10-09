@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  classifyOnDiskSpelling,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
@@ -18,7 +19,6 @@ import {
   authoringPlatform,
   parseFlow,
   assertSafeFlowName,
-  classifyOnDiskSpelling,
   describeSelector,
   flowsDirFor,
   foldStepFromArgs,
@@ -782,6 +782,9 @@ const NESTED_RECORDER_TOOLS: Record<string, string> = {
     "directly when the walkthrough is complete.",
 };
 
+/** The tools that write a flow file; a replayed flow refuses them when it arrives as an upload. */
+export const RECORDING_TOOL_IDS: ReadonlySet<string> = new Set(Object.keys(NESTED_RECORDER_TOOLS));
+
 /**
  * Keyed on the error's identity and its `toolId`, so a tool that ran and
  * reported its own "not found" is not read as the command being absent.
@@ -1328,15 +1331,29 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A recorded `restart-app` is captured as the portable `launch` directive
       // (same terminate-and-relaunch semantics, plus the runner's post-launch
       // settle and readiness gate at replay). Recorded first, it makes the flow
-      // an e2e flow. Only the plain bundleId form maps; extra args (e.g. an
-      // Android `activity`) keep the raw tool step. `launch-app` is NOT
-      // rewritten — it foregrounds without terminating.
+      // an e2e flow. Only the plain bundleId form maps, plus `launchArgs` on an
+      // iOS device, which records as the `ios: { app, args }` entry beside a
+      // `native` id so the flow still replays elsewhere; other extra args (e.g.
+      // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
+      // no args. `launch-app` is NOT rewritten — it foregrounds without
+      // terminating.
       const strippedArgs = stripDeviceKeys(args);
+      const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
+      const noLaunchArgs =
+        launchArgs === undefined || (Array.isArray(launchArgs) && launchArgs.length === 0);
+      const iosArgs =
+        !noLaunchArgs &&
+        Array.isArray(launchArgs) &&
+        launchArgs.every((a) => typeof a === "string") &&
+        platformOf(args.udid) === "ios"
+          ? (launchArgs as string[])
+          : undefined;
       const isLaunch =
         params.command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
-        Object.keys(strippedArgs).length === 1;
+        Object.keys(extraLaunchArgs).length === 0 &&
+        (noLaunchArgs || iosArgs !== undefined);
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change
       // the tool made; args the directive does not take keep the raw tool step.
@@ -1365,7 +1382,11 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
         warning = captured?.warning;
       } else if (isLaunch) {
-        step = { kind: "launch", app: strippedArgs.bundleId as string };
+        const bundleId = strippedArgs.bundleId as string;
+        step = {
+          kind: "launch",
+          app: iosArgs ? { native: bundleId, ios: { app: bundleId, args: iosArgs } } : bundleId,
+        };
       } else if (foldStep) {
         step = foldStep;
       } else if (runTarget?.flow) {

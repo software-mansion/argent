@@ -675,6 +675,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           alwaysLoad?: boolean;
           searchHint?: string;
           longRunning?: boolean;
+          hideFromMcp?: boolean;
         } = {
           name: def.id,
           description: def.description ?? "",
@@ -685,6 +686,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (def.alwaysLoad) entry.alwaysLoad = true;
         if (def.searchHint) entry.searchHint = def.searchHint;
         if (def.longRunning) entry.longRunning = true;
+        if (def.hideFromMcp) entry.hideFromMcp = true;
         return entry;
       });
     res.json({ tools });
@@ -700,6 +702,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const name = req.params.name as string;
       const requestStartedAt = performance.now();
       const aiMeta = extractAiTelemetryMeta(req);
+      // "close" fires once. A caller that hangs up during the awaits below
+      // (file inputs, the device grant, the dependency preflight) is gone
+      // before the listeners further down exist, so it is noted from here.
+      let callerGone = false;
+      res.once("close", () => {
+        if (!res.writableFinished) callerGone = true;
+      });
 
       const emitHttpFailure = (
         signal: FailureSignal,
@@ -761,7 +770,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         derivedTargets = resolved.derivedTargets;
         // Materialized uploads are call-scoped: remove them once the response
         // settles, however it ends.
-        res.once("close", () => void resolved.cleanup());
+        if (callerGone) void resolved.cleanup();
+        else res.once("close", () => void resolved.cleanup());
       } catch (err) {
         if (err instanceof FileInputError) {
           res.status(422).json({ error: err.message });
@@ -912,6 +922,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
+      // Nobody is left to read the result.
+      if (callerGone) return;
+
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -958,9 +971,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         res.write(`${JSON.stringify(payload)}\n`);
       };
       if (wantsStream) {
+        // Every line must reach the client as soon as it is written.
+        // `no-transform` asks intermediaries not to compress the stream, and
+        // `X-Accel-Buffering: no` makes nginx pass each chunk through instead
+        // of holding it in its buffers.
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
-          "Cache-Control": "no-cache",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
         });
       }
 
