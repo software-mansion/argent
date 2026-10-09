@@ -63,7 +63,7 @@ A selector finds an element on the screen. Write a selector as an explicit map:
 | `role` | Case-insensitive substring of the element role                  |
 | `any`  | Any element. Takes only `true`. Pair it with a relational scope |
 
-All fields in a selector must match. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
+All fields in a selector must match. A run of whitespace in a label, including a no-break space, matches one space in `text`. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
 
 A bare string, for example `tap: Save`, is a loose selector. It tries `id` first, then `text`. Prefer the map form.
 
@@ -92,19 +92,28 @@ A selector can scope its matches by the frames of other elements:
 
 `within` uses the visual frame, not the source tree. Reading order is top to bottom, left to right, as the user sees the UI. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. `after`, `next`, `any: true` and a `text` condition use this reading order. Scopes nest, with at most six scope keys in one selector. The `await-ui-element` tool does not support scopes.
 
+When the agent records a tap and the selector alone matches more than one element, Argent adds a `within` or `next` scope to the step.
+
 ### Runner tree and discovery tree
 
-The runner resolves a selector against a different tree than the `describe` tool:
+The runner resolves a selector against the runner tree. On some platforms, the runner tree is different from the `describe` tree:
 
-| Platform        | Runner tree                                   | `describe` tree            |
-| --------------- | --------------------------------------------- | -------------------------- |
-| iOS simulator   | Native UIView hierarchy                       | Accessibility tree         |
-| Physical iPhone | Accessibility snapshot of `describe`          | Same snapshot              |
-| Android         | Full accessibility hierarchy                  | Trimmed interactable nodes |
-| Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
-| Vega            | Toolkit page source                           | Same source                |
+| Platform        | Runner tree                                                  | `describe` tree            |
+| --------------- | ------------------------------------------------------------ | -------------------------- |
+| iOS simulator   | Accessibility tree of `describe`, with the differences below | Accessibility tree         |
+| Physical iPhone | Accessibility snapshot of `describe`                         | Same snapshot              |
+| Android         | Full accessibility hierarchy                                 | Trimmed interactable nodes |
+| Chromium        | DOM nodes with an id, label, value or handler                | Shorter DOM walk           |
+| Vega            | Toolkit page source                                          | Same source                |
 
-On an iOS simulator and Android, an id absent from `describe` can still resolve in a flow. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+On an iOS simulator and on a physical iPhone, the runner and `describe` read one tree. Copy ids, text and roles from `describe`. On an iOS simulator, the runner tree has these differences:
+
+- The runner removes the elements that are scrolled or clipped out of view.
+- The runner removes the elements under a system alert.
+- The runner keeps the unlabeled scrolling containers that `describe` does not show.
+- The runner keeps the unlabeled containers that carry an id. `describe` does not show them.
+
+On Android and on Chromium, an id absent from `describe` can still resolve in a flow. Verify the id in a scratch fragment.
 
 ## Directives
 

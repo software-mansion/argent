@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import type { DescribeFrame, DescribeNode } from "../describe/contract";
+import type { DescribeFrame, DescribeNode, UiOrientation } from "../describe/contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
@@ -48,6 +48,7 @@ export interface UiTree {
   alertVisible?: boolean;
   keyboardVisible?: boolean;
   foregroundApp?: string;
+  interfaceOrientation?: UiOrientation;
   unsupportedFields: string[];
 }
 
@@ -73,7 +74,7 @@ export function createUiTreeTool(registry: Registry): ToolDefinition<Params, UiT
     },
     description: `Read the raw accessibility tree of the screen as nested JSON, for SDK callers.
 Use when a program needs element ancestry, such as an e2e engine's scoped selectors; agents use describe.
-Returns { schemaVersion, roots, truncated, alertVisible, keyboardVisible, foregroundApp, unsupportedFields }.
+Returns { schemaVersion, roots, truncated, alertVisible, keyboardVisible, foregroundApp, interfaceOrientation, unsupportedFields }.
 Fails if the iOS ax-service predates the tree command; update argent.`,
     hideFromMcp: true,
     zodSchema,

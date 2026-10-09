@@ -13,6 +13,7 @@ const CONTENT_ROLES = new Set([
   // purpose: as its catch-all fallback, requiring it to carry its own
   // label/value before we emit a line keeps decorative groupings out.
   "AXButton",
+  "AXSwitch",
   "AXStaticText",
   "AXImage",
   "AXLink",

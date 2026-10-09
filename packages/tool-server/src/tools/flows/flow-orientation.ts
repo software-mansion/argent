@@ -15,8 +15,8 @@ import type { DescribeFrame, UiOrientation } from "../describe/contract";
  * dispatched, and a frame has to be turned back before it is compared with
  * another in reading order.
  *
- * The orientation is UIKit's name for the interface's (as the injected
- * framework reports it; see `flow-ios-tree.ts`). The maps below were checked on
+ * The orientation is UIKit's name for the interface's (as the accessibility
+ * tree reports it; see `flow-ios-tree.ts`). The maps below were checked on
  * the simulator against a touch probe: in `landscapeRight` (home side on the
  * right, a rotated iPhone) a UI point (u, v), normalized, is the native point
  * (1 - v, u); in `landscapeLeft` (the unfolded iPhone Duo), (v, 1 - u).
