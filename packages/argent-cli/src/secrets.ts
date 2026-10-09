@@ -6,6 +6,9 @@
 import pc from "picocolors";
 import { getResolvedToolsUrl } from "@argent/tools-client";
 import { secretSources, secretNames, SECRET_ENV_PREFIX } from "@argent/configuration-core";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+
+const LIST_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
 
 export async function secrets(argv: string[]): Promise<void> {
   const [sub, ...rest] = argv;
@@ -40,7 +43,16 @@ Examples:
 
 async function cmdList(argv: string[]): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) return printUsage();
-  const json = argv.includes("--json");
+  let json: boolean;
+  try {
+    const { positionals, options } = parseCommandArgs(argv, LIST_OPTIONS);
+    if (positionals.length > 0) throw new UsageError(`Unexpected argument "${positionals[0]}"`);
+    json = options.json === true;
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}. Try \`argent secrets --help\`.`);
+    process.exit(2);
+  }
   const sources = secretSources();
   const all = secretNames(sources);
 

@@ -319,6 +319,18 @@ describe("flags (list) CLI", () => {
     expect(unset).toMatchObject({ enabled: false, scope: null });
   });
 
+  it("rejects an unknown flag instead of listing", () => {
+    const out = expectExit(2, () => flagsCmd(["--jsno"], TEST_REGISTRY));
+    expect(out.stderr).toContain("Unknown flag: --jsno");
+    expect(out.stdout).toBe("");
+  });
+
+  it("rejects a positional argument", () => {
+    const out = expectExit(2, () => flagsCmd(["a"], TEST_REGISTRY));
+    expect(out.stderr).toContain('Unexpected extra argument: "a"');
+    expect(out.stdout).toBe("");
+  });
+
   it("--help prints usage", () => {
     const out = captureConsole(() => flagsCmd(["--help"]));
     expect(out.stdout).toContain("Usage: argent flags");
