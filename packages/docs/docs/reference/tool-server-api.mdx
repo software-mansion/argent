@@ -165,7 +165,7 @@ The runner then uses the members as the files of the client:
 3. A `run:` step looks up its member by `key`. The runner applies the cycle guard, the depth limit and the refusal of a `case_folded` spelling. The runner never opens `canonical`. It uses the path as a key and in messages.
 4. A `missing` member makes its `run:` step report `could not load fragment "<target>": ENOENT: no such file or directory, open '<canonical>'`. A `run:` step in a `when:` block that does not run needs no file.
 5. A `snapshot:` step that compares reads its baseline from the members. When no member has the path of the baseline, the step fails as for a missing baseline. A `refused` baseline makes the step report `error` with the reason of the client.
-6. A `snapshot:` step with `updateBaselines` keeps the new baseline for the result. The step reports `baseline updated` when a member or an earlier step of the call has the same path, else `baseline written`. A later step of the call reads the new baseline.
+6. A `snapshot:` step with `updateBaselines` keeps the new baseline for the result. The client writes the file only when the result arrives. The step reports `baseline captured; the client updates it when the run ends (<path>)` when a member or an earlier step of the call has the same path, else `baseline captured; the client writes it when the run ends (<path>)`. `<path>` is the client path of the baseline. A later step of the call reads the new baseline.
 
 ## Baselines in the result
 
