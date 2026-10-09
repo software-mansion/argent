@@ -270,23 +270,23 @@ Run `flow-execute` on the complete YAML with the absolute project root. For a fr
 
 `flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`.
 
-Over `argent link` or `ARGENT_TOOLS_URL`, the client sends the flow file, its `run:` fragments, the flows that its `tool: flow-execute` steps name, the snapshot baselines of each run and the files its `tool:` steps name with the call. These steps work over a link:
+Over `argent link` or `ARGENT_TOOLS_URL`, the client sends the flow file, its `run:` fragments, the flows that its `tool: flow-execute` steps name, the snapshot baselines of each run and the file arguments of its `tool:` steps with the call. These steps work over a link:
 
-- `run:` fragments and the flows that `tool: flow-execute` steps name, when they sit under the project root, under `.argent/flows/`, or beside the flow file.
-- `snapshot:` steps in the flow and in its fragments. The baselines stay in the project on the client, and the client writes each new baseline under `updateBaselines` when the call ends.
-- A `tool:` step whose argument is a `.png` or `.yaml` file at an absolute path, such as `screenshot-diff` with `baselinePath`. Keep that file under the project or beside the flow, and spell its path without a symlink that lies outside the project. Otherwise the step fails during the replay, after the earlier steps acted.
+- `run:` fragments and the flows that `tool: flow-execute` steps name, when they are under `project_root`, under its `.argent/flows/`, or beside the flow file. Keep them there.
+- `snapshot:` steps in the flow and in its fragments. The baselines stay in the project. With `updateBaselines: true`, the client writes each new baseline when the run ends. A `baseline not written` line in the report means that the client did not save that baseline: fix the reason in the line and run again.
+- A `tool:` step whose file argument is an absolute path to a `.png` or `.yaml` file, such as `baselinePath` of `screenshot-diff`. Keep the real file under the project root or beside the flow file, not behind a symlink to another place. Otherwise the step reports `error` when it runs, after the earlier steps acted.
 - A `tool: flow-execute` step that names its flow with `name` and an absolute `project_root` without a `..` segment. Keep the flow that the step names under the project on the client, and spell `name` in the letter case of its file. That flow uses its own baselines. A replay with `updateBaselines` also updates them, unless the step sets `updateBaselines` itself.
 
-These steps do not work over a link, in the flow or in any fragment or flow it runs:
+These steps do not work over a link, in the flow or in a fragment or flow that it runs:
 
 - `script:`
 - a `tool:` step that takes a directory, an app or an output directory, such as `reinstall-app`, `gather-workspace-data`, or `screenshot-diff` with `outputDir`
-- a `tool:` step with a relative file path or a file other than `.png` or `.yaml`
-- a `tool:` step that builds its file path from several arguments, such as `flow-read-prerequisite` with `name`
+- a `tool:` step with a relative file path, or a file other than `.png` or `.yaml`
+- a `tool:` step whose tool builds the file path from several arguments, such as `flow-read-prerequisite` with `name`
 - a `tool: flow-execute` step with `flow_path`, or with `name` and a relative `project_root` or one with a `..` segment
 - a `tool:` step that records a flow
 
-The tool-server checks the flow, every fragment and every flow it runs before the first step, and the error lists each such step. A flow that needs them runs only with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
+The tool-server checks the flow, its fragments and the flows that it runs before the first step. The error lists each step that does not work over a link, and each `run:` or `tool: flow-execute` step whose flow the client could not send, with the reason. A fragment or a flow that does not exist fails its step when the step runs. Run a flow that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
 
 Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason — most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
 
