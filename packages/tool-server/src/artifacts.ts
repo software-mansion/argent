@@ -134,10 +134,10 @@ function streamDirectoryAsArchive(
       child.kill("SIGTERM");
     }
   });
-  // A non-zero exit can still leave a whole archive (that live-trace warning);
-  // one tar abandoned lacks the trailing zero blocks. The compressor would close
-  // a valid frame around either, so cut the response off for the latter and the
-  // client's download fails instead of extracting a partial bundle.
+  // tar can exit non-zero after a whole archive (that live-trace warning), but an
+  // abandoned one lacks the trailing zero blocks. The compressor closes a valid
+  // frame either way, so destroy the response for the latter: the client's
+  // download then fails instead of extracting a partial bundle.
   let tail: Buffer = Buffer.alloc(0);
   child.stdout.on("data", (chunk: Buffer) => {
     tail =

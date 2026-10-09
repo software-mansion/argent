@@ -690,7 +690,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (def.hideFromMcp) entry.hideFromMcp = true;
         return entry;
       });
-    // The archive formats `POST /upload` accepts, so a client sends zstd only here.
+    // Formats `POST /upload` reads; a client sends zstd only when listed.
     res.json({ tools, uploadFormats: ARCHIVE_FORMATS });
   });
 

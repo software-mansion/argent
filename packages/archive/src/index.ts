@@ -63,7 +63,7 @@ export function createCompressor(format: ArchiveFormat): zlib.Gzip | zlib.ZstdCo
   return format === "zstd"
     ? zlib.createZstdCompress({
         chunkSize: CHUNK_BYTES,
-        // Corruption check, like gzip's CRC; Node's decoder verifies it.
+        // Lets the decoder detect corruption.
         params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 },
       })
     : zlib.createGzip({ chunkSize: CHUNK_BYTES });
@@ -79,7 +79,7 @@ export function createTarArgs(sourcePath: string): string[] {
 
 /**
  * Archive `sourcePath` (file or directory) into `archivePath`. Removes the
- * partial archive on failure, so a mid-write failure doesn't leak it.
+ * partial archive on failure.
  */
 export async function createArchiveFile(
   sourcePath: string,
