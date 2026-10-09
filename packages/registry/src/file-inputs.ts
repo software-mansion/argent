@@ -94,7 +94,9 @@ export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_M
   /**
    * How the tool-server looks the member up. For `flow`: the directory of the
    * file that names the target, a NUL, and the target as written, which is
-   * exactly the pair the runner resolves. For `baseline`: the absolute client
+   * exactly the pair the runner resolves; for the flow of a nested
+   * `tool: flow-execute` step, `<project_root>/.argent/flows`, a NUL and
+   * `<name>.yaml`. For `baseline`: the absolute client
    * path `<dir>/__baselines__/<key>/<name>.png`. For `tool`: a file argument
    * of a `tool:` step ({@link isClientFileArgument}), as the step spells it.
    * One path is sent once: a `tool` member also serves as the baseline at
@@ -170,12 +172,17 @@ export interface FileInputSpec {
   unwrapWhenSet?: string;
   /**
    * `"flow"`: the file is a flow, and over a link the client also sends, on
-   * the same wire, every flow file its `run:` steps reach, the snapshot
-   * baselines of its run, and the file arguments of its `tool:` steps
-   * ({@link FileInputWire.members}). The call's `project_root` bounds what the
-   * client sends. Clients that do not know the field send the file alone.
+   * the same wire, every flow file its `run:` steps reach, the flow each of
+   * its nested `tool: flow-execute` steps names (with that flow's own files),
+   * the snapshot baselines of each run, and the file arguments of its `tool:`
+   * steps ({@link FileInputWire.members}). `"step"`: on flow-add-step's
+   * `project_root` probe, the client sends the files that the one step it
+   * records (`command` + `args`) makes the tool-server read, and the
+   * recording file and the sibling the recorder checks a nested flow against.
+   * The call's `project_root` bounds what the client sends. Clients that do
+   * not know the field send the file alone.
    */
-  collect?: "flow";
+  collect?: "flow" | "step";
 }
 
 /** A {@link FileInputMember} as the tool-server resolved it. */

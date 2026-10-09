@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  LINKED_CALL_HEADER,
   describeParamIssues,
   getFailureSignal,
   type FailureSignal,
@@ -986,6 +987,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
+          // The argent client marks every call it sends over a link. A false
+          // mark makes the recorder stricter for that caller and keeps its
+          // recording in memory, sent back in client-file directives.
+          ...(firstHeader(req.headers[LINKED_CALL_HEADER]) === "1" ? { linked: true } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream

@@ -70,9 +70,10 @@ export function completeRunExtension(value: string): string {
 }
 
 /**
- * Longest `run:` chain a flow may nest: the runner refuses the `run:` step
- * that would push the chain past it. The client sends the files of a flow's
- * `run:` closure to this depth, the deepest one the runner resolves.
+ * Longest chain of `run:` fragments and nested `tool: flow-execute` runs a
+ * flow may nest: the runner refuses the step that would push the chain past
+ * it. The client sends the files of a flow's closure to this depth, the
+ * deepest one the runner resolves.
  */
 export const MAX_RUN_DEPTH = 20;
 
@@ -89,20 +90,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * taken or not, spelled as the runner keeps them (extension completed), the
  * names of its `snapshot` steps, whose baselines the run reads or writes, and
  * its `tool:` steps, whose file arguments the run reads (which arguments are
- * files depends on the tool's declaration: {@link toolStepFiles}). A value the
- * runner's parse refuses names nothing. Pure: it walks a document the caller
- * parsed, with no YAML or file-system dependency. The tool-server's
- * test/flows/flow-collect-parity.test.ts holds the client's walk over it to
- * the runner's parse.
+ * files depends on the tool's declaration: {@link toolStepFiles}). `nested`:
+ * the flow each `tool: flow-execute` step among them names
+ * ({@link nestedFlowTarget}), with the step's args, which say whether its run
+ * updates baselines. A value the runner's parse refuses names nothing. Pure:
+ * it walks a document the caller parsed, with no YAML or file-system
+ * dependency. The tool-server's test/flows/flow-collect-parity.test.ts holds
+ * the client's walk over it to the runner's parse.
  */
 export function collectFlowRequests(doc: unknown): {
   runTargets: string[];
   snapshots: string[];
   toolSteps: { tool: string; args: Record<string, unknown> }[];
+  nested: { target: NestedFlowTarget; args: Record<string, unknown> }[];
 } {
   const runTargets = new Set<string>();
   const snapshots = new Set<string>();
   const toolSteps: { tool: string; args: Record<string, unknown> }[] = [];
+  const nested: { target: NestedFlowTarget; args: Record<string, unknown> }[] = [];
   const seen = new Set<unknown>();
   const visit = (steps: unknown, depth: number): void => {
     if (!Array.isArray(steps) || depth > MAX_BLOCK_NESTING || seen.has(steps)) return;
@@ -122,13 +127,16 @@ export function collectFlowRequests(doc: unknown): {
       const snapshot = isRecord(step.snapshot) ? step.snapshot.name : step.snapshot;
       if (typeof snapshot === "string" && FLOW_NAME_PATTERN.test(snapshot)) snapshots.add(snapshot);
       if (typeof step.tool === "string") {
-        toolSteps.push({ tool: step.tool, args: isRecord(step.args) ? step.args : {} });
+        const args = isRecord(step.args) ? step.args : {};
+        toolSteps.push({ tool: step.tool, args });
+        const target = step.tool === "flow-execute" ? nestedFlowTarget(args) : undefined;
+        if (target !== undefined) nested.push({ target, args });
       }
       visit(step.steps, depth + 1);
     }
   };
   if (isRecord(doc)) visit(doc.steps, 0);
-  return { runTargets: [...runTargets], snapshots: [...snapshots], toolSteps };
+  return { runTargets: [...runTargets], snapshots: [...snapshots], toolSteps, nested };
 }
 
 /**
@@ -266,4 +274,42 @@ export async function resolveFlowRelativeFile(
     addressable
   );
   return { canonical, spelling };
+}
+
+/**
+ * The flow a nested `tool: flow-execute` step names, in a form both sides of a
+ * link accept, or undefined. `name`: a flow name with an absolute
+ * `project_root` that has no `..` segment, and no `flow_path`; `path` is the
+ * saved flow `<project_root>/.argent/flows/<name>.yaml`. `flow_path`: an
+ * absolute path with no `..` segment to a `<flow-name>.yaml` file, and no
+ * `name`. The argent client sends the flow of a `name` step with the call,
+ * and the tool-server runs a nested step over a link only in that form, so the
+ * two decide with this one function.
+ */
+export type NestedFlowTarget =
+  | { kind: "name"; projectRoot: string; name: string; path: string }
+  | { kind: "flow_path"; path: string };
+
+export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+  const { name, project_root: projectRoot, flow_path: flowPath } = args as Record<string, unknown>;
+  if (flowPath === undefined) {
+    if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return undefined;
+    if (!isResolvedAbsolute(projectRoot)) return undefined;
+    return {
+      kind: "name",
+      projectRoot,
+      name,
+      path: path.join(projectRoot, ".argent", "flows", `${name}.yaml`),
+    };
+  }
+  if (name !== undefined || !isResolvedAbsolute(flowPath)) return undefined;
+  if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flowPath))) return undefined;
+  return { kind: "flow_path", path: flowPath };
+}
+
+function isResolvedAbsolute(value: unknown): value is string {
+  return (
+    typeof value === "string" && path.isAbsolute(value) && !value.split(/[\\/]+/).includes("..")
+  );
 }

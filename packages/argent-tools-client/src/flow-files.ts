@@ -1,11 +1,13 @@
 /**
- * The flow half of the INPUT-side file boundary: the files a `collect: "flow"`
- * file input sends with the flow over a link (see `file-inputs.ts` for the
- * generic wire, upload and directive code). {@link collectFlowMembers} walks
- * the flow's `run:` closure, the file arguments of its `tool:` steps and its
- * run's snapshot baselines on THIS machine and returns them as the wire's
- * `members`, each one inline, uploaded, listed by name, or with the state that
- * tells the tool-server why it was not sent.
+ * The flow half of the INPUT-side file boundary: the files a `collect` file
+ * input sends over a link (see `file-inputs.ts` for the generic wire, upload
+ * and directive code). {@link collectFlowMembers} walks the flow's `run:`
+ * closure, the file arguments of its `tool:` steps, the flows its nested
+ * `tool: flow-execute` steps run and the snapshot baselines of each run on
+ * THIS machine; {@link collectStepMembers} does the same for the one step a
+ * `flow-add-step` call records. Both return the wire's `members`, each one
+ * inline, uploaded, listed by name, or with the state that tells the
+ * tool-server why it was not sent.
  */
 
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
@@ -25,8 +27,10 @@ import {
   flowMemberKey,
   hasToolFileExtension,
   isClientFileArgument,
+  nestedFlowTarget,
   toolStepFiles,
   type FileInputMember,
+  type NestedFlowTarget,
 } from "@argent/registry";
 
 import {
@@ -338,78 +342,225 @@ async function sendBytes(
 }
 
 /**
- * The snapshot baselines of the run of the root flow at `canonical`, from
- * `<its dir>/__baselines__/<key>/`, where the runner keys them
- * ({@link baselineKeyFor}). A run that updates baselines never reads one, so
- * each `.png` there goes by name only (`listed`), for the runner to say
- * whether a write replaced one; its directory is the only place a baseline
- * in the result may be written. A run that compares gets the bytes of the
- * baselines of its own snapshots only (`<snapshot>__*.png`, crops included),
- * of one platform when the call names it ({@link callPlatform}). A directory
- * outside the roots sends nothing and takes no write. A baseline already in
- * `sent`, as the file argument of a `tool:` step, is not sent twice.
+ * One run whose files a call sends: the call's root flow, or a flow that a
+ * nested `tool: flow-execute` step runs. `canonical` and `text` are its root
+ * flow file; `flowName` keys its baselines when the file's stem cannot
+ * ({@link baselineKeyFor}); `hop` is how deep the runner nests that file;
+ * `updates` says whether the run writes its baselines, and `platform` whose
+ * baselines a compare run reads ({@link callPlatform}).
  */
-async function collectBaselineMembers(
-  canonical: string,
-  flowName: string,
-  snapshots: string[],
-  args: Record<string, unknown>,
-  roots: string[],
-  budget: { inline: number },
-  opts: PrepareFileInputsOptions,
-  sent: ReadonlySet<string>,
-  emit: (member: FileInputMember, sent: string) => void
-): Promise<void> {
-  const dir = path.join(
-    path.dirname(canonical),
-    "__baselines__",
-    baselineKeyFor(canonical, flowName)
-  );
-  const real = (await landing(dir)).canonical;
-  if (!roots.some((root) => isWithin(real, root))) return;
-  const updates = args.updateBaselines === true;
-  if (updates) opts.baselineDirs?.push(dir);
-  const platform = callPlatform(args);
-  const prefixes = snapshots.map(
-    (name) => `${name}__${platform === undefined ? "" : `${platform}-`}`
-  );
-  const names = await readdir(dir).catch(() => [] as string[]);
-  for (const name of names.sort()) {
-    if (!name.endsWith(".png")) continue;
-    if (!updates && !prefixes.some((prefix) => name.startsWith(prefix))) continue;
-    const file = path.join(dir, name);
-    if (sent.has(file)) continue;
-    const member: FileInputMember = { role: "baseline", key: file, path: file };
-    const entry = await baselineEntry(file, roots, updates);
-    if (entry.state === "refused") {
-      emit({ ...member, state: "refused", error: entry.error }, `refused (${entry.error})`);
-    } else if (entry.state === "missing") {
-      emit({ ...member, state: "missing" }, "missing");
-    } else if (updates) {
-      emit({ ...member, state: "listed" }, "listed");
-    } else {
-      const sent = await sendBytes(member, entry.real, budget, opts);
-      emit(sent.member, sent.sent);
+interface MemberRun {
+  canonical: string;
+  text: string;
+  flowName: string;
+  hop: number;
+  updates: boolean;
+  platform: string | undefined;
+}
+
+/**
+ * Whether a nested run updates its baselines: when its step says so, and,
+ * when the step does not say, when the run that starts it does, as the runner
+ * dispatches it.
+ */
+function nestedRunUpdates(parentUpdates: boolean, args: Record<string, unknown>): boolean {
+  return args.updateBaselines === true || (parentUpdates && args.updateBaselines === undefined);
+}
+
+/**
+ * Collects the members of one call: each flow by its key, each file argument
+ * of a `tool:` step by its path and each baseline once, in the order they are
+ * found, inline while the call's budget lasts and through `POST /upload`
+ * after it, and logs each under `ARGENT_FLOW_FILES_LOG=1`.
+ */
+function memberCollector(roots: string[], opts: PrepareFileInputsOptions) {
+  const members: FileInputMember[] = [];
+  const flows = new Map<string, { member: FileInputMember; text?: string }>();
+  const tools = new Set<string>();
+  const runs = new Set<string>();
+  // Each baseline directory a run keys its snapshots in: the snapshot name
+  // prefixes a compare run reads, and whether a run of the call updates it.
+  const baselineDirs = new Map<string, { prefixes: Set<string>; updates: boolean }>();
+  const budget = { inline: 0 };
+  const logging = process.env[FLOW_FILES_LOG_ENV] === "1";
+  const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
+  const emit = (member: FileInputMember, sent: string): void => {
+    members.push(member);
+    const subject = member.role === "flow" ? member.canonical : member.key;
+    if (logging) log(printable(`[flow-files] ${member.role} ${subject}: ${sent}`));
+  };
+
+  /** The flow that `target` names beside `anchorDir`, sent once ({@link readFlowMember}). */
+  async function flow(
+    anchorDir: string,
+    target: string
+  ): Promise<{ member: FileInputMember; text?: string }> {
+    const key = flowMemberKey(anchorDir, target);
+    const known = flows.get(key);
+    if (known !== undefined) return known;
+    const { member, text, sent } = await readFlowMember(anchorDir, target, roots, budget, opts);
+    const entry = { member, ...(text === undefined ? {} : { text }) };
+    flows.set(key, entry);
+    emit(member, sent);
+    return entry;
+  }
+
+  /**
+   * The file arguments of a `tool:` step: the arguments its tool declares as
+   * a `file` input, at an absolute path with a {@link TOOL_FILE_EXTENSIONS}
+   * name ({@link isClientFileArgument}), each path once, as spelled. A nested
+   * flow is not a file argument the runner reads for its tool.
+   */
+  async function toolFiles(step: { tool: string; args: Record<string, unknown> }): Promise<void> {
+    if (step.tool === "flow-execute") return;
+    for (const file of toolStepFiles(opts.toolFileInputs?.(step.tool), step.args)) {
+      // An input whose superseding param is also set stays unread: the
+      // tool's own validation refuses the call.
+      const { unwrapWhenSet } = file.spec;
+      if (unwrapWhenSet !== undefined && step.args[unwrapWhenSet] !== undefined) continue;
+      if (!isClientFileArgument(file) || tools.has(file.path)) continue;
+      tools.add(file.path);
+      const read = await readToolMember(file.path, roots, budget, opts);
+      emit(read.member, read.sent);
     }
   }
+
+  /** The run of the flow that a nested step names, when the flow was sent and the runner nests that deep. */
+  async function nestedRun(
+    target: Extract<NestedFlowTarget, { kind: "name" }>,
+    hop: number,
+    updates: boolean,
+    platform: string | undefined
+  ): Promise<MemberRun | undefined> {
+    const { member, text } = await flow(path.dirname(target.path), `${target.name}.yaml`);
+    if (text === undefined || hop >= MAX_RUN_DEPTH) return undefined;
+    return { canonical: member.canonical!, text, flowName: target.name, hop, updates, platform };
+  }
+
+  /**
+   * The files of `start` and of every run it nests: per run, every file a
+   * `run:` step of its root flow or of a file it reaches names, in breadth
+   * order, each resolution once per run, as deep as the runner resolves
+   * ({@link MAX_RUN_DEPTH}, nested runs counted). Every branch of a `when:`
+   * counts, since which one runs is decided on the device. The file
+   * arguments of the `tool:` steps of those files, and the flow each nested
+   * `tool: flow-execute` step names by `name` (the one form the runner runs),
+   * whose run is walked the same way. The snapshots of a run key the
+   * baselines of that run, sent by {@link sendBaselines}.
+   */
+  async function walk(start: MemberRun[]): Promise<void> {
+    const queue = [...start];
+    for (let run = queue.shift(); run !== undefined; run = queue.shift()) {
+      const id = [run.canonical, run.flowName, run.updates, run.platform ?? ""].join("\0");
+      if (runs.has(id)) continue;
+      runs.add(id);
+      const snapshots = new Set<string>();
+      const visited = new Set<string>();
+      const files = [{ canonical: run.canonical, text: run.text, hop: run.hop }];
+      for (let file = files.shift(); file !== undefined; file = files.shift()) {
+        let doc: unknown;
+        try {
+          // The runner's parse; its warnings belong to the run, not to this terminal.
+          doc = parseYaml(file.text.trim(), { logLevel: "error" });
+        } catch {
+          continue;
+        }
+        const requests = collectFlowRequests(doc);
+        for (const name of requests.snapshots) snapshots.add(name);
+        for (const step of requests.toolSteps) await toolFiles(step);
+        const anchorDir = path.dirname(file.canonical);
+        for (const target of requests.runTargets) {
+          const key = flowMemberKey(anchorDir, target);
+          if (visited.has(key)) continue;
+          visited.add(key);
+          const { member, text } = await flow(anchorDir, target);
+          if (text !== undefined && file.hop + 1 < MAX_RUN_DEPTH) {
+            files.push({ canonical: member.canonical!, text, hop: file.hop + 1 });
+          }
+        }
+        // The runner binds its own device into a nested step, so the nested
+        // run compares on the platform of the run that starts it.
+        for (const { target, args } of requests.nested) {
+          if (target.kind !== "name") continue;
+          const next = await nestedRun(
+            target,
+            file.hop + 1,
+            nestedRunUpdates(run.updates, args),
+            run.platform
+          );
+          if (next !== undefined) queue.push(next);
+        }
+      }
+      if (snapshots.size === 0) continue;
+      const dir = path.join(
+        path.dirname(run.canonical),
+        "__baselines__",
+        baselineKeyFor(run.canonical, run.flowName)
+      );
+      const entry = baselineDirs.get(dir) ?? { prefixes: new Set<string>(), updates: false };
+      baselineDirs.set(dir, entry);
+      if (run.updates) {
+        entry.updates = true;
+      } else {
+        const platform = run.platform === undefined ? "" : `${run.platform}-`;
+        for (const name of snapshots) entry.prefixes.add(`${name}__${platform}`);
+      }
+    }
+  }
+
+  /**
+   * The snapshot baselines of the runs, from each run's
+   * `<dir of its root flow's real file>/__baselines__/<key>/`, where the
+   * runner keys them ({@link baselineKeyFor}). A run that compares reads the
+   * baselines of its own snapshots only (`<snapshot>__*.png`, crops
+   * included), of one platform when its call names it, so those go with their
+   * bytes. A run that updates baselines never reads one, so every other
+   * `.png` there goes by name only (`listed`), for the runner to say whether a
+   * write replaced one; the directory of such a run is one where a baseline
+   * in the result may be written (`baselineDirs`). A directory outside the
+   * roots sends nothing and takes no write. A baseline already sent as the
+   * file argument of a `tool:` step is not sent twice.
+   */
+  async function sendBaselines(): Promise<void> {
+    for (const [dir, { prefixes, updates }] of baselineDirs) {
+      const real = (await landing(dir)).canonical;
+      if (!roots.some((root) => isWithin(real, root))) continue;
+      if (updates) opts.baselineDirs?.push(dir);
+      const names = await readdir(dir).catch(() => [] as string[]);
+      for (const name of names.sort()) {
+        if (!name.endsWith(".png")) continue;
+        const compared = [...prefixes].some((prefix) => name.startsWith(prefix));
+        if (!updates && !compared) continue;
+        const file = path.join(dir, name);
+        if (tools.has(file)) continue;
+        const member: FileInputMember = { role: "baseline", key: file, path: file };
+        const entry = await baselineEntry(file, roots, updates && !compared);
+        if (entry.state === "refused") {
+          emit({ ...member, state: "refused", error: entry.error }, `refused (${entry.error})`);
+        } else if (entry.state === "missing") {
+          emit({ ...member, state: "missing" }, "missing");
+        } else if (!compared) {
+          emit({ ...member, state: "listed" }, "listed");
+        } else {
+          const sent = await sendBytes(member, entry.real, budget, opts);
+          emit(sent.member, sent.sent);
+        }
+      }
+    }
+  }
+
+  return { members, flow, toolFiles, nestedRun, walk, sendBaselines };
 }
 
 /**
  * The project files the flow at `rootPath` makes the runner read, sent with
- * its wire. Its `run:` closure: every file a `run:` step of the flow or of a
- * file it reaches names, in breadth order, each resolution once, as deep as
- * the runner resolves ({@link MAX_RUN_DEPTH}). Every branch of a `when:`
- * counts, since which one runs is decided on the device. The file arguments
- * of the `tool:` steps of those files ({@link readToolMember}): the arguments
- * that the tool declares as a `file` input, at an absolute path with a
- * {@link TOOL_FILE_EXTENSIONS} name, each path once, as spelled. Then the
- * snapshot baselines of its run ({@link collectBaselineMembers}), for the
- * snapshots of the flow and of its closure. The targets, snapshot names and
- * tool steps come from the registry's {@link collectFlowRequests}; the
- * tool-server's test/flows/flow-collect-parity.test.ts holds this walk to the
- * runner's parse. `canonical` and `spelling` describe the root flow itself.
- * Nothing is collected for arguments the tool-server refuses
- * ({@link namesValidFlow}).
+ * its wire: the files of its run and of each run it nests
+ * ({@link memberCollector}), then the snapshot baselines of those runs. The
+ * targets, snapshot names, tool steps and nested flows come from the
+ * registry's {@link collectFlowRequests}; the tool-server's
+ * test/flows/flow-collect-parity.test.ts holds this walk to the runner's parse.
+ * `canonical` and `spelling` describe the root flow itself. Nothing is
+ * collected for arguments the tool-server refuses ({@link namesValidFlow}).
  */
 export async function collectFlowMembers(
   rootPath: string,
@@ -424,68 +575,106 @@ export async function collectFlowMembers(
     path.basename(rootPath),
     FLOW_FILE_NAME_PATTERN
   );
-  const roots = await closureRoots(rootPath, canonical, args.project_root);
-  const members: FileInputMember[] = [];
-  const seen = new Set<string>();
-  const snapshots = new Set<string>();
-  const budget = { inline: 0 };
-  const logging = process.env[FLOW_FILES_LOG_ENV] === "1";
-  const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
-  const emit = (member: FileInputMember, sent: string): void => {
-    members.push(member);
-    const subject = member.role === "flow" ? member.canonical : member.key;
-    if (logging) log(printable(`[flow-files] ${member.role} ${subject}: ${sent}`));
-  };
-  const queue = [{ canonical, text: rootBytes.toString("utf8"), hop: 0 }];
-  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-    let doc: unknown;
-    try {
-      // The runner's parse; its warnings belong to the run, not to this terminal.
-      doc = parseYaml(file.text.trim(), { logLevel: "error" });
-    } catch {
-      continue;
-    }
-    const requests = collectFlowRequests(doc);
-    for (const name of requests.snapshots) snapshots.add(name);
-    for (const step of requests.toolSteps) {
-      // A nested flow is not a file argument the runner reads for its tool.
-      if (step.tool === "flow-execute") continue;
-      for (const file of toolStepFiles(opts.toolFileInputs?.(step.tool), step.args)) {
-        // An input whose superseding param is also set stays unread: the
-        // tool's own validation refuses the call.
-        const { unwrapWhenSet } = file.spec;
-        if (unwrapWhenSet !== undefined && step.args[unwrapWhenSet] !== undefined) continue;
-        if (!isClientFileArgument(file) || seen.has(file.path)) continue;
-        seen.add(file.path);
-        const read = await readToolMember(file.path, roots, budget, opts);
-        emit(read.member, read.sent);
-      }
-    }
-    const anchorDir = path.dirname(file.canonical);
-    for (const target of requests.runTargets) {
-      const key = flowMemberKey(anchorDir, target);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const { member, text, sent } = await readFlowMember(anchorDir, target, roots, budget, opts);
-      emit(member, sent);
-      if (text !== undefined && file.hop + 1 < MAX_RUN_DEPTH) {
-        queue.push({ canonical: member.canonical!, text, hop: file.hop + 1 });
-      }
-    }
-  }
-  if (snapshots.size > 0) {
-    const flowName = path.basename(rootPath, ".yaml");
-    await collectBaselineMembers(
+  const collector = memberCollector(
+    await closureRoots(rootPath, canonical, args.project_root),
+    opts
+  );
+  await collector.walk([
+    {
       canonical,
-      flowName,
-      [...snapshots],
-      args,
-      roots,
-      budget,
-      opts,
-      seen,
-      emit
-    );
+      text: rootBytes.toString("utf8"),
+      flowName: path.basename(rootPath, ".yaml"),
+      hop: 0,
+      updates: args.updateBaselines === true,
+      platform: callPlatform(args),
+    },
+  ]);
+  await collector.sendBaselines();
+  return { canonical, spelling, members: collector.members };
+}
+
+/**
+ * The step a `flow-add-step` call runs and records: its `command`, with
+ * `args` parsed from the JSON text of an object, or `{}` when the call has no
+ * `args`. Undefined for any other `command` or `args`: no step runs with them.
+ */
+function recordedStep(
+  args: Record<string, unknown>
+): { tool: string; args: Record<string, unknown> } | undefined {
+  const { command, args: text } = args;
+  if (typeof command !== "string") return undefined;
+  if (text === undefined) return { tool: command, args: {} };
+  if (typeof text !== "string") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
   }
-  return { canonical, spelling, members };
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+  return { tool: command, args: parsed as Record<string, unknown> };
+}
+
+/**
+ * The project files the one step a `flow-add-step` call records makes the
+ * tool-server read, as a replay of that step over a link reads them: the file
+ * arguments of the step, and for a nested `flow-execute`, the flow it names
+ * with the files of its run ({@link memberCollector}) and the baselines of
+ * that run. The recorder also resolves the recording file
+ * `<project_root>/.argent/flows/<name>.yaml` for its real directory, and the
+ * sibling `<name>.yaml` there, which a nested flow is recorded as a `run:`
+ * step of only when it is the flow that ran. A `flow_path` the recorder
+ * rewrites to that sibling's name (it is a file in the recording's
+ * directory) is sent under its own spelling too, for the recorder's on-disk
+ * spelling check, and its run as the name the recorder runs it by. Nothing
+ * for a call without a valid `name` and absolute `project_root`, or whose
+ * step does not parse.
+ */
+export async function collectStepMembers(
+  args: Record<string, unknown>,
+  opts: PrepareFileInputsOptions
+): Promise<FileInputMember[]> {
+  const { name, project_root: projectRoot } = args;
+  const step = recordedStep(args);
+  if (
+    typeof name !== "string" ||
+    !FLOW_NAME_PATTERN.test(name) ||
+    typeof projectRoot !== "string" ||
+    !path.isAbsolute(projectRoot) ||
+    step === undefined
+  ) {
+    return [];
+  }
+  const recording = path.join(projectRoot, ".argent", "flows", `${name}.yaml`);
+  const collector = memberCollector(
+    await closureRoots(recording, (await landing(recording)).canonical, projectRoot),
+    opts
+  );
+  await collector.toolFiles(step);
+  if (step.tool === "flow-execute") {
+    const self = await collector.flow(path.dirname(recording), path.basename(recording));
+    let runArgs = step.args;
+    const named = nestedFlowTarget(runArgs);
+    if (named?.kind === "flow_path") {
+      const stem = path.basename(named.path, ".yaml");
+      if (path.resolve(path.dirname(named.path)) === path.resolve(path.dirname(recording))) {
+        await collector.flow(path.dirname(recording), path.basename(named.path));
+        runArgs = { ...runArgs, name: stem };
+        delete runArgs.flow_path;
+      }
+    }
+    const target = nestedFlowTarget(runArgs);
+    if (target?.kind === "name") {
+      await collector.flow(path.dirname(self.member.canonical!), `${target.name}.yaml`);
+      const run = await collector.nestedRun(
+        target,
+        0,
+        runArgs.updateBaselines === true,
+        callPlatform(runArgs)
+      );
+      if (run !== undefined) await collector.walk([run]);
+    }
+  }
+  await collector.sendBaselines();
+  return collector.members;
 }

@@ -134,13 +134,19 @@ counts the remaining flows skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
-a link, the CLI uploads the flow file, the run: fragments that it reaches and
-the snapshot baselines that the run compares. It also uploads each .png or
-.yaml file that a tool: step takes as a file argument by an absolute path. The
-CLI writes the new baselines that the run returns. The tool-server rejects the
-flow before the first step when the flow or a fragment has one of these steps:
+a link, the CLI uploads these files and writes the new baselines that the run
+returns:
+  - the flow file and the run: fragments that it reaches
+  - each flow that a tool: flow-execute step names with name (a nested flow)
+  - the snapshot baselines of each run
+  - each .png or .yaml file that a tool: step takes as a file argument by an
+    absolute path
+The tool-server rejects the flow before the first step when the flow, a
+fragment or a nested flow has one of these steps:
   - a script: step
-  - a tool: step that runs or records a flow
+  - a tool: flow-execute step that does not name its flow with name and an
+    absolute project_root that has no .. segment
+  - a tool: step that records a flow
   - a tool: step that takes a directory, an app or an output directory
   - a tool: step whose tool builds a file path from several arguments
   - a tool: step that names a relative path or a file other than .png or .yaml
@@ -156,7 +162,9 @@ Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
   --platform <p>         ios | android | chromium | vega | ios-remote — narrow
                          auto-detection (ios never picks a remote simulator)
-  --update-baselines     Write/refresh screenshot baselines instead of diffing
+  --update-baselines     Write/refresh screenshot baselines instead of diffing,
+                         also those of flows that tool: flow-execute steps run,
+                         unless such a step sets updateBaselines
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          and failed-step screenshots (step-<n>-screen.png)
                          under <dir>/<flow>/ — a stable path for CI artifact

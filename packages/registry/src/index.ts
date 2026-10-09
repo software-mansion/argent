@@ -1,5 +1,5 @@
 export { TypedEventEmitter } from "./event-emitter";
-export { ServiceState, isLiveServiceState } from "./types";
+export { LINKED_CALL_HEADER, ServiceState, isLiveServiceState } from "./types";
 export type {
   ServiceEvents,
   ServiceInstance,
@@ -58,9 +58,10 @@ export {
   completeRunExtension,
   flowMemberKey,
   MAX_RUN_DEPTH,
+  nestedFlowTarget,
   resolveFlowRelativeFile,
 } from "./flow-file-refs";
-export type { OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
+export type { NestedFlowTarget, OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

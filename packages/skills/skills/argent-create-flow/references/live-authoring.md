@@ -34,6 +34,8 @@ A recorded `flow-execute` has two names. The top-level `name` identifies the rec
 
 When the user requests a script, call `flow-add-script` at the point where it must run. Read [Flow YAML: Local scripts](flow-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
 
+Over a link, `flow-add-step` refuses a call whose step a replay over the same link rejects, and runs nothing. It also refuses a `flow-execute` call whose flow does not pass. That flow can have changed the device before it stopped. In both cases the recorder records no step. See [Replay](#replay) for the steps that a replay over a link rejects.
+
 Obey these lifecycle rules:
 
 1. Pass the same `name` and absolute `project_root` to every recording tool.
@@ -42,7 +44,7 @@ Obey these lifecycle rules:
 4. Treat `flow-start-recording` as destructive. It always truncates the named YAML, including a finished or committed flow. `restarted` reports only a displaced live take.
 5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `flow-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `flow-start-recording` and `flow-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` — one summary line for the step it appended — plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `flow-finish-recording` returns `flowFile` regardless.
-7. Edit or reorder the YAML only after `flow-finish-recording`. An active remote recording can overwrite mid-recording edits.
+7. Edit or reorder the YAML only after `flow-finish-recording`. A recording over a link, also to 127.0.0.1, overwrites edits made during the recording.
 
 ## Start in the correct order
 
@@ -268,17 +270,23 @@ Run `flow-execute` on the complete YAML with the absolute project root. For a fr
 
 `flow-execute` takes exactly one flow source: `name`, for a flow saved under `.argent/flows/`, or `flow_path`, an absolute path to any flow `.yaml`.
 
-Over `argent link` or `ARGENT_TOOLS_URL`, `run:` fragments work when they are under `project_root`, under its `.argent/flows/`, or beside the flow file. Keep fragments there. `snapshot:` steps work in the flow and in its fragments, and the baselines stay in the project. With `updateBaselines: true`, the client writes each new baseline when the run ends. A `baseline not written` line in the report means that the client did not save that baseline: fix the reason in the line and run again.
+Over `argent link` or `ARGENT_TOOLS_URL`, the client sends the flow file, its `run:` fragments, the flows that its `tool: flow-execute` steps name, the snapshot baselines of each run and the file arguments of its `tool:` steps with the call. These steps work over a link:
 
-A `tool:` step works when its file argument is an absolute path to a `.png` or `.yaml` file, such as `baselinePath` of `screenshot-diff`. Keep the real file under the project root or beside the flow file, not behind a symlink to another place. Otherwise the step reports `error` when it runs, after the earlier steps acted. These steps do not work over a link, in the flow or in a fragment that it reaches:
+- `run:` fragments and the flows that `tool: flow-execute` steps name, when they are under `project_root`, under its `.argent/flows/`, or beside the flow file. Keep them there.
+- `snapshot:` steps in the flow and in its fragments. The baselines stay in the project. With `updateBaselines: true`, the client writes each new baseline when the run ends. A `baseline not written` line in the report means that the client did not save that baseline: fix the reason in the line and run again.
+- A `tool:` step whose file argument is an absolute path to a `.png` or `.yaml` file, such as `baselinePath` of `screenshot-diff`. Keep the real file under the project root or beside the flow file, not behind a symlink to another place. Otherwise the step reports `error` when it runs, after the earlier steps acted.
+- A `tool: flow-execute` step that names its flow with `name` and an absolute `project_root` without a `..` segment. Keep the flow that the step names under the project on the client, and spell `name` in the letter case of its file. That flow uses its own baselines. A replay with `updateBaselines` also updates them, unless the step sets `updateBaselines` itself.
+
+These steps do not work over a link, in the flow or in a fragment or flow that it runs:
 
 - `script:`
-- `tool: flow-execute`, and a `tool:` step that records a flow
 - a `tool:` step that takes a directory, an app or an output directory, such as `reinstall-app`, `gather-workspace-data`, or `screenshot-diff` with `outputDir`
 - a `tool:` step with a relative file path, or a file other than `.png` or `.yaml`
 - a `tool:` step whose tool builds the file path from several arguments, such as `flow-read-prerequisite` with `name`
+- a `tool: flow-execute` step with `flow_path`, or with `name` and a relative `project_root` or one with a `..` segment
+- a `tool:` step that records a flow
 
-The tool-server checks the flow and its fragments before the first step. The error lists each step that does not work over a link, and each `run:` step whose fragment the client could not send, with the reason. A fragment that does not exist fails its `run:` step when the step runs. Run a flow that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
+The tool-server checks the flow, its fragments and the flows that it runs before the first step. The error lists each step that does not work over a link, and each `run:` or `tool: flow-execute` step whose flow the client could not send, with the reason. A fragment or a flow that does not exist fails its step when the step runs. Run a flow that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
 
 Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason — most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
 

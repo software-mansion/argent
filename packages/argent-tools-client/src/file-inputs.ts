@@ -59,11 +59,11 @@ export interface FileInputSpec {
    */
   skipWhenSet?: string;
   /**
-   * Over a link, also send the flow's `run:` closure, its run's snapshot
-   * baselines and the file arguments of its `tool:` steps as `members` (see
-   * `collectMembers`).
+   * Over a link, also send as `members` the files the flow makes the
+   * tool-server read (see `collectMembers`), or, on flow-add-step's probe,
+   * the files its one recorded step makes it read (see `collectStepMembers`).
    */
-  collect?: "flow";
+  collect?: "flow" | "step";
 }
 
 export interface FileInputWire {
@@ -132,6 +132,15 @@ export interface PrepareFileInputsOptions {
     args: Record<string, unknown>,
     opts: PrepareFileInputsOptions
   ) => Promise<Pick<FileInputWire, "canonical" | "spelling" | "members">>;
+  /**
+   * Builds the `members` of a `collect: "step"` probe over a link from the
+   * call's args (the tools client passes flow-files.ts's collector). Without
+   * it the probe sends no members.
+   */
+  collectStepMembers?: (
+    args: Record<string, unknown>,
+    opts: PrepareFileInputsOptions
+  ) => Promise<FileInputMember[]>;
   /**
    * The file inputs a tool declares, from the same `GET /tools` listing, so a
    * `collect` call sends the file arguments of the flow's `tool:` steps.
@@ -399,6 +408,15 @@ export async function prepareFileInputs(
           await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), record, opts)
         );
       }
+    }
+
+    if (
+      spec.kind === "probe" &&
+      spec.collect === "step" &&
+      opts.includeContent &&
+      opts.collectStepMembers
+    ) {
+      wire.members = await opts.collectStepMembers(record, opts);
     }
 
     if (spec.kind === "tar-upload") {
