@@ -52,7 +52,7 @@ The `project_root` input of `flow-add-step` carries `"collect": "step"`:
 
 ## The flow file input
 
-Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. For an input with `collect`, the object has three more fields:
+Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. `path` is an absolute path on the client. The client resolves a relative path against its working directory. For an input with `collect`, the object has three more fields:
 
 ```json
 {

@@ -109,7 +109,7 @@ describe("resolveFileInputs — tar-upload kind", () => {
         { appPath: wire({ path: appDir, size: st.size, mtimeMs: 0 }) },
         () => undefined
       )
-    ).rejects.toThrow(/no upload was provided/);
+    ).rejects.toThrow(/no upload was provided\. Update argent/);
   });
 
   it("resolves a file in place when it exists on this host with matching stat", async () => {
@@ -237,16 +237,19 @@ describe("resolveFileInputs — tar-upload kind", () => {
     await cleanup();
   });
 
-  it("fails with guidance when remote but no uploadId provided", async () => {
+  it("says a path the client sent no stat for was not found, without update advice", async () => {
     const ghost = path.join(tmpDir, "NotHere.app");
 
-    await expect(
-      resolveFileInputs(
-        { fileInputs: TAR_UPLOAD_SPEC },
-        { appPath: wire({ path: ghost }) },
-        () => undefined
-      )
-    ).rejects.toThrow(/no upload was provided/);
+    const err = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wire({ path: ghost }) },
+      () => undefined
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe(
+      `Path "${ghost}" was not found. The client sent no file for it, and the ` +
+        `tool-server host has none at that path.`
+    );
   });
 
   it("fails when uploadId is set without contentHash", async () => {
