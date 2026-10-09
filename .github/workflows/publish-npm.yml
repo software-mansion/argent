@@ -310,22 +310,28 @@ jobs:
       # Serialization makes concurrent index collisions impossible, but npm's
       # read-after-write lag can still hand a back-to-back run a stale version
       # list, so retry a version-exists collision by recomputing + restamping.
-      # Any other publish failure is real and fails fast.
+      # npm stages a publish for minutes before listing it, and rejects a
+      # second publish of a staged version with E409 while `npm view` still
+      # cannot see it, so that counts as a collision too, and --taken makes
+      # the recompute step past it. Any other publish failure is real and
+      # fails fast.
       - name: Publish canary
         if: steps.mode.outputs.mode == 'canary'
         env:
           DIST_TAG: ${{ steps.mode.outputs.dist_tag }}
         run: |
+          set -o pipefail
           for attempt in 1 2 3; do
             VERSION="$(node -p "require('./packages/argent/package.json').version")"
             echo "Publishing ${VERSION} (attempt ${attempt})"
-            if npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance; then
+            if npm publish -w @swmansion/argent --tag "$DIST_TAG" --provenance 2>&1 | tee publish.log; then
               echo "Published ${VERSION}"
               exit 0
             fi
-            if npm view "@swmansion/argent@${VERSION}" version >/dev/null 2>&1; then
+            if grep -q "previously staged version" publish.log \
+              || npm view "@swmansion/argent@${VERSION}" version >/dev/null 2>&1; then
               echo "::warning::${VERSION} already on npm (lost a race / stale read) — recomputing"
-              node scripts/next-canary-version.mjs --write
+              node scripts/next-canary-version.mjs --write --taken "$VERSION"
               sleep 10
             else
               echo "::error::npm publish failed for ${VERSION} (not a version collision)"

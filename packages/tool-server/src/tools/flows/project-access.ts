@@ -130,11 +130,14 @@ function clientRefusal(subject: string, reason: string, verb = "send"): FailureE
 
 /**
  * The client's files, looked up by the key the runner resolves: the client
- * resolved each `run:` target of its flow before the call, with the same
- * resolution code the host implementation runs, and sent what it found, and
- * it sent the run's snapshot baselines by their client paths. A `run:` pair
- * the client did not send, or refused to send, is refused here with the
- * client's reason.
+ * resolved each `run:` target of its flow on its own disk before the call,
+ * named it as the host implementation names it (`canonicalFlowPath`), and sent
+ * what it found, and it sent the run's snapshot baselines by their client
+ * paths. A `run:` pair the client did not send is refused here. A pair it
+ * refused to send still names where the target landed, and its read fails
+ * with the client's reason, as a directory fails only at the read on the host:
+ * the runner's guards decide first, so a target past the depth limit fails as
+ * it does on the host.
  *
  * A baseline this call writes goes into an in-call overlay, which later reads
  * see first, and travels back to the client in the result
@@ -155,17 +158,17 @@ export class ClientProjectAccess implements ProjectAccess {
 
   async resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
     const member = this.member(anchorDir, target);
-    if (member?.role !== "flow" || member.state === "refused" || member.canonical === undefined) {
-      throw clientRefusal(
-        target,
-        member?.error ?? `${target} is not a run: target of a flow this client sent`
-      );
+    if (member?.role !== "flow" || member.canonical === undefined) {
+      throw clientRefusal(target, `${target} is not a run: target of a flow this client sent`);
     }
     const text = member.state === "present" ? (member.text ?? "") : null;
     return {
       canonical: member.canonical,
       spelling: member.spelling ?? { state: "listed" },
-      read: async () => text,
+      read: async () => {
+        if (member.state !== "refused") return text;
+        throw clientRefusal(target, member.error ?? "the client did not send it");
+      },
     };
   }
 

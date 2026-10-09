@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createToolsClient, errorBodyMessage, ToolInvocationError } from "../src/tools-client.js";
+import { createToolsClient, errorBodyMessage } from "../src/tools-client.js";
+import { ToolInvocationError } from "../src/errors.js";
 
 let server: Server | undefined;
 
@@ -33,6 +34,7 @@ async function startServer(
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   if (server) {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = undefined;
@@ -208,6 +210,105 @@ describe("callTool progress streaming", () => {
     await expect(callTool("streamy", {}, { onProgress: () => {} })).rejects.toThrow(
       /without a result/
     );
+  });
+});
+
+describe("callTool abort", () => {
+  it("rejects with an AbortError and sends no request when already aborted", async () => {
+    let invoked = false;
+    await startServer((_req, res) => {
+      invoked = true;
+      res.end("{}");
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const { callTool } = createToolsClient();
+    const err = await callTool("streamy", {}, { signal: AbortSignal.abort() }).catch(
+      (e: unknown) => e
+    );
+    expect((err as Error).name).toBe("AbortError");
+    expect(invoked).toBe(false);
+    // It stops before any request, also the /tools lookup.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects with the signal's reason while waiting for a buffered reply", async () => {
+    let received!: () => void;
+    const invoked = new Promise<void>((resolve) => (received = resolve));
+    let disconnected!: () => void;
+    const closed = new Promise<void>((resolve) => (disconnected = resolve));
+    // Never answer: the call waits until the client aborts.
+    // The response never ends, so its close means the client dropped the connection.
+    await startServer((_req, res) => {
+      res.on("close", disconnected);
+      received();
+    });
+
+    const controller = new AbortController();
+    const { callTool } = createToolsClient();
+    const pending = callTool("streamy", {}, { signal: controller.signal });
+    await invoked;
+    controller.abort(new Error("gave up"));
+
+    const err = await pending.catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(ToolInvocationError);
+    expect((err as Error).message).toBe("gave up");
+    // The tool-server sees the disconnect.
+    await closed;
+  });
+
+  it("rejects, not resolves empty, when aborted mid-body", async () => {
+    // Half a JSON body, then stall: the call waits in the body read.
+    await startServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"data":');
+    });
+
+    // Abort only once the POST's headers are in, so the abort hits the body read.
+    const controller = new AbortController();
+    const realFetch = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const res = await realFetch(input, init);
+      if (init?.method === "POST") setImmediate(() => controller.abort());
+      return res;
+    });
+    const { callTool } = createToolsClient();
+    await expect(callTool("streamy", {}, { signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+
+  it("stops reading the stream and fires no more progress events", async () => {
+    let res!: ServerResponse;
+    await startServer((_req, r) => {
+      res = r;
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      // One chunk, two lines: the abort must land between them.
+      res.write(
+        `${JSON.stringify({ event: "progress", data: { index: 0 } })}\n` +
+          `${JSON.stringify({ event: "progress", data: { index: 1 } })}\n`
+      );
+    });
+
+    const controller = new AbortController();
+    const events: unknown[] = [];
+    const { callTool } = createToolsClient();
+    const err = await callTool(
+      "streamy",
+      {},
+      {
+        signal: controller.signal,
+        onProgress: (e) => {
+          events.push(e);
+          controller.abort();
+          res.write(`${JSON.stringify({ event: "progress", data: { index: 2 } })}\n`);
+          res.end(`${JSON.stringify({ event: "result", data: { ok: true } })}\n`);
+        },
+      }
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).name).toBe("AbortError");
+    expect(events).toEqual([{ index: 0 }]);
   });
 });
 

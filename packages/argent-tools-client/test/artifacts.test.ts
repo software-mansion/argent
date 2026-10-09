@@ -110,6 +110,23 @@ describe("materializeArtifacts", () => {
     expect((seen[0]!.headers as Record<string, string>).Authorization).toBeUndefined();
   });
 
+  it("aborts the download with the signal and reads the artifact as missing", async () => {
+    const controller = new AbortController();
+    // A download that only ends when its signal aborts.
+    const hangingFetch = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      })) as unknown as typeof fetch;
+    setTimeout(() => controller.abort(), 10);
+
+    const { result } = await materializeArtifacts(
+      { image: handle("img1", "shot.png", "image/png") },
+      { toolsUrl: "http://remote:3001", fetchImpl: hangingFetch, signal: controller.signal }
+    );
+
+    expect(result).toEqual({ image: null });
+  });
+
   it("walks nested handles (e.g. exportedFiles) and leaves non-handles untouched", async () => {
     const result = {
       exportedFiles: {

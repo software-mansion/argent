@@ -32,10 +32,13 @@ import * as path from "node:path";
 
 import { createTarGzFile } from "@argent/archive";
 import {
+  FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
   type FileInputMember,
   type OnDiskSpelling,
 } from "@argent/registry";
+
+import { ToolInvocationError } from "./errors.js";
 
 /** Must match the wire contract in `@argent/registry`'s file-inputs.ts. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
@@ -128,6 +131,8 @@ export interface PrepareFileInputsOptions {
     args: Record<string, unknown>,
     opts: PrepareFileInputsOptions
   ) => Promise<Pick<FileInputWire, "canonical" | "spelling" | "members">>;
+  /** Stops the upload. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -224,8 +229,15 @@ function toolServerError(text: string): string | undefined {
  * Why `POST /upload` refused an archive of `bytes` bytes. A 413 that the
  * tool-server did not send comes from a proxy that limits the size of a
  * request body, so the error names the size that the proxy must accept.
+ * The call that needs the upload is not sent, so the error is a rejection of
+ * that call alone (kind "validation"): the tool did not run.
  */
-function uploadFailure(url: string, res: Response, text: string, bytes: number): Error {
+function uploadFailure(
+  url: string,
+  res: Response,
+  text: string,
+  bytes: number
+): ToolInvocationError {
   const status = `${res.status} ${res.statusText}`.trim();
   const own = toolServerError(text);
   let detail = own === undefined ? "" : `: ${own}`;
@@ -236,12 +248,16 @@ function uploadFailure(url: string, res: Response, text: string, bytes: number):
       `The proxy must accept a body of at least ${mb} MB on POST /upload, for example ` +
       `client_max_body_size ${mb}m in nginx`;
   }
-  return new Error(`Upload to ${url}/upload failed: ${status}${detail}`);
+  return new ToolInvocationError(`Upload to ${url}/upload failed: ${status}${detail}`, {
+    errorCode: FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED,
+    errorKind: "validation",
+  });
 }
 
 async function uploadTar(
   tarPath: string,
-  endpoint: { url: string; token: string }
+  endpoint: { url: string; token: string },
+  signal?: AbortSignal
 ): Promise<string> {
   const { size } = await stat(tarPath);
   // `duplex: "half"` is required to stream a Node Readable request body via
@@ -254,6 +270,7 @@ async function uploadTar(
     },
     body: createReadStream(tarPath) as unknown as BodyInit,
     duplex: "half",
+    signal,
   };
   const res = await fetch(`${endpoint.url}/upload`, init);
   if (!res.ok) {
@@ -272,14 +289,15 @@ async function uploadTar(
 /** Tar `sourcePath`, stream it to `POST /upload`, and return what the wire names it by. */
 export async function uploadFile(
   sourcePath: string,
-  endpoint: { url: string; token: string }
+  endpoint: { url: string; token: string },
+  signal?: AbortSignal
 ): Promise<{ uploadId: string; contentHash: string }> {
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
   trackArchive(tarPath);
   try {
     await createTarGzFile(sourcePath, tarPath);
     const contentHash = await sha256File(tarPath);
-    return { uploadId: await uploadTar(tarPath, endpoint), contentHash };
+    return { uploadId: await uploadTar(tarPath, endpoint, signal), contentHash };
   } finally {
     untrackArchive(tarPath);
     await rm(tarPath, { force: true }).catch(() => {});
@@ -386,7 +404,7 @@ export async function prepareFileInputs(
       if (opts.uploadEndpoint && st) {
         // stderr, not stdout (MCP owns it), so a slow upload isn't silent.
         process.stderr.write(`Uploading ${path.basename(filePath)} to the remote tool-server...\n`);
-        Object.assign(wire, await uploadFile(filePath, opts.uploadEndpoint));
+        Object.assign(wire, await uploadFile(filePath, opts.uploadEndpoint, opts.signal));
       }
     }
 
