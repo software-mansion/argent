@@ -1338,6 +1338,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // no args. `launch-app` is NOT rewritten — it foregrounds without
       // terminating.
       const strippedArgs = stripDeviceKeys(args);
+      // `out` names a path on the CLIENT, which a replayed step has none of, so
+      // recording it bakes in a destination the flow can never write and makes
+      // every later replay warn about it. Dropped here, and said out loud: this
+      // tool declares no image output hint, so the live call the recording made
+      // did not write `out` either.
+      const droppedOut = typeof strippedArgs.out === "string" ? strippedArgs.out.trim() : "";
+      if (droppedOut) delete strippedArgs.out;
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
       const noLaunchArgs =
         launchArgs === undefined || (Array.isArray(launchArgs) && launchArgs.length === 0);
@@ -1402,6 +1409,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           args: strippedArgs,
           delayMs: params.delayMs,
         };
+      }
+
+      if (droppedOut) {
+        const note =
+          `\`out\` was not written and was left out of the recorded step: it names a path on ` +
+          `your machine, and a flow step writes nothing there. Anything already at ${droppedOut} ` +
+          `is from an earlier run. Call \`screenshot\` directly to keep a capture.`;
+        warning = warning ? `${warning}; ${note}` : note;
       }
 
       let savedTo: FlowSavedTo;
