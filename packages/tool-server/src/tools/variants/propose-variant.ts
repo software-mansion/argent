@@ -129,7 +129,9 @@ it does not wait for the user.`,
       // Best-effort: failure leaves the frame undefined and the preview UI falls back.
       let frame = params.variant.frame;
       if (!frame && params.udid) {
-        const match = params.match ?? { by: "text" as const, value: params.element };
+        // Locate the element the way its card will, not by this call's own
+        // `match`: an element that already has an explicit matcher keeps it.
+        const match = variantProposalStore.locatorFor(params.element, params.match);
         const captured = await captureElementFrame(registry, params.udid, match);
         if (captured) frame = captured;
       }
@@ -142,14 +144,22 @@ it does not wait for the user.`,
       const finish = variantProposalStore.isCliSession()
         ? "end your turn — the user's feedback will arrive as a message"
         : "call await_user_selection once";
+      // A dropped matcher has to be said out loud: the agent asked to locate
+      // the element one way and the card will use another, and the likeliest
+      // cause is that two different elements were given the same label.
+      const ignored = res.matchIgnored
+        ? ` Ignored ${res.matchIgnored.by}=${res.matchIgnored.value}: "${res.element}" already anchors on ` +
+          `${res.matchApplied.by}=${res.matchApplied.value}; use a different element label for a different element.`
+        : "";
+
       return {
         ...res,
         hint:
-          res.variantCount === 1
+          (res.variantCount === 1
             ? `Staged the first variant for "${res.element}". Propose more variants (for this or ` +
               `other elements), then ${finish} when done.`
             : `"${res.element}" now has ${res.variantCount} variants. Keep proposing, then ` +
-              `${finish} when every element is covered.`,
+              `${finish} when every element is covered.`) + ignored,
       };
     },
   };
