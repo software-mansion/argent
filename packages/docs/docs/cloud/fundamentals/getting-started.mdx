@@ -18,7 +18,7 @@ Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundame
    https://github.com/software-mansion/sim-remote-releases/releases/latest,
    make it executable and put it in ~/.local/bin. Add ~/.local/bin to PATH if it is missing.
 2. Confirm the installation with sim-remote --help.
-3. Run export SIM_ROUTER_API_KEY=<my api key>, then run sim-remote login and wait until
+3. Run export SIM_REMOTE_API_KEY=<my api key>, then run sim-remote login and wait until
    it prints the acquired machine. Do not write the key to any file.
 4. Run sim-remote simctl list devices available and pick an iPhone.
 5. Boot it and wait until the boot completes with sim-remote simctl bootstatus <UDID> -b.
@@ -55,10 +55,10 @@ We issue one API key per user and send it to you directly. If you do not have a 
 
 ### Step 3: Authenticate
 
-Put your API key in the `SIM_ROUTER_API_KEY` environment variable and log in. The command reserves a machine for you and prints its name.
+Put your API key in the `SIM_REMOTE_API_KEY` environment variable and log in. The command reserves a machine for you and prints its name.
 
 ```bash
-export SIM_ROUTER_API_KEY=<API_KEY>
+export SIM_REMOTE_API_KEY=<API_KEY>
 sim-remote login
 ```
 
