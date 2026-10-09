@@ -69,6 +69,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getClientHeight = protoGetter(Element.prototype, "clientHeight");
   const getScrollWidth = protoGetter(Element.prototype, "scrollWidth");
   const getClientWidth = protoGetter(Element.prototype, "clientWidth");
+  const getClientLeft = protoGetter(Element.prototype, "clientLeft");
+  const getClientTop = protoGetter(Element.prototype, "clientTop");
+  const getOffsetWidth = protoGetter(HTMLElement.prototype, "offsetWidth");
+  const getOffsetHeight = protoGetter(HTMLElement.prototype, "offsetHeight");
   const getAttr = Element.prototype.getAttribute;
   const hasAttr = Element.prototype.hasAttribute;
   const getBCR = Element.prototype.getBoundingClientRect;
@@ -188,8 +192,106 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
   }
 
-  function frame(el) {
-    return normRect(getBCR.call(el));
+  // Clip windows are viewport-px rects; null means only the viewport, which normRect
+  // already clamps to.
+  function intersect(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    return {
+      left: Math.max(a.left, b.left),
+      top: Math.max(a.top, b.top),
+      right: Math.min(a.right, b.right),
+      bottom: Math.min(a.bottom, b.bottom),
+    };
+  }
+
+  function frame(el, clip) {
+    return normRect(intersect(getBCR.call(el), clip));
+  }
+
+  // Overflow clips a descendant only when the clipper is on its containing-block chain,
+  // so an absolute box takes the clip in force at its containing block and a fixed box
+  // the viewport's (a popover or modal escapes an overflow:hidden card). Each entry is
+  // the clip a child with that position gets.
+  const NO_CLIP = { flow: null, abs: null, fixed: null };
+
+  function ownClip(clips, style) {
+    if (style.position === "absolute") return clips.abs;
+    if (style.position === "fixed") return clips.fixed;
+    return clips.flow;
+  }
+
+  function isSet(v) {
+    return Boolean(v) && v !== "none";
+  }
+
+  // Properties that make an element the containing block of fixed descendants.
+  function containsFixed(style) {
+    return (
+      isSet(style.transform) ||
+      isSet(style.translate) ||
+      isSet(style.rotate) ||
+      isSet(style.scale) ||
+      isSet(style.perspective) ||
+      isSet(style.filter) ||
+      isSet(style.backdropFilter) ||
+      /layout|paint|strict|content/.test(style.contain || "") ||
+      /transform|perspective|filter/.test(style.willChange || "")
+    );
+  }
+
+  // Padding box in viewport px, scrollbars excluded. client* and offset* are layout px,
+  // so they are scaled to the rendered (transformed) box. An SVG viewport has no CSS box
+  // to measure (client* read 0) and no offset* at all: its rect is the clip.
+  function paddingBox(el) {
+    const r = getBCR.call(el);
+    if (!(el instanceof HTMLElement)) return r;
+    const ow = getOffsetWidth.call(el);
+    const oh = getOffsetHeight.call(el);
+    const sx = ow > 0 ? r.width / ow : 1;
+    const sy = oh > 0 ? r.height / oh : 1;
+    const left = r.left + getClientLeft.call(el) * sx;
+    const top = r.top + getClientTop.call(el) * sy;
+    return {
+      left,
+      top,
+      right: left + getClientWidth.call(el) * sx,
+      bottom: top + getClientHeight.call(el) * sy,
+    };
+  }
+
+  // The root's overflow clips the viewport, not its box, and so does the body's unless
+  // the root's is set; both are left to the viewport clamp. Chromium ignores overflow
+  // on inline boxes and on table rows, row groups and columns.
+  function overflowApplies(el, style) {
+    const tag = getTagName.call(el);
+    if (tag === "HTML" || tag === "BODY") return false;
+    return style.display !== "inline" && !/^table-(row|column|header|footer)/.test(style.display);
+  }
+
+  function childClips(el, style, clips, clip) {
+    if (style.display === "contents") return clips;
+    let inner = clip;
+    if (overflowApplies(el, style)) {
+      const paint = /paint|strict|content/.test(style.contain || "");
+      const cx = paint || style.overflowX !== "visible";
+      const cy = paint || style.overflowY !== "visible";
+      if (cx || cy) {
+        const p = paddingBox(el);
+        inner = intersect(clip, {
+          left: cx ? p.left : -Infinity,
+          top: cy ? p.top : -Infinity,
+          right: cx ? p.right : Infinity,
+          bottom: cy ? p.bottom : Infinity,
+        });
+      }
+    }
+    const fixedBlock = containsFixed(style);
+    return {
+      flow: inner,
+      abs: fixedBlock || style.position !== "static" ? inner : clips.abs,
+      fixed: fixedBlock ? inner : clips.fixed,
+    };
   }
 
   // Painted extent of an element's own inline TEXT. A box-less element (display:contents,
@@ -200,7 +302,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // (they keep a layout box but paint nothing), oversizing the frame and mis-placing the
   // tap point. Returns 0x0 when an ancestor transform (e.g. scale(0)) or display:none
   // collapses the paint. walk() consults this only when the element has its own text.
-  function contentFrame(el) {
+  function contentFrame(el, clip) {
     try {
       let box = null;
       for (const child of getChildNodes.call(el)) {
@@ -220,7 +322,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         }
       }
       if (!box || box.right <= box.left || box.bottom <= box.top) return null;
-      return normRect(box);
+      return normRect(intersect(box, clip));
     } catch (e) {
       return null;
     }
@@ -268,6 +370,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     let maxRight = 0;
     let maxBottom = 0;
     for (const c of children) {
+      // A child clipped or scrolled out of view has no extent to cover.
+      if (c.frame.width <= 0 || c.frame.height <= 0) continue;
       minX = Math.min(minX, c.frame.x);
       minY = Math.min(minY, c.frame.y);
       maxRight = Math.max(maxRight, c.frame.x + c.frame.width);
@@ -279,7 +383,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x: minX, y: minY, width: maxRight - minX, height: maxBottom - minY };
   }
 
-  function walk(el, depth) {
+  // An iframe's document starts again from NO_CLIP: its rects are in its own viewport.
+  function walk(el, depth, clips = NO_CLIP) {
     if (truncated) return null;
     if (depth > MAX_DEPTH) return null;
     if (!(el instanceof Element)) return null;
@@ -300,9 +405,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       nodeBudget--;
     }
 
+    const clip = ownClip(clips, style);
+    const inner = childClips(el, style, clips, clip);
     const childResults = [];
     for (const child of getChildrenEls.call(el)) {
-      const c = walk(child, depth + 1);
+      const c = walk(child, depth + 1, inner);
       if (c) childResults.push(c);
     }
 
@@ -317,7 +424,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const shadow = getShadowRoot.call(el);
     if (shadow) {
       for (const child of shadow.children) {
-        const c = walk(child, depth + 1);
+        const c = walk(child, depth + 1, inner);
         if (c) childResults.push(c);
       }
     }
@@ -374,7 +481,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (bl) {
       selfFrame = unionFrame(childResults);
       if (text && selfFrame.width <= 0 && selfFrame.height <= 0) {
-        const cf = contentFrame(el);
+        const cf = contentFrame(el, clip);
         if (cf) selfFrame = cf;
       }
       if (childResults.length === 0 && selfFrame.width <= 0 && selfFrame.height <= 0) {
@@ -397,7 +504,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         return childResults[0];
       }
     } else {
-      selfFrame = frame(el);
+      selfFrame = frame(el, clip);
     }
 
     const scrollable = isScrollable(el, style);
@@ -430,7 +537,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isDisabled(el)) node.disabled = true;
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
-    if (scrollable) node.scrollable = true;
+    if (scrollable) {
+      node.scrollable = true;
+      if (inner.flow) node.clipFrame = normRect(inner.flow);
+    }
     // Input focus: el is its document's activeElement. Deliberately emitted to
     // EVERY describe consumer (the agent-facing tool as much as the flow type
     // directive's focus wait) — where the caret is is useful targeting info.

@@ -10,7 +10,7 @@ import {
 import { isBlindRead } from "../describe/blind-read";
 import { nativeDirection, uiPointToNative, uiVectorToNative } from "./flow-orientation";
 import {
-  selectorToFrame,
+  selectorToNode,
   findAll,
   evaluateCondition,
   firstInReadingOrder,
@@ -427,17 +427,25 @@ function flowFindAll(
   return fallback;
 }
 
-/** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
+/** Identifier-first-then-text resolution for a (possibly loose) selector. */
+function flowSelectorToNode(
+  tree: DescribeNode,
+  sel: FlowSelector,
+  orientation: UiOrientation | undefined
+): DescribeNode | undefined {
+  for (const s of selectorAlternatives(sel)) {
+    const node = selectorToNode(tree, s, orientation);
+    if (node) return node;
+  }
+  return undefined;
+}
+
 function flowSelectorToFrame(
   tree: DescribeNode,
   sel: FlowSelector,
   orientation: UiOrientation | undefined
 ): DescribeFrame | undefined {
-  for (const s of selectorAlternatives(sel)) {
-    const frame = selectorToFrame(tree, s, orientation);
-    if (frame) return frame;
-  }
-  return undefined;
+  return flowSelectorToNode(tree, sel, orientation)?.frame;
 }
 
 /**
@@ -819,15 +827,17 @@ async function scrollToVisible(
     const axisDirection = nativeDirection(direction, orientation);
 
     // Anchor the gesture inside the container (so the right nested scroller
-    // moves), or over the whole screen when none is named. Its frame is also the
-    // clip window the axis check measures the target against.
-    const region = within ? flowSelectorToFrame(tree, within, orientation) : FULL_SCREEN;
+    // moves), or over the whole screen when none is named. The axis check
+    // measures the target against the window the container clips its content
+    // to, or against its frame where the source does not report one.
+    const container = within ? flowSelectorToNode(tree, within, orientation) : undefined;
+    const region = within ? container?.frame : FULL_SCREEN;
     if (!region) {
       return { reason: `scroll container ${describeSelector(within!)} is not visible` };
     }
 
     const frame = flowSelectorToFrame(tree, target, orientation);
-    if (frame && axisFullyInside(frame, axisDirection, region)) {
+    if (frame && axisFullyInside(frame, axisDirection, container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
 

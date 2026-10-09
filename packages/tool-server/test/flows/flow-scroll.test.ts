@@ -303,6 +303,54 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("measures a `within` target against the container's clip window, not its frame", async () => {
+    // The pane clips its content short of its frame (a scrollbar along its
+    // bottom), so a half-revealed row is cut flush at 0.55, inside the frame.
+    const pane = () =>
+      n({
+        identifier: "pane",
+        frame: { x: 0, y: 0.3, width: 1, height: 0.3 },
+        clipFrame: { x: 0, y: 0.3, width: 1, height: 0.25 },
+      });
+    let scrolled = false;
+    currentTree = () =>
+      screen([
+        pane(),
+        n({
+          label: "Row 5",
+          frame: scrolled
+            ? { x: 0.1, y: 0.4, width: 0.8, height: 0.1 }
+            : { x: 0.1, y: 0.5, width: 0.8, height: 0.05 },
+        }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("clip-window", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 5" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "clip-window", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+  });
+
   it("accepts a last item flush at the far edge once the scroll hits its end", async () => {
     // The LAST item sits flush against the container's far edge at max scroll —
     // the axis check can never clear its entry edge. Since the tree stops

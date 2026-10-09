@@ -29,8 +29,8 @@ import {
  * scoping hoisted text to the nearest identified ancestor.
  */
 function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
-  // The walker already pruned hidden subtrees; an off-viewport frame clamps to
-  // zero area, which is the "no on-screen frame" signal here.
+  // The walker already pruned hidden subtrees, and a frame outside the viewport
+  // or a clipping ancestor is zero-area: the "no on-screen frame" signal here.
   const onScreen = node.frame.width > 0 && node.frame.height > 0;
   const addressable = Boolean(
     node.identifier || node.label || node.value || node.clickable || node.focused
