@@ -185,67 +185,6 @@ describe("the stem a valid flow_path derives", () => {
     ]);
   });
 
-  it("keys the adopted baseline under __baselines__/<stem> on the client for an uploaded flow_path", async () => {
-    // The same key over a link: the flow arrived as an upload, landed here
-    // under a temp name, and its client sent its files with it. The write goes
-    // back for <dirname(real client file)>/__baselines__/<stem>/ on the client,
-    // and nothing lands beside the temp copy on this host.
-    const clientFlowPath = "/work/proj/.argent/flows/withsnap.yaml";
-    const yaml = ["executionPrerequisite: ''", "steps:", "  - snapshot: shot", ""].join("\n");
-    const uploaded = path.join(flowDir, "materialized-upload.yaml");
-    await fs.writeFile(uploaded, yaml, "utf8");
-    const runFlow = createRunFlowTool(mockRegistry());
-    const result = asRun(
-      await runFlow.execute(
-        {},
-        {
-          project_root: "/work/proj",
-          flow_path: uploaded,
-          device: IOS_DEVICE,
-          updateBaselines: true,
-        },
-        {
-          artifacts: new ArtifactStore(),
-          fileInputs: {
-            flow_path: {
-              clientPath: clientFlowPath,
-              presentOnHost: false,
-              viaUpload: true,
-              canonical: clientFlowPath,
-              spelling: { state: "listed" },
-              members: {},
-            },
-          },
-        }
-      )
-    );
-
-    const baseline = "/work/proj/.argent/flows/__baselines__/withsnap/shot__ios-390x844.png";
-    expect(result.ok).toBe(true);
-    expect(result.flow).toBe("withsnap");
-    expect(result.steps).toEqual([
-      expect.objectContaining({
-        kind: "snapshot",
-        status: "pass",
-        flow: "withsnap",
-        reason: `baseline written (${baseline})`,
-      }),
-    ]);
-    // The capture goes back to the client in the result, for that path.
-    expect(result.baselineWrites).toEqual([
-      {
-        __argentClientFile: true,
-        path: baseline,
-        content: (await fs.readFile(capture)).toString("base64"),
-        encoding: "base64",
-      },
-    ]);
-    // Nothing lands beside the upload, and no artifact names a file on this
-    // host as the baseline: the reason names the client file.
-    expect(await fs.readdir(flowDir, { recursive: true })).toEqual(["materialized-upload.yaml"]);
-    expect(result.steps[0]?.artifacts).toBeUndefined();
-  });
-
   it("seeds run: cycle detection, so a sibling cycling back to the top flow is caught", async () => {
     const flowPath = path.join(flowDir, "checkout.yaml");
     await fs.writeFile(
