@@ -383,7 +383,7 @@ argent flow run .argent/flows --recursive
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
-When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. With `--output`, Argent writes the screenshot to `<dir>/<flow>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
+When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. This rule includes the steps of a flow that a `tool: flow-execute` step runs, and the steps of the flows that run it. With `--output`, Argent writes the screenshot to `<dir>/<flow>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
 
 Each step line shows the time of the step before the reason, for example `(1.2s)`. A step that did not run shows no time. The time of a `when` or `run` step does not include the steps in its block or fragment. The last line of a flow run shows the time of the run. The summary of a directory run shows the time of all flows, for example `(1m 32s)`.
 

@@ -1063,10 +1063,12 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   snapshotApps: Map<string, string>;
   /**
-   * True once a step carrying a `{{secret:…}}` placeholder ran. The value may
-   * still be on screen, so a later failure takes no screenshot.
+   * `typed` is set once a step carrying a `{{secret:…}}` placeholder ran. The
+   * value may still be on screen, so a later failure takes no screenshot. A
+   * run that a `tool:` step starts shares the holder of the run that started
+   * it, so a secret typed on either side counts on both.
    */
-  secretTyped?: boolean;
+  secret: { typed?: boolean };
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
@@ -1700,6 +1702,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
+        secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
         ...(!resolved.booted && device?.platform === "chromium"
@@ -2341,7 +2344,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
-    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
+    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secret.typed = true;
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
@@ -2360,7 +2363,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
  * step keeps its own failure either way.
  */
 async function captureFailureScreen(state: ExecState): Promise<ArtifactHandle | undefined> {
-  if (!state.device || state.signal?.aborted || state.secretTyped) return undefined;
+  if (!state.device || state.signal?.aborted || state.secret.typed) return undefined;
   try {
     // Full resolution: the image is a file in the report, never in an agent's
     // context (the MCP client prints only its path).
@@ -2928,8 +2931,11 @@ async function execLeafStep(
         const result = await invokeSubTool(registry, ctx, step.name, prepared.args, {
           ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
           // The two tools that can start a nested run continue this run's
-          // stack, so a flow that runs itself stops at the cycle guard.
-          ...(FLOW_STARTING_TOOLS.has(step.name) ? { flowStack: scope.runStack } : {}),
+          // stack, so a flow that runs itself stops at the cycle guard, and
+          // share its secret holder.
+          ...(FLOW_STARTING_TOOLS.has(step.name)
+            ? { flowStack: scope.runStack, flowSecret: state.secret }
+            : {}),
         });
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
