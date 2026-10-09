@@ -8,9 +8,11 @@ import * as path from "node:path";
 import { PNG } from "pngjs";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
+import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequisite";
-import { serializeFlow } from "../src/tools/flows/flow-utils";
+import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
+import { parseFlow, serializeFlow } from "../src/tools/flows/flow-utils";
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({ updateInstallable: false, currentVersion: "1.0.0" })),
@@ -33,21 +35,35 @@ const READ_FILE_TOOL = {
   fileInputs: [{ target: "image", path: "${image}", kind: "file" }],
 };
 
-/** The registry flow-execute dispatches its steps through — never the flow source. */
+/**
+ * The registry flow-execute dispatches its steps through — never the flow
+ * source. A `tool: flow-execute` step runs the real tool over it, so a nested
+ * run gets the device bound into its args as a registry would.
+ */
 function stepRegistry(): Registry {
-  return {
-    invokeTool: vi.fn(async (id: string, args: { image?: string }) => {
+  const registry = {
+    invokeTool: vi.fn(async (id: string, args: { image?: string }, opts?: object) => {
       if (id === "list-devices") return { devices: [] };
       if (id === "screenshot") return { image: { hostPath: path.join(tmpDir, "capture.png") } };
       if (id === "read-file") return { read: await fs.readFile(args.image!, "base64") };
+      if (id === "flow-execute") {
+        return nested.execute({}, args as never, { artifacts: new ArtifactStore(), ...opts });
+      }
       return { ok: true };
     }),
-    getTool: vi.fn((id: string) => (id === READ_FILE_TOOL.id ? READ_FILE_TOOL : undefined)),
+    getTool: vi.fn((id: string) =>
+      id === READ_FILE_TOOL.id ? READ_FILE_TOOL : id === "flow-execute" ? nested : undefined
+    ),
     resolveService: vi.fn(async () => ({
       isConnected: () => true,
       listConnectedBundleIds: () => [],
     })),
   } as unknown as Registry;
+  const nested = {
+    ...createRunFlowTool(registry),
+    inputSchema: { type: "object", properties: { device: {} } },
+  };
+  return registry;
 }
 
 /**
@@ -61,10 +77,14 @@ function stepRegistry(): Registry {
 function httpRegistry(steps: Registry): Registry {
   const tools: Record<
     string,
-    ReturnType<typeof createRunFlowTool> | typeof flowReadPrerequisiteTool
+    | ReturnType<typeof createRunFlowTool | typeof createFlowAddStepTool>
+    | typeof flowReadPrerequisiteTool
+    | typeof flowStartRecordingTool
   > = {
     "flow-execute": createRunFlowTool(steps),
     "flow-read-prerequisite": flowReadPrerequisiteTool,
+    "flow-start-recording": flowStartRecordingTool,
+    "flow-add-step": createFlowAddStepTool(steps),
   };
   return {
     // GET /tools lists the step tools too, as one real registry does.
@@ -759,25 +779,34 @@ describe("flow-execute over a link, from the real argent client", () => {
     return file;
   }
 
-  /** The step reports and written baselines of a run of `flowPath`; `beforeSend` sees the built body. */
-  async function callFlow(
+  /** The real client; `beforeSend` sees the built body of each call to the tool `tool`. */
+  async function toolsClient(
     remote: boolean,
-    flowPath: string,
-    beforeSend?: (body: string) => Promise<void>,
-    extra: { updateBaselines?: boolean } = {}
-  ): Promise<{ steps: Omit<FlowRunResult["steps"][number], "durationMs">[]; writes?: unknown }> {
+    tool: string,
+    beforeSend?: (body: string) => Promise<void>
+  ) {
     const { createToolsClient } = (await import(clientSrc)) as {
       createToolsClient(options: object): {
         callTool(name: string, args: unknown): Promise<{ data: unknown }>;
       };
     };
-    const client = createToolsClient({
+    return createToolsClient({
       baseUrl: async () => ({ url, token: "", remote }),
       fetchImpl: async (target: string, init: RequestInit) => {
-        if (target.endsWith("/tools/flow-execute")) await beforeSend?.(String(init.body));
+        if (target.endsWith(`/tools/${tool}`)) await beforeSend?.(String(init.body));
         return fetch(target, init);
       },
     });
+  }
+
+  /** The step reports and written baselines of a run of `flowPath`; `beforeSend` sees the built body. */
+  async function callFlow(
+    remote: boolean,
+    flowPath: string,
+    beforeSend?: (body: string) => Promise<void>,
+    extra: { updateBaselines?: boolean; platform?: string } = {}
+  ): Promise<{ steps: Omit<FlowRunResult["steps"][number], "durationMs">[]; writes?: unknown }> {
+    const client = await toolsClient(remote, "flow-execute", beforeSend);
     const { data } = await client.callTool("flow-execute", {
       flow_path: flowPath,
       project_root: projectRoot,
@@ -933,5 +962,111 @@ describe("flow-execute over a link, from the real argent client", () => {
     expect(run.steps[3]!.reason).toContain(
       `the client refused to send "${secret}": ${secret} links to a file that is not one of .png, .yaml`
     );
+  });
+
+  /** A member as `[role, its last two path parts, state, typeof content]`. */
+  const memberShape = (m: { role: string; path: string; state?: string; content?: string }) => [
+    m.role,
+    m.path.split(path.sep).slice(-2).join("/"),
+    m.state,
+    typeof m.content,
+  ];
+
+  it("sends each nested run's flow and baselines as the runner reads or writes them, in one overlay for the call", async () => {
+    const capture = PNG.sync.write(new PNG({ width: 30, height: 60 }));
+    await fs.writeFile(path.join(tmpDir, "capture.png"), capture);
+    const nest = (name: string, more = "") =>
+      `  - tool: flow-execute\n    args: { name: ${name}, project_root: ${JSON.stringify(projectRoot)}${more} }\n`;
+    // The first nested run updates as its caller does, the second only
+    // compares, and the third compares on the device of the run that starts
+    // it, whatever platform its step names.
+    const root = await write(
+      ".argent/flows/root.yaml",
+      `steps:\n${nest("child")}${nest("child", ", updateBaselines: false")}` +
+        nest("peer", ", updateBaselines: false, platform: android")
+    );
+    await write(".argent/flows/child.yaml", "steps:\n  - snapshot: snap\n");
+    await write(".argent/flows/peer.yaml", "steps:\n  - snapshot: snap\n");
+    const baselines = path.join(await fs.realpath(path.dirname(root)), "__baselines__");
+    const snap = path.join(baselines, "child", "snap__ios-30x60.png");
+    // Not PNGs: a compare that read one would fail.
+    await write(".argent/flows/__baselines__/child/snap__ios-30x60.png", "stale");
+    await write(".argent/flows/__baselines__/child/old__ios-30x60.png", "another snapshot");
+    await write(".argent/flows/__baselines__/peer/snap__android-30x60.png", "another platform");
+    await fs.writeFile(path.join(baselines, "peer", "snap__ios-30x60.png"), capture);
+    let members: Parameters<typeof memberShape>[0][] = [];
+
+    // The project leaves this host once the client has read it.
+    const run = await callFlow(
+      true,
+      root,
+      async (body) => {
+        members = JSON.parse(body).flow_path.members;
+        await fs.rename(projectRoot, `${projectRoot}-moved`);
+      },
+      { updateBaselines: true, platform: "ios" }
+    );
+
+    expect(members.map(memberShape)).toEqual([
+      ["flow", "flows/child.yaml", undefined, "string"],
+      ["flow", "flows/peer.yaml", undefined, "string"],
+      ["baseline", "child/old__ios-30x60.png", "listed", "undefined"],
+      ["baseline", "child/snap__ios-30x60.png", undefined, "string"],
+      ["baseline", "peer/snap__ios-30x60.png", undefined, "string"],
+    ]);
+    expect(
+      run.steps.map((s) => (s.result as FlowRunResult | undefined)?.steps[0]?.reason ?? s.reason)
+    ).toEqual([
+      `baseline captured; the client updates it when the run ends (${snap})`,
+      // The capture the first nested run took, not the bytes the client sent.
+      "diff 0.00% ≤ 0.5% (snap__ios-30x60.png)",
+      "diff 0.00% ≤ 0.5% (snap__ios-30x60.png)",
+    ]);
+    expect(run.writes).toEqual([snap]);
+    expect(await fs.readFile(snap)).toEqual(capture);
+  });
+
+  it("records a nested flow over a link from the files of that one step: its flow, fragment and baselines", async () => {
+    const capture = PNG.sync.write(new PNG({ width: 30, height: 60 }));
+    await fs.writeFile(path.join(tmpDir, "capture.png"), capture);
+    // The real path, so the recording and its siblings have one key each.
+    const project = await fs.realpath(projectRoot);
+    const flows = path.join(project, ".argent", "flows");
+    await write(".argent/flows/child.yaml", "steps:\n  - run: frag\n  - snapshot: snap\n");
+    await write(".argent/flows/frag.yaml", "steps:\n  - echo: frag\n");
+    await write(".argent/flows/unrelated.yaml", "steps:\n  - echo: unrelated\n");
+    await write(".argent/flows/__baselines__/child/other__ios-30x60.png", "another snapshot");
+    await fs.writeFile(path.join(flows, "__baselines__", "child", "snap__ios-30x60.png"), capture);
+    let members: Parameters<typeof memberShape>[0][] = [];
+    let onSend = async (_body: string): Promise<void> => {};
+    const client = await toolsClient(true, "flow-add-step", (body) => onSend(body));
+    const recording = { name: "rec", project_root: project };
+    const addFlow = (args: object) =>
+      client.callTool("flow-add-step", {
+        ...recording,
+        command: "flow-execute",
+        args: JSON.stringify({ project_root: project, device: DEVICE, ...args }),
+      });
+
+    await client.callTool("flow-start-recording", recording);
+    // An earlier step of the take runs a flow that the next step does not read.
+    await addFlow({ name: "unrelated" });
+    onSend = async (body) => {
+      members = JSON.parse(body).project_root.members;
+      await fs.rename(projectRoot, `${projectRoot}-moved`);
+    };
+    // A sibling by flow_path, which the recorder runs and records by its name.
+    await addFlow({ flow_path: path.join(flows, "child.yaml") });
+
+    expect(members.map(memberShape)).toEqual([
+      ["flow", "flows/rec.yaml", undefined, "string"],
+      ["flow", "flows/child.yaml", undefined, "string"],
+      ["flow", "flows/frag.yaml", undefined, "string"],
+      ["baseline", "child/snap__ios-30x60.png", undefined, "string"],
+    ]);
+    expect(parseFlow(await fs.readFile(path.join(flows, "rec.yaml"), "utf8")).steps).toEqual([
+      { kind: "run", flow: "unrelated.yaml" },
+      { kind: "run", flow: "child.yaml" },
+    ]);
   });
 });
