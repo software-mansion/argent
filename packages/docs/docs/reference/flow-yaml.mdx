@@ -479,7 +479,15 @@ With `--update-baselines`, the tool-server returns each new baseline in the resu
 
 The CLI does not upload a baseline outside the directories above, or a `.png` name that links to a file that is not a PNG file. A `snapshot:` step that reads or writes such a baseline reports `error`.
 
-The CLI also uploads each file argument of the `tool:` steps in the flow and its fragments, in each `when:` block. Only an argument that the tool declares as a file counts: an absolute `.png` path that a `keyboard` step types is not uploaded. The CLI checks the path as the flow spells it. The CLI does not upload a file argument outside the directories above, or a name that links to a file that does not end in `.png` or `.yaml`. A file argument that is not on the client is not uploaded either. The `tool:` step then reports `error` when it runs. The tool-server never uses a file at the same path on its own computer. A `tool:` step that reads a baseline that an earlier `snapshot:` step of the same run wrote gets the new baseline.
+The CLI also uploads each file argument of the `tool:` steps in the flow and its fragments, in each `when:` block. Only an argument that the tool declares as a file counts: an absolute `.png` path that a `keyboard` step types is not uploaded. When a `tool:` step reads a baseline that an earlier `snapshot:` step of the same run wrote, the step gets the new baseline.
+
+The CLI does not upload these file arguments:
+
+- a file argument whose real location is outside the directories above
+- a name that links to a file that does not end in `.png` or `.yaml`
+- a file argument that is not on the client
+
+Such a file argument does not stop the flow before the first step. Its `tool:` step reports `error` when it runs. The tool-server never uses a file at the same path on its own computer.
 
 The other rows of the table still need a run without a link. The tool-server rejects such a step before the first step, in the flow file and in each fragment that the CLI uploads.
 
@@ -495,7 +503,7 @@ When the CLI cannot connect to the tool-server that a link names, the flow does 
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send that file, each `run:` fragment that it reaches, the snapshot baselines of the run and the file arguments of its `tool:` steps, and the tool-server runs those copies. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload. The client uploads a fragment or a file argument only when it is under `project_root`, under the project of a flow saved under `<project>/.argent/flows/`, under the `.argent/flows` directory of `project_root`, or beside the flow file or its real file. When the call sets `updateBaselines`, the result returns each new baseline, and the client writes it beside the real file of the flow file. Argent checks the flow and each uploaded fragment before it runs the first step. At any depth, it rejects a `script:` step, a `tool:` step that records a flow, runs a flow, takes a directory, an app or an output directory, builds a file path from two or more arguments, or names a relative path or a file that does not end in `.png` or `.yaml`, and a fragment that the client did not upload for a reason. The error lists each such step. A fragment or a file argument that does not exist fails its step when that step runs. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send that file, each `run:` fragment that it reaches, the snapshot baselines of the run and the file arguments of its `tool:` steps. The tool-server runs those copies. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload. The client uploads a fragment or a file argument only when it is under `project_root`, under the project of a flow saved under `<project>/.argent/flows/`, under the `.argent/flows` directory of `project_root`, or beside the flow file or its real file. When the call sets `updateBaselines`, the result returns each new baseline, and the client writes it beside the real file of the flow file. Argent checks the flow and each uploaded fragment before it runs the first step. At any depth, it rejects each step that the table in [Flows over a link](#flows-over-a-link) rejects, and a fragment that the client did not upload for a reason. The error lists each such step. A fragment or a file argument that does not exist fails its step when that step runs. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 
