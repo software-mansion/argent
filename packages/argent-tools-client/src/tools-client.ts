@@ -72,8 +72,9 @@ export interface CreateToolsClientOptions {
    * `meta.longRunning` is the tool's flag from the listing (false for GET
    * /tools), so the caller can disable its timeout. `meta.carriesUpload` is true
    * when the body names an upload: the tool-server consumes an upload on the
-   * first request that reaches it, so the caller must not abort or resend that
-   * request. POST /upload keeps the global fetch.
+   * first request that reaches it, so the caller must not time out or resend
+   * that request. `init.signal` is the call's `signal`, which the request must
+   * still follow. POST /upload keeps the global fetch.
    */
   fetchImpl?: (
     url: string,

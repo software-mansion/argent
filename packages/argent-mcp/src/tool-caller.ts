@@ -8,7 +8,10 @@ export async function fetchWithReconnect(
   getUrl: () => string,
   reconnect: () => Promise<void>,
   config?: {
-    /** A function is called once per attempt, so a retry can carry fresh headers. */
+    /**
+     * A function is called once per attempt, so a retry can carry fresh headers.
+     * Its `signal` ends the call without a retry.
+     */
     init?: RequestInit | (() => RequestInit);
     expBackoffBase?: number;
     maxRetries?: number;
@@ -28,10 +31,18 @@ export async function fetchWithReconnect(
     const controller = new AbortController();
     const timer =
       fetchTimeoutMs !== null ? setTimeout(() => controller.abort(), fetchTimeoutMs) : undefined;
+    let callerSignal: AbortSignal | null | undefined;
     try {
       const attemptInit = typeof init === "function" ? init() : init;
-      return await fetch(getUrl(), { ...attemptInit, signal: controller.signal });
+      callerSignal = attemptInit?.signal;
+      return await fetch(getUrl(), {
+        ...attemptInit,
+        signal: callerSignal
+          ? AbortSignal.any([callerSignal, controller.signal])
+          : controller.signal,
+      });
     } catch (err) {
+      if (callerSignal?.aborted) throw err;
       lastError = err;
       if (attempt === maxRetries) break;
       if (attempt === 0) {
@@ -67,7 +78,8 @@ interface ToolCaller {
   fetchTools(): Promise<ToolMeta[]>;
   callTool(
     name: string,
-    args: unknown
+    args: unknown,
+    opts?: { signal?: AbortSignal }
   ): Promise<{ result: unknown; outputHint?: string; note?: string }>;
 }
 
@@ -121,7 +133,7 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
       parseUrl(url);
       return fetchWithReconnect(() => rebase(url), deps.reconnect, {
         init: () => withHeaders(init),
-        // A call that carried an upload is sent once and never aborted: the
+        // A call that carried an upload is sent once and never timed out: the
         // tool-server consumes the upload when it reads the call, so a second
         // attempt could only fail.
         fetchTimeoutMs: meta.longRunning || meta.carriesUpload ? null : timeout,
@@ -132,8 +144,8 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
 
   return {
     fetchTools: client.fetchTools,
-    async callTool(name, args) {
-      const { data, note, outputHint } = await client.callTool(name, args);
+    async callTool(name, args, opts) {
+      const { data, note, outputHint } = await client.callTool(name, args, opts);
       return { result: data, outputHint, note };
     },
   };
