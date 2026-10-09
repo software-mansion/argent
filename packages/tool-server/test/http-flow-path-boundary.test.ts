@@ -26,15 +26,23 @@ vi.mock("../src/tools/flows/flow-actions", async (importOriginal) => ({
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 
+/** A step tool that declares `image` as a file input; `label` is a plain string. */
+const READ_FILE_TOOL = {
+  id: "read-file",
+  inputSchema: { type: "object", properties: { image: {}, label: {} } },
+  fileInputs: [{ target: "image", path: "${image}", kind: "file" }],
+};
+
 /** The registry flow-execute dispatches its steps through — never the flow source. */
 function stepRegistry(): Registry {
   return {
-    invokeTool: vi.fn(async (id: string) => {
+    invokeTool: vi.fn(async (id: string, args: { image?: string }) => {
       if (id === "list-devices") return { devices: [] };
       if (id === "screenshot") return { image: { hostPath: path.join(tmpDir, "capture.png") } };
+      if (id === "read-file") return { read: await fs.readFile(args.image!, "base64") };
       return { ok: true };
     }),
-    getTool: vi.fn(() => undefined),
+    getTool: vi.fn((id: string) => (id === READ_FILE_TOOL.id ? READ_FILE_TOOL : undefined)),
     resolveService: vi.fn(async () => ({
       isConnected: () => true,
       listConnectedBundleIds: () => [],
@@ -59,12 +67,13 @@ function httpRegistry(steps: Registry): Registry {
     "flow-read-prerequisite": flowReadPrerequisiteTool,
   };
   return {
+    // GET /tools lists the step tools too, as one real registry does.
     getSnapshot: vi.fn(() => ({
       services: new Map(),
       namespaces: [],
-      tools: Object.keys(tools),
+      tools: [...Object.keys(tools), READ_FILE_TOOL.id],
     })),
-    getTool: vi.fn((id: string) => tools[id]),
+    getTool: vi.fn((id: string) => tools[id] ?? steps.getTool(id)),
     invokeTool: vi.fn(async (id: string, args: unknown, opts?: Partial<ToolContext>) => {
       const tool = tools[id];
       if (!tool) throw new Error(`unexpected tool "${id}"`);
@@ -878,5 +887,51 @@ describe("flow-execute over a link, from the real argent client", () => {
       "diff 0.00% ≤ 0.5% (fresh__ios-30x60.png)",
       "diff 0.00% ≤ 0.5% (fresh__ios-30x60.png)",
     ]);
+  });
+
+  it("sends a tool: step only the file arguments its tool declares, refuses a .png link to a .env, and reads the baseline the call wrote", async () => {
+    const capture = new PNG({ width: 30, height: 60 });
+    await fs.writeFile(path.join(tmpDir, "capture.png"), PNG.sync.write(capture));
+    const flows = path.join(await fs.realpath(projectRoot), ".argent", "flows");
+    const baseline = path.join(flows, "__baselines__", "root", "title__ios-30x60.png");
+    await write(".argent/flows/__baselines__/root/title__ios-30x60.png", "old");
+    const label = await write("label.png", "not a file input");
+    const secret = path.join(flows, "secret.png");
+    await fs.symlink(await write(".env", "TOKEN=hunter2\n"), secret);
+    const read = (image: string, more = "") =>
+      `  - tool: read-file\n    args: { image: ${JSON.stringify(image)}${more} }\n`;
+    const root = await write(
+      ".argent/flows/root.yaml",
+      `steps:\n${read(baseline, `, label: ${JSON.stringify(label)}`)}  - snapshot: title\n` +
+        read(baseline) +
+        read(secret)
+    );
+    let members: { role: string; key: string; state?: string; content?: string }[] = [];
+
+    const run = await callFlow(
+      true,
+      root,
+      async (body) => {
+        members = JSON.parse(body).flow_path.members;
+      },
+      { updateBaselines: true }
+    );
+
+    expect(members.map((m) => [m.role, m.key, m.state, typeof m.content])).toEqual([
+      ["tool", baseline, undefined, "string"],
+      ["tool", secret, "refused", "undefined"],
+    ]);
+    expect(run.writes).toEqual([baseline]);
+    const written = await fs.readFile(baseline, "base64");
+    expect(run.steps.map((s) => [s.status, (s.result as { read?: string })?.read])).toEqual([
+      ["pass", Buffer.from("old").toString("base64")],
+      ["pass", undefined],
+      // The capture the snapshot step took, not the bytes the client sent.
+      ["pass", written],
+      ["error", undefined],
+    ]);
+    expect(run.steps[3]!.reason).toContain(
+      `the client refused to send "${secret}": ${secret} links to a file that is not one of .png, .yaml`
+    );
   });
 });
