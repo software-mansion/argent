@@ -27,7 +27,7 @@ The agent does not read coordinates from a screenshot. Before a tap, the agent h
 - the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
-After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
+After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. A `tv-remote` press returns the screenshot only, because `describe` does not answer reliably on tvOS. The `disable-auto-describe` flag stops the element tree.
 
 ## Launching apps
 

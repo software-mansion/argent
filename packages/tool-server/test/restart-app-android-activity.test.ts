@@ -4,6 +4,9 @@ vi.mock("../src/utils/adb", async (importActual) => {
   const actual = await importActual<typeof import("../src/utils/adb")>();
   return {
     ...actual,
+    // Stubbed so the launch handlers under test cannot spawn a real adb server
+    // for their Metro reverse; that call is covered in adb-metro-reverse.test.ts.
+    ensureMetroReverse: vi.fn(async () => 8081),
     adbShell: vi.fn(async (_s: string, cmd: string) => {
       shellCalls.push(cmd);
       return "Status: ok\n";

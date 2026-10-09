@@ -80,7 +80,7 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 
 ### Step 1: Start profiling
 
-Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it for annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
+Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
 
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-device-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
@@ -90,7 +90,7 @@ Mind the react-native and ios-native profiler selection mentioned above when sta
 
 #### Annotate every interaction
 
-After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction — including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 3.
+Keep the `timestampMs` each `gesture-tap` / `gesture-swipe` returns, for _every_ interaction — including back-navigation swipes, not just the primary action — and pass them to `react-profiler-analyze` in Step 3 as `{ timestampMs, label }`. No arithmetic: the tool subtracts the profiling start it recorded.
 
 ### Step 2: Stop and collect
 
@@ -101,7 +101,7 @@ If `fiber_renders_captured: 0`, warn the user — React commit data may be missi
 
 Call `react-profiler-analyze` with `port`, `device_id`, `project_root`, `platform`, and `rn_version`. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode` — check these in the returned markdown report.
 
-If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the gesture-tap/gesture-swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation — only server-side timestamps from the tool return values.
+If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred: `{ timestampMs, label }`, with `timestampMs` copied straight from the gesture tool's return value. Do **not** use `Date.now()` — only the server-side timestamp the tool returned is on the same clock as the profile.
 
 If dual profiling, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report` for the cross-correlated view — do not skip this step when both profilers ran; the combined report surfaces correlations that individual reports miss.
 
