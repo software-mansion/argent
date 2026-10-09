@@ -1274,10 +1274,12 @@ function toolStepFilePaths(registry: Registry, tool: string, args: Record<string
  * runner resolves, every `when:` branch included, since which branch runs is
  * decided on the device. A fragment the client refused to send (outside its
  * roots, a link to a file that is not YAML, over the size cap) is listed with
- * the client's reason. A fragment the client does not have is not: it fails
- * at its own `run:` step, which may never run. A fragment that does not parse
- * fails at its step too. Without a closure (an older client), every `run:`
- * step is refused, and the error says that an updated client gets it run.
+ * the client's reason, unless the runner never reads it: a `run:` past the
+ * depth limit fails with the depth error first, as it does on the host. A
+ * fragment the client does not have is not listed: it fails at its own `run:`
+ * step, which may never run. A fragment that does not parse fails at its step
+ * too. Without a closure (an older client), every `run:` step is refused, and
+ * the error says that an updated client gets it run.
  *
  * Every offending step is listed, in walk order, so the author sees the whole
  * repair at once rather than one step per run. The stage is the first
@@ -1299,6 +1301,7 @@ function assertUploadSelfContained(
           offending.push({ kind: "run", line: `${where}: run: ${step.flow}` });
           continue;
         }
+        if (file.hop + 1 >= MAX_RUN_DEPTH) continue;
         const anchorDir = path.dirname(file.canonical);
         const key = flowMemberKey(anchorDir, step.flow);
         if (seen.has(key)) continue;
@@ -1306,7 +1309,7 @@ function assertUploadSelfContained(
         const member = closure.project.member(anchorDir, step.flow);
         if (member?.state === "refused") {
           offending.push({ kind: "run", line: `${where}: run: ${step.flow} (${member.error})` });
-        } else if (member?.state === "present" && file.hop + 1 < MAX_RUN_DEPTH) {
+        } else if (member?.state === "present") {
           let fragment: FlowFile;
           try {
             fragment = parseFlow(member.text ?? "");

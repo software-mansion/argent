@@ -72,12 +72,24 @@ export class HostProjectAccess implements ProjectAccess {
   }
 }
 
+function clientRefusal(target: string, reason: string): FailureError {
+  return new FailureError(`the client refused to send "${target}": ${reason}`, {
+    error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+    failure_stage: "client_member_refused",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
 /**
  * The client's files, looked up by the pair the runner resolves: the client
  * resolved each `run:` target of its flow on its own disk before the call,
  * named it as the host implementation names it (`canonicalFlowPath`), and sent
- * what it found. A pair the client did not send, or refused to send, is
- * refused here with the client's reason.
+ * what it found. A pair the client did not send is refused here. A pair it
+ * refused to send still names where the target landed, and its read fails
+ * with the client's reason, as a directory fails only at the read on the host:
+ * the runner's guards decide first, so a target past the depth limit fails as
+ * it does on the host.
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;
@@ -92,16 +104,17 @@ export class ClientProjectAccess implements ProjectAccess {
 
   async resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
     const member = this.member(anchorDir, target);
-    if (member?.role !== "flow" || member.state === "refused") {
-      const reason = member?.error ?? `${target} is not a run: target of a flow this client sent`;
-      throw new FailureError(`the client refused to send "${target}": ${reason}`, {
-        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-        failure_stage: "client_member_refused",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      });
+    if (member?.role !== "flow") {
+      throw clientRefusal(target, `${target} is not a run: target of a flow this client sent`);
     }
     const text = member.state === "present" ? (member.text ?? "") : null;
-    return { canonical: member.canonical, spelling: member.spelling, read: async () => text };
+    return {
+      canonical: member.canonical,
+      spelling: member.spelling,
+      read: async () => {
+        if (member.state !== "refused") return text;
+        throw clientRefusal(target, member.error ?? "the client did not send it");
+      },
+    };
   }
 }

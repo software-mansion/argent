@@ -976,6 +976,38 @@ describe("flow-execute over a link, from the real argent client", () => {
     );
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
+
+  it("runs a chain that ends past the depth limit as the co-located run does, whatever its last target is", async () => {
+    // The runner stops the 20th run: before it reads the target, so the client
+    // may refuse that target (here a directory) and the run still goes as deep.
+    await write(".argent/flows/n0.yaml", "steps:\n  - echo: n0\n  - run: n1.yaml\n");
+    for (let hop = 1; hop < 20; hop++) {
+      await write(
+        `.argent/flows/n${hop}.yaml`,
+        `steps:\n  - echo: n${hop}\n  - run: n${hop + 1}.yaml\n`
+      );
+    }
+    await fs.mkdir(path.join(projectRoot, ".argent/flows/n20.yaml"));
+    const root = path.join(projectRoot, ".argent/flows/n0.yaml");
+    let members: { key: string; state?: string }[] = [];
+
+    const colocated = await callFlow(false, root);
+    const linked = await callFlow(true, root, async (body) => {
+      members = JSON.parse(body).flow_path.members;
+    });
+
+    expect(linked).toEqual(colocated);
+    expect(colocated.at(-1)).toMatchObject({
+      kind: "run",
+      status: "error",
+      target: "n20.yaml",
+      reason: "max run depth exceeded",
+    });
+    expect(members.at(-1)).toMatchObject({
+      key: expect.stringMatching(/n20\.yaml$/),
+      state: "refused",
+    });
+  });
 });
 
 describe("flow-execute with run: fragments sent through POST /upload", () => {
