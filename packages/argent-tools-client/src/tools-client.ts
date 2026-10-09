@@ -1,4 +1,6 @@
-import { describeParamIssues } from "@argent/registry";
+import * as path from "node:path";
+
+import { LINKED_CALL_HEADER, describeParamIssues } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
@@ -8,7 +10,7 @@ import {
   type FileInputSpec,
   type FileInputWire,
 } from "./file-inputs.js";
-import { collectFlowMembers } from "./flow-files.js";
+import { collectFlowMembers, collectStepMembers } from "./flow-files.js";
 import { ToolInvocationError } from "./errors.js";
 
 export interface ToolMeta {
@@ -361,6 +363,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         log: diagnose,
         baselineDirs,
         collectMembers: collectFlowMembers,
+        collectStepMembers,
         toolFileInputs: (tool) => tools.find((t) => t.name === tool)?.fileInputs,
         signal: opts?.signal,
       });
@@ -375,7 +378,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         diagnose(`The baseline ${file} was not written on this client: ${error}`);
       }
       if (process.env.ARGENT_FLOW_FILES_LOG === "1") {
-        for (const file of applied.written) diagnose(`[flow-files] baseline ${file}: written`);
+        // A recorded flow YAML is written here too; only baselines are logged.
+        for (const file of applied.written) {
+          if (baselineDirs.includes(path.dirname(file))) {
+            diagnose(`[flow-files] baseline ${file}: written`);
+          }
+        }
       }
       return applied.result;
     };
@@ -390,6 +398,9 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // Tells the tool-server the call came over a link, a link to
+          // 127.0.0.1 included, which nothing else in the request shows.
+          ...(remote ? { [LINKED_CALL_HEADER]: "1" } : {}),
           // A proxy that compresses the stream holds each line until its buffer
           // fills. `identity` keeps the stream uncompressed end to end.
           ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),

@@ -129,6 +129,9 @@ function clientRefusal(subject: string, reason: string, verb = "send"): FailureE
   });
 }
 
+/** The baselines each call wrote, by the files the client sent with it. */
+const callOverlays = new WeakMap<object, Map<string, Buffer>>();
+
 /**
  * The client's files, looked up by the key the runner resolves: the client
  * resolved each `run:` target of its flow on its own disk before the call,
@@ -143,14 +146,25 @@ function clientRefusal(subject: string, reason: string, verb = "send"): FailureE
  *
  * A baseline this call writes goes into an in-call overlay, which later reads
  * see first, and travels back to the client in the result
- * ({@link baselineDirectives}).
+ * ({@link baselineDirectives}). The overlay belongs to the files of the call,
+ * not to one instance: a nested `flow-execute` gets the same `members` and
+ * builds its own instance over them, so a baseline one run of the call writes
+ * is what a later run of the same call reads, and the outermost run returns
+ * every write.
  */
 export class ClientProjectAccess implements ProjectAccess {
   readonly mode = "client" as const;
   /** Baselines this call wrote, by client path. */
-  private readonly overlay = new Map<string, Buffer>();
+  private readonly overlay: Map<string, Buffer>;
 
-  constructor(private readonly members: Readonly<Record<string, ResolvedMember>>) {}
+  constructor(readonly members: Readonly<Record<string, ResolvedMember>>) {
+    let overlay = callOverlays.get(members);
+    if (overlay === undefined) {
+      overlay = new Map();
+      callOverlays.set(members, overlay);
+    }
+    this.overlay = overlay;
+  }
 
   /** The member the runner reaches for this pair, or undefined when the client did not send one. */
   member(anchorDir: string, target: string): ResolvedMember | undefined {

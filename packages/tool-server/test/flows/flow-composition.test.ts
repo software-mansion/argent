@@ -2542,11 +2542,14 @@ describe("flow composition (run:)", () => {
 
     expect(registry.invokeTool).toHaveBeenCalledWith(
       "flow-execute",
-      expect.objectContaining({ device: DEVICE })
+      expect.objectContaining({ device: DEVICE }),
+      expect.objectContaining({ flowStack: expect.any(Array) })
     );
+    // The same three-argument shape, so a call with the stale id would match.
     expect(registry.invokeTool).not.toHaveBeenCalledWith(
       "flow-execute",
-      expect.objectContaining({ device: "STALE-ID" })
+      expect.objectContaining({ device: "STALE-ID" }),
+      expect.objectContaining({ flowStack: expect.any(Array) })
     );
     expect(result.ok).toBe(true);
   });

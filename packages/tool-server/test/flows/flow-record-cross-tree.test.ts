@@ -2413,7 +2413,7 @@ describe("a flow-directive name points at the tool that records it", () => {
     expect(msg).toContain("rewrites it into the `run:` step");
     expect(msg).toContain("sibling flow");
     expect(msg).toContain("delayMs");
-    expect(msg).toContain("REMOTE");
+    expect(msg).toContain("in this recording's folder, on the computer that has the project");
     expect(msg).toContain("refused outright and records nothing");
   });
 

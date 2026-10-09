@@ -17,10 +17,11 @@
  * - `kind: "directory"` is used in place, and fails with remote-mode guidance
  *   when absent here (a tree can't ride in a tool call).
  * - `kind: "probe"` passes through and only reports presence.
- * - A `collect` spec's `members` (a flow's `run:` closure, its run's snapshot
- *   baselines and its `tool:` steps' file arguments, sent with the flow by a
- *   linked client) are decoded with the same checks, each into its own state:
- *   a member that the client did not send fails only where it is used. A
+ * - A `collect` spec's `members` (a flow's `run:` closure, its nested flows,
+ *   the snapshot baselines of its runs and its `tool:` steps' file arguments,
+ *   sent with the flow by a linked client, or the files one recorded step
+ *   reads) are decoded with the same checks, each into its own state: a
+ *   member that the client did not send fails only where it is used. A
  *   member whose bytes fail those checks fails the call, as a declared input
  *   does.
  *
@@ -381,6 +382,10 @@ async function resolveOne(
   };
 
   if (spec.kind === "probe") {
+    // flow-add-step's probe carries the files its one step reads.
+    if (spec.collect === "step" && Array.isArray(wire.members)) {
+      meta.members = await resolveMembers(wire.members, tempDirs, lookupUpload);
+    }
     return { value: wire.path, meta };
   }
 

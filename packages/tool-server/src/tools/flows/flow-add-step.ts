@@ -2,12 +2,14 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
-  classifyOnDiskSpelling,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
+  nestedFlowTarget,
   ToolNotFoundError,
   wrapFailure,
+  type ClientFileDirective,
+  type FileInputSpec,
   type Registry,
   type ToolDefinition,
 } from "@argent/registry";
@@ -22,6 +24,7 @@ import {
   describeSelector,
   flowsDirFor,
   foldStepFromArgs,
+  isLinkedRecorderCall,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -34,6 +37,17 @@ import {
   type UnmetUiWaitCause,
 } from "../await-ui-element";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
+import {
+  UPLOAD_STAGE_BY_KIND,
+  prepareToolStepInputs,
+  toolFilePathHints,
+  toolStepUploadIssue,
+  uploadUpdateHint,
+  withClientPaths,
+  type PreparedToolStep,
+} from "./flow-tool-inputs";
+import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
@@ -355,8 +369,8 @@ const UNMET_WAIT_WARNING =
   "returning success:false instead of failing, so the step was written to the flow anyway. At " +
   "replay an unmet wait FAILS the step and stops the run there, so re-record it once the " +
   "condition can actually hold, and delete the failed step after `flow-finish-recording` rather " +
-  "than mid-recording: against a remote client the in-memory copy is authoritative and the next " +
-  "append writes the step straight back, and in host mode the recorder re-reads the file before " +
+  "than mid-recording: over a link the in-memory copy is authoritative and the next " +
+  "append writes the step straight back, and without a link the recorder re-reads the file before " +
   "each append, so an edit that renumbers the steps costs the finish the verdicts it would " +
   "otherwise carry. The cross-tree re-probe was " +
   "skipped: it asks whether a check that PASSED would survive conversion to `await:`/`assert:`, " +
@@ -754,10 +768,9 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     tool: "flow-execute",
     rewritten: true,
     rewriteCondition:
-      "when the target resolves as a sibling flow in this recording's folder — a `name` that " +
-      "does not is kept as a raw `tool: flow-execute` step, and so is every target in a REMOTE " +
-      "recording (`run:` composition is host-resolved, so the host cannot validate the client's " +
-      "siblings); a `flow_path` that is not a sibling is refused outright and records nothing",
+      "when the target resolves as a sibling flow in this recording's folder, on the computer " +
+      "that has the project; a `name` that does not is kept as a raw `tool: flow-execute` step, " +
+      "and a `flow_path` that is not a sibling is refused outright and records nothing",
   },
   type: { tool: "keyboard", rewritten: false },
   await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
@@ -900,10 +913,15 @@ const RUN_TARGET_COMMAND = "flow-execute";
  * `project_root` pair already resolves to, in a directory flow-start-recording
  * established through its own boundary. Every other flow_path is refused here —
  * a raw `tool:` step has no boundary to resolve a path through at replay either.
+ * The on-disk spelling is the answer of `project`, on the client over a link;
+ * a linked call whose client sent no files has no answer to give, and is
+ * refused.
  */
 async function rewriteSiblingFlowPath(
-  session: RecordingSession | null,
-  args: Record<string, unknown>
+  session: RecordingSession,
+  args: Record<string, unknown>,
+  project: ProjectAccess,
+  linked: boolean
 ): Promise<void> {
   const flowPath = args.flow_path;
   // A call naming both sources — or neither — is flow-execute's schema to judge.
@@ -923,11 +941,6 @@ async function rewriteSiblingFlowPath(
       }
     );
 
-  if (!session || session.persist !== "host") {
-    throw invalid(
-      "the recording is not persisted on this host, so its siblings cannot be resolved here"
-    );
-  }
   // Reject ".." segments: the sibling checks below compare path.resolve
   // results, which collapse ".." lexically, but the kernel resolves a symlinked
   // directory component first — "<flowsDir>/link/../<stem>.yaml" can open a file
@@ -996,7 +1009,23 @@ async function rewriteSiblingFlowPath(
   // `name`, this path names a file the caller says exists, so a listing lacking
   // it entirely is the same phantom spelling with no neighbour to name.
   const suppliedBase = path.basename(flowPath);
-  const spelling = await classifyOnDiskSpelling(flowsDir, suppliedBase);
+  // Asked last, so a path that no sibling can match gets its own reason. Only
+  // an argent client that is older than this tool-server sends a call over a
+  // link without the files of its step, and it sends no nested flow either.
+  if (linked && project.mode === "host") {
+    throw new FailureError(
+      `Cannot record a flow-execute of flow_path "${flowPath}": the argent client sent no ` +
+        `files with this call, so the recorder cannot check that the file is a sibling of the ` +
+        `recording. Update the argent CLI or MCP adapter on the client.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_add_step_flow_path",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  const { spelling } = await project.resolveFlowFile(flowsDir, suppliedBase);
   if (spelling.state !== "listed") {
     // Hint the real spelling only when this same ladder would accept it (a
     // stem-case slip like Sibling.yaml); an invalid real name (sibling.YAML)
@@ -1037,10 +1066,11 @@ async function rewriteSiblingFlowPath(
  * anchor is the realpath'd containing-file dir because the runner's is
  * (scopeFlowDir in flow-run.ts), so a recording made through a symlink
  * validates its sibling in the canonical directory. So the raw step is kept
- * only when the target can't be resolved as a sibling, the sibling is not the
- * file the live sub-invoke executed, or the recording is remote (the host can't
- * read the client's sibling files). A `flow_path` target reaches here as its
- * sibling `name` or not at all — see {@link rewriteSiblingFlowPath}.
+ * only when the target can't be resolved as a sibling, or the sibling is not
+ * the file the live sub-invoke executed. `project` resolves the recording,
+ * its sibling and the executed file where the project is: on this host, or
+ * on the client over a link. A `flow_path` target reaches here as its sibling
+ * `name` or not at all — see {@link rewriteSiblingFlowPath}.
  *
  * "Resolved as a sibling" is the same two-part identity {@link
  * rewriteSiblingFlowPath} demands of a flow_path, asked of the name route: the
@@ -1050,37 +1080,22 @@ async function rewriteSiblingFlowPath(
  * `<name>.yaml` byte-for-byte. Every refusal keeps the raw step rather than
  * throwing: unlike the rewrite, this runs AFTER the nested flow ran on the
  * device, so a throw would discard the record of a step that already happened.
- * The raw step still replays the flow that actually ran, carrying the caller's
- * own project_root.
+ * The raw step names the flow that ran by `name` and the caller's own
+ * `project_root`. Without a link, a replay reads that flow on this host. Over a
+ * link, a replay reads it from the files the client sends with the call, and
+ * only under the roots that the client sends files from.
  */
 async function captureRunTarget(
   session: RecordingSession,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  project: ProjectAccess
 ): Promise<{ flow?: string; warning?: string }> {
   const name = typeof args.name === "string" ? args.name : undefined;
   if (name === undefined) {
     return { warning: "flow-execute call had no flow name; kept the raw step" };
   }
-  if (session.persist !== "host") {
-    return {
-      warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name}" portably`,
-    };
-  }
   try {
     assertSafeFlowName(name);
-    // Resolve against THIS recording's own flows dir, not the project root the
-    // nested flow-execute ran under: `run:` composes siblings of the flow being
-    // recorded, which is not necessarily the project that nested call ran in —
-    // and against the recording's REAL file, because the runner resolves the
-    // recorded `run:` against the canonical containing-file directory
-    // (scopeFlowDir in flow-run.ts). When the recording is itself a symlink, a
-    // sibling beside the symlink's spelling would validate here yet fail at
-    // replay. A realpath failure lands in the catch below — an anchor we cannot
-    // canonicalize is one we cannot promise will replay.
-    const realFlowPath = await fs.realpath(session.filePath);
-    const flowsDir = path.dirname(realFlowPath);
-    const fragPath = path.join(flowsDir, `${name}.yaml`);
-
     // The live invoke resolved `name` under the CALL's project_root; a recorded
     // `run:` resolves it beside the recording. Those are the same file only
     // while that root's flows dir is this one — a nested call naming another
@@ -1102,6 +1117,21 @@ async function captureRunTarget(
       };
     }
 
+    // Resolve against THIS recording's own flows dir, not the project root the
+    // nested flow-execute ran under: `run:` composes siblings of the flow being
+    // recorded, which is not necessarily the project that nested call ran in —
+    // and against the recording's REAL file, because the runner resolves the
+    // recorded `run:` against the canonical containing-file directory
+    // (scopeFlowDir in flow-run.ts), on the client over a link
+    // (clientRootCanonical). When the recording is itself a symlink, a sibling
+    // beside the symlink's spelling would validate here yet fail at replay.
+    const self = await project.resolveFlowFile(
+      path.dirname(session.filePath),
+      path.basename(session.filePath)
+    );
+    const flowsDir = path.dirname(self.canonical);
+    const fragPath = path.join(flowsDir, `${name}.yaml`);
+
     // A composed `run:` name is written into the recorded YAML, the one output
     // that gets committed and replayed elsewhere. On a case-insensitive
     // filesystem (APFS, NTFS) `name: "Frag"` opens a sibling really named
@@ -1114,7 +1144,8 @@ async function captureRunTarget(
     // word of the tool it dispatched. Only a case-folded verdict keeps the raw
     // step: a name matching nothing at all is an ordinary missing sibling, which
     // the read below reports far better than a casing complaint could.
-    const spelling = await classifyOnDiskSpelling(flowsDir, `${name}.yaml`);
+    const sibling = await project.resolveFlowFile(flowsDir, `${name}.yaml`);
+    const spelling = sibling.spelling;
     if (spelling.state === "case_folded") {
       // Hint a name only when one can reach the file: an on-disk .YAML is
       // addressable by no name at all (this route always builds "<name>.yaml"),
@@ -1133,34 +1164,32 @@ async function captureRunTarget(
 
     // Parsing validates the sibling exists and is a well-formed flow; a failure
     // falls through to keeping the raw step.
-    parseFlow(await fs.readFile(fragPath, "utf8"));
+    const text = await sibling.read();
+    if (text === null) throw new Error(`ENOENT: no such file or directory, open '${fragPath}'`);
+    parseFlow(text);
     // The sibling validated above is the file the runner will replay — but the
     // live sub-invoke that just ran resolved `name` through getFlowPath, the
     // as-written flows dir under the caller's project_root. When the recording
     // is a symlink out of the flows dir the two anchors can name different
     // files, so require them to canonicalize to the same one, matching the
     // runner's own canonicalization (canonicalFlowPath in flow-file-refs.ts
-    // realpaths before reading). An executed path that cannot be canonicalized
-    // (e.g. ENOENT) means nothing verifiable ran from the flows dir, and the raw
-    // step is then the honest record: it replays via name + project_root.
-    let executedPath: string | undefined;
-    try {
-      executedPath = await fs.realpath(path.join(flowsDirFor(projectRoot), `${name}.yaml`));
-    } catch {
-      executedPath = undefined;
-    }
-    if (executedPath === undefined) {
+    // realpaths before reading). An executed file that is not there means
+    // nothing verifiable ran from the flows dir, and the raw step is then the
+    // honest record: it replays via name + project_root. Over a link the
+    // client sends both files with the call, as resolved on its own disk.
+    const executed = await project.resolveFlowFile(flowsDirFor(projectRoot), `${name}.yaml`);
+    if ((await executed.read()) === null) {
       return {
         warning: `kept the raw flow-execute step — could not verify which file the live flow-execute ran ("${name}" has no canonical file in project_root's flows dir to compare the sibling against)`,
       };
     }
-    if (executedPath !== (await fs.realpath(fragPath))) {
+    if (executed.canonical !== sibling.canonical) {
       return {
         warning:
           `kept the raw flow-execute step — project_root "${projectRoot}" resolves "${name}" to ` +
-          `"${executedPath}", not the recording's sibling "${fragPath}", so "${name}.yaml" beside ` +
-          `the recording's real file is not the file the live flow-execute ran and a run: ${name} ` +
-          `step would replay a different flow than the one that just ran`,
+          `"${executed.canonical}", not the recording's sibling "${fragPath}", so "${name}.yaml" ` +
+          `beside the recording's real file is not the file the live flow-execute ran and a ` +
+          `run: ${name} step would replay a different flow than the one that just ran`,
       };
     }
     return { flow: `${name}.yaml` };
@@ -1171,6 +1200,59 @@ async function captureRunTarget(
   }
 }
 
+/**
+ * The refusal of a call over a link whose step a replay over the same link
+ * refuses ({@link toolStepUploadIssue}): nothing runs, so the device gets no
+ * call that opens a client path on this host.
+ */
+function replayRefusal(
+  issue: NonNullable<ReturnType<typeof toolStepUploadIssue>>,
+  args: Record<string, unknown>
+): FailureError {
+  let hint: string;
+  if (issue.kind === "nested") {
+    hint =
+      nestedFlowTarget(args)?.kind === "name"
+        ? " Over a link, a nested flow-execute runs only when the argent client sends the flow " +
+          "it names with the call. Update the argent CLI or MCP adapter on the client."
+        : " Over a link, a nested flow-execute runs only when it names its flow with a flow " +
+          "name in name, has an absolute project_root with no .. segment, and has no flow_path.";
+  } else if (issue.fixes.length === 0) {
+    hint =
+      " A replay without a link runs this step. To keep it, add it to the YAML by hand after " +
+      "flow-finish-recording.";
+  } else {
+    hint =
+      uploadUpdateHint(
+        issue.fixes.includes("update")
+          ? ["tool: steps with file arguments for a client that sends them with the call"]
+          : []
+      ) + toolFilePathHints(issue.fixes);
+  }
+  return new FailureError(
+    `Cannot record this call: the recording is over a link, and a replay over the same link ` +
+      `refuses the step "${issue.line}". Nothing ran and no step was recorded.${hint}`,
+    {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: UPLOAD_STAGE_BY_KIND[issue.kind],
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
+ * Over a link, the argent client sends with the call the files the one
+ * recorded step makes this tool read, as a replay over the same link reads
+ * them: the file arguments of the step, the flow a nested `flow-execute` names
+ * with that flow's own files, and the recording file and the sibling the
+ * recorder checks a nested flow against. The probe passes `project_root`
+ * through unchanged.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
+];
+
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
   {
@@ -1179,6 +1261,8 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     stepCount: number;
     recorded?: string;
     savedTo: FlowSavedTo;
+    /** Over a link: the baselines a nested run of the step wrote, which the client writes. */
+    baselineWrites?: ClientFileDirective[];
   }
 > {
   return {
@@ -1204,6 +1288,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
     // because an aborted request still appends its first.
     longRunning: true,
     zodSchema,
+    fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);
@@ -1235,9 +1320,32 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // enough: `rewriteSiblingFlowPath` only deletes and adds top-level keys.
       const authoredArgs = { ...args };
 
+      // Over a link the project is on the client, and the recorder records only
+      // what a replay over the same link runs. One predicate decides "over a
+      // link" for every check below. The files the step reads are those the
+      // client sent with the call; an older client sends none.
+      const linked = isLinkedRecorderCall(session, ctx);
+      const stepFiles = ctx?.fileInputs?.project_root?.members;
+      const project: ProjectAccess = stepFiles
+        ? new ClientProjectAccess(stepFiles)
+        : new HostProjectAccess();
+
       // A nested flow-execute must never carry a raw flow_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
-      if (params.command === RUN_TARGET_COMMAND) await rewriteSiblingFlowPath(session, args);
+      if (params.command === RUN_TARGET_COMMAND) {
+        await rewriteSiblingFlowPath(session, args, project, linked);
+      }
+
+      // Refused before the tap capture and the invoke, so nothing runs.
+      if (linked) {
+        const issue = toolStepUploadIssue(
+          registry,
+          params.command,
+          args,
+          project.mode === "client"
+        );
+        if (issue) throw replayRefusal(issue, args);
+      }
 
       // Selector capture must read the tree BEFORE the tap runs: a navigating
       // tap (e.g. a list row that opens a detail screen) replaces the screen, so
@@ -1257,9 +1365,23 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         });
       }
 
+      // Over a link the call reads its files from those the client sent, as a
+      // replay does: a file argument, or the flow a nested flow-execute names,
+      // which finds its own files there too. The step is recorded from `args`,
+      // which keep the client paths.
+      let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
-        toolResult = await invokeSubTool(registry, ctx, params.command, args);
+        prepared = await prepareToolStepInputs(registry, project, params.command, args);
+        const nestedFromClient =
+          params.command === RUN_TARGET_COMMAND && prepared.fileInputs !== undefined;
+        toolResult = await invokeSubTool(registry, ctx, params.command, prepared.args, {
+          ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
+          // A nested run whose flow came from the client gets a run stack even
+          // with no enclosing run, which marks it as nested: its refusals name
+          // the flow it runs, and this call returns the baselines it writes.
+          ...(nestedFromClient ? { flowStack: ctx?.flowStack ?? [] } : {}),
+        });
       } catch (err) {
         const hint = isToolNotFound(err, params.command)
           ? directiveCommandHint(params.command)
@@ -1270,16 +1392,46 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           registry,
           err,
           params.command,
-          args,
+          prepared?.args ?? args,
           authoredArgs
         );
-        if (reframed === undefined) throw err;
+        if (reframed === undefined) {
+          // A reason the tool wrote about a temp file names the client path.
+          if (prepared && err instanceof Error)
+            err.message = withClientPaths(prepared, err.message);
+          throw err;
+        }
         throw new FailureError(reframed, {
           error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
           failure_stage: "flow_add_step_nested_params",
           failure_area: "tool_server",
           error_kind: "validation",
         });
+      } finally {
+        await prepared?.cleanup();
+      }
+
+      // A nested run that did not pass returns its report instead of throwing.
+      // A replay over a link fails at the same step, so over a link it is not
+      // recorded. Without a link the call is recorded.
+      if (linked && params.command === RUN_TARGET_COMMAND) {
+        const outcome = nestedOrchestratorOutcome(RUN_TARGET_COMMAND, toolResult);
+        if (outcome) {
+          throw new FailureError(
+            outcome.status === "fail"
+              ? `Cannot record this call: the nested flow did not pass (${outcome.reason}). A ` +
+                  `replay over the same link fails at the same step. No step was recorded. Fix ` +
+                  `the nested flow, then call flow-add-step again.`
+              : `Cannot record this call: the nested flow did not run (${outcome.reason}). No ` +
+                  `step was recorded.`,
+            {
+              error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+              failure_stage: "flow_add_step_nested_failed",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
+          );
+        }
       }
 
       // A blocked native-devtools precheck RESOLVES its block instead of
@@ -1325,7 +1477,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // `run:` composition directive rather than a raw, non-portable tool call.
       const runTarget =
         params.command === RUN_TARGET_COMMAND && params.delayMs === undefined
-          ? await captureRunTarget(session, args)
+          ? await captureRunTarget(session, args, project)
           : undefined;
 
       // A recorded `restart-app` is captured as the portable `launch` directive
@@ -1450,12 +1602,17 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         });
       }
 
+      const baselineWrites =
+        project instanceof ClientProjectAccess && ctx?.flowStack === undefined
+          ? project.baselineDirectives()
+          : [];
       return {
         message: `Step added to "${params.name}" flow${warning ? ` — ${warning}` : ""}`,
         toolResult,
         stepCount,
         recorded: summarizeStep(step, stepCount),
         savedTo,
+        ...(baselineWrites.length > 0 ? { baselineWrites } : {}),
       };
     },
   };
