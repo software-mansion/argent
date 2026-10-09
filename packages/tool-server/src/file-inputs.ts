@@ -57,6 +57,7 @@ export interface UploadEntry {
   sha256: string;
 }
 
+/** Hands over a pending upload at most once; the caller then owns its tar. */
 type UploadLookup = (uploadId: string) => UploadEntry | undefined;
 
 interface ResolveFileInputsResult {
@@ -422,6 +423,37 @@ async function resolveOne(
 }
 
 /**
+ * Remove each upload that a declared wire in `body` names, its members
+ * included, and that resolution did not take: the call failed before it, or
+ * did not need it. An upload serves only the call that names it, so it must
+ * not stay on disk and count toward the pending limit until the sweeper runs.
+ */
+async function releaseUploads(
+  specs: FileInputSpec[],
+  body: Record<string, unknown>,
+  lookupUpload: UploadLookup | undefined
+): Promise<void> {
+  const ids: unknown[] = [];
+  for (const spec of specs) {
+    const wire = body[spec.target];
+    if (!isFileInputWire(wire)) continue;
+    ids.push(wire.uploadId);
+    if (!Array.isArray(wire.members)) continue;
+    for (const member of wire.members as unknown[]) {
+      if (typeof member === "object" && member !== null) {
+        ids.push((member as FileInputMember).uploadId);
+      }
+    }
+  }
+  await Promise.all(
+    ids.map(async (id) => {
+      const entry = typeof id === "string" ? lookupUpload?.(id) : undefined;
+      if (entry) await rm(entry.tarPath, { force: true }).catch(() => {});
+    })
+  );
+}
+
+/**
  * Replace every declared file-input wrapper in `body` with a plain
  * server-readable path string. Returns the rewritten args plus per-target
  * resolution metadata. Only declared targets are honored, so clients can't
@@ -492,6 +524,8 @@ export async function resolveFileInputs(
     // earlier ones — the caller never gets a result to clean up from.
     await cleanup();
     throw err;
+  } finally {
+    await releaseUploads(specs, body as Record<string, unknown>, lookupUpload);
   }
 
   return { args, fileInputs: resolved, derivedTargets, cleanup };

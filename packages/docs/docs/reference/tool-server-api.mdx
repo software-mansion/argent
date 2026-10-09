@@ -146,6 +146,7 @@ The tool-server reads the members before it validates the arguments:
 
 - The tool-server keeps the text of each member that has bytes. It applies the 32 MiB limit and the size check of a file input. It also applies the 32 MiB limit to the total size of the members of the call. It reads an upload as for a `tar-upload` input.
 - When the bytes of a member fail a check, or the tool-server does not have its upload, the call fails with the status 422. A file input fails in the same way.
+- The tool-server deletes each upload that the call names before the flow starts, also when the call fails. An `uploadId` is valid for one call only.
 - A member becomes `refused` when it has no bytes and no `state`, or when its `canonical` or `spelling` is not valid.
 - The tool-server ignores a member with an unknown `role`, and a member with a `key` that it already has.
 

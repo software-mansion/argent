@@ -456,10 +456,53 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
       const read = vi.mocked(fs.readFile).mock.calls.map(([file]) => path.basename(String(file)));
       expect(read).toEqual(["a.yaml"]);
       expect(await fs.readdir(scratch)).toEqual([]);
-      for (const entry of [a!, b!]) await expect(fs.stat(entry.tarPath)).rejects.toThrow();
+      expect([...store.pending.keys()]).toEqual([]);
+      for (const entry of [a!, b!, c!]) await expect(fs.stat(entry.tarPath)).rejects.toThrow();
     } finally {
       restoreTmpdir();
       await fs.rm(scratch, { recursive: true, force: true });
     }
+  });
+
+  it("removes the uploads of the later members when one member fails", async () => {
+    const write = (file: string) => fs.writeFile(file, FRAGMENT);
+    const [a, b, c] = await Promise.all(
+      ["a.yaml", "b.yaml", "c.yaml"].map((name) => fragmentUpload(name, write))
+    );
+    const store = uploadStore({ a: a!, b: b!, c: c! });
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        {
+          flow_path: flowWire([
+            member("a.yaml", "a", a!, { contentHash: "0".repeat(64) }),
+            member("b.yaml", "b", b!),
+            member("c.yaml", "c", c!),
+          ]),
+        },
+        store.lookup
+      )
+    ).rejects.toThrow(/content hash mismatch/i);
+
+    expect([...store.pending.keys()]).toEqual([]);
+    for (const entry of [a!, b!, c!]) await expect(fs.stat(entry.tarPath)).rejects.toThrow();
+  });
+
+  it("removes the uploads of a wire that the call does not resolve", async () => {
+    // name + flow_path: the tool reports the two sources, so the closure that
+    // came with flow_path is never read.
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+    const store = uploadStore({ a });
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: [{ ...FLOW_SPEC[0]!, unwrapWhenSet: "name" }] },
+      { name: "saved", flow_path: flowWire([member("a.yaml", "a", a)]) },
+      store.lookup
+    );
+
+    expect(args.flow_path).toBe(`${FLOWS}/root.yaml`);
+    expect([...store.pending.keys()]).toEqual([]);
+    await expect(fs.stat(a.tarPath)).rejects.toThrow();
   });
 });
