@@ -134,24 +134,29 @@ function sanitizeFilename(name: string): string {
   return cleaned.length > 0 && cleaned !== "." && cleaned !== ".." ? cleaned : "upload";
 }
 
-/** Decode inlined content, refusing what exceeds the limit or disagrees with the client's size. */
-function decodeContent(wire: Pick<FileInputWire, "path" | "size" | "content">): Buffer {
-  const data = Buffer.from(wire.content!, "base64");
-  if (data.length > MAX_UPLOAD_BYTES) {
+/** Refuse uploaded bytes that exceed the limit or disagree with the client's size. */
+function checkUploadSize(wire: Pick<FileInputWire, "path" | "size">, bytes: number): void {
+  if (bytes > MAX_UPLOAD_BYTES) {
     throw new FileInputError(
-      `Uploaded file "${wire.path}" is ${data.length} bytes — exceeds the ` +
+      `Uploaded file "${wire.path}" is ${bytes} bytes — exceeds the ` +
         `${MAX_UPLOAD_BYTES}-byte file-input limit.`
     );
   }
-  // A client-recorded size disagreeing with the decoded bytes means the upload
+  // A client-recorded size disagreeing with the received bytes means the upload
   // was truncated or mangled in transit — fail rather than hand the tool a
   // corrupt file.
-  if (wire.size != null && data.length !== wire.size) {
+  if (wire.size != null && bytes !== wire.size) {
     throw new FileInputError(
-      `Uploaded content for "${wire.path}" is ${data.length} bytes but the client ` +
+      `Uploaded content for "${wire.path}" is ${bytes} bytes but the client ` +
         `recorded ${wire.size} — refusing a truncated or corrupted upload.`
     );
   }
+}
+
+/** Decode inlined content, refusing what exceeds the limit or disagrees with the client's size. */
+function decodeContent(wire: Pick<FileInputWire, "path" | "size" | "content">): Buffer {
+  const data = Buffer.from(wire.content!, "base64");
+  checkUploadSize(wire, data.length);
   return data;
 }
 
@@ -222,6 +227,21 @@ function errorText(err: unknown): string {
 }
 
 /**
+ * Add a member's bytes to the total of its flow before they are read. The text
+ * of each member stays in memory for the whole run, so the members of a flow
+ * get the limit of one file together, however many the call names.
+ */
+function countMemberBytes(member: FileInputMember, taken: { bytes: number }, bytes: number): void {
+  taken.bytes += bytes;
+  if (taken.bytes > MAX_UPLOAD_BYTES) {
+    throw new FileInputError(
+      `The members of this call are ${taken.bytes} bytes together with "${member.path}". ` +
+        `This exceeds the ${MAX_UPLOAD_BYTES}-byte limit for the members of one call.`
+    );
+  }
+}
+
+/**
  * One member's bytes, read the way a declared file input's are, or undefined
  * when the client sent neither content nor an upload for it. Bytes that fail
  * a check, or an upload that is gone, throw the {@link FileInputError} of a
@@ -230,9 +250,14 @@ function errorText(err: unknown): string {
 async function memberText(
   member: FileInputMember,
   tempDirs: string[],
-  lookupUpload: UploadLookup | undefined
+  lookupUpload: UploadLookup | undefined,
+  taken: { bytes: number }
 ): Promise<string | undefined> {
-  if (typeof member.content === "string") return decodeContent(member).toString("utf8");
+  if (typeof member.content === "string") {
+    const data = decodeContent(member);
+    countMemberBytes(member, taken, data.length);
+    return data.toString("utf8");
+  }
   if (typeof member.uploadId !== "string") return undefined;
   const unused: ResolvedFileInput = {
     clientPath: member.path,
@@ -241,11 +266,17 @@ async function memberText(
   };
   const wire = member as unknown as FileInputWire;
   const { value } = await extractTarUpload(wire, member.uploadId, unused, tempDirs, lookupUpload);
-  return readFile(value, "utf8").catch((err: unknown) => {
+  const unreadable = (err: unknown): never => {
     throw new FileInputError(
       `Could not read the uploaded file "${member.path}": ${errorText(err)}`
     );
-  });
+  };
+  // A small archive can expand to far more than the limit, so the size on disk
+  // is checked before the bytes are read into memory.
+  const { size } = await stat(value).catch(unreadable);
+  checkUploadSize(member, size);
+  countMemberBytes(member, taken, size);
+  return readFile(value, "utf8").catch(unreadable);
 }
 
 /**
@@ -254,7 +285,8 @@ async function memberText(
  * that needs it fails, and nothing else. An entry whose transfer failed (its
  * bytes fail the checks of a declared input, or its upload is gone) fails the
  * call with that upload error, as a declared input does: the flow is fine,
- * its transfer is not. An entry of a role this server does not know is left
+ * its transfer is not. So does an entry that takes the members past the limit
+ * of one file together. An entry of a role this server does not know is left
  * out, as is a repeated key after its first entry.
  */
 async function resolveMembers(
@@ -263,6 +295,7 @@ async function resolveMembers(
   lookupUpload: UploadLookup | undefined
 ): Promise<Record<string, ResolvedMember>> {
   const out: Record<string, ResolvedMember> = {};
+  const taken = { bytes: 0 };
   for (const raw of members) {
     if (typeof raw !== "object" || raw === null) continue;
     const member = raw as FileInputMember;
@@ -293,7 +326,7 @@ async function resolveMembers(
         error: typeof member.error === "string" ? member.error : "the client did not send it",
       };
     } else {
-      const text = await memberText(member, tempDirs, lookupUpload);
+      const text = await memberText(member, tempDirs, lookupUpload, taken);
       out[member.key] =
         text === undefined
           ? { ...base, state: "refused", error: `the client sent no content for "${member.path}"` }
