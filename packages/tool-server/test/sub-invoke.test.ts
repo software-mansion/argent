@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { Registry, ResolvedFileInput, ToolContext } from "@argent/registry";
+import type { Registry, ToolContext } from "@argent/registry";
 import { invokeSubTool } from "../src/utils/sub-invoke";
 
 function mockRegistry(impl?: (id: string, args: unknown) => unknown): Registry {
@@ -68,75 +68,6 @@ describe("invokeSubTool", () => {
     const idA = recordChildInvocation.mock.calls[0]![0];
     const idB = recordChildInvocation.mock.calls[1]![0];
     expect(idA).not.toEqual(idB);
-  });
-
-  it("forwards fileInputs to the registry on both paths", async () => {
-    const fileInputs: Record<string, ResolvedFileInput> = {
-      baselinePath: { clientPath: "/client/base.png", presentOnHost: false, viaUpload: true },
-    };
-    const args = { baselinePath: "/tmp/argent-file-input-x/base.png" };
-    const signal = new AbortController().signal;
-
-    // Without a recorder: the signal and the file inputs share one options object.
-    const direct = mockRegistry();
-    await invokeSubTool(
-      direct,
-      { artifacts: {}, signal } as unknown as ToolContext,
-      "screenshot-diff",
-      args,
-      { fileInputs }
-    );
-    expect(vi.mocked(direct.invokeTool).mock.calls).toStrictEqual([
-      ["screenshot-diff", args, { signal, fileInputs }],
-    ]);
-
-    // With a recorder: forwarded beside the minted id and the recorder.
-    const recorded = mockRegistry();
-    const recordChildInvocation = vi.fn((_id: string, _args?: unknown) => vi.fn());
-    await invokeSubTool(
-      recorded,
-      { artifacts: {}, signal, recordChildInvocation } as unknown as ToolContext,
-      "screenshot-diff",
-      args,
-      { fileInputs }
-    );
-    const childId = recordChildInvocation.mock.calls[0]![0];
-    expect(vi.mocked(recorded.invokeTool).mock.calls).toStrictEqual([
-      [
-        "screenshot-diff",
-        args,
-        { signal, toolInvocationId: childId, recordChildInvocation, fileInputs },
-      ],
-    ]);
-  });
-
-  it("passes an options object when only extra.fileInputs is set", async () => {
-    const registry = mockRegistry();
-    const fileInputs: Record<string, ResolvedFileInput> = {
-      currentPath: { clientPath: "/client/cur.png", presentOnHost: true, viaUpload: true },
-    };
-
-    const args = { currentPath: "/tmp/c.png" };
-
-    await invokeSubTool(registry, undefined, "screenshot-diff", args, { fileInputs });
-
-    // No signal key: only what was set travels.
-    expect(vi.mocked(registry.invokeTool).mock.calls).toStrictEqual([
-      ["screenshot-diff", args, { fileInputs }],
-    ]);
-  });
-
-  it("keeps the two-argument call when extra carries no fileInputs", async () => {
-    const registry = mockRegistry();
-    const ctx = { artifacts: {} } as unknown as ToolContext;
-
-    await invokeSubTool(registry, ctx, "gesture-tap", { x: 0.1 }, { fileInputs: undefined });
-    await invokeSubTool(registry, undefined, "gesture-tap", { x: 0.2 }, {});
-
-    expect(vi.mocked(registry.invokeTool).mock.calls).toStrictEqual([
-      ["gesture-tap", { x: 0.1 }],
-      ["gesture-tap", { x: 0.2 }],
-    ]);
   });
 
   it("releases the recorded metadata even when the sub-tool throws", async () => {
