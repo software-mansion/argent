@@ -430,13 +430,13 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 - a flow in a directory run that failed without a report
 - a usage error, such as an unknown flag
 
-A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text. With `ARGENT_FLOW_FILES_LOG=1`, the CLI writes each `[flow-files]` line as a warning object on stderr: `{ "event": "warning", "warning": <text> }`.
+A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
 
 ### Flows over a link
 
-`argent link` and the `ARGENT_TOOLS_URL` variable route the CLI to a tool-server. In this section, both are a link. Over a link, `argent flow run` uploads the flow file with the call. The upload also holds each `run:` fragment that the flow reaches. The other files beside the flow file stay on the client.
+`argent link` and the `ARGENT_TOOLS_URL` variable route the CLI to a tool-server. In this section, both are a link. Over a link, `argent flow run` uploads the flow file and each `run:` fragment that the flow reaches. The other files beside the flow file stay on the client.
 
 | Flow content                                                                                                           | Over a link                                                                                                       |
 | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -447,7 +447,9 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 | A `tool:` step that records a flow, for example `flow-add-step`                                                        | The tool-server rejects the flow before the first step                                                            |
 | A relative `launch: { chromium: <path> }`                                                                              | The launch fails. Use an absolute path on the tool-server                                                         |
 
-The CLI uploads each fragment that a `run:` step names, at any depth and in each `when:` block. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload. The CLI uploads a fragment only when its real location is under one of these directories:
+The rejections in the table apply to the flow file and to each fragment that the CLI uploads. For each rejection, the error lists the steps that caused it. When an older CLI sends `run:` or `snapshot:` steps, the error also tells you to update the argent CLI.
+
+The CLI uploads each fragment that a `run:` step names. This includes the `run:` steps in fragments and in `when:` blocks. The CLI uploads a fragment only when its real location is under one of these directories:
 
 - the project root, which is the working directory of the CLI
 - the project of a flow saved under `<project>/.argent/flows/`
@@ -461,7 +463,9 @@ The CLI does not upload these fragments:
 - a directory, or a file that the CLI cannot read
 - a file larger than 32 MiB
 
-The tool-server then rejects the flow before the first step, and the error gives the reason for each such fragment. A fragment that does not exist does not stop the flow before the first step. Its `run:` step reports `error` when the step runs. A `when:` block that does not run does not need its fragments.
+The tool-server then rejects the flow before the first step. The error gives the reason for each such fragment.
+
+A fragment that does not exist in these directories does not stop the flow before the first step. Its `run:` step reports `error` when the step runs. A `when:` block that does not run does not need its fragments.
 
 For a flow with `snapshot:` steps, the CLI also uploads baselines from the `__baselines__/<flow>/` directory that a run without a link uses. A `snapshot:` step in a fragment uses the baselines of the flow file, as in a run without a link. The upload depends on the run:
 
@@ -474,11 +478,9 @@ With `--update-baselines`, the tool-server returns each new baseline in the resu
 
 The CLI does not upload a baseline that links out of the directories above, or a `.png` name that links to a file that is not a PNG file. A `snapshot:` step that reads or writes such a baseline reports `error`. When the `__baselines__/<flow>/` directory itself links out of these directories, the CLI uploads no baseline and writes none.
 
-The other rows of the table still need a run without a link. The tool-server rejects such a step before the first step, in the flow file and in each fragment that the CLI uploads.
+The CLI puts fragments and baselines in the call until they are 256 KiB in total. The CLI sends each other file in a separate request to `POST /upload`. Thus the body limit of a reverse proxy applies to one such file at a time. When the proxy refuses a file with the status 413, the flow does not run. The error gives the body size that the proxy must accept on `POST /upload`. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload.
 
-The CLI puts small fragments and baselines in the call, up to 256 KiB in total. The CLI sends each other file in its own request to `POST /upload`. A body limit of a reverse proxy therefore applies to one file at a time. When the proxy refuses a file with the status 413, the flow does not run. The error gives the body size that the proxy must accept on `POST /upload`. With `ARGENT_FLOW_FILES_LOG=1`, the CLI prints one line for each file before the call.
-
-For each rejection in the table, the error lists the steps that caused it. When an older CLI sends `run:` or `snapshot:` steps, the error also tells you to update the argent CLI.
+Set `ARGENT_FLOW_FILES_LOG=1` to see what the CLI does with each fragment and baseline. The CLI then prints one `[flow-files]` line on stderr for each file before the call, and one line for each baseline that it writes. With `--json`, each line is a warning object: `{ "event": "warning", "warning": <text> }`.
 
 The tool-server runs the uploaded copy even when it has a file at the same path. This is also true over a link to `127.0.0.1`. Only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place, and all step kinds run.
 
@@ -488,7 +490,13 @@ When the CLI cannot connect to the tool-server that a link names, the flow does 
 
 ## Remote runs
 
-The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send that file, each `run:` fragment that it reaches and the snapshot baselines that the run compares. The tool-server runs those copies. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload. The client uploads a fragment only when it is under `project_root`, under the project of a flow saved under `<project>/.argent/flows/`, under the `.argent/flows` directory of `project_root`, or beside the flow file or its real file. When the call sets `updateBaselines`, the client writes each new baseline into the `__baselines__/<flow>/` directory when the run ends. When the client cannot write a baseline, the report shows `baseline not written` with the path and the reason. Argent checks the flow and each uploaded fragment before it runs the first step. At any depth, it rejects a `script:` step, a `tool:` step that takes a file or records a flow, and a fragment that the client did not upload for a reason. The error lists each such step. A fragment that does not exist fails its `run:` step when that step runs. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
+The `flow-execute` tool takes one flow source: `name` for a saved flow, or `flow_path` for any file. Over a link, both sources send the flow file, each `run:` fragment that it reaches and the snapshot baselines that the run compares. The tool-server runs those copies. The client sends the fragments and the baselines with the rules of [Flows over a link](#flows-over-a-link). The `project_root` argument is the project root. When the call sets `updateBaselines`, the client writes each new baseline into the `__baselines__/<flow>/` directory when the run ends. When the client cannot write a baseline, the report shows `baseline not written` with the path and the reason. Argent checks the flow and each fragment before it runs the first step. At any depth, Argent rejects these:
+
+- a `script:` step
+- a `tool:` step that takes a file or records a flow
+- a fragment that the client does not send, except a fragment that does not exist
+
+The error lists each such step. A fragment that does not exist fails its `run:` step when that step runs. Without a link, the tool-server reads the file in place, and all step kinds run. See [Flows over a link](#flows-over-a-link) for the `argent flow run` command.
 
 ## YAML safety
 
