@@ -567,40 +567,6 @@ describe("gesture-drag duration ceiling", () => {
   });
 });
 
-// `settle` was this flag's earlier spelling with the opposite polarity, and every
-// dispatch path forwards only `safeParse(...).data` - left undeclared, the
-// non-strict object would strip a recording's `settle: true` and run the flinging
-// default, green and silent.
-describe("gesture-drag retired `settle` param", () => {
-  const schema = gestureDragTool.zodSchema!;
-  const base = { udid: "chromium-cdp-19222", fromX: 0.25, fromY: 0.5, toX: 0.75, toY: 0.5 };
-
-  it("rejects `settle: true` instead of stripping it, and names the replacement", () => {
-    const parsed = schema.safeParse({ ...base, settle: true });
-
-    expect(parsed.success).toBe(false);
-    const issue = parsed.error!.issues[0];
-    expect(issue.path).toEqual(["settle"]);
-    // The error is the only place the new spelling and the flipped sense appear.
-    expect(issue.message).toContain("momentum: false");
-  });
-
-  it("rejects `settle: false` too - it was the stack-build default, not a no-op to wave through", () => {
-    const parsed = schema.safeParse({ ...base, settle: false });
-
-    expect(parsed.success).toBe(false);
-    expect(parsed.error!.issues[0].path).toEqual(["settle"]);
-  });
-
-  it("leaves a call that never mentions `settle` untouched", () => {
-    const parsed = schema.safeParse({ ...base, momentum: false });
-
-    expect(parsed.success).toBe(true);
-    expect(parsed.data).toEqual({ ...base, momentum: false });
-    expect("settle" in parsed.data!).toBe(false);
-  });
-});
-
 // A `cdp.send` that times out rejects without closing the socket, so the session
 // outlives the failed drag with the left button still held - and the renderer
 // reads every later click on that page as a drag.

@@ -467,17 +467,6 @@ describe("swipe: parse/serialize", () => {
     expect(steps).toEqual([{ kind: "swipe", direction: "left" }]);
   });
 
-  it("rejects the old `settle` spelling by name, pointing at the inverted replacement", () => {
-    // Never aliased: `settle: true` means `momentum: false`, so a silent key
-    // rewrite would invert the author's intent.
-    expect(() => parseFlow("steps:\n  - swipe: { direction: left, settle: true }\n")).toThrow(
-      /swipe\.settle was renamed to swipe\.momentum, with the opposite sense.*momentum: false/is
-    );
-    expect(() => parseFlow("steps:\n  - swipe: { direction: left, settle: false }\n")).toThrow(
-      /swipe\.settle was renamed to swipe\.momentum/i
-    );
-  });
-
   it("from carries the usual target sugar: bare = loose, map = strict, point = point", () => {
     const steps = parseFlow(
       "steps:\n" +

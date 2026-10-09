@@ -41,13 +41,10 @@ export function toType(schema: Schema, indent = ""): string {
     case "object": {
       const required = new Set<string>(schema.required ?? []);
       const inner = `${indent}  `;
-      // A retired param (`not: {}`) is left out, so passing it is an excess-property error.
-      const props = Object.entries<Schema>(schema.properties ?? {})
-        .filter(([, prop]) => !("not" in prop))
-        .map(
-          ([name, prop]) =>
-            `${doc(prop, inner)}${inner}${key(name)}${required.has(name) ? "" : "?"}: ${toType(prop, inner)};`
-        );
+      const props = Object.entries<Schema>(schema.properties ?? {}).map(
+        ([name, prop]) =>
+          `${doc(prop, inner)}${inner}${key(name)}${required.has(name) ? "" : "?"}: ${toType(prop, inner)};`
+      );
       const extra = schema.additionalProperties;
       if (extra && typeof extra === "object")
         props.push(`${inner}[key: string]: ${toType(extra, inner)};`);

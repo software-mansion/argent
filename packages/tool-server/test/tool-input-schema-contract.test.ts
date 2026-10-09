@@ -41,6 +41,25 @@ describe("advertised tool input schemas", () => {
   }
 });
 
+// gesture-drag and gesture-swipe once advertised a key as `{ not: {} }`.
+// Grammar-constrained providers compile every tool schema into one decoding
+// grammar and have no `not` to compile it with: ModelRun, behind OpenRouter,
+// refused the whole request with a 400 naming that parameter (issue #1250).
+describe("advertised tool parameters", () => {
+  const definitions = definitionsById(createRegistry());
+
+  for (const [id, definition] of definitions) {
+    it(`${id}: declares no parameter with \`not\``, () => {
+      const properties = (advertisedSchema(definition)?.properties ?? {}) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const offending = Object.keys(properties).filter((name) => "not" in properties[name]!);
+      expect(offending, `${id} declares \`not\` on ${offending.join("/")}`).toEqual([]);
+    });
+  }
+});
+
 // Zod validates a parameter's `pattern` before the platform dispatch runs, so
 // no platform is exempt from it. A description that calls such a value
 // free-form walks the agent into a rejection whose message names a rule the

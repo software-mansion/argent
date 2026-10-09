@@ -27,7 +27,6 @@ describe("toType", () => {
       properties: {
         "udid": { type: "string", description: "Device id. Ends */ here" },
         "flag-name": { type: "boolean" },
-        "settle": { not: {} },
       },
       required: ["udid"],
       additionalProperties: { type: "number" },
