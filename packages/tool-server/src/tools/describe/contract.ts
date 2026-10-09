@@ -24,6 +24,9 @@ export interface DescribeNode {
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
+  // A scroll container's content window: `frame` less borders and scrollbars,
+  // where the source measures it (Chromium). Its content is clipped to this.
+  clipFrame?: DescribeFrame;
   checkable?: boolean;
   checked?: boolean;
   disabled?: boolean;
@@ -49,6 +52,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
+      clipFrame: describeFrameSchema.optional(),
       checkable: z.boolean().optional(),
       checked: z.boolean().optional(),
       disabled: z.boolean().optional(),

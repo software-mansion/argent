@@ -10,7 +10,9 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
  * DOM-clobbering forms. Mirrors test/debugger/component-tree-script.test.ts.
  *
  * The mock implements only the DOM surface the script reads: getBoundingClientRect,
- * getComputedStyle (display / visibility / opacity / overflow{,X,Y}), children,
+ * getComputedStyle (display / visibility / opacity / overflow{,X,Y} / position, plus
+ * whatever transform-like property a fixture sets), client{Left,Top,Width,Height} and
+ * offset{Width,Height} (padding-box clipping), children,
  * childNodes (text), getAttribute/hasAttribute, open shadowRoot, iframe contentDocument,
  * and a Range whose rect unions the element's own painted content with the still-laid-out
  * boxes of its descendants (everything but display:none) — so it reproduces the real
@@ -23,9 +25,10 @@ const H = 1000;
 
 class MockNode {}
 class MockElement extends MockNode {}
-class MockHTMLInputElement extends MockElement {}
-class MockHTMLTextAreaElement extends MockElement {}
-class MockHTMLImageElement extends MockElement {}
+class MockHTMLElement extends MockElement {}
+class MockHTMLInputElement extends MockHTMLElement {}
+class MockHTMLTextAreaElement extends MockHTMLElement {}
+class MockHTMLImageElement extends MockHTMLElement {}
 
 // The script reads childNodes / tagName / children through the native prototype getter
 // (Object.getOwnPropertyDescriptor(proto, prop).get.call(el)) so a DOM-clobbering <form>
@@ -56,6 +59,10 @@ defineNative(MockElement.prototype, "scrollHeight", "__scrollHeight");
 defineNative(MockElement.prototype, "clientHeight", "__clientHeight");
 defineNative(MockElement.prototype, "scrollWidth", "__scrollWidth");
 defineNative(MockElement.prototype, "clientWidth", "__clientWidth");
+defineNative(MockElement.prototype, "clientLeft", "__clientLeft");
+defineNative(MockElement.prototype, "clientTop", "__clientTop");
+defineNative(MockHTMLElement.prototype, "offsetWidth", "__offsetWidth");
+defineNative(MockHTMLElement.prototype, "offsetHeight", "__offsetHeight");
 // getAttribute / hasAttribute / getBoundingClientRect are methods on Element.prototype.
 // The script invokes them via the captured `Element.prototype.X` so a [LegacyOverrideBuiltins]
 // form can't shadow them to a control element (which would crash with "not a function").
@@ -79,6 +86,11 @@ type Opts = {
   tag?: string;
   text?: string;
   rect?: Rect;
+  // client{Left,Top,Width,Height}: border-left/top and the padding box minus scrollbars
+  client?: { left: number; top: number; width: number; height: number };
+  offset?: { width: number; height: number }; // untransformed border-box size
+  scrollSize?: { width: number; height: number }; // scrollWidth / scrollHeight
+  svg?: boolean; // an Element that is not an HTMLElement
   content?: Rect | null; // painted extent of own inline content (Range)
   style?: Record<string, string>;
   attrs?: Record<string, string>;
@@ -91,13 +103,28 @@ type Opts = {
 };
 
 function el(opts: Opts = {}): MockElement {
-  const node = new MockElement() as MockElement & Record<string, unknown>;
+  const node = (opts.svg ? new MockElement() : new MockHTMLElement()) as MockElement &
+    Record<string, unknown>;
   const rect = opts.rect ?? { x: 0, y: 0, w: 100, h: 20 };
   node.tagName = (opts.tag ?? "div").toUpperCase();
   // Backing fields read by the Element.prototype getAttribute/hasAttribute/
   // getBoundingClientRect methods defined above (the script reads them via the prototype).
   node.__attrs = opts.attrs ?? {};
   node.__rect = rect;
+  if (opts.client) {
+    node.__clientLeft = opts.client.left;
+    node.__clientTop = opts.client.top;
+    node.__clientWidth = opts.client.width;
+    node.__clientHeight = opts.client.height;
+  }
+  if (opts.offset) {
+    node.__offsetWidth = opts.offset.width;
+    node.__offsetHeight = opts.offset.height;
+  }
+  if (opts.scrollSize) {
+    node.__scrollWidth = opts.scrollSize.width;
+    node.__scrollHeight = opts.scrollSize.height;
+  }
   node.children = opts.children ?? [];
   // The text node carries the element's own painted-text rect (`content`) so a Range
   // over just this text node measures the own-text extent — matching the real browser,
@@ -153,6 +180,7 @@ function el(opts: Opts = {}): MockElement {
     overflow: "visible",
     overflowX: "visible",
     overflowY: "visible",
+    position: "static",
   };
   const s = { ...baseStyle, ...(opts.style ?? {}) };
   if (opts.style?.overflow && !opts.style.overflowX) s.overflowX = opts.style.overflow;
@@ -174,10 +202,14 @@ function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: str
   return node;
 }
 
-function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean } {
+function run(
+  rootChildren: MockElement[],
+  body: MockElement = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H } })
+): { tree: unknown; truncated: boolean } {
   const root = el({ tag: "html", rect: { x: 0, y: 0, w: W, h: H } }) as MockElement &
     Record<string, unknown>;
-  root.children = [el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H }, children: rootChildren })];
+  if (rootChildren.length) (body as Record<string, unknown>).children = rootChildren;
+  root.children = [body];
 
   const g = globalThis as Record<string, unknown>;
   const saved = {
@@ -188,6 +220,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
     HTMLInputElement: g.HTMLInputElement,
     HTMLTextAreaElement: g.HTMLTextAreaElement,
     HTMLImageElement: g.HTMLImageElement,
+    HTMLElement: g.HTMLElement,
   };
   g.window = {
     innerWidth: W,
@@ -264,6 +297,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
   g.HTMLInputElement = MockHTMLInputElement;
   g.HTMLTextAreaElement = MockHTMLTextAreaElement;
   g.HTMLImageElement = MockHTMLImageElement;
+  g.HTMLElement = MockHTMLElement;
   try {
     const payload = (0, eval)(DESCRIBE_DOM_SCRIPT) as string;
     return JSON.parse(payload);
@@ -887,5 +921,254 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     } finally {
       Object.defineProperty(MockElement.prototype, "scrollHeight", saved!);
     }
+  });
+});
+
+// Frame in mock px (W = H = 1000), rounded so float noise never decides an assertion.
+function pxFrame(tree: unknown, id: string): { x: number; y: number; w: number; h: number } {
+  const node = findById(tree, id);
+  if (!node) throw new Error(`no node identified ${id}`);
+  const f = node.frame as { x: number; y: number; width: number; height: number };
+  const r = (v: number) => Math.round(v * 1e3 * 1e3) / 1e3;
+  return { x: r(f.x), y: r(f.y), w: r(f.width), h: r(f.height) };
+}
+
+// A 300x100 scroll container at the origin with a 1px border and a 15px scrollbar:
+// its padding box (the clip edge) is x 1..286, y 1..99.
+function scroller(children: MockElement[], opts: Opts = {}): MockElement {
+  return el({
+    attrs: { id: "sc" },
+    rect: { x: 0, y: 0, w: 300, h: 100 },
+    client: { left: 1, top: 1, width: 285, height: 98 },
+    offset: { width: 300, height: 100 },
+    ...opts,
+    style: { overflow: "auto", ...opts.style },
+    children,
+  });
+}
+
+const row = (id: string, rect: Rect, style: Record<string, string> = {}) =>
+  el({ attrs: { id, onclick: "" }, text: id, rect, style });
+
+describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
+  it("frames rows by what their scroll container shows: whole, cut at the clip edge, or none", () => {
+    const { tree } = run([
+      scroller([
+        row("in", { x: 1, y: 1, w: 285, h: 40 }),
+        row("part", { x: 1, y: 81, w: 285, h: 40 }),
+        row("out", { x: 1, y: 121, w: 285, h: 40 }),
+      ]),
+    ]);
+    expect(pxFrame(tree, "in")).toEqual({ x: 1, y: 1, w: 285, h: 40 });
+    expect(pxFrame(tree, "part")).toEqual({ x: 1, y: 81, w: 285, h: 18 });
+    expect(pxFrame(tree, "out").h).toBe(0);
+    // The container's own frame is its border box, not its clip.
+    expect(pxFrame(tree, "sc")).toEqual({ x: 0, y: 0, w: 300, h: 100 });
+  });
+
+  it("clips by the padding box, so a row under the scrollbar is cut there", () => {
+    const { tree } = run([scroller([row("wide", { x: 1, y: 1, w: 400, h: 20 })])]);
+    expect(pxFrame(tree, "wide")).toEqual({ x: 1, y: 1, w: 285, h: 20 });
+  });
+
+  it("intersects nested clips", () => {
+    const { tree } = run([
+      scroller([
+        el({
+          attrs: { id: "inner" },
+          rect: { x: 1, y: 50, w: 200, h: 100 },
+          client: { left: 0, top: 0, width: 200, height: 100 },
+          style: { overflow: "auto" },
+          children: [
+            row("inner-in", { x: 1, y: 60, w: 200, h: 20 }),
+            row("inner-out", { x: 1, y: 110, w: 200, h: 20 }),
+          ],
+        }),
+      ]),
+    ]);
+    expect(pxFrame(tree, "inner")).toEqual({ x: 1, y: 50, w: 200, h: 49 });
+    expect(pxFrame(tree, "inner-in")).toEqual({ x: 1, y: 60, w: 200, h: 20 });
+    // Inside the inner scroller's box, but below the outer one's clip edge.
+    expect(pxFrame(tree, "inner-out").h).toBe(0);
+  });
+
+  it("clips an absolute box only when the clipper is its containing block or inside it", () => {
+    const below = { x: 10, y: 150, w: 80, h: 20 };
+    const card = (clipperStyle: Record<string, string>, between: MockElement[] = []) =>
+      run([
+        el({
+          style: { position: "relative" },
+          rect: { x: 0, y: 0, w: 400, h: 400 },
+          children: [
+            scroller(between.length ? between : [row("abs", below, { position: "absolute" })], {
+              style: { overflow: "hidden", ...clipperStyle },
+            }),
+          ],
+        }),
+      ]).tree;
+    // Containing block is the outer relative div: escapes the clip (a popover).
+    expect(pxFrame(card({}), "abs")).toEqual({ x: 10, y: 150, w: 80, h: 20 });
+    // The clipper itself is positioned, so it contains and clips the box.
+    expect(pxFrame(card({ position: "relative" }), "abs").h).toBe(0);
+    // A positioned wrapper inside the clipper contains it, so the clip applies.
+    const wrapped = card({}, [
+      el({
+        style: { position: "relative" },
+        rect: { x: 1, y: 1, w: 285, h: 20 },
+        children: [row("abs", below, { position: "absolute" })],
+      }),
+    ]);
+    expect(pxFrame(wrapped, "abs").h).toBe(0);
+  });
+
+  it("lets a fixed box escape every clip unless a transformed ancestor contains it", () => {
+    const fixed = () => row("fixed", { x: 10, y: 500, w: 80, h: 20 }, { position: "fixed" });
+    const escaped = run([scroller([fixed()], { style: { overflow: "hidden" } })]).tree;
+    expect(pxFrame(escaped, "fixed")).toEqual({ x: 10, y: 500, w: 80, h: 20 });
+    const containingBlocks: Record<string, string>[] = [
+      { transform: "matrix(1, 0, 0, 1, 0, 0)" },
+      { translate: "1px" },
+      { rotate: "1deg" },
+      { scale: "1.5" },
+      { perspective: "100px" },
+      { filter: "blur(1px)" },
+      { backdropFilter: "blur(1px)" },
+      { contain: "layout" },
+      { willChange: "transform" },
+    ];
+    for (const style of containingBlocks) {
+      const contained = run([scroller([fixed()], { style: { overflow: "hidden", ...style } })]);
+      expect(pxFrame(contained.tree, "fixed").h, JSON.stringify(style)).toBe(0);
+    }
+  });
+
+  it("clips only the axes whose overflow is not visible", () => {
+    const { tree } = run([
+      scroller(
+        [
+          row("below", { x: 1, y: 150, w: 100, h: 20 }),
+          row("right", { x: 400, y: 10, w: 50, h: 20 }),
+        ],
+        { style: { overflowX: "clip", overflowY: "visible" } }
+      ),
+    ]);
+    expect(pxFrame(tree, "below")).toEqual({ x: 1, y: 150, w: 100, h: 20 });
+    expect(pxFrame(tree, "right").w).toBe(0);
+  });
+
+  it("clips under contain: paint with overflow visible", () => {
+    const { tree } = run([
+      scroller([row("out", { x: 1, y: 150, w: 100, h: 20 })], {
+        style: { overflow: "visible", contain: "paint" },
+      }),
+    ]);
+    expect(pxFrame(tree, "out").h).toBe(0);
+  });
+
+  it("ignores overflow where Chromium does not apply it", () => {
+    for (const display of ["inline", "contents", "table-row", "table-row-group"]) {
+      const { tree } = run([
+        scroller([row("out", { x: 1, y: 150, w: 100, h: 20 })], {
+          style: { overflow: "hidden", display },
+        }),
+      ]);
+      expect(pxFrame(tree, "out"), display).toEqual({ x: 1, y: 150, w: 100, h: 20 });
+    }
+  });
+
+  it("does not treat the body's overflow as a clip (it belongs to the viewport)", () => {
+    const body = el({
+      tag: "body",
+      rect: { x: 0, y: 0, w: W, h: 50 },
+      client: { left: 0, top: 0, width: W, height: 50 },
+      style: { overflow: "hidden" },
+    });
+    const { tree } = run([row("far", { x: 0, y: 900, w: 100, h: 20 })], body);
+    expect(pxFrame(tree, "far")).toEqual({ x: 0, y: 900, w: 100, h: 20 });
+  });
+
+  it("scales the padding box by the clipper's transform", () => {
+    // Rendered at 2x: border box 600x200 on screen for a 300x100 layout box.
+    const { tree } = run([
+      scroller([row("lower", { x: 2, y: 150, w: 400, h: 40 })], {
+        rect: { x: 0, y: 0, w: 600, h: 200 },
+        client: { left: 1, top: 1, width: 298, height: 98 },
+        offset: { width: 300, height: 100 },
+        style: { overflow: "hidden", transform: "matrix(2, 0, 0, 2, 0, 0)" },
+      }),
+    ]);
+    expect(pxFrame(tree, "lower")).toEqual({ x: 2, y: 150, w: 400, h: 40 });
+  });
+
+  it("reports a scroll container's content window as its clipFrame", () => {
+    const { tree } = run([scroller([], { scrollSize: { width: 285, height: 400 } })]);
+    const sc = findById(tree, "sc")!;
+    expect(sc.scrollable).toBe(true);
+    const f = sc.clipFrame as { x: number; y: number; width: number; height: number };
+    expect([f.x, f.y, f.width, f.height].map((v) => Math.round(v * 1e6) / 1e3)).toEqual([
+      1, 1, 285, 98,
+    ]);
+  });
+
+  it("clips to an SVG viewport's own rect, which has no CSS box to measure", () => {
+    const { tree } = run([
+      el({
+        svg: true,
+        attrs: { id: "viewport" },
+        rect: { x: 0, y: 0, w: 300, h: 100 },
+        client: { left: 0, top: 0, width: 0, height: 0 },
+        style: { overflow: "hidden" },
+        children: [
+          row("in", { x: 10, y: 10, w: 100, h: 20 }),
+          row("out", { x: 10, y: 150, w: 100, h: 20 }),
+        ],
+      }),
+    ]);
+    expect(pxFrame(tree, "in")).toEqual({ x: 10, y: 10, w: 100, h: 20 });
+    expect(pxFrame(tree, "out").h).toBe(0);
+  });
+
+  it("clips everything under an HTML clipper whose padding box is empty", () => {
+    const { tree } = run([
+      scroller([row("squeezed", { x: 0, y: 10, w: 100, h: 20 })], {
+        rect: { x: 0, y: 0, w: 2, h: 100 },
+        client: { left: 1, top: 1, width: 0, height: 98 },
+        offset: { width: 2, height: 100 },
+        style: { overflow: "hidden" },
+      }),
+    ]);
+    expect(pxFrame(tree, "squeezed").w).toBe(0);
+  });
+
+  it("frames a box-less wrapper by its visible children only", () => {
+    const { tree } = run([
+      scroller([
+        el({
+          attrs: { role: "button", id: "wrap" },
+          style: { display: "contents" },
+          rect: ZERO,
+          children: [
+            row("shown", { x: 1, y: 10, w: 100, h: 20 }),
+            row("gone", { x: 1, y: 300, w: 100, h: 20 }),
+          ],
+        }),
+      ]),
+    ]);
+    expect(pxFrame(tree, "wrap")).toEqual({ x: 1, y: 10, w: 100, h: 20 });
+  });
+
+  it("clips a box-less element's own text", () => {
+    const { tree } = run([
+      scroller([
+        el({
+          attrs: { id: "contents-text" },
+          style: { display: "contents" },
+          text: "far text",
+          rect: ZERO,
+          content: { x: 1, y: 150, w: 60, h: 15 },
+        }),
+      ]),
+    ]);
+    expect(pxFrame(tree, "contents-text").h).toBe(0);
   });
 });
