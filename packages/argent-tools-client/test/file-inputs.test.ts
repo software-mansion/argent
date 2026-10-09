@@ -12,7 +12,7 @@ import {
   type FileInputWire,
   type PrepareFileInputsOptions,
 } from "../src/file-inputs.js";
-import { collectFlowMembers } from "../src/flow-files.js";
+import { collectFlowMembers, collectStepMembers } from "../src/flow-files.js";
 
 let tmpDir: string;
 
@@ -393,6 +393,138 @@ describe("prepareFileInputs — collect: flow", () => {
       "u-1",
     ]);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("prepareFileInputs — relative paths", () => {
+  const previousCwd = process.cwd();
+  let cwd: string;
+
+  beforeEach(async () => {
+    process.chdir(tmpDir);
+    cwd = process.cwd();
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves a relative file against the caller's working directory", async () => {
+    await fs.writeFile(path.join(cwd, "baseline.png"), "png");
+    const specs: FileInputSpec[] = [
+      { target: "baselinePath", path: "${baselinePath}", kind: "file" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { baselinePath: "./baseline.png" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.baselinePath).toEqual({
+      [FILE_INPUT_MARKER]: true,
+      path: path.join(cwd, "baseline.png"),
+      size: 3,
+      mtimeMs: (await fs.stat(path.join(cwd, "baseline.png"))).mtimeMs,
+    });
+  });
+
+  it("prefixes a path with a .. segment instead of collapsing it", async () => {
+    await fs.mkdir(path.join(cwd, "sub"));
+    await fs.writeFile(path.join(cwd, "app.apk"), "apk");
+    process.chdir(path.join(cwd, "sub"));
+    const specs: FileInputSpec[] = [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: "../app.apk" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath!.path).toBe(`${path.join(cwd, "sub")}${path.sep}../app.apk`);
+    expect(out.appPath!.size).toBe(3);
+  });
+
+  it("uploads a relative app over a link under its absolute path", async () => {
+    await fs.writeFile(path.join(cwd, "app.apk"), "apk-bytes");
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ uploadId: "u-rel" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const specs: FileInputSpec[] = [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: "app.apk" },
+      { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath).toMatchObject({ path: path.join(cwd, "app.apk"), uploadId: "u-rel" });
+  });
+
+  it("resolves a derived target and leaves its source params as written", async () => {
+    await fs.mkdir(path.join(cwd, ".argent", "flows"), { recursive: true });
+    await fs.writeFile(path.join(cwd, ".argent", "flows", "f.yaml"), "steps: []\n");
+    const specs: FileInputSpec[] = [
+      { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { name: "f", project_root: "." },
+      { includeContent: false }
+    )) as Record<string, unknown>;
+
+    expect(out.project_root).toBe(".");
+    expect((out.flow_file as FileInputWire).path).toBe(
+      path.join(cwd, ".argent", "flows", "f.yaml")
+    );
+  });
+
+  it("collects a relative flow's members over a link", async () => {
+    const flows = path.join(cwd, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+    await fs.writeFile(path.join(flows, "main.yaml"), "steps:\n  - run: frag.yaml\n");
+    await fs.writeFile(path.join(flows, "frag.yaml"), "steps:\n  - echo: hi\n");
+    const specs: FileInputSpec[] = [
+      { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { flow_path: ".argent/flows/main.yaml", project_root: cwd },
+      { includeContent: true, collectMembers: collectFlowMembers }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.flow_path!.members!.map((m) => m.canonical)).toEqual([
+      path.join(flows, "frag.yaml"),
+    ]);
+  });
+
+  it("collects a recorded step's files for a relative project_root over a link", async () => {
+    await fs.writeFile(path.join(cwd, "baseline.png"), "png");
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      {
+        project_root: ".",
+        name: "rec",
+        command: "screenshot-diff",
+        args: JSON.stringify({ baselinePath: path.join(cwd, "baseline.png") }),
+      },
+      {
+        includeContent: true,
+        collectStepMembers,
+        toolFileInputs: () => [{ target: "baselinePath", path: "${baselinePath}", kind: "file" }],
+      }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.project_root!.path).toBe(cwd);
+    expect(out.project_root!.members!.map((m) => [m.role, m.key])).toEqual([
+      ["tool", path.join(cwd, "baseline.png")],
+    ]);
   });
 });
 

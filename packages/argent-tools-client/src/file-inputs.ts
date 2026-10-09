@@ -169,6 +169,17 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
   return missing ? null : out;
 }
 
+/**
+ * `p` as an absolute path on this machine. The tool-server works in the
+ * directory of whichever client spawned it, so it cannot resolve a relative
+ * path. A path with a `..` segment is prefixed, not normalized: collapsing `..`
+ * ignores symlinks, so it can name another file than the kernel opens.
+ */
+function callerPath(p: string): string {
+  if (path.isAbsolute(p)) return p;
+  return p.split(/[\\/]/).includes("..") ? `${process.cwd()}${path.sep}${p}` : path.resolve(p);
+}
+
 // Archives of the uploads in progress. A signal or `process.exit()` ends the
 // process without the `finally` that removes an archive, so listeners remove
 // them while any exists. A signal is then raised again for its default action.
@@ -383,11 +394,14 @@ export async function prepareFileInputs(
     // still diagnosed by the tool, not by the boundary.
     if (spec.skipWhenSet && record[spec.skipWhenSet] !== undefined) continue;
     if (spec.target in record && typeof record[spec.target] !== "string") continue;
-    const filePath = interpolatePath(spec.path, record);
-    if (filePath === null) continue;
+    const spelled = interpolatePath(spec.path, record);
+    if (spelled === null) continue;
     // When the target IS a source param the interpolated path equals its
     // value; a derived target (flow_file) is wrapped only when unset.
-    if (spec.target in record && record[spec.target] !== filePath) continue;
+    if (spec.target in record && record[spec.target] !== spelled) continue;
+    const filePath = callerPath(spelled);
+    // The collectors read the target as the wire names it.
+    const callArgs = spec.target in record ? { ...record, [spec.target]: filePath } : record;
 
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };
     if (spec.kind === "file") {
@@ -405,7 +419,7 @@ export async function prepareFileInputs(
       ) {
         Object.assign(
           wire,
-          await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), record, opts)
+          await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), callArgs, opts)
         );
       }
     }
@@ -416,7 +430,7 @@ export async function prepareFileInputs(
       opts.includeContent &&
       opts.collectStepMembers
     ) {
-      wire.members = await opts.collectStepMembers(record, opts);
+      wire.members = await opts.collectStepMembers(callArgs, opts);
     }
 
     if (spec.kind === "tar-upload") {

@@ -157,3 +157,20 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 | `gather-workspace-data` | Fetch a structured snapshot of the app project's workspace |
 | `update-argent`         | Apply a pending Argent update                              |
 | `dismiss-update`        | Silence update reminders for a number of hours             |
+
+## Relative paths
+
+The client resolves a relative path in these arguments against its working directory. The tool-server gets the absolute path.
+
+| Tool                                     | Arguments                                  |
+| ---------------------------------------- | ------------------------------------------ |
+| `reinstall-app`                          | `appPath`                                  |
+| `screenshot-diff`                        | `baselinePath`, `currentPath`, `outputDir` |
+| `flow-execute`, `flow-read-prerequisite` | `flow_path`                                |
+| `flow-start-recording`, `flow-add-step`  | `project_root`                             |
+| `react-profiler-component-source`        | `project_root`                             |
+| `gather-workspace-data`                  | `workspacePath`                            |
+
+The working directory of `argent run` is the directory of the shell. The working directory of the [Argent SDK](/docs/reference/node-client) is `process.cwd()` of the program. The working directory of the MCP server is the directory where the editor starts `argent mcp`.
+
+Other arguments get to the tool-server as written. The working directory of the tool-server is the directory of the client that started it. Give an absolute path in other arguments that name a file or a directory.

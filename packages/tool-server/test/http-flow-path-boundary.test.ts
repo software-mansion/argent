@@ -1111,10 +1111,9 @@ describe("flow-execute over a link, from the real argent client", () => {
   it("sends no fragment for arguments the tool-server refuses, and gets its error", async () => {
     // Each call names a flow whose run: target lies outside the project. The
     // roots taken from such arguments (the directory a bad name climbs to, a
-    // project_root with "..", the filesystem root for a relative flow_path)
-    // would reach it, so they must not be taken before the arguments pass.
+    // project_root with "..") would reach it, so they must not be taken before
+    // the arguments pass.
     await write(".argent/flows/keep.yaml", "steps:\n  - echo: keep\n");
-    await write(".argent/flows/relative.yaml", "steps:\n  - run: ../../../sib/frag.yaml\n");
     const nested = await write("e2e/root.yaml", "steps:\n  - run: ../../sib/frag.yaml\n");
     const above = path.join(tmpDir, "above.yaml");
     await fs.writeFile(above, "steps:\n  - run: sib/frag.yaml\n");
@@ -1135,7 +1134,6 @@ describe("flow-execute over a link, from the real argent client", () => {
           { flow_path: nested, project_root: `${projectRoot}/e2e/../..` },
           'project_root must not contain ".." segments',
         ],
-        [{ flow_path: ".argent/flows/relative.yaml" }, "flow paths must be absolute"],
         [{ name: "keep", flow_path: above }, "Pass exactly one flow source: name or flow_path."],
       ] as const) {
         let wire: { content?: string; members?: unknown } | undefined;
@@ -1159,6 +1157,37 @@ describe("flow-execute over a link, from the real argent client", () => {
         expect(wire?.content).toBeDefined();
         expect(wire?.members).toBeUndefined();
       }
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("sends a relative flow_path as the absolute path in the client's working directory", async () => {
+    await write(".argent/flows/relative.yaml", "steps:\n  - run: ../../../sib/frag.yaml\n");
+    await fs.mkdir(path.join(tmpDir, "sib"));
+    await fs.writeFile(path.join(tmpDir, "sib/frag.yaml"), "steps:\n  - echo: outside\n");
+    let wire: { path?: string; members?: { state?: string; content?: string }[] } = {};
+    const client = await toolsClient(true, "flow-execute", async (body) => {
+      wire = JSON.parse(body).flow_path;
+    });
+
+    const originalCwd = process.cwd();
+    process.chdir(projectRoot);
+    try {
+      const err = await client
+        .callTool("flow-execute", {
+          flow_path: ".argent/flows/relative.yaml",
+          project_root: projectRoot,
+          device: DEVICE,
+        })
+        .catch((e: unknown) => e);
+
+      expect(wire.path).toBe(path.join(process.cwd(), ".argent/flows/relative.yaml"));
+      // The run: target outside the project still goes out without its bytes.
+      expect(wire.members!.map((m) => [m.state, m.content])).toEqual([["refused", undefined]]);
+      expect(String(err)).toContain(
+        "run: ../../../sib/frag.yaml (../../../sib/frag.yaml is outside every root this client serves"
+      );
     } finally {
       process.chdir(originalCwd);
     }

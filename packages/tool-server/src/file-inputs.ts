@@ -396,9 +396,13 @@ async function resolveOne(
     if (meta.presentOnHost) {
       return { value: wire.path, meta };
     }
+    // No stat: the client found nothing at the path, or predates tar uploads.
     throw new FileInputError(
-      `Path "${wire.path}" does not exist on the tool-server host and no upload was provided. ` +
-        `Update argent to a version that supports uploads for remote sessions.`
+      wire.size == null
+        ? `Path "${wire.path}" was not found. The client sent no file for it, and the ` +
+            `tool-server host has none at that path.`
+        : `Path "${wire.path}" does not exist on the tool-server host and no upload was provided. ` +
+            `Update argent to a version that supports uploads for remote sessions.`
     );
   }
 
