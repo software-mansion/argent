@@ -9,6 +9,7 @@ import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -42,7 +43,7 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
 const MAX_BODY_SIZE = 1000;
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -127,7 +128,9 @@ Returns an error message string if the requestId is not found — use view-netwo
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
-    return { inspector: `NetworkInspector:${params.port}:${canonicalDeviceId(params.device_id)}` };
+    return {
+      inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
+    };
   },
   async execute(services, params) {
     if (resolveDevice(params.device_id).platform === "chromium") {

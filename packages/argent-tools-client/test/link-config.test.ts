@@ -2,21 +2,19 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // link-config.ts captures LINK_DIR/LINK_FILE from `homedir()` at module load.
 // Same HOME-redirection pattern as launcher-state.test.ts so all writes land in
 // an isolated temp dir and the developer's real ~/.argent/link.json is safe.
 let linkConfig: typeof import("../src/link-config.js");
 let TEST_HOME: string;
+let restoreHome: () => void;
 let LINK_FILE: string;
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-link-config-test-"));
-  // os.homedir() — which STATE_DIR and the link file are built from — reads
-  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
-  // is inert there and these tests operate on the real ~/.argent.
-  process.env.HOME = TEST_HOME;
-  process.env.USERPROFILE = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   linkConfig = await import("../src/link-config.js");
   LINK_FILE = linkConfig.LINK_PATHS.LINK_FILE;
@@ -24,6 +22,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
@@ -186,27 +185,6 @@ describe("getResolvedToolsUrl — precedence chain", () => {
     writeFileSync(LINK_FILE, "{ not json", "utf8");
     const resolved = await linkConfig.getResolvedToolsUrl();
     expect(resolved).toEqual({ url: null, source: "none" });
-  });
-});
-
-describe("isRemoteRouted", () => {
-  it("returns false when neither env nor link is configured", async () => {
-    expect(await linkConfig.isRemoteRouted()).toBe(false);
-  });
-
-  it("returns true when a link file is configured", async () => {
-    await linkConfig.writeLinkConfig(sampleConfig);
-    expect(await linkConfig.isRemoteRouted()).toBe(true);
-  });
-
-  it("returns true when ARGENT_TOOLS_URL is set (regardless of link presence)", async () => {
-    process.env.ARGENT_TOOLS_URL = "http://override.example:9000";
-    expect(await linkConfig.isRemoteRouted()).toBe(true);
-  });
-
-  it("is gated on a *valid* link file — corrupt JSON does not count as routed", async () => {
-    writeFileSync(LINK_FILE, "{ not json", "utf8");
-    expect(await linkConfig.isRemoteRouted()).toBe(false);
   });
 });
 

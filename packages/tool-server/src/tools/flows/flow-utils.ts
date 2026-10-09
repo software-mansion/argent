@@ -1,13 +1,18 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_NAME_PATTERN,
+  completeRunExtension,
   type ClientFileDirective,
+  type OnDiskSpelling,
+  type ToolContext,
 } from "@argent/registry";
 import {
   hasVisibleText,
@@ -24,15 +29,42 @@ import {
 // match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
+
+/**
+ * The refusal for a Windows client path on a macOS or Linux tool-server, which
+ * reads `C:\work` as relative: the path is absolute where it was written, so
+ * "must be absolute" would blame its author for a mistake they did not make.
+ * Undefined for every other path.
+ */
+export function windowsPathRefusal(label: string, value: string): string | undefined {
+  if (process.platform === "win32" || path.isAbsolute(value) || !path.win32.isAbsolute(value)) {
+    return undefined;
+  }
+  return (
+    `${label} "${value}" is a Windows path. A tool-server on macOS or Linux cannot open ` +
+    `Windows paths. Use argent on the computer that runs the tool-server, or start the ` +
+    `tool-server on the Windows computer.`
+  );
+}
 
 /**
  * Validate a caller-supplied `project_root`. Absolute and no ".." are what keep
  * a recording's files inside the project the agent named.
  */
 export function assertValidProjectRoot(root: string): void {
+  const windows = windowsPathRefusal("project_root", root);
+  if (windows) {
+    throw new FailureError(windows, {
+      error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
+      failure_stage: "flow_project_root_set",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
   if (!path.isAbsolute(root)) {
     throw new FailureError(
       `project_root must be an absolute path (got "${root}"). ` +
@@ -135,9 +167,11 @@ export function getFlowPath(projectRoot: string, name: string): string {
  * A case-SENSITIVE volume (ext4) keeps `Login` and `login` apart on its own:
  * `realpath` there simply fails to find the variant spelling.
  *
- * "client" mode needs no special case: the caller's root does not exist on this
- * host, so both `realpath` calls fail and the fallback returns
- * {@link getFlowPath} unchanged.
+ * "client" mode needs no special case. When the caller's root does not exist
+ * on this host, both `realpath` calls fail and the fallback returns
+ * {@link getFlowPath} unchanged. When it does (a link to 127.0.0.1, or a
+ * client path this host also has), the key is this host's real path, which is
+ * harmless: the key is only an identity.
  */
 // `async`, so `getFlowPath`'s validation throws land as a rejection like every
 // other failure here rather than synchronously out of a promise-returning call.
@@ -171,57 +205,62 @@ async function resolveFlowKey(projectRoot: string, name: string): Promise<string
 const keyResolutions = new Map<string, Promise<string>>();
 
 /**
- * How the flow file a caller addressed is spelled in its own directory.
- * `listed`: the directory carries that basename byte-for-byte — or its listing
- * could not be read at all (an execute-only parent lets stat through while
- * refusing readdir), which vouches for nothing and so must refuse nothing.
- * `case_folded`: no entry carries it, but one differs only by case — what a
- * case-insensitive filesystem (APFS, NTFS) opens for a spelling nothing on disk
- * has. `absent`: nothing matches even case-insensitively. `addressable` says
- * whether the on-disk spelling is one the flow layer's own ladders accept, so a
- * caller can be pointed at it instead of at a rename.
+ * Where a recording's YAML is persisted:
+ * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
+ *                directly; the caller's project root is on this machine and
+ *                the recording did not start over a link.
+ * - `"client"` — the recording started over a link (`argent link` or
+ *                `ARGENT_TOOLS_URL`, a link to 127.0.0.1 included), or the
+ *                caller's project root is NOT on this machine. The flow lives
+ *                in memory here and every mutating tool returns a
+ *                {@link ClientFileDirective} so the *client* writes the YAML
+ *                into the agent's project.
  */
-type OnDiskSpelling =
-  | { state: "listed" }
-  | { state: "case_folded"; actual: string; addressable: boolean }
-  | { state: "absent" };
+export type FlowPersistMode = "host" | "client";
 
 /**
- * Classify the supplied basename against `dir`'s listing. One classifier serves
- * every route that turns a caller's spelling into a flow identity — replay's
- * `flow_path` and `name` (flow-run.ts) and the recorder's two nested
- * flow-execute targets (flow-add-step.ts) — so they can never drift apart in
- * which spellings they accept.
- *
- * readdir, not realpath: realpath rewrites a symlinked flow to its target's
- * name, and a flow deliberately runs — and composes — under the link's own
- * name. Every call site hands a pure-ASCII basename (flow-name charset +
- * ".yaml"), so Unicode-normalizing filesystems cannot make the comparison lie.
- *
- * What an `absent` verdict means is the caller's to decide, and they differ:
- * `flow_path` arrives with the boundary's stat already vouching for the file,
- * so a listing that lacks it is itself the phantom-spelling bug, while a `name`
- * may simply not name a saved flow — an ordinary missing-flow error the later
- * read reports far better than a casing complaint could.
+ * The refusal of a flow passed by `name` whose file a case-insensitive
+ * filesystem matched under another spelling: the name keys the report and
+ * `__baselines__/`, and no directory entry carries it.
  */
-export async function classifyOnDiskSpelling(dir: string, base: string): Promise<OnDiskSpelling> {
-  const entries = await fs.readdir(dir).catch(() => null);
-  if (entries === null || entries.includes(base)) return { state: "listed" };
-  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
-  if (actual === undefined) return { state: "absent" };
-  return { state: "case_folded", actual, addressable: FLOW_FILE_NAME_PATTERN.test(actual) };
+export function flowNameCasingError(
+  flowName: string,
+  spelling: Extract<OnDiskSpelling, { state: "case_folded" }>
+): FailureError {
+  // Hand back a name only when one can reach the file: an on-disk .YAML is
+  // addressable by no name at all (the name route always builds
+  // "<name>.yaml"), it is omitted from `argent flow list`, and flow_path
+  // refuses it too.
+  const recovery = spelling.addressable
+    ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
+    : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
+      `lowercase .yaml.`;
+  return new FailureError(
+    `Invalid flow name "${flowName}": no saved flow is named "${flowName}.yaml" — this ` +
+      `filesystem matched it case-insensitively to "${spelling.actual}", so the flow name ` +
+      `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
+      recovery,
+    {
+      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+      failure_stage: "flow_name_casing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 }
 
 /**
- * Where a recording's YAML is persisted:
- * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
- *                directly; the caller's project root is on this machine.
- * - `"client"` — the caller's project root is NOT on this machine (remote
- *                tool-server). The flow lives in memory here and every mutating
- *                tool returns a {@link ClientFileDirective} so the *client*
- *                writes the YAML into the agent's project.
+ * Whether a recorder call is over a link, for every recorder check that asks.
+ * A `client` take is (also one an older client started), and so is a call
+ * that carries the link header, also into a take that started in `host` mode.
+ * Over a link the recorder accepts only what a replay over the same link runs.
  */
-export type FlowPersistMode = "host" | "client";
+export function isLinkedRecorderCall(
+  session: RecordingSession,
+  ctx: Pick<ToolContext, "linked"> | undefined
+): boolean {
+  return session.persist === "client" || ctx?.linked === true;
+}
 
 /**
  * One recorded step's warning, plus the anchor saying WHICH step it judged.
@@ -267,7 +306,8 @@ export interface RecordingSession {
   /**
    * Absolute path of the flow file as the CALLER knows it. A real host path in
    * "host" mode; in "client" mode it names a file on the client's machine and
-   * is only echoed back inside the directive.
+   * is echoed back inside the directive. Over a link it also anchors what the
+   * recorder asks the client to resolve beside the recording.
    */
   filePath: string;
   /** In-memory flow content — authoritative in "client" mode. */
@@ -337,18 +377,7 @@ const recordings = new Map<string, RecordingSession>();
 const flowFileLocks = new Map<string, Promise<unknown>>();
 
 async function withFlowLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = flowFileLocks.get(key) ?? Promise.resolve();
-  // `previous` is always an already-swallowed promise, so a failed holder can
-  // never wedge or reject the chain.
-  const run = previous.then(() => fn());
-  const held = run.catch(() => {});
-  flowFileLocks.set(key, held);
-  // Drop the entry once this holder is the last one, so the map does not grow
-  // by one permanent entry per flow ever recorded.
-  void held.then(() => {
-    if (flowFileLocks.get(key) === held) flowFileLocks.delete(key);
-  });
-  return run;
+  return withKeyedLock(flowFileLocks, key, fn);
 }
 
 /**
@@ -564,18 +593,25 @@ export function __flowFileLockCountForTesting(): number {
 export type ChromiumLaunch = string | { path: string; args?: string[] };
 
 /**
+ * An ios `launch` target: a bundle id (bare string) or a bundle id plus the
+ * arguments passed to the app process at launch, on a simulator or a physical
+ * iPhone.
+ */
+export type IosLaunch = string | { app: string; args?: string[] };
+
+/**
  * The app a `launch` step starts from scratch. A bare string applies to every
  * platform; the map targets a specific id per platform (chromium takes a path —
- * see {@link ChromiumLaunch}). `native` is a shared id for the installed-app
- * platforms (ios/android/vega), overridden by a specific `ios`/`android`/`vega`
- * key. A flow that BEGINS with a `launch` step is an e2e flow; one that doesn't
+ * see {@link ChromiumLaunch}), and `ios` may carry launch args ({@link IosLaunch}).
+ * `native` is a shared id for the installed-app platforms (ios/android/vega),
+ * overridden by a specific `ios`/`android`/`vega` key. A flow that BEGINS with a `launch` step is an e2e flow; one that doesn't
  * is a fragment.
  */
 export type Launch =
   | string
   | {
       native?: string;
-      ios?: string;
+      ios?: IosLaunch;
       android?: string;
       vega?: string;
       chromium?: ChromiumLaunch;
@@ -650,7 +686,8 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
  * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
- * drift (flow-device's `FlowPlatform` aliases it).
+ * drift. Narrower than {@link SelectablePlatform}, which a RUN is selected
+ * with: a guard is authored text, and `ios-remote` is not writable.
  */
 export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
 
@@ -717,7 +754,20 @@ export type FlowStep =
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
-  | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector };
+  /**
+   * Fold or unfold a foldable simulator: exactly one of `posture` and `angle`.
+   * The `fold` tool's own contract; the runner dispatches it to that tool.
+   */
+  | { kind: "fold"; posture?: FoldPosture; angle?: number }
+  | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
+  | { kind: "script"; path: string; timeout?: number };
+
+const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
+export type FoldPosture = (typeof FOLD_POSTURES)[number];
+
+function isFoldPosture(value: unknown): value is FoldPosture {
+  return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
+}
 
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
@@ -733,7 +783,7 @@ export type FlowFile = {
  * line per authored step no matter where the run ended: `execSteps`' hard-stop,
  * device-free and cancellation gates, plus `reportBlockSkipped` recursing into a
  * nested block. The fifth is the upload preflight's walk, where a block it
- * cannot see hides a nested `run:`/`snapshot` from validation. The last two,
+ * cannot see hides a nested `run:`, `script:` or `snapshot` from validation. The last two,
  * `flowRequiresDevice` and `flowScopesDevice` (flow-device.ts), read children to
  * resolve the flow's device decisions from a block's body — dead while `when`
  * is the only block kind, and the guard against a later one.
@@ -760,14 +810,45 @@ export function isBlockStep(step: FlowStep): step is BlockStep {
   return isBlockDirectiveKey(step.kind);
 }
 
+export function precedesLeadingLaunch(step: FlowStep): boolean {
+  switch (step.kind) {
+    case "echo":
+    case "script":
+      return true;
+    case "launch":
+    case "run":
+    case "when":
+    case "tool":
+    case "tap":
+    case "long-press":
+    case "swipe":
+    case "type":
+    case "await":
+    case "assert":
+    case "idle":
+    case "wait":
+    case "scroll-to":
+    case "pinch":
+    case "rotate":
+    case "fold":
+    case "snapshot":
+      return false;
+    default: {
+      const unclassified: never = step;
+      void unclassified;
+      return false;
+    }
+  }
+}
+
 /**
- * A flow is end-to-end iff it BEGINS by launching an app — its first step
- * (ignoring `echo` narration) is a `launch`. Such a flow controls its own start
- * state, so it must not declare an `executionPrerequisite`. Everything else is a
- * fragment.
+ * A flow is end-to-end iff it BEGINS by launching an app — the first step a
+ * launch cannot sit behind ({@link precedesLeadingLaunch}) is a `launch`. Such
+ * a flow controls its own start state, so it must not declare an
+ * `executionPrerequisite`. Everything else is a fragment.
  */
 function isE2eFlow(flow: FlowFile): boolean {
-  const first = flow.steps.find((s) => s.kind !== "echo");
+  const first = flow.steps.find((s) => !precedesLeadingLaunch(s));
   return first?.kind === "launch";
 }
 
@@ -776,6 +857,9 @@ function isE2eFlow(flow: FlowFile): boolean {
  * ios/android/vega a specific key wins, else the shared `native` id. For
  * chromium this returns the app *path* (never `native`) — chromium booters want
  * {@link chromiumLaunchSpec}, which also carries the CLI args.
+ *
+ * The platform is read as an authoring key ({@link authoringPlatform}), so a
+ * remote simulator uses the flow's `ios` entry.
  */
 export function appIdForPlatform(launch: Launch | undefined, platform: string): string | null {
   if (launch === undefined) return null;
@@ -785,8 +869,24 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
     if (c === undefined) return null;
     return typeof c === "string" ? c : c.path;
   }
-  const v = (launch as Record<string, string | undefined>)[platform];
+  const key = authoringPlatform(platform);
+  if (key === "ios") {
+    const i = launch.ios;
+    if (i !== undefined) return typeof i === "string" ? i : i.app;
+    return launch.native ?? null;
+  }
+  const v = (launch as Record<string, string | undefined>)[key];
   return v ?? launch.native ?? null;
+}
+
+/**
+ * The launch args an ios `{ app, args }` entry declares, or undefined when it
+ * declares none (a bare-string launch, a bare ios id, or no ios key at all).
+ */
+export function iosLaunchArgs(launch: Launch | undefined): string[] | undefined {
+  if (launch === undefined || typeof launch === "string") return undefined;
+  const i = launch.ios;
+  return i !== undefined && typeof i !== "string" ? i.args : undefined;
 }
 
 /**
@@ -941,7 +1041,11 @@ type YamlStep =
   | { "scroll-to": YamlScrollBody }
   | { pinch: { on?: YamlSelector; scale: number } }
   | { rotate: { on?: YamlSelector; by: number } }
-  | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } };
+  | { fold: YamlFoldBody }
+  | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
+  | { script: { path: string; timeout?: number } };
+
+type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
   executionPrerequisite?: string;
@@ -1086,6 +1190,32 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   return out;
 }
 
+// C0, DEL and C1.
+// eslint-disable-next-line no-control-regex
+const INLINE_UNSAFE = /[\u0000-\u001f\u007f-\u009f]/g;
+const INLINE_SHORT: Record<string, string> = {
+  "\b": "\\b",
+  "\t": "\\t",
+  "\n": "\\n",
+  "\f": "\\f",
+  "\r": "\\r",
+};
+
+/**
+ * A value going inline into a one-line label, with its control characters
+ * spelled the way JSON spells them: a raw newline in a selector field splits a
+ * report step across two lines, and a raw escape byte repaints the reader's
+ * terminal. ONLY the control characters — a backslash in a regex source or an
+ * identifier is content, and doubling it would print a pattern nobody could
+ * copy back into the .yaml.
+ */
+export function escapeInline(value: string): string {
+  return value.replace(
+    INLINE_UNSAFE,
+    (c) => INLINE_SHORT[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
+}
+
 /**
  * Render a selector for a human-readable message (failure reasons, recording
  * warnings). The internal `loose` flag is dropped.
@@ -1100,7 +1230,9 @@ export function describeSelector(s: FlowSelector): string {
     // file uses. A regex matcher prints in /slashes/ so it can't be misread as
     // a literal.
     .map(([k, v]) =>
-      k === "textMatches" ? `text=/${v}/` : `${k === "identifier" ? "id" : k}="${v}"`
+      k === "textMatches"
+        ? `text=/${escapeInline(String(v))}/`
+        : `${k === "identifier" ? "id" : k}=${JSON.stringify(String(v))}`
     )
     .join(" ");
   // The universal selector prints as CSS spells it, so a relation-only target
@@ -1512,6 +1644,17 @@ function toYamlStep(step: FlowStep): YamlStep {
           ? { on: selectorToYaml(step.selector), by: step.by }
           : { by: step.by },
       };
+    case "fold": {
+      // The bare form: parseFold takes exactly one of posture and angle (and
+      // accepts the map spelling), so every parsed step comes back bare; the
+      // map is only for a step that breaks that invariant.
+      if (step.posture !== undefined && step.angle === undefined) return { fold: step.posture };
+      if (step.angle !== undefined && step.posture === undefined) return { fold: step.angle };
+      const body: Exclude<YamlFoldBody, FoldPosture | number> = {};
+      if (step.posture !== undefined) body.posture = step.posture;
+      if (step.angle !== undefined) body.angle = step.angle;
+      return { fold: body };
+    }
     case "snapshot": {
       // A name-only snapshot sugars to a bare string.
       if (step.maxMismatch === undefined && step.cropOn === undefined) {
@@ -1524,14 +1667,25 @@ function toYamlStep(step: FlowStep): YamlStep {
       if (step.cropOn !== undefined) body.cropOn = selectorToYaml(step.cropOn);
       return { snapshot: body };
     }
-    case "tool":
-    default: {
+    case "script": {
+      const body: { path: string; timeout?: number } = { path: step.path };
+      if (step.timeout !== undefined) body.timeout = step.timeout;
+      return { script: body };
+    }
+    case "tool": {
       const y: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
         tool: step.name,
       };
       if (Object.keys(step.args).length > 0) y.args = step.args;
       if (step.delayMs !== undefined) y.delayMs = step.delayMs;
       return y;
+    }
+    default: {
+      const unserialized: never = step;
+      void unserialized;
+      throw new Error(
+        `internal: no YAML spelling for step kind "${(unserialized as FlowStep).kind}"`
+      );
     }
   }
 }
@@ -1547,10 +1701,12 @@ const MAX_ENTRY_RENDER_CHARS = 200;
 
 function badEntry(raw: unknown, detail: string): never {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
-  // throw and mask the validation message.
+  // throw and mask the validation message. It also returns the *value*
+  // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
+  // declared `string` return type hides.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw);
+    rendered = JSON.stringify(raw) ?? String(raw);
   } catch {
     rendered = "[cyclic entry]";
   }
@@ -2121,14 +2277,53 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
 }
 
 /**
- * The platform set, spelled once: launch maps, `when: { platform }` guards
- * ({@link WhenPlatform}), flow-device's `FlowPlatform`, and flow-run's
- * `platform` param enum all derive from this tuple.
+ * The platforms an AUTHOR can name in a flow file: launch-map keys and
+ * `when: { platform }` guards ({@link WhenPlatform}).
  */
-export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+
+/**
+ * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
+ * flow-run's `platform` param. `ios-remote` is selectable but deliberately not
+ * writable: a flow says what it drives, not which machine hosts the simulator,
+ * so `when:` and launch maps stay on {@link LAUNCH_PLATFORMS}.
+ */
+export const SELECTABLE_PLATFORMS = [...LAUNCH_PLATFORMS, "ios-remote"] as const;
+export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
+
+/**
+ * The platform a flow AUTHOR names, for a device the runner resolved.
+ *
+ * `ios-remote` is an iOS simulator reached over the sim-remote tunnel: same OS,
+ * same app, same UI. Only the host differs, and a flow file names neither host
+ * nor device — so every surface that reads what the author wrote folds it to
+ * `ios`, which is why `ios-remote` stays out of {@link LAUNCH_PLATFORMS}.
+ *
+ * Deliberately NOT applied where the question is "which machine am I driving?":
+ * device selection ({@link SELECTABLE_PLATFORMS}, `resolveFlowDevice`, the
+ * `platform` run param) and service refs / transports all keep the real
+ * platform.
+ */
+export function authoringPlatform(platform: string): string {
+  return platform === "ios-remote" ? "ios" : platform;
+}
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
+
+/**
+ * YAML reads an unquoted `5` or `true` as a number or boolean, not a string.
+ * Name that launch arg and say to quote it instead of the generic launch error.
+ */
+function rejectUnquotedLaunchArg(raw: unknown, args: unknown[], where: string): void {
+  const i = args.findIndex((a) => typeof a === "number" || typeof a === "boolean");
+  if (i === -1) return;
+  const v = String(args[i]);
+  badEntry(
+    raw,
+    `${where}.args[${i}] is a ${typeof args[i]} (${v}); quote it so it stays a string: "${v}"`
+  );
+}
 
 /**
  * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
@@ -2141,8 +2336,29 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
     rejectUnknownKeys({ launch: { chromium: raw } }, b, ["path", "args"], "launch.chromium");
     if (typeof b.path !== "string" || b.path.length === 0) return null;
     if (b.args === undefined) return { path: b.path };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { chromium: raw } }, b.args, "launch.chromium");
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
     return { path: b.path, args: b.args as string[] };
+  }
+  return null;
+}
+
+/**
+ * Parse an ios launch value: a bundle id (bare string) or `{ app, args? }`.
+ * Returns null when the shape is invalid (caller reports the launch error).
+ */
+function parseIosLaunch(raw: unknown): IosLaunch | null {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const b = raw as Record<string, unknown>;
+    rejectUnknownKeys({ launch: { ios: raw } }, b, ["app", "args"], "launch.ios");
+    if (typeof b.app !== "string" || b.app.length === 0) return null;
+    if (b.args === undefined) return { app: b.app };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { ios: raw } }, b.args, "launch.ios");
+    if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
+    return { app: b.app, args: b.args as string[] };
   }
   return null;
 }
@@ -2159,7 +2375,7 @@ function parseLaunch(raw: unknown): Launch {
     if (keys.length > 0) {
       const out: {
         native?: string;
-        ios?: string;
+        ios?: IosLaunch;
         android?: string;
         vega?: string;
         chromium?: ChromiumLaunch;
@@ -2173,6 +2389,13 @@ function parseLaunch(raw: unknown): Launch {
             break;
           }
           out.chromium = c;
+        } else if (k === "ios") {
+          const i = parseIosLaunch(b[k]);
+          if (i === null) {
+            valid = false;
+            break;
+          }
+          out.ios = i;
         } else if (typeof b[k] === "string" && (b[k] as string).length > 0) {
           (out as Record<string, string>)[k] = b[k] as string;
         } else {
@@ -2187,7 +2410,7 @@ function parseLaunch(raw: unknown): Launch {
     { launch: raw },
     `launch needs an app id (bare string) or a per-platform map ` +
       `({ native | ${LAUNCH_PLATFORMS.filter((p) => p !== "chromium").join(" | ")}: <app id>, ` +
-      `chromium: <app path> | { path, args } })`
+      `ios: { app, args }, chromium: <app path> | { path, args } })`
   );
 }
 
@@ -2209,7 +2432,9 @@ export const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "scroll-to",
   "pinch",
   "rotate",
+  "fold",
   "snapshot",
+  "script",
 ];
 
 /**
@@ -2502,6 +2727,64 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
   return step;
 }
 
+const FOLD_SHAPE_HINT =
+  `fold takes a posture (${FOLD_POSTURES.join(", ")}), an angle in degrees (0-180), or an ` +
+  `options map — e.g. fold: open, fold: 120, fold: { angle: 120 }`;
+
+function parseFoldAngle(value: unknown, entry: unknown, what: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 180) {
+    badEntry(entry, `${what} must be a number of degrees between 0 (closed) and 180 (open)`);
+  }
+  return value;
+}
+
+/**
+ * Parse a `fold` body: a bare posture (`fold: open`), a bare angle
+ * (`fold: 120`), or an options map with exactly one of `posture` and `angle`.
+ * The same contract as the `fold` tool the step dispatches to.
+ */
+function parseFold(body: unknown, entry: unknown): FlowStep {
+  if (typeof body === "string") {
+    if (!isFoldPosture(body)) badEntry(entry, FOLD_SHAPE_HINT);
+    return { kind: "fold", posture: body };
+  }
+  if (typeof body === "number") {
+    return { kind: "fold", angle: parseFoldAngle(body, entry, "fold") };
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    badEntry(entry, FOLD_SHAPE_HINT);
+  }
+  const obj = body as Record<string, unknown>;
+  rejectUnknownKeys(entry, obj, ["posture", "angle"], "fold");
+  const hasPosture = obj.posture !== undefined;
+  const hasAngle = obj.angle !== undefined;
+  if (hasPosture === hasAngle) {
+    badEntry(entry, "fold takes exactly one of posture and angle");
+  }
+  const step: FlowStep = { kind: "fold" };
+  if (hasPosture) {
+    if (!isFoldPosture(obj.posture)) {
+      badEntry(entry, `fold.posture must be one of ${FOLD_POSTURES.join(", ")}`);
+    }
+    step.posture = obj.posture;
+  }
+  if (hasAngle) step.angle = parseFoldAngle(obj.angle, entry, "fold.angle");
+  return step;
+}
+
+/**
+ * The `fold:` step a recorded `fold` tool call becomes, or undefined when the
+ * call's args are not the directive's (the recorder then keeps a raw
+ * `tool: fold` step, as it does for any call it cannot rewrite).
+ */
+export function foldStepFromArgs(args: Record<string, unknown>): FlowStep | undefined {
+  try {
+    return parseFold(args, { fold: args });
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Parse a `when:` guard — exactly one condition key: a UI condition
  * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a static
@@ -2669,9 +2952,9 @@ export function runTargetName(target: string): string {
  * `../shared/login.yaml` is a documented layout. Only the SHAPE is checked here;
  * nothing about WHERE the path lands. At run time execRunStep joins it onto the
  * containing flow file's own directory and resolves the result with kernel
- * semantics (see canonicalFlowPath in flow-run.ts) — deliberately not a lexical
- * collapse, since a `..` after a symlinked component names the parent of the
- * link's target, not of the spelling. There is no path fence there: a target
+ * semantics (see canonicalFlowPath in flow-file-refs.ts) — deliberately not a
+ * lexical collapse, since a `..` after a symlinked component names the parent of
+ * the link's target, not of the spelling. There is no path fence there: a target
  * runs if the tool server can read it, and fails with that file's own ENOENT if
  * it cannot.
  */
@@ -2722,32 +3005,331 @@ function parseRunTarget(raw: unknown, value: unknown): string {
   return target;
 }
 
+function parseScriptStep(raw: unknown, body: unknown): FlowStep {
+  if (typeof body === "string") {
+    badEntry(
+      raw,
+      "a `script` step takes a map, not a bare path — write `script: { path: scripts/seed.mjs }`"
+    );
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    badEntry(raw, "script needs { path, timeout? }, e.g. `script: { path: scripts/seed.mjs }`");
+  }
+  const b = body as Record<string, unknown>;
+  rejectUnknownKeys(raw, b, ["path", "timeout"], "script");
+  const step: Extract<FlowStep, { kind: "script" }> = {
+    kind: "script",
+    path: parseScriptPath(raw, b.path),
+  };
+  if (b.timeout !== undefined) step.timeout = parseScriptTimeout(raw, b.timeout);
+  return step;
+}
+
+export function parseScriptPath(raw: unknown, value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    badEntry(
+      raw,
+      "a `script` step needs a `path` — a .mjs file path relative to this flow's file, e.g. `script: { path: scripts/seed.mjs }`"
+    );
+  }
+  if (value.includes("\\")) {
+    badEntry(raw, "a `script` path uses forward slashes, e.g. `path: scripts/seed.mjs`");
+  }
+  // posix.isAbsolute catches `/...`; the drive-letter test catches the win32
+  // forms it does not — absolute ("C:/") and drive-RELATIVE ("C:foo", which
+  // resolves against that drive's own current directory).
+  if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
+    badEntry(raw, "a `script` path must be relative to the flow file that references it");
+  }
+  if (!value.endsWith(".mjs")) {
+    if (value.toLowerCase().endsWith(".mjs")) {
+      badEntry(raw, "a `script` path must use the lowercase .mjs extension");
+    }
+    badEntry(
+      raw,
+      "a `script` path must end in .mjs — the extension pins the module type whatever the project's package.json says"
+    );
+  }
+  if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
+    badEntry(
+      raw,
+      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .mjs`
+    );
+  }
+  return value;
+}
+
 /**
- * Complete a `run:` target's optional `.yaml` extension: `run: login` means
- * `login.yaml` beside the containing flow file, exactly as the spelled-out form
- * does. This is the compatibility path for flows written when a `run:` target
- * was a saved-flow NAME looked up in `.argent/flows` — a bare name resolves to
- * the same file it always did, since those flows sit in that one directory.
+ * The `timeout` a `script` step may carry, in milliseconds. The finiteness
+ * check is not redundant: YAML `.inf` is typeof number and greater than 0. The
+ * executor clamps whatever survives to the host's configured maximum and says
+ * so in the step's report.
  *
- * Completed HERE rather than at resolution time so exactly one spelling reaches
- * everything downstream: canonicalFlowPath's read, the fragment's on-disk casing
- * check, the report's `target`, and runDisplayName — which slices a fixed
- * `".yaml".length` off the target and would truncate a real path segment given a
- * bare one (see flow-run.ts). Re-serializing a parsed flow therefore writes the
- * completed spelling back, which is the intended one-way migration.
+ * The floor is {@link MIN_SCRIPT_TIMEOUT_MS} — the same constant the executor
+ * floors the host's `scripts.maxTimeoutMs` to, read from one place rather than
+ * spelled twice: a parse floor above the run-time one would refuse a limit the
+ * host would have honoured, and one below it would accept a limit the host
+ * silently raises. Its value is sized from the fixed cost of the step rather
+ * than from the script — a fork, a Node boot, the runner preload and the
+ * script's own import all run before the first line the limit is meant to
+ * bound.
  *
- * The test is the CANDIDATE's basename, not the supplied value's: basename()
- * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
- * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate cannot
- * name — a wrong extension (`login.yml`), a mis-cased one (`Login.YAML`), an
- * empty target — leaves the value untouched for the caller's extension
- * diagnostics, which name the real problem better than a silent completion to
- * `login.yml.yaml` could.
+ * No other millisecond option shares that floor. Each draws its bound from the
+ * work it measures: `await`'s `timeout` takes 1
+ * and `wait` takes 0, `idle`'s `timeout` carries a 600ms floor derived from the
+ * settle reads it has to fit, and `idle.stableFor` a bounded integer range.
+ * What this one measures starts a PROCESS first, so a limit under the floor
+ * buys no short step — it buys one that ends at its time limit, or one whose
+ * verdict tracks how busy the host was, and either way an errored script step
+ * stops the flow. `timeout: 0.5` is the extreme of it:
+ * Node holds no timer under 1ms, so the report quotes back a limit that never
+ * ran. Refused here, deviceless and naming the key, rather than after the run
+ * has started.
  */
-function completeRunExtension(value: string): string {
-  if (value.endsWith(".yaml")) return value;
-  const candidate = `${value}.yaml`;
-  return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
+export function parseScriptTimeout(raw: unknown, value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    badEntry(raw, "script.timeout needs a positive number of milliseconds (e.g. `timeout: 30000`)");
+  }
+  if (value < MIN_SCRIPT_TIMEOUT_MS) {
+    badEntry(
+      raw,
+      `script.timeout is in milliseconds and needs at least ${MIN_SCRIPT_TIMEOUT_MS} — the step ` +
+        `spends its first tens of milliseconds starting the Node process, so ${value} leaves the ` +
+        `script too little to run in and errors the step (30 seconds is \`timeout: 30000\`)`
+    );
+  }
+  return value as number;
+}
+
+const OUTPUT_REFERENCE_MARKER = "{{output:";
+
+interface StepField {
+  where: string;
+  /**
+   * A second spelling of the same field, when the parse cannot tell which one
+   * the author wrote. Set only by the gesture targets — see
+   * {@link gestureTargetPath}.
+   */
+  altWhere?: string;
+  value: string;
+}
+
+/**
+ * A selector's own string leaves, addressed by their YAML spellings.
+ *
+ * `patterns` adds the regex spelling `text: { matches }`, which the walk
+ * otherwise skips — see {@link outputReferenceFields} for the one context that
+ * asks for it.
+ */
+function* selectorFields(sel: FlowSelector, where: string, patterns = false): Generator<StepField> {
+  if (sel.text !== undefined) yield { where: `${where}.text`, value: sel.text };
+  // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
+  if (patterns && sel.textMatches !== undefined) {
+    yield { where: `${where}.text.matches`, value: sel.textMatches };
+  }
+  if (sel.identifier !== undefined) yield { where: `${where}.id`, value: sel.identifier };
+  if (sel.role !== undefined) yield { where: `${where}.role`, value: sel.role };
+  for (const relation of SELECTOR_RELATIONS) {
+    const nested = sel[relation];
+    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`, patterns);
+  }
+}
+
+/**
+ * Every string leaf of a `tool` step's args, addressed by its own path.
+ *
+ * `args:` is the one step body the parser does not constrain, so a YAML anchor
+ * can make it cyclic (`args: &a { self: *a }`) and the walk has to survive one
+ * rather than blow the stack. `seen` holds the containers on the current path
+ * only: a node reached twice down two different branches is two real leaves and
+ * must be yielded twice, while a node that contains itself is dropped at the
+ * point it closes the loop.
+ */
+function* argFields(
+  value: unknown,
+  where: string,
+  seen: Set<object> = new Set()
+): Generator<StepField> {
+  if (typeof value === "string") {
+    yield { where, value };
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const [i, item] of value.entries()) yield* argFields(item, `${where}[${i}]`, seen);
+  } else if (value instanceof Map) {
+    // `%YAML 1.1` + `!!omap` materializes a real Map, whose entries
+    // Object.entries reports as none.
+    for (const [key, item] of value) yield* argFields(item, `${where}.${String(key)}`, seen);
+  } else if (value instanceof Set) {
+    // `!!set` members ARE the values, so they carry no key of their own and the
+    // path stays the container's.
+    for (const item of value) yield* argFields(item, where, seen);
+  } else {
+    for (const [key, item] of Object.entries(value))
+      yield* argFields(item, `${where}.${key}`, seen);
+  }
+  seen.delete(value);
+}
+
+/**
+ * Where a gesture step's target sits in the file: `tap.on` for the options
+ * form, `tap` for the bare one.
+ *
+ * `pinch` and `rotate` have only the options form, so those are certain. `tap`
+ * and `long-press` take both, and the parsed step keeps no record of which was
+ * written — `duration` is optional in long-press's options form and `times: 1`
+ * normalizes to `undefined`, so a step carrying neither could have been spelled
+ * either way. Naming one spelling there would name a path that is not in the
+ * author's file, so `alt` carries the other and the refusal offers both.
+ */
+function gestureTargetPath(
+  step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>
+): { path: string; alt?: string } {
+  if (step.kind === "pinch" || step.kind === "rotate") return { path: `${step.kind}.on` };
+  const option = step.kind === "tap" ? step.times : step.duration;
+  if (option !== undefined) return { path: `${step.kind}.on` };
+  return { path: step.kind, alt: `${step.kind}.on` };
+}
+
+function* conditionFields(
+  kind: string,
+  cond: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  },
+  patterns = false
+): Generator<StepField> {
+  yield* selectorFields(
+    cond.selector,
+    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`,
+    patterns
+  );
+  if (cond.expectedText !== undefined && (patterns || cond.textMatch !== "matches")) {
+    yield {
+      where: cond.textMatch ? `${kind}.text.${cond.textMatch}` : `${kind}.text`,
+      value: cond.expectedText,
+    };
+  }
+}
+
+function* outputReferenceFields(step: FlowStep): Generator<StepField> {
+  switch (step.kind) {
+    case "echo":
+      yield { where: "echo", value: step.message };
+      return;
+    case "tool":
+      yield* argFields(step.args, "args");
+      return;
+    case "type":
+      yield* selectorFields(step.into, "type.into");
+      yield { where: "type.text", value: step.text };
+      return;
+    case "await":
+    case "assert":
+      yield* conditionFields(step.kind, step);
+      return;
+    case "when":
+      // Patterns included HERE and nowhere else. `{{output:…}}` is on no
+      // resolver list, so a regex carrying one matches nothing — which a `tap`,
+      // an `await` or an `assert` reports on its first run. A `when` does not:
+      // an unmatchable guard is simply not met, the block is skipped, and the
+      // run is green. Same reasoning, and same field set, as the `{{secret:`
+      // scan in parseWhenCondition.
+      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition, true);
+      return;
+    case "tap":
+    case "long-press":
+    case "pinch":
+    case "rotate": {
+      if (!step.selector) return;
+      const { path, alt } = gestureTargetPath(step);
+      for (const field of selectorFields(step.selector, path)) {
+        // Every path this walk yields opens with `path`, so the alternative
+        // spelling is that prefix swapped for the other one.
+        yield alt ? { ...field, altWhere: `${alt}${field.where.slice(path.length)}` } : field;
+      }
+      return;
+    }
+    // Both ends are optional and either may be a bare point, so each is
+    // guarded on its own. Neither spelling is ambiguous the way a `tap`'s is:
+    // `from`/`to` exist only in the options form, so there is no `altWhere`.
+    case "swipe":
+      if (step.from && "selector" in step.from) {
+        yield* selectorFields(step.from.selector, "swipe.from");
+      }
+      if (step.to && "selector" in step.to) {
+        yield* selectorFields(step.to.selector, "swipe.to");
+      }
+      return;
+    case "scroll-to":
+      yield* selectorFields(step.target, "scroll-to.target");
+      if (step.within) yield* selectorFields(step.within, "scroll-to.within");
+      return;
+    case "snapshot":
+      if (step.cropOn) yield* selectorFields(step.cropOn, "snapshot.cropOn");
+      return;
+    case "script":
+      return;
+    case "launch":
+    case "run":
+    case "idle":
+    case "wait":
+    case "fold":
+      return;
+    default: {
+      const unclassified: never = step;
+      void unclassified;
+      return;
+    }
+  }
+}
+
+/**
+ * Whether this step, or one nested in it, spells an output reference.
+ *
+ * {@link assertNoOutputReferences} judges a WHOLE flow, and a host-mode append
+ * re-parses the file before it pushes — so its refusal can name a step that was
+ * already there (a mid-recording hand edit) rather than the one being appended.
+ * A caller that reports the refusal asks this which of the two it is holding.
+ */
+export function holdsOutputReference(step: FlowStep): boolean {
+  for (const field of outputReferenceFields(step)) {
+    if (field.value.includes(OUTPUT_REFERENCE_MARKER)) return true;
+  }
+  return blockSteps(step)?.some(holdsOutputReference) ?? false;
+}
+
+function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void {
+  steps.forEach((step, i) => {
+    const at = [...trail, i + 1];
+    for (const field of outputReferenceFields(step)) {
+      if (!field.value.includes(OUTPUT_REFERENCE_MARKER)) continue;
+      const rendered =
+        field.value.length > MAX_ENTRY_RENDER_CHARS
+          ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
+          : field.value;
+      const locator = field.altWhere
+        ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
+        : `\`${field.where}\``;
+      throw new FailureError(
+        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} uses unsupported template syntax. ` +
+          `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`,
+        {
+          error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+          failure_stage: "flow_output_reference",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+    const inner = blockSteps(step);
+    if (inner) assertNoOutputReferences(inner, at);
+  });
 }
 
 const SWIPE_DIRECTIONS: readonly SwipeDirection[] = ["up", "down", "left", "right"];
@@ -3059,6 +3641,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("rotate" in raw) return parseRotate((raw as { rotate: unknown }).rotate, raw);
 
+  if ("fold" in raw) return parseFold((raw as { fold: unknown }).fold, raw);
+
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;
     // A misspelled `maxMissmatch` would silently drop the tolerance.
@@ -3109,6 +3693,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     return step;
   }
 
+  if ("script" in raw) return parseScriptStep(raw, (raw as { script: unknown }).script);
+
   if ("tool" in raw) {
     const r = raw as { tool: string; args?: Record<string, unknown>; delayMs?: number };
     const step: FlowStep = { kind: "tool", name: r.tool, args: r.args ?? {} };
@@ -3134,11 +3720,11 @@ export function serializeFlow(flow: FlowFile): string {
   return yamlStringify(doc, { blockQuote: false });
 }
 
-/** Validate cross-field invariants that are checkable without other files. */
 export function validateFlow(flow: FlowFile): void {
+  assertNoOutputReferences(flow.steps);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
-      "A flow that starts with a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch to make it a fragment, or drop executionPrerequisite.",
+      "A flow whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
       {
         error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
         failure_stage: "flow_file_validate",
@@ -3613,15 +4199,35 @@ export type FlowSavedTo = string | ClientFileDirective;
  * step still lands in the file it was recorded for, and only the NEXT call on
  * the key reports the recording gone.
  */
-function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+/**
+ * Whether this session still holds its key, and if not, how it lost it.
+ *
+ * `restarted` means a DIFFERENT session occupies the key; `gone` means the key
+ * is empty, which is either a finish or the MAX_RECORDINGS backstop — the
+ * server cannot tell those apart after the fact. {@link assertSessionStillLive}
+ * asks this for a caller about to WRITE, and throws on anything but `live`. A
+ * caller whose step already ran and has nothing to write still has a report to
+ * make, and every claim in it about the flow file — that it is unchanged, and
+ * how many steps it holds — is about a file another take may already own.
+ * Outside the flow-file lock the answer can go stale the moment it returns, so
+ * such a caller reads it to qualify a sentence, never to decide a write.
+ */
+export function recordingSessionState(session: RecordingSession): "live" | "restarted" | "gone" {
   const current = recordings.get(session.key);
-  if (current === session) return;
+  if (current === session) return "live";
+  return current ? "restarted" : "gone";
+}
+
+function assertSessionStillLive(session: RecordingSession, step: FlowStep): void {
+  const state = recordingSessionState(session);
+  if (state === "live") return;
   // A key that is occupied by a DIFFERENT session was restarted; an empty key
   // was either finished or evicted by the MAX_RECORDINGS backstop, which the
   // server cannot tell apart after the fact — so name both rather than guess.
-  const why = current
-    ? "it was restarted while this step was running, so the step belongs to the discarded take"
-    : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
+  const why =
+    state === "restarted"
+      ? "it was restarted while this step was running, so the step belongs to the discarded take"
+      : "it was finished (or dropped by the concurrent-recording cap) while this step was running";
   // Do NOT send the agent to flow-start-recording here. It truncates
   // unconditionally, and on every branch there is something to lose: the live
   // take that just claimed this key, or the finished flow sitting on disk.
@@ -3632,17 +4238,19 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
   // because the key is empty, and `startRecordingSession` registers under this
   // key's lock — so naming a competing agent that does not exist would send the
   // reader after the wrong cause.
-  const whatIsAtStake = current
-    ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
-      `under a fresh name rather than restarting this one.`
-    : `The key is now free, but the finished take is on disk and flow-start-recording truncates ` +
-      `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
-  const recovery =
-    `Nothing was added to the flow file` +
-    (step.kind === "echo"
+  const whatIsAtStake =
+    state === "restarted"
+      ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
+        `under a fresh name rather than restarting this one.`
+      : `The key is now free, but the finished take is on disk and flow-start-recording truncates ` +
+        `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
+  const alreadySpent =
+    step.kind === "echo"
       ? ". "
-      : ", but the step itself already ran on the device — repeating it repeats that action. ") +
-    whatIsAtStake;
+      : step.kind === "script"
+        ? ", but the script already ran — repeating it repeats whatever it did. "
+        : ", but the step itself already ran on the device — repeating it repeats that action. ";
+  const recovery = `Nothing was added to the flow file` + alreadySpent + whatIsAtStake;
   throw new FailureError(
     `Recording of "${session.name}" in ${session.projectRoot} is no longer active — ${why}. ` +
       recovery,

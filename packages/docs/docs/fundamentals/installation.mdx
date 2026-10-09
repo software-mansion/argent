@@ -2,6 +2,7 @@
 sidebar_position: 2
 sidebar_label: Installation
 title: Installation
+description: Install Argent with npx @swmansion/argent init. The wizard installs the package. It registers the MCP server in your editor. It copies the agent skills into your workspace.
 sidebar_custom_props:
   icon: download
 ---
@@ -26,6 +27,14 @@ In a pnpm project, where npm's `devEngines` check may refuse to run `npx`:
 pnpm dlx @swmansion/argent@latest init
 ```
 
+The `argent` package on npm is a short alias for `@swmansion/argent`. It runs the same `@swmansion/argent` version:
+
+```bash
+npx argent@latest init
+```
+
+The alias is only for `npx`. To install Argent globally, install `@swmansion/argent`.
+
 The installation wizard:
 
 - installs `@swmansion/argent` globally,
@@ -45,6 +54,17 @@ The installation wizard:
 npm install -g @swmansion/argent
 argent init
 ```
+
+## Install from a GitHub release
+
+Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.28.0.tgz`. It is the same file npm serves. Download it and install it globally:
+
+```bash
+npm install -g ./swmansion-argent-0.28.0.tgz
+argent init
+```
+
+Argent's own dependencies still come from your configured npm registry.
 
 ## Share Argent with your team
 
@@ -75,6 +95,7 @@ Argent runs Android emulators on Linux, but a few host-side knobs matter:
   # log out and back in so the new group takes effect
   ```
 
+- **glibc version.** The gesture tools, `screenshot`, `rotate` and `paste` start the bundled `simulator-server` binary. This binary needs glibc 2.39 or newer, for example Ubuntu 24.04 or Debian 13. On an older host, the binary does not start. These tools then fail with ``version `GLIBC_2.39' not found``. Run `ldd --version` to see the glibc version of the host.
 - **GPU mode.** Argent picks `-gpu swiftshader` on Linux for universal compatibility. Override it with `ARGENT_EMULATOR_GPU_MODE=host` if you have verified that hardware GL works on your machine.
 - **System image.** Prefer the `default` or `google_apis` variants of `x86_64` images. Always pick `x86_64` on Intel and AMD hosts, since ARM images run through QEMU translation and are dramatically slower.
 - **AVD resources.** Stock 2 GB / 4 vCPU AVDs can be CPU-starved by a concurrent Gradle build. Bump `hw.ramSize`, `hw.cpu.ncore` and `vm.heapSize` in `~/.android/avd/<name>.avd/config.ini`.

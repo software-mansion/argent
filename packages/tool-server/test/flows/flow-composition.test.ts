@@ -7,19 +7,21 @@ import {
   FLOW_FILE_NAME_PATTERN,
   FLOW_NAME_PATTERN,
   getFailureSignal,
+  MAX_RUN_DEPTH,
   type Registry,
 } from "@argent/registry";
 import {
   createRunFlowTool,
   flowLaunchGateReason,
   LAUNCH_TO_VERDICT_MS,
-  MAX_RUN_DEPTH,
   NATIVE_READY_TIMEOUT_MS,
   type FlowRunResult,
 } from "../../src/tools/flows/flow-run";
-import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import { reinstallAppTool } from "../../src/tools/reinstall-app";
+import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
 
 // Stub the snapshot differ: the baseline-anchoring test asserts only WHERE the
 // runner points it (root flowsDir + root flow name), not the diffing itself.
@@ -1419,8 +1421,8 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-SHOUTY-FILE");
   });
 
-  it("rejects run: composition when the root flow was uploaded (no shared filesystem)", async () => {
-    // A remote client's flow arrives as content and is materialized to a temp
+  it("rejects run: composition when the root flow was uploaded", async () => {
+    // A linked client's flow arrives as content and is materialized to a temp
     // file — the files its run: paths reference stayed on the client, and a
     // same-named file on the server must never be read in their place. The
     // rejection is a preflight contract error, so no step (e.g. a leading
@@ -1463,7 +1465,7 @@ describe("flow composition (run:)", () => {
           },
         }
       )
-    ).rejects.toThrow(/co-located/i);
+    ).rejects.toThrow("step 2: run: login.yaml");
     // Preflight, not mid-run: nothing was dispatched to the device.
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
@@ -1493,7 +1495,7 @@ describe("flow composition (run:)", () => {
           },
         }
       )
-    ).rejects.toThrow(/co-located/i);
+    ).rejects.toThrow("step 1 of the when: block at step 1: run: login.yaml");
   });
 
   it("rejects an uploaded flow whose run: sits two when: blocks deep", async () => {
@@ -1539,7 +1541,9 @@ describe("flow composition (run:)", () => {
         (e: unknown) => e
       );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain('run: composition ("run: login.yaml")');
+    expect((err as Error).message).toContain(
+      "step 1 of the when: block at step 1 of the when: block at step 1: run: login.yaml"
+    );
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
     // Preflight, not mid-run: nothing was dispatched to the device.
     expect(registry.invokeTool).not.toHaveBeenCalled();
@@ -1579,7 +1583,7 @@ describe("flow composition (run:)", () => {
           },
         }
       )
-    ).rejects.toThrow(/run: composition/);
+    ).rejects.toThrow("step 2: run: login.yaml");
     // Preflight, not post-boot: no Electron instance was spawned and no
     // device was resolved before the rejection.
     expect(bootElectronApp).not.toHaveBeenCalled();
@@ -1626,15 +1630,15 @@ describe("flow composition (run:)", () => {
     // A rejection — not a { notice, executionPrerequisite } return: on a
     // failure this prints the notice that leaked through instead.
     expect(outcome).toBeInstanceOf(Error);
-    expect((outcome as Error).message).toContain('run: composition ("run: login.yaml")');
+    expect((outcome as Error).message).toContain("step 1: run: login.yaml");
     expect(getFailureSignal(outcome)?.failure_stage).toBe("flow_upload_run_composition");
   });
 
-  it("rejects an uploaded flow quoting the first run:'s as-written directory-qualified path", async () => {
-    // The guard's quote is the author's remediation pointer: with two
+  it("rejects an uploaded flow quoting each run:'s as-written directory-qualified path", async () => {
+    // The guard's list is the author's remediation pointer: with two
     // same-stem steps (`run: ios/login.yaml`, then `run: android/login.yaml`)
-    // the throw fires on the FIRST offender, and only the as-written
-    // directory says which of the two lines it means. Reducing the target to
+    // every offender is listed, and only the as-written directory says which
+    // of the two lines each entry means. Reducing the target to
     // its basename stem (runTargetName — what the report attribution sites
     // use, and what `step.flow` carried before targets kept their spelling)
     // would print `run: login`, a string appearing nowhere in the flow and
@@ -1673,19 +1677,19 @@ describe("flow composition (run:)", () => {
         (e: unknown) => e
       );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain('run: composition ("run: ios/login.yaml")');
+    expect((err as Error).message).toContain("step 1: run: ios/login.yaml");
+    expect((err as Error).message).toContain("step 2: run: android/login.yaml");
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_run_composition");
     // Preflight, not mid-run: nothing was dispatched to the device.
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("allows run: composition for a co-located flow_file resolved in place", async () => {
-    // The everyday co-located client: the flow_file boundary resolves the
-    // exact ${project_root}/.argent/flows/${name}.yaml path on a shared
-    // filesystem (presentOnHost, NOT an upload). This return is what carries
-    // the whole feature — misclassifying it as an upload would reject every
-    // local run: composition with the co-located contract error, so the
-    // upload-rejection tests above need this inverse pin.
+  it("allows run: composition for a flow_file resolved in place", async () => {
+    // The everyday unlinked client: the flow_file boundary resolves the exact
+    // ${project_root}/.argent/flows/${name}.yaml path in place (presentOnHost,
+    // NOT an upload). This return is what carries the whole feature —
+    // misclassifying it as an upload would reject every local run:
+    // composition, so the upload-rejection tests above need this inverse pin.
     await writeFlow("login", {
       executionPrerequisite: "",
       steps: [{ kind: "echo", message: "composed fragment ran" }],
@@ -1761,7 +1765,7 @@ describe("flow composition (run:)", () => {
         (e: unknown) => e
       );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain('snapshot step ("snapshot: home")');
+    expect((err as Error).message).toContain("step 2: snapshot: home");
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
     // Preflight, not mid-run: nothing was dispatched to the device and the
     // differ was never pointed at the temp materialization dir.
@@ -1802,9 +1806,266 @@ describe("flow composition (run:)", () => {
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_snapshot_baseline");
   });
 
-  it("allows a snapshot step for a co-located flow_file resolved in place", async () => {
+  it("lists every run:, script: and snapshot step of an uploaded flow in one rejection", async () => {
+    // One rejection names the whole repair: an author fixing the flow for a
+    // link sees every step that reads beside the file, in walk order, rather
+    // than one step per run. The stage is the first offender's.
+    vi.mocked(runSnapshot).mockClear();
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "echo", message: "before" },
+          { kind: "run", flow: "frag.yaml" },
+          { kind: "echo", message: "between" },
+          { kind: "script", path: "seed.mjs" },
+          { kind: "snapshot", name: "title", maxMismatch: 0.5 },
+        ],
+      }),
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("not self-contained");
+    expect(message).toContain(
+      "  - step 2: run: frag.yaml\n  - step 4: script: { path: seed.mjs }\n  - step 5: snapshot: title"
+    );
+    // validation is what lets a directory run move on to the next flow.
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_run_composition",
+      error_kind: "validation",
+    });
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(vi.mocked(runSnapshot)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an uploaded flow whose nested tool: flow-execute names a flow on the client", async () => {
+    // The raw step the recorder keeps for every nested flow in a remote
+    // recording. invokeSubTool forwards no file inputs, so without the
+    // preflight the nested run opens `<project_root>/.argent/flows/login.yaml`
+    // on THIS host after step 1 drove the device: ENOENT, or — when the same
+    // path exists here — the server's own copy, reported as a pass.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+          {
+            kind: "tool",
+            name: "flow-execute",
+            args: { name: "login", project_root: "/client", prerequisiteAcknowledged: true },
+          },
+        ],
+      }),
+      "utf8"
+    );
+
+    const registry = mockRegistry();
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("not self-contained");
+    expect(message).toContain("  - step 2: tool: flow-execute (name: login)");
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_nested_flow",
+      error_kind: "validation",
+    });
+    // Preflight, not mid-run: neither the tap nor the nested run was dispatched.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  /** Run an uploaded flow with these steps and return what it threw. */
+  async function rejectUpload(steps: FlowStep[], registry = mockRegistry()): Promise<unknown> {
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(uploadedPath, serializeFlow({ executionPrerequisite: "", steps }), "utf8");
+    return createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+  }
+
+  it("rejects an uploaded flow whose nested tool: flow-execute names a flow_path", async () => {
+    const registry = mockRegistry();
+    const err = await rejectUpload(
+      [
+        { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+        {
+          kind: "tool",
+          name: "flow-execute",
+          args: { flow_path: "/client/.argent/flows/login.yaml", project_root: "/client" },
+        },
+      ],
+      registry
+    );
+    expect((err as Error).message).toContain(
+      "  - step 2: tool: flow-execute (flow_path: /client/.argent/flows/login.yaml)"
+    );
+    expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("files an upload whose first offending step records a flow under the recording stage", async () => {
+    const err = await rejectUpload([
+      {
+        kind: "tool",
+        name: "flow-start-recording",
+        args: { name: "rec", project_root: "/client" },
+      },
+      { kind: "run", flow: "frag.yaml" },
+    ]);
+    expect((err as Error).message).toContain(
+      "  - step 1: tool: flow-start-recording (records a flow)\n  - step 2: run: frag.yaml"
+    );
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_recording_tool",
+      error_kind: "validation",
+    });
+  });
+
+  it("files an upload whose first offending step is a script under the script stage", async () => {
+    const err = await rejectUpload([
+      { kind: "echo", message: "before" },
+      { kind: "script", path: "seed.mjs" },
+      { kind: "run", flow: "frag.yaml" },
+    ]);
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_script_step",
+      error_kind: "validation",
+    });
+  });
+
+  it("rejects an uploaded flow whose tool: steps take files or record a flow", async () => {
+    // A tool: step gets its arguments as plain strings, so a file argument
+    // names a client path that this host opens on its own disk: ENOENT after
+    // the earlier steps drove the device, or the server's own file reported
+    // as a pass. reinstall-app uninstalls the app before it fails.
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [
+          { kind: "tool", name: "tap", args: { x: 0.5, y: 0.5 } },
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { baselinePath: "/client/base.png", currentPath: "/client/now.png" },
+          },
+          // Fills none of the declared file inputs, so the check does not list it
+          // (screenshot-diff itself refuses this call when it runs).
+          {
+            kind: "tool",
+            name: "screenshot-diff",
+            args: { captureBaseline: true, captureCurrent: true },
+          },
+          { kind: "tool", name: "reinstall-app", args: { appPath: "/client/app.apk" } },
+          { kind: "tool", name: "flow-add-step", args: { name: "rec", command: "tap" } },
+        ],
+      }),
+      "utf8"
+    );
+
+    const tools: Record<string, { fileInputs?: unknown }> = {
+      "screenshot-diff": screenshotDiffTool,
+      "reinstall-app": reinstallAppTool,
+    };
+    const registry = mockRegistry();
+    vi.mocked(registry.getTool).mockImplementation((id: string) => tools[id] as never);
+    const err = await createRunFlowTool(registry)
+      .execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+      .then(
+        () => null,
+        (e: unknown) => e
+      );
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain(
+      "  - step 2: tool: screenshot-diff (/client/base.png, /client/now.png)\n" +
+        "  - step 4: tool: reinstall-app (/client/app.apk)\n" +
+        "  - step 5: tool: flow-add-step (records a flow)\n"
+    );
+    expect(message).not.toContain("step 3");
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "flow_upload_tool_file_input",
+      error_kind: "validation",
+    });
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("allows a snapshot step for a flow_file resolved in place", async () => {
     // The inverse pin for the snapshot upload rejection above: the everyday
-    // co-located client (presentOnHost, NOT an upload) keeps its durable
+    // unlinked client (presentOnHost, NOT an upload) keeps its durable
     // baseline directory beside the flow file, so the snapshot path still runs.
     await writeFlow("main", {
       executionPrerequisite: "",
@@ -2281,11 +2542,14 @@ describe("flow composition (run:)", () => {
 
     expect(registry.invokeTool).toHaveBeenCalledWith(
       "flow-execute",
-      expect.objectContaining({ device: DEVICE })
+      expect.objectContaining({ device: DEVICE }),
+      expect.objectContaining({ flowStack: expect.any(Array) })
     );
+    // The same three-argument shape, so a call with the stale id would match.
     expect(registry.invokeTool).not.toHaveBeenCalledWith(
       "flow-execute",
-      expect.objectContaining({ device: "STALE-ID" })
+      expect.objectContaining({ device: "STALE-ID" }),
+      expect.objectContaining({ flowStack: expect.any(Array) })
     );
     expect(result.ok).toBe(true);
   });
@@ -2373,14 +2637,15 @@ describe("flow composition (run:)", () => {
     // must fail rather than let selectors silently fall back to the AX tree.
     // (An unresolvable service fails fast; a resolvable-but-never-connected
     // one hits the same guard after the connect timeout.)
+    const resolveService = vi.fn(async () => {
+      throw new Error("native-devtools unavailable");
+    });
     const registry = {
       invokeTool: vi.fn(async (id: string) =>
         id === "list-devices" ? { devices: [] } : { ok: true }
       ),
       getTool: vi.fn(() => undefined),
-      resolveService: vi.fn(async () => {
-        throw new Error("native-devtools unavailable");
-      }),
+      resolveService,
     } as unknown as Registry;
 
     const result = asRun(
@@ -2401,6 +2666,157 @@ describe("flow composition (run:)", () => {
     // and the step's reason is the only place any of them surfaces.
     expect(result.steps[0].reason).toContain("native-devtools unavailable");
     expect(result.ok).toBe(false);
+    expect(resolveService).toHaveBeenCalled();
+  });
+
+  it("errors the launch step with the helper's own reason on Android", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.acme.app" },
+        { kind: "echo", message: "should never run" },
+      ],
+    });
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService: vi.fn(async () => {
+        throw new Error(
+          "the argent android helper could not start on emulator-5554 even after reinstalling it: " +
+            "am instrument exited before becoming ready: INSTRUMENTATION_STATUS: Error=Unable to find instrumentation info"
+        );
+      }),
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: "emulator-5554" }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
+    // The factory's reason, not a boolean turned back into generic advice.
+    expect(result.steps[0].reason).toContain("the argent android helper is unavailable:");
+    expect(result.steps[0].reason).toContain("Error=Unable to find instrumentation info");
+    expect(result.ok).toBe(false);
+  });
+
+  it("waits out the gate for a com.apple.* launch, then withholds the verdict", async () => {
+    // The gate ties the launched bundle to the app a later selector step
+    // auto-targets, so the wait runs for every bundle (see `treeSourceGate`).
+    // Only the verdict is withheld for `com.apple.*`: the first selector read
+    // reports the missing hierarchy instead.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        // The bundle prefix match is case-insensitive.
+        { kind: "launch", app: "com.APPLE.Preferences" },
+        { kind: "echo", message: "should never run" },
+      ],
+    });
+    const resolveService = vi.fn(async () => ({ isConnected: () => false }));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService,
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
+    // The wait ran: a per-bundle skip would never touch the service.
+    expect(resolveService).toHaveBeenCalled();
+    // The pass is clean: no connection failure for a hierarchy the gate cannot
+    // wait for.
+    expect(result.steps[0].reason ?? "").not.toMatch(/could not connect to native devtools/i);
+    expect(result.steps[0].reason ?? "").not.toMatch(/stale or duplicate argent server/i);
+    // The launch spends the post-launch settle plus the full 15s
+    // NATIVE_DEVTOOLS_CONNECT_BUDGET_MS, so the 30s budget covers both on a
+    // loaded host.
+  }, 30000);
+
+  it("runs a coordinate-only flow green against an app that never connects", async () => {
+    // A raw `tool: restart-app` step dispatches through the registry, not
+    // `runLaunch`, so it never reaches `treeSourceGate`. Point taps and `tool:`
+    // steps resolve no selectors.
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "restart-app", args: { bundleId: "com.apple.Preferences" } },
+        {
+          kind: "tool",
+          name: "await-ui-element",
+          args: { condition: "visible", selector: { text: "General" } },
+        },
+        { kind: "tap", x: 0.5, y: 0.35 },
+      ],
+    });
+    const resolveService = vi.fn(async () => ({ isConnected: () => false }));
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService,
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "tool:pass",
+      "tool:pass",
+      "tap:pass",
+    ]);
+    expect(result.ok).toBe(true);
+    // No step gates on the connection this flow never gets. A gesture without a
+    // selector still settles the screen first, so the tap goes out unsettled and
+    // warns.
+    expect(result.steps[2].warning).toContain("without settling the screen");
+  });
+
+  it("passes the gate for a com.apple.* app that does connect", async () => {
+    // Argent treats `com.apple.*` as non-injectable, but simulator system apps
+    // do connect after a restart-app (measured on iOS 18.3 and 26.5).
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: "com.apple.Preferences" },
+        { kind: "echo", message: "runs once the system app has connected" },
+      ],
+    });
+    const registry = {
+      invokeTool: vi.fn(async (id: string) =>
+        id === "list-devices" ? { devices: [] } : { ok: true }
+      ),
+      getTool: vi.fn(() => undefined),
+      resolveService: vi.fn(async () => ({ isConnected: () => true })),
+    } as unknown as Registry;
+
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:pass", "echo:pass"]);
+    expect(result.ok).toBe(true);
   });
 
   // Argent refuses an Apple system app a flow tree, so its hierarchy never
@@ -2718,8 +3134,12 @@ describe("flow composition (run:)", () => {
       );
 
       const reason = result.steps[2].reason ?? "";
-      expect(reason).toMatch(/Apple system app/);
-      expect(reason).not.toMatch(/Launch or restart the app first/);
+      // Both reasons say "Apple system app", so that phrase no longer separates
+      // the two paths. Only the launched-id diagnosis NAMES the bundle: it is
+      // handed the id the tool step preserved. Drop that id and the read falls
+      // through to auto-targeting, whose no-connection text names no app.
+      expect(reason).toMatch(/com\.apple\.Preferences is an Apple system app/);
+      expect(reason).not.toMatch(/no app is connected to native devtools/);
     }
   );
 
@@ -2743,7 +3163,12 @@ describe("flow composition (run:)", () => {
       )
     );
 
-    expect(result.steps[2].reason ?? "").toMatch(/Launch or restart the app first/);
+    // A flow selector step cannot name a bundleId, so `resolveNativeTargetApp`'s
+    // own "Launch or restart the app first" advice is dropped. The auto-target
+    // reason that replaces it names no bundle and reports nothing is connected.
+    const reason = result.steps[2].reason ?? "";
+    expect(reason).toMatch(/no app is connected to native devtools/);
+    expect(reason).not.toMatch(/platform binary with library validation/);
   });
 
   // The measured half says what is wrong with the app; without this half a flow
@@ -3178,6 +3603,34 @@ describe("flow validation", () => {
         "executionPrerequisite: nope\nsteps:\n  - echo: starting\n  - launch: com.acme.app\n"
       )
     ).toThrow(/must not declare executionPrerequisite/i);
+  });
+
+  it("a leading script does not hide the launch step from the e2e check", () => {
+    expect(() =>
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n  - script: { path: seed.mjs }\n  - launch: com.acme.app\n"
+      )
+    ).toThrow(/must not declare executionPrerequisite/i);
+  });
+
+  it("names the rule that classified the flow, not step 1", () => {
+    // The two tests above match only the half of the sentence the
+    // classification change left true. A launch admitted from BEHIND an
+    // `echo:`/`script:` is still the launch this refusal is about, so the
+    // sentence must not claim the flow "starts with" one, nor send the author
+    // after a "leading launch" they did not write first.
+    let message = "";
+    try {
+      parseFlow(
+        "executionPrerequisite: nope\n" +
+          "steps:\n  - script: { path: seed.mjs }\n  - launch: com.acme.app\n"
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("first step other than `echo:`/`script:` is a `launch`");
+    expect(message).not.toMatch(/starts with a launch step|leading launch/i);
   });
 
   it("rejects a path-unsafe snapshot name (no traversal into baseline path)", () => {

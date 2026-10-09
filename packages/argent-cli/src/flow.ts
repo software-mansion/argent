@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FLOW_NAME_PATTERN } from "@argent/registry";
+import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -39,13 +39,19 @@ export interface StepReport {
   depth?: number;
   /** Baseline key stem, on artifact-bearing snapshot steps. */
   snapshotKey?: string;
+  /** Set beside `snapshotKey` when a remote simulator took the capture; a local run shares that key. */
+  snapshotRemote?: boolean;
   /**
-   * Snapshot-step artifacts keyed by role (baseline/current/diff). Arrives as
+   * Step artifacts keyed by role: baseline/current/diff on a snapshot step,
+   * `screen` on a failed step that flow-run screenshotted. Arrives as
    * artifact handles; by render time each is a string — a durable local copy
-   * for the failed snapshots `--output` exports, otherwise the handle's
+   * for what `--output` exports, otherwise the handle's
    * server-side hostPath/filename — or null when a download failed.
    */
   artifacts?: Record<string, unknown>;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
+  durationMs?: number;
 }
 
 export interface FlowReport {
@@ -58,6 +64,8 @@ export interface FlowReport {
   skipped: number;
   errored: number;
   steps: StepReport[];
+  startedAt?: number;
+  durationMs?: number;
 }
 
 const STATUS_GLYPH: Record<StepReport["status"], string> = {
@@ -82,6 +90,14 @@ function stepIndent(depth: number | undefined): string {
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
 }
 
+function durationSuffix(ms: unknown): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "";
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return ` (${(tenths / 10).toFixed(1)}s)`;
+  const seconds = Math.round(ms / 1000);
+  return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
+}
+
 function printHelp(toStderr = false): void {
   const print = toStderr ? console.error : console.log;
   print(`Usage: argent flow <subcommand> [options]
@@ -99,21 +115,42 @@ Run a YAML flow without an LLM in the loop. \`run\` takes any of these forms:
 For a name and for a file path alike, the
 filename (minus .yaml) names the run's report and artifacts, so it must
 contain only letters, numbers, "_", or "-" — the same charset a name must
-match. A flow that begins with a \`launch\` step runs its app from scratch; any
-other flow (a fragment) runs against the device's current state — handy while
-authoring one. Exception: a fragment whose first step \`run:\`s a chromium e2e
+match. A flow is e2e when its first non-\`echo\`/\`script\` step is \`launch\`.
+Other flows are fragments and use the device's current state. Exception: a fragment whose first step \`run:\`s a chromium e2e
 flow boots that flow's app before step 1 — when that launch is unambiguously
 chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
 multi-platform launch auto-detects a device instead. Pass --device to attach to
 a running instance.
 
-A directory run prints only failing steps plus a final flow summary;
---recursive walks subdirectories too (dot-directories and node_modules are
-skipped). An invalid flow file fails alone and the batch continues; an infra
-error stops the batch and counts the remaining flows skipped.
+A directory run prints only the steps that need attention (each failure, each
+warning, and each script step's output), then its outcome. After the last flow
+it lists every failed flow with its reason and a command that re-runs that flow
+alone, then a final flow summary; --recursive walks subdirectories too
+(dot-directories and node_modules are skipped). A flow that fails its steps
+keeps the batch running, as does one the server rejects up front — an invalid
+file, or a device it cannot resolve. A transport failure, a rejection the server
+does not mark as validation, or a reply that is not a report stops the batch and
+counts the remaining flows skipped.
 
-Runs require the auto-started local tool server;
-ARGENT_TOOLS_URL and \`argent link\` routing are not supported.
+The CLI sends a run to its tool-server: the local one that starts
+automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
+a link, the CLI uploads these files and writes the new baselines that the run
+returns:
+  - the flow file and the run: fragments that it reaches
+  - each flow that a tool: flow-execute step names with name (a nested flow)
+  - the snapshot baselines of each run
+  - each .png or .yaml file that a tool: step takes as a file argument by an
+    absolute path
+The tool-server rejects the flow before the first step when the flow, a
+fragment or a nested flow has one of these steps:
+  - a script: step
+  - a tool: flow-execute step that does not name its flow with name and an
+    absolute project_root that has no .. segment
+  - a tool: step that records a flow
+  - a tool: step that takes a directory, an app or an output directory
+  - a tool: step whose tool builds a file path from several arguments
+  - a tool: step that names a relative path or a file other than .png or .yaml
+Without a link, all step kinds run.
 
 Subcommands:
   run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
@@ -123,9 +160,13 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega — narrow auto-detection
-  --update-baselines     Write/refresh screenshot baselines instead of diffing
+  --platform <p>         ios | android | chromium | vega | ios-remote — narrow
+                         auto-detection (ios never picks a remote simulator)
+  --update-baselines     Write/refresh screenshot baselines instead of diffing,
+                         also those of flows that tool: flow-execute steps run,
+                         unless such a step sets updateBaselines
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
+                         and failed-step screenshots (step-<n>-screen.png)
                          under <dir>/<flow>/ — a stable path for CI artifact
                          upload; a directory run keys nested flows as
                          <dir>/<subdir>/<flow>/. A different flow file with the
@@ -133,8 +174,10 @@ Options (run):
                          instead (with a warning), so no flow's evidence is
                          overwritten
   -r, --recursive        With a directory path, also run flows in subdirectories
-  --json                 Print the raw JSON report
-  --json-stream          Print progress and the final report as NDJSON (single flow only)
+  --json                 Print the flow's JSON report, or a directory run's JSON
+                         aggregate
+  --json-stream          Print each step and the final report as NDJSON (single
+                         flow only, never with --json)
   --help, -h             Show this help
   --                     End of options — only needed for a flow whose name
                          starts with "-" (\`argent flow run -- -nightly\`)
@@ -223,13 +266,16 @@ export function renderEchoLine(s: StepReport): string | undefined {
   return `  ${indent}› ${s.message}`;
 }
 
-export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
+function stepLabel(s: StepReport, topFlow: string): string {
   const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
   const what = s.tool ?? s.target;
-  const label = what ? `${s.kind} ${what}` : s.kind;
+  return `${what ? `${s.kind} ${what}` : s.kind}${where}`;
+}
+
+export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
-  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${label}${where}${reason}`;
+  return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${stepLabel(s, topFlow)}${durationSuffix(s.durationMs)}${reason}`;
 }
 
 /**
@@ -239,6 +285,19 @@ export function renderStepLine(s: StepReport, n: number, topFlow: string): strin
  */
 export function renderUnderStepLine(s: StepReport, n: number, text: string): string {
   return `${" ".repeat(5 + Math.max(2, String(n).length))}${stepIndent(s.depth)}${text}`;
+}
+
+export function renderScriptLogLines(s: StepReport, n: number): string[] {
+  const log = typeof s.scriptLog === "string" ? s.scriptLog : "";
+  const lines: string[] = [];
+  if (log) {
+    const body = log.endsWith("\n") ? log.slice(0, -1) : log;
+    for (const line of body.split("\n")) lines.push(renderUnderStepLine(s, n, `│ ${line}`));
+  }
+  if (s.scriptLogTruncated === true) {
+    lines.push(renderUnderStepLine(s, n, "│ … output truncated"));
+  }
+  return lines;
 }
 
 export function renderSummary(report: FlowReport, opts: { withDevice?: boolean } = {}): string {
@@ -255,7 +314,7 @@ export function renderSummary(report: FlowReport, opts: { withDevice?: boolean }
   const nothingCounted =
     report.ok && report.passed + report.failed + report.errored + report.skipped === 0;
   const note = nothingCounted ? " (no test steps)" : "";
-  return `${report.ok ? "PASS" : "FAIL"}${where} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}${note}`;
+  return `${report.ok ? "PASS" : "FAIL"}${where} — ${report.passed} passed, ${report.failed} failed, ${report.errored} errored, ${report.skipped} skipped${warningsNote}${note}${durationSuffix(report.durationMs)}`;
 }
 
 /**
@@ -286,6 +345,18 @@ export function renderArtifactLines(report: FlowReport): string[] {
  * A PASSING step carrying a warning needs attention too: renderSummary counts
  * every warning whatever its status, so skipping those printed "1 warning" with
  * the text nowhere on screen.
+ *
+ * A PASSING script step's log is the same case: it is the step's only output,
+ * every other report surface prints it whatever the status, and a seed script
+ * that ran here is what explains a later step that failed.
+ *
+ * So is the note such a step carries in `reason` — the host lowered the time
+ * limit the flow declared, or ran the script somewhere other than the
+ * project_root it was handed. Nothing else on the line reports that, and a
+ * script that writes nothing has no log to carry it in either: the flow ran
+ * under bounds it never asked for and the batch said only PASS. Restricted to
+ * `script`, because a passing `when` guard, snapshot or chromium launch also
+ * sets `reason`, and those narrate a result the summary already counts.
  */
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
@@ -293,9 +364,20 @@ export function renderFailedSteps(report: FlowReport): string[] {
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
-    if (s.status !== "fail" && s.status !== "error" && !s.warning) continue;
+    const scriptLog = renderScriptLogLines(s, n);
+    const scriptNote = s.kind === "script" && Boolean(s.reason);
+    if (
+      s.status !== "fail" &&
+      s.status !== "error" &&
+      !s.warning &&
+      !scriptNote &&
+      scriptLog.length === 0
+    ) {
+      continue;
+    }
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...scriptLog);
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
         if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
@@ -306,13 +388,62 @@ export function renderFailedSteps(report: FlowReport): string[] {
 }
 
 /** Flow-level verdict of a directory run, mirroring renderSummary's shape. */
-export function renderBatchSummary(counts: {
-  total: number;
-  passed: number;
-  failed: number;
-  skipped: number;
-}): string {
-  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped`;
+export function renderBatchSummary(
+  counts: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  },
+  durationMs?: number
+): string {
+  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
+}
+
+interface FailedFlow {
+  path?: string;
+  headline: string;
+  detail?: string;
+  rerun?: string;
+}
+
+/**
+ * Why a report failed: its first failing step, numbered as renderFailedSteps
+ * numbers it so the recap, the per-flow block, and a single rerun agree. The
+ * reason is wire data, so it is stringified the way renderStepLine's template
+ * does rather than trusted to be a string.
+ */
+export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
+  let n = 0;
+  for (const s of report.steps) {
+    if (s.kind === "echo") continue;
+    n++;
+    if (s.status === "fail" || s.status === "error") {
+      const detail = s.reason ? String(s.reason) : undefined;
+      return { headline: `step ${n} ${stepLabel(s, report.flow)}`, detail };
+    }
+  }
+  return { headline: "failed with no failing step" };
+}
+
+function renderFailedFlow(f: FailedFlow): string[] {
+  const lines = [`  ${STATUS_GLYPH.fail} ${f.path ? `${f.path} › ` : ""}${f.headline}`];
+  for (const line of f.detail?.split("\n") ?? []) if (line) lines.push(`    ${line}`);
+  if (f.rerun) lines.push(`    re-run: ${f.rerun}`);
+  return lines;
+}
+
+export function renderSingleFailure(report: FlowReport): string[] {
+  return report.ok ? [] : ["", ...renderFailedFlow(summarizeFailure(report))];
+}
+
+export function renderFailedFlows(failed: readonly FailedFlow[]): string[] {
+  if (failed.length === 0) return [];
+  return [
+    "",
+    `Failed flows (${failed.length})`,
+    ...failed.flatMap((f) => ["", ...renderFailedFlow(f)]),
+  ];
 }
 
 /**
@@ -335,19 +466,47 @@ const FLOWS_DIR = path.join(".argent", "flows");
 /**
  * Charset every POSIX shell passes through unquoted (shlex.quote's set).
  * Anything outside it — a space above all — would be word-split or interpreted
- * if pasted into a terminal.
+ * if pasted into a terminal. A leading "=" is excluded too: zsh (the macOS
+ * default shell) expands `=name` to the path of the command `name`.
  */
-const SHELL_SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const SHELL_SAFE_ARG = /^(?!=)[A-Za-z0-9_@%+=:,./-]+$/;
 
 /**
- * Quote a path for splicing into a "Did you mean: argent flow run …" hint,
- * whose whole value is being copy-pasteable. Single quotes are the one POSIX
- * form with no further escapes inside; an all-safe path stays bare so the hint
- * reads like what the user typed.
+ * Quote an argument for splicing into a printed `argent flow run …` command —
+ * a "Did you mean" hint or a batch `re-run:` line — whose whole value is being
+ * copy-pasteable. Single quotes are the one POSIX form with no further escapes
+ * inside; an all-safe argument stays bare so the command reads like what the
+ * user typed.
  */
 function shellQuoteArg(arg: string): string {
   if (SHELL_SAFE_ARG.test(arg)) return arg;
   return `'${arg.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * The command that runs one flow of a directory run alone, from the same
+ * working directory, with the same --device, --platform and --update-baselines,
+ * and an --output that exports to the directory the batch exported that flow
+ * to. A flow outside that directory keeps its absolute path, since `run`
+ * refuses ".." segments, and a path with a leading "-" gets "./" so the parser
+ * does not read it as an option.
+ */
+function rerunCommand(
+  flowPath: string,
+  rel: string,
+  projectRoot: string,
+  args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
+): string {
+  const pathArg = (p: string) => shellQuoteArg(p.startsWith("-") ? `.${path.sep}${p}` : p);
+  const fromCwd = path.relative(projectRoot, flowPath);
+  const shown =
+    path.isAbsolute(fromCwd) || fromCwd.split(/[\\/]+/).includes("..") ? flowPath : fromCwd;
+  const parts = ["argent flow run", pathArg(shown)];
+  if (args.device) parts.push("--device", shellQuoteArg(args.device));
+  if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
+  if (args.updateBaselines) parts.push("--update-baselines");
+  if (args.output) parts.push("--output", pathArg(path.join(args.output, path.dirname(rel))));
+  return parts.join(" ");
 }
 
 /**
@@ -542,11 +701,15 @@ async function claimExportDirName(
 }
 
 /**
- * Copy each failed snapshot's artifacts into a durable, globbable location —
+ * Copy each failed step's artifacts into a durable, globbable location —
  * `<outputDir>/<flow>/<key>-<role>.png`, where `<flow>` is the YAML filename
  * stem (derived from the CLI-resolved `flowPath`, never from the wire report)
  * and `<key>` is the snapshot's baseline key, so a run that hits several
- * flows/snapshots can't clobber itself. Stems are unique only per directory, so
+ * flows/snapshots can't clobber itself. A remote simulator's capture lands at
+ * `<key>-remote-<role>.png`, because its key is the one a local run of the same
+ * device class reports. The `screen` screenshot flow-run attaches to any other
+ * failed or errored step lands at `step-<n>-screen.png`, `<n>` being the step
+ * number the report prints (renderFailedSteps). Stems are unique only per directory, so
  * when a different flow file already owns `<flow>/` (see EXPORT_SOURCE_MARKER)
  * this run lands in the deterministic `<flow>-<pathhash>/` instead, and when
  * nothing at all can be claimed the export is skipped with a warning rather
@@ -559,7 +722,7 @@ async function claimExportDirName(
  * file's runs are indistinguishable to a separate process.
  *
  * This is the only place the CLI needs artifact bytes, so materialization
- * happens here, scoped to each failed snapshot's artifacts. Rewrites each
+ * happens here, scoped to each exported step's artifacts. Rewrites each
  * copied role's path in the report so the renderers and `--json` print the
  * durable location instead of a temp path. Failure-only: a clean pass carries
  * no artifacts, and a seeded baseline is already durable under
@@ -582,7 +745,7 @@ export async function exportFailureArtifacts(
     return;
   }
   // Claimed lazily, at the first byte actually about to be copied, because
-  // nothing earlier proves a byte will land at all: no failed snapshot, no
+  // nothing earlier proves a byte will land at all: no failed step, no
   // usable key, an empty artifacts object, or every role null after a failed
   // download. Claiming for any of them would leave a directory and a marker
   // behind for a run holding no artifacts — and the marker is not inert: it
@@ -590,17 +753,37 @@ export async function exportFailureArtifacts(
   // late is exactly as race-free: the atomicity is O_EXCL's, not the
   // ordering's, and the marker still precedes the first byte.
   let dir: string | null = null;
+  // Numbered as renderFailedSteps numbers steps, so `step-<n>-screen.png`
+  // names the step the report prints as step n.
+  let n = 0;
   for (const s of report.steps) {
-    if (s.kind !== "snapshot" || s.status !== "fail" || !s.artifacts) continue;
-    // Key first: keyFromBaselinePath needs the original baseline path, not a
-    // materialized rewrite. The pattern check also hardens that fallback, whose
-    // basename can still be ".." for a path ending in "/..".
-    const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
-    if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
-    // Materialize only this snapshot's artifacts — never the whole report.
-    const { result } = await materializeArtifacts(s.artifacts, ctx);
-    s.artifacts = result as Record<string, unknown>;
-    for (const [role, value] of Object.entries(s.artifacts)) {
+    if (s.kind !== "echo") n++;
+    if (!s.artifacts) continue;
+    let artifacts: Record<string, unknown>;
+    let fileName: (role: string) => string;
+    if (s.kind === "snapshot" && s.status === "fail") {
+      // Key first: keyFromBaselinePath needs the original baseline path, not a
+      // materialized rewrite. The pattern check also hardens that fallback, whose
+      // basename can still be ".." for a path ending in "/..".
+      const key = s.snapshotKey ?? keyFromBaselinePath(s.artifacts);
+      if (!key || !SAFE_ARTIFACT_NAME.test(key)) continue;
+      artifacts = s.artifacts;
+      // A remote simulator reports the key a local run of the same device class
+      // does, so its files carry a marker. Without it, a local run and a remote
+      // run exported into one --output overwrite each other's evidence.
+      const remote = s.snapshotRemote === true ? "-remote" : "";
+      fileName = (role) => `${key}${remote}-${role}.png`;
+    } else if ((s.status === "fail" || s.status === "error") && s.artifacts.screen != null) {
+      // The screenshot flow-run attaches to a failed leaf step.
+      artifacts = { screen: s.artifacts.screen };
+      fileName = () => `step-${n}-screen.png`;
+    } else {
+      continue;
+    }
+    // Materialize only this step's exported artifacts — never the whole report.
+    const { result } = await materializeArtifacts(artifacts, ctx);
+    Object.assign(s.artifacts, result);
+    for (const [role, value] of Object.entries(result as Record<string, unknown>)) {
       if (typeof value !== "string") continue; // null = failed materialization
       if (dir === null) {
         const dirName = await claimExportDirName(outputDir, flowPath, stem);
@@ -610,7 +793,7 @@ export async function exportFailureArtifacts(
         // next run to redirect away from.
         dir = path.join(outputDir, dirName);
       }
-      const dest = path.join(dir, `${key}-${role}.png`);
+      const dest = path.join(dir, fileName(role));
       // Even if the key and stem patterns are ever weakened, the copy stays
       // inside --output. Also covers `role`, the remaining server-supplied piece
       // of the destination. It judges the real destination, so it can only run
@@ -648,7 +831,7 @@ function keyFromBaselinePath(artifacts: Record<string, unknown>): string | null 
  * path would be pure waste against a remote tool-server. The renderers and
  * `--json` filter on `typeof v === "string"`, so a raw handle object would
  * vanish from the output. Runs after the optional `--output` export, which has
- * already replaced the failed snapshots' handles with durable local copies.
+ * already replaced the exported handles with durable local copies.
  */
 function resolveArtifactDisplayPaths(report: FlowReport): void {
   for (const s of report.steps) {
@@ -699,12 +882,14 @@ export function renderReport(report: FlowReport): string {
     n++;
     lines.push(renderStepLine(s, n, report.flow));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
+    lines.push(...renderScriptLogLines(s, n));
     if (s.artifacts && typeof s.artifacts === "object") {
       for (const [k, v] of Object.entries(s.artifacts)) {
         if (typeof v === "string") lines.push(renderUnderStepLine(s, n, `${k}: ${v}`));
       }
     }
   }
+  lines.push(...renderSingleFailure(report));
   lines.push(`\n${renderSummary(report)}`);
   return lines.join("\n");
 }
@@ -871,32 +1056,6 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
   return found.sort();
 }
 
-/**
- * CLI runs rely on the caller and tool-server sharing a filesystem: the runner
- * resolves `run:` targets against each containing flow file's directory and
- * reads/writes `__baselines__` beside the canonicalized root YAML — all on the
- * tool server's disk. The flow-execute tool stays remotely callable; only CLI
- * routing that cannot guarantee the shared filesystem is refused, deliberately
- * including single-file flows that could run remotely, since the CLI cannot
- * tell them apart without parsing the flow. Returns the refusal with its
- * recovery hint when remote routing is configured.
- */
-async function requireLocalToolServer(): Promise<string | undefined> {
-  const routing = await getResolvedToolsUrl();
-  if (routing.source === "none") return undefined;
-  // With ARGENT_TOOLS_URL set over an existing link file, unsetting only the
-  // env var re-routes through the shadowed link — the same refusal with the
-  // other source, so name both steps up front.
-  const recovery =
-    routing.source === "env"
-      ? routing.shadowedLink
-        ? "Unset ARGENT_TOOLS_URL and run `argent unlink`, then try again — " +
-          `a link to ${routing.shadowedLink.url} is also configured and takes over once the env var is unset.`
-        : "Unset ARGENT_TOOLS_URL and try again."
-      : "Run `argent unlink` and try again.";
-  return `argent flow run requires the auto-started local tool server; ${routing.source} routing is configured.\n${recovery}`;
-}
-
 /** One flow-execute payload builder so single and batch runs cannot drift. */
 function buildRunPayload(
   flowPath: string,
@@ -920,19 +1079,118 @@ function writeJsonStreamRecord(record: Record<string, unknown>): void {
   console.log(JSON.stringify(record));
 }
 
+/**
+ * A run whose routed tool-server never answered. Nothing ran, so it is a setup
+ * error like the other can't-run exits, not a run error.
+ */
+class ToolServerUnreachableError extends Error {
+  readonly errorCode = "TOOL_SERVER_UNREACHABLE";
+  readonly errorKind = "network";
+}
+
+/** The stdout verdict for a ToolServerUnreachableError, in either runner. */
+const UNREACHABLE_VERDICT = "not run (tool-server unreachable)";
+
+/**
+ * The fetch failures that end a request before a connection opens, by the
+ * code on the error's `cause`, with the words the message gives each one.
+ */
+const CONNECT_FAILURES = new Map([
+  ["ECONNREFUSED", "connection refused"],
+  ["ENOTFOUND", "host not found"],
+  ["EAI_AGAIN", "host not found"],
+  ["ETIMEDOUT", "timed out"],
+  ["UND_ERR_CONNECT_TIMEOUT", "timed out"],
+  ["EHOSTUNREACH", "host unreachable"],
+  ["ENETUNREACH", "host unreachable"],
+]);
+
+/**
+ * `err` restated for the operator when it is a failed connect to the
+ * tool-server that ARGENT_TOOLS_URL or `argent link` names; undefined
+ * otherwise. ETIMEDOUT and the unreachable codes can also end an open
+ * socket, where the run may have started, so a cause with a syscall other
+ * than connect or DNS stays a run error. undici's connect timeout and a
+ * dual-stack AggregateError carry no syscall. Routing is read only here,
+ * after the failure, so no validation path waits on it.
+ */
+async function toolServerUnreachable(
+  err: unknown
+): Promise<ToolServerUnreachableError | undefined> {
+  if (!(err instanceof TypeError)) return undefined;
+  const cause = err.cause as { code?: unknown; syscall?: unknown } | undefined;
+  const reason = typeof cause?.code === "string" ? CONNECT_FAILURES.get(cause.code) : undefined;
+  const syscall = cause?.syscall;
+  if (!reason || (syscall !== undefined && syscall !== "connect" && syscall !== "getaddrinfo")) {
+    return undefined;
+  }
+  const routing = await getResolvedToolsUrl();
+  if (routing.source === "none") return undefined;
+  // With ARGENT_TOOLS_URL set over a link file, unsetting only the env var
+  // routes through the link instead, so the recovery names both steps.
+  const recovery =
+    routing.source === "link"
+      ? "Start the tool-server on the linked machine, or run `argent unlink`."
+      : routing.shadowedLink
+        ? "Start that tool-server, or unset ARGENT_TOOLS_URL and run `argent unlink` to use " +
+          `the local one. A link to ${routing.shadowedLink.url} is also configured and ` +
+          "takes over once the env var is unset."
+        : "Start that tool-server, or unset ARGENT_TOOLS_URL to use the local one.";
+  const setBy = routing.source === "env" ? "ARGENT_TOOLS_URL" : "argent link";
+  return new ToolServerUnreachableError(
+    `Could not reach the tool-server at ${routing.url} (set by ${setBy}): ${reason}.\n${recovery}`
+  );
+}
+
+/** A failure's machine-readable half, under the names JSON output carries it by. */
+function failureSignal(err: unknown): { error_code?: string; error_kind?: string } {
+  if (!(err instanceof ToolInvocationError) && !(err instanceof ToolServerUnreachableError)) {
+    return {};
+  }
+  return {
+    ...(err.errorCode ? { error_code: err.errorCode } : {}),
+    ...(err.errorKind ? { error_kind: err.errorKind } : {}),
+  };
+}
+
+/**
+ * A failure that produced no report, as the one record every machine mode
+ * carries it by: --json-stream writes it on stdout, --json on stderr, so one
+ * reader parses both.
+ */
+function errorRecord(
+  err: unknown,
+  message = err instanceof Error ? err.message : String(err)
+): Record<string, unknown> {
+  return { event: "error", error: message, ...failureSignal(err) };
+}
+
 /** Mirror a tool invocation failure without putting human text on stdout. */
 function writeJsonStreamError(err: unknown): void {
-  const message = err instanceof Error ? err.message : String(err);
-  writeJsonStreamRecord({
-    event: "error",
-    error: message,
-    ...(err instanceof ToolInvocationError && err.errorCode ? { error_code: err.errorCode } : {}),
-    ...(err instanceof ToolInvocationError && err.errorKind ? { error_kind: err.errorKind } : {}),
+  writeJsonStreamRecord(errorRecord(err));
+}
+
+/**
+ * The tools client for a run. Under --json stderr carries one JSON object per
+ * line, so the client's diagnostics go there as warning records, not prose.
+ */
+function runToolsClient(
+  args: ReturnType<typeof parseRunArgs>,
+  options: FlowCommandOptions
+): ToolsClient {
+  return createToolsClient({
+    paths: options.paths,
+    ...(args.json
+      ? {
+          onDiagnostic: (message: string) =>
+            console.error(JSON.stringify({ event: "warning", warning: message })),
+        }
+      : {}),
   });
 }
 
 /**
- * Durable diff output: copy failed-snapshot images out of the tool-server's
+ * Durable diff output: copy failed-step images out of the tool-server's
  * cache before any renderer prints paths, so every output mode shows the
  * durable location. The only artifact bytes the CLI ever fetches; baseUrl is
  * resolved lazily so a run without --output makes no extra round-trip. Whatever
@@ -951,20 +1209,83 @@ async function exportAndResolveArtifacts(
   resolveArtifactDisplayPaths(report);
 }
 
-/** One flow's outcome in a directory run — also the --json aggregate entry. */
+/**
+ * Why a flow the server rejected never ran, for the stdout ledger either
+ * runner keeps. `error_kind: "validation"` marks any rejection scoped to the
+ * one call, so it says nothing about the flow file — device resolution rejects
+ * that way too (nothing matched the run, or several did and none was singled
+ * out), and blaming perfectly good YAML on a simulator nobody started sends the
+ * reader to the wrong file. Only a code whose subject IS the file licenses
+ * "invalid flow"; an unrecognized one stays neutral and leaves the reason to
+ * the stderr line beside it.
+ */
+function rejectionVerdict(code: string | undefined): string {
+  switch (code) {
+    case FAILURE_CODES.FLOW_FILE_INVALID:
+    case FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED:
+    case FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE:
+      return "not run (invalid flow)";
+    case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
+      return "not run (no device resolved)";
+    case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:
+      return "not run (upload failed)";
+    default:
+      return "not run (rejected)";
+  }
+}
+
+/**
+ * Whether a wire value is a report the renderers can walk. They run past the
+ * try on both runners, so a value this admits and they then throw on takes
+ * down the whole ledger rather than one line of it — hence the elements are
+ * checked too. A non-array `steps` throws on `for (… of report.steps)` and a
+ * nullish element on the first field read off it; a primitive element throws
+ * nowhere, which is worse — the verdict is the report's own `ok`, so `ok: true`
+ * exits 0 over steps no renderer can read: renderReport prints a line of
+ * `undefined` fields for each, and the batch's renderFailedSteps prints none.
+ */
+function isFlowReport(data: unknown): data is FlowReport {
+  const steps = (data as FlowReport | undefined)?.steps;
+  return Array.isArray(steps) && steps.every((step) => !!step && typeof step === "object");
+}
+
+/**
+ * The baselines a run over a link returned that this client could not write,
+ * as `<path>: <reason>`: the tools client leaves `{ path, error }` in place of
+ * each one. They fail the run, whose report passed on baselines that are not
+ * on disk.
+ */
+function unwrittenBaselines(report: FlowReport): string[] {
+  const writes = (report as { baselineWrites?: unknown }).baselineWrites;
+  if (!Array.isArray(writes)) return [];
+  return writes.flatMap((write: unknown) => {
+    const { path: file, error } = (write ?? {}) as { path?: unknown; error?: unknown };
+    return typeof file === "string" && typeof error === "string" ? [`${file}: ${error}`] : [];
+  });
+}
+
+/**
+ * One flow's outcome in a directory run — also the --json aggregate entry. The
+ * failure signal keeps --json-stream's spelling, so one consumer reads both;
+ * `error` is prose assembled per failure, never a classification.
+ */
 interface BatchFlowResult {
   path: string;
   status: "pass" | "fail" | "skip";
   report?: FlowReport;
   error?: string;
+  error_code?: string;
+  error_kind?: string;
 }
 
 /**
- * Run every discovered flow in `dir` sequentially. Reports failures only (no
- * live step lines), then a flow-level summary. A flow failing its steps — or
- * one the tool-server rejects as invalid — lets the batch continue, while an
- * infra error (transport throw, unclassified failure, non-report result) stops
- * it and counts the remaining flows skipped.
+ * Run every discovered flow in `dir` sequentially. Prints each flow's failing
+ * steps and warnings, then its outcome (no live step lines), then a flow-level
+ * summary; a flow failing its steps — or one the tool-server rejects up front
+ * (a bad YAML, an unparseable step, a device it cannot resolve, a refused
+ * upload of one of its files) — lets the batch continue, while a transport
+ * throw, a rejection the server does not mark as validation, or a reply that
+ * is not a report stops it and counts the remaining flows skipped.
  */
 async function runFlowDirectory(
   dir: string,
@@ -972,33 +1293,44 @@ async function runFlowDirectory(
   projectRoot: string,
   options: FlowCommandOptions
 ): Promise<void> {
+  // Under --json stdout holds the aggregate alone, so each failure goes to
+  // stderr as the record --json-stream would carry, never as prose.
+  const printError = (message: string, err: unknown = message): void => {
+    console.error(args.json ? JSON.stringify(errorRecord(err, message)) : message);
+  };
+  // Discovery fails before any call, so there is no aggregate to print, and
+  // stdout stays empty rather than holding prose where a document is due.
+  const reject = (message: string): Promise<never> => {
+    printError(message);
+    return exitAfterFlush(2);
+  };
   let flows: string[];
   try {
     flows = await collectFlowFiles(dir, args.recursive);
   } catch {
-    console.error(`Could not read flow directory: ${dir}`);
-    return exitAfterFlush(2);
+    return reject(`Could not read flow directory: ${dir}`);
   }
   if (flows.length === 0) {
-    console.error(`No flows found in ${dir}`);
-    if (!args.recursive) console.error("Pass -r/--recursive to include subdirectories.");
-    return exitAfterFlush(2);
+    return reject(
+      `No flows found in ${dir}` +
+        (args.recursive ? "" : "\nPass -r/--recursive to include subdirectories.")
+    );
   }
 
-  const refusal = await requireLocalToolServer();
-  if (refusal) {
-    console.error(refusal);
-    return exitAfterFlush(2);
-  }
-  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
+  const { callTool, baseUrl } = runToolsClient(args, options);
 
   const outputBase = args.output ? path.resolve(args.output) : undefined;
   const results: BatchFlowResult[] = [];
-  // A validation rejection is specific to one flow file, so the batch keeps
-  // going. Anything else — transport death, or a failure the server didn't
-  // classify — could make every remaining flow burn a device run against the
-  // same wall, so stop.
+  const failures: FailedFlow[] = [];
+  const batchStartedAt = Date.now();
+  // A validation rejection is scoped to the one call, so the batch keeps
+  // going. Anything the server does not mark that way — another kind, or none
+  // at all — stops it, as does a transport throw: each remaining flow would
+  // burn a run against the same wall.
   let stopped = false;
+  // An unreachable tool-server stops the batch as a setup error (exit 2): the
+  // flows after it would fail to connect the same way.
+  let unreachable = false;
   for (const [i, rel] of flows.entries()) {
     if (!args.json) console.log(`[${i + 1}/${flows.length}] ${rel}`);
     if (stopped) {
@@ -1006,30 +1338,45 @@ async function runFlowDirectory(
       if (!args.json) console.log(`  ${STATUS_GLYPH.skip} not run (batch stopped)`);
       continue;
     }
+    const flowPath = path.join(dir, rel);
+    const rerun = rerunCommand(flowPath, rel, projectRoot, args);
     let report: FlowReport | undefined;
     try {
       // No onProgress: batch output is failures-only, never live step lines.
-      const resp = await callTool(
-        "flow-execute",
-        buildRunPayload(path.join(dir, rel), projectRoot, args)
-      );
-      const data = resp.data as FlowReport;
-      // typeof guard: `in` throws on a primitive wire value, and that must
-      // classify as "no report", not as an infra throw.
-      if (data && typeof data === "object" && "steps" in data) report = data;
-    } catch (err) {
+      const resp = await callTool("flow-execute", buildRunPayload(flowPath, projectRoot, args));
+      if (isFlowReport(resp.data)) report = resp.data;
+    } catch (thrown) {
+      const unreachableErr = await toolServerUnreachable(thrown);
+      const err = unreachableErr ?? thrown;
       const message = err instanceof Error ? err.message : String(err);
-      console.error(message);
-      results.push({ path: rel, status: "fail", error: message });
-      const rejectedThisFlowOnly =
-        err instanceof ToolInvocationError && err.errorKind === "validation";
+      const toolErr = err instanceof ToolInvocationError ? err : undefined;
+      const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
+      const verdict = unreachableErr
+        ? UNREACHABLE_VERDICT
+        : rejectedThisFlowOnly
+          ? rejectionVerdict(toolErr?.errorCode)
+          : "did not finish (run error)";
+      // A verdict on stdout for every entry, next to the `[i/n]` header stdout
+      // already carries. The detail goes to stderr, so without this line a
+      // redirected stdout log shows this flow's header followed by the next
+      // flow's — an entry that reads as if it never ran, while the final tally
+      // still counts it failed and names nothing. Verdict before detail, as the
+      // single-flow runner prints them, so a merged log reads the same way.
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
+      printError(message, err);
+      results.push({ path: rel, status: "fail", error: message, ...failureSignal(err) });
+      failures.push({ path: rel, headline: verdict, detail: message, rerun });
       if (!rejectedThisFlowOnly) stopped = true;
+      if (unreachableErr) unreachable = true;
       continue;
     }
     if (!report) {
       const message = `"${rel}" did not produce a run report.`;
-      console.error(message);
+      const verdict = "did not finish (no run report)";
+      if (!args.json) console.log(`  ${STATUS_GLYPH.error} ${verdict}`);
+      printError(message);
       results.push({ path: rel, status: "fail", error: message });
+      failures.push({ path: rel, headline: verdict, detail: message, rerun });
       stopped = true;
       continue;
     }
@@ -1038,10 +1385,20 @@ async function runFlowDirectory(
     await exportAndResolveArtifacts(
       report,
       outputBase ? path.join(outputBase, path.dirname(rel)) : undefined,
-      path.join(dir, rel),
+      flowPath,
       baseUrl
     );
-    results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
+    const unwritten = unwrittenBaselines(report);
+    results.push({ path: rel, status: report.ok && !unwritten.length ? "pass" : "fail", report });
+    if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
+    else if (unwritten.length) {
+      failures.push({
+        path: rel,
+        headline: "baselines not written",
+        detail: unwritten.join("\n"),
+        rerun,
+      });
+    }
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
@@ -1054,12 +1411,16 @@ async function runFlowDirectory(
     failed: results.filter((r) => r.status === "fail").length,
     skipped: results.filter((r) => r.status === "skip").length,
   };
+  const durationMs = Date.now() - batchStartedAt;
   if (args.json) {
-    console.log(JSON.stringify({ ok: counts.failed === 0, ...counts, flows: results }, null, 2));
+    console.log(
+      JSON.stringify({ ok: counts.failed === 0, ...counts, durationMs, flows: results }, null, 2)
+    );
   } else {
-    console.log(`\n${renderBatchSummary(counts)}`);
+    for (const line of renderFailedFlows(failures)) console.log(line);
+    console.log(`\n${renderBatchSummary(counts, durationMs)}`);
   }
-  return exitAfterFlush(counts.failed === 0 ? 0 : 1);
+  return exitAfterFlush(unreachable ? 2 : counts.failed === 0 ? 0 : 1);
 }
 
 export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
@@ -1092,46 +1453,55 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return exitAfterFlush(2);
   }
 
-  // Either flag claims stdout for machine-readable output, so help goes to
-  // stderr as the diagnostic it is.
-  const jsonStream = rest.some(
-    (tok) => tok === "--json-stream" || tok.startsWith("--json-stream=")
-  );
-  const helpToStderr =
-    jsonStream || rest.some((tok) => tok === "--json" || tok.startsWith("--json="));
+  // The output mode is read off raw argv, since parsing can fail on a later
+  // token. Either flag claims stdout for machine-readable output, so help goes
+  // to stderr as the diagnostic it is. --json reads stderr as records, so a
+  // usage error there is the record alone, with no help.
+  const flagGiven = (flag: string): boolean =>
+    rest.some((tok) => tok === flag || tok.startsWith(`${flag}=`));
+  const jsonStream = flagGiven("--json-stream");
+  const json = !jsonStream && flagGiven("--json");
   // Checked before parseRunArgs so --help wins even when it trails a
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp(helpToStderr);
+    printHelp(jsonStream || json);
     return;
   }
-  const fail = (message: string, code: number, err: unknown = message): Promise<never> => {
-    if (jsonStream) writeJsonStreamError(err);
-    console.error(message);
-    return exitAfterFlush(code);
+  const usageError = (message: string, prose: string): Promise<never> => {
+    if (json) {
+      console.error(JSON.stringify(errorRecord(message)));
+      return exitAfterFlush(2);
+    }
+    if (jsonStream) writeJsonStreamError(message);
+    console.error(prose);
+    printHelp(jsonStream);
+    return exitAfterFlush(2);
   };
-
   let args: ReturnType<typeof parseRunArgs>;
   try {
     args = parseRunArgs(rest);
   } catch (err) {
     if (err instanceof FlagParseException) {
-      if (jsonStream) writeJsonStreamError(err);
-      console.error(`Error: ${err.message}\n`);
-      printHelp(helpToStderr);
-      return exitAfterFlush(2);
+      return usageError(err.message, `Error: ${err.message}\n`);
     }
     throw err;
   }
   if (!args.flowRef) {
     const message =
       "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.";
-    if (jsonStream) writeJsonStreamError(message);
-    console.error(message);
-    printHelp(helpToStderr);
-    return exitAfterFlush(2);
+    return usageError(message, message);
   }
+
+  // A failure with no report. --json-stream mirrors it on stdout as a record
+  // and keeps the human line on stderr; --json owns stdout for the report
+  // alone, so its stderr carries the same record instead of prose, and one
+  // reader parses both modes.
+  const fail = (message: string, code: number, err: unknown = message): Promise<never> => {
+    if (jsonStream) writeJsonStreamError(err);
+    console.error(args.json ? JSON.stringify(errorRecord(err, message)) : message);
+    return exitAfterFlush(code);
+  };
 
   const projectRoot = process.cwd();
   // From here a name is indistinguishable from a path the user typed: one set
@@ -1339,10 +1709,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     );
   }
 
-  const refusal = await requireLocalToolServer();
-  if (refusal) return fail(refusal, 2);
-
-  const { callTool, baseUrl } = createToolsClient({ paths: options.paths });
+  const { callTool, baseUrl } = runToolsClient(args, options);
 
   const payload = buildRunPayload(flowPath, projectRoot, args);
 
@@ -1367,6 +1734,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     liveIndex++;
     console.log(renderStepLine(s, liveIndex, flowName));
     if (s.warning) console.log(renderUnderStepLine(s, liveIndex, `⚠ ${s.warning}`));
+    for (const line of renderScriptLogLines(s, liveIndex)) console.log(line);
   };
 
   let report: FlowReport;
@@ -1382,10 +1750,33 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // show a path. Only what --output copies is fetched, below.
     report = resp.data as FlowReport;
   } catch (err) {
+    const unreachableErr = await toolServerUnreachable(err);
+    // The same stdout verdict a directory run gives every entry. Live step
+    // lines make the gap worse here: the last thing a redirected log holds is
+    // a passing step, so a run that died reads as one that passed and got cut
+    // off. The header is the flow's name, printed by the first step event or
+    // here when the run failed before any of them. Streaming mode owns stdout,
+    // so no prose verdict there either.
+    if (!args.json && !args.jsonStream) {
+      if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+      console.log(
+        `  ${STATUS_GLYPH.error} ` +
+          (unreachableErr
+            ? UNREACHABLE_VERDICT
+            : err instanceof ToolInvocationError && err.errorKind === "validation"
+              ? rejectionVerdict(err.errorCode)
+              : "did not finish (run error)")
+      );
+    }
+    if (unreachableErr) return fail(unreachableErr.message, 2, unreachableErr);
     return fail(err instanceof Error ? err.message : String(err), 1, err);
   }
 
-  if (!report || typeof report !== "object" || !("steps" in report)) {
+  if (!isFlowReport(report)) {
+    if (!args.json && !args.jsonStream) {
+      if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+      console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
+    }
     return fail(`"${flowName}" did not produce a run report.`, 2);
   }
 
@@ -1410,10 +1801,16 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // prerequisite note, materialized artifact paths, and the summary.
     if (report.executionPrerequisite) console.log(`  assumes: ${report.executionPrerequisite}`);
     for (const line of renderArtifactLines(report)) console.log(line);
+    for (const line of renderSingleFailure(report)) console.log(line);
     console.log(`\n${renderSummary(report, { withDevice: true })}`);
   } else {
     console.log(renderReport(report));
   }
 
-  return exitAfterFlush(report.ok ? 0 : 1);
+  const unwritten = unwrittenBaselines(report);
+  if (!args.json && !args.jsonStream) {
+    for (const line of unwritten)
+      console.log(`  ${STATUS_GLYPH.error} baseline not written: ${line}`);
+  }
+  return exitAfterFlush(report.ok && unwritten.length === 0 ? 0 : 1);
 }

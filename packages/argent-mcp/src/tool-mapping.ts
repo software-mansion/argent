@@ -23,3 +23,8 @@ export function toMcpTool(t: ToolMeta): McpTool {
     ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
   };
 }
+
+/** The MCP `tools/list` payload: every tool but those marked `hideFromMcp`. */
+export function toMcpToolList(tools: ToolMeta[]): McpTool[] {
+  return tools.filter((t) => !t.hideFromMcp).map(toMcpTool);
+}
