@@ -11,15 +11,18 @@
  * The client replaces each declared arg with a {@link FileInputWire} carrying
  * the path, its stat, and (only when routed to a remote tool-server) the
  * base64 content. The tool-server resolves it back to a server-readable path
- * *before* zod validation: used in place when the path on its own disk matches
- * the recorded stat (co-located ⇒ zero copies, mirroring the artifact gate),
- * otherwise materialized from the inlined content. Tools therefore always
- * execute against a plain local path.
+ * *before* zod validation: materialized from the inlined content whenever the
+ * client sent it (a linked client), otherwise used in place when the path on
+ * its own disk matches the recorded stat (an unlinked client ⇒ zero copies,
+ * mirroring the artifact gate). Tools therefore always execute against a plain
+ * local path.
  *
  * {@link ClientFileDirective} is the reverse: a tool whose output belongs in
  * the *client's* project (e.g. a recorded flow YAML) returns the content plus
  * the client-side destination path, and the client writes it.
  */
+
+import type { OnDiskSpelling } from "./flow-file-refs";
 
 /** Discriminant key identifying a client-file wrapper inside tool args. */
 export const FILE_INPUT_MARKER = "__argentFileInput" as const;
@@ -31,7 +34,7 @@ export interface FileInputWire {
    * Absolute path on the CLIENT machine. Also probed on the tool-server's own
    * filesystem — a hit (existence for directories, size/mtime match for files)
    * means client and server are co-located (or share a checkout) and the path
-   * is used in place with no copy.
+   * is used in place with no copy, unless the wrapper carries `content`.
    */
   path: string;
   /** stat of `path` on the client, for the server-side co-location probe. */
@@ -40,7 +43,8 @@ export interface FileInputWire {
   /**
    * Base64 file bytes, inlined only when the client is routed to an external
    * tool-server (`argent link` / ARGENT_TOOLS_URL), so unlinked local calls
-   * never pay the encoding cost.
+   * never pay the encoding cost. When present, the server uses these bytes
+   * even if a host file at `path` matches the stat.
    */
   content?: string;
   /**
@@ -63,6 +67,49 @@ export interface FileInputWire {
    * `POST /upload` and rejects a mismatch before extraction.
    */
   contentHash?: string;
+  /**
+   * The client's real path of `path`, sent with `members` (a `collect` spec
+   * routed to a remote tool-server): the runner anchors the flow's `run:`
+   * targets beside it, as a co-located run anchors them beside its realpath.
+   */
+  canonical?: string;
+  /** How `path`'s basename is spelled in its directory on the client, sent with {@link canonical}. */
+  spelling?: OnDiskSpelling;
+  /**
+   * The project files the file at `path` makes the tool-server read, collected
+   * by the client for a `collect` spec, and sent only when the call is routed
+   * to a remote tool-server. Absent from an older client, and from every call
+   * without a link.
+   */
+  members?: FileInputMember[];
+}
+
+/**
+ * One project file sent with a `collect` wire: its bytes travel like a
+ * file input's (inline `content`, or `uploadId` + `contentHash` through
+ * `POST /upload`), or `state` says why it carries none.
+ */
+export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_MARKER | "members"> {
+  role: "flow" | "baseline" | "tool";
+  /**
+   * How the tool-server looks the member up. For `flow`: the directory of the
+   * file that names the target, a NUL, and the target as written, which is
+   * exactly the pair the runner resolves; for the flow of a nested
+   * `tool: flow-execute` step, `<project_root>/.argent/flows`, a NUL and
+   * `<name>.yaml`. For `baseline`: the absolute client
+   * path `<dir>/__baselines__/<key>/<name>.png`. For `tool`: a file argument
+   * of a `tool:` step ({@link isClientFileArgument}), as the step spells it.
+   * One path is sent once: a `tool` member also serves as the baseline at
+   * that path.
+   */
+  key: string;
+  /**
+   * No bytes: `missing` = nothing at `canonical`; `refused` = the client does
+   * not send it (`error` says why); `listed` = a baseline sent by name only,
+   * for a run that updates baselines and never reads them.
+   */
+  state?: "missing" | "refused" | "listed";
+  error?: string;
 }
 
 /**
@@ -123,6 +170,33 @@ export interface FileInputSpec {
    * field.
    */
   unwrapWhenSet?: string;
+  /**
+   * `"flow"`: the file is a flow, and over a link the client also sends, on
+   * the same wire, every flow file its `run:` steps reach, the flow each of
+   * its nested `tool: flow-execute` steps names (with that flow's own files),
+   * the snapshot baselines of each run, and the file arguments of its `tool:`
+   * steps ({@link FileInputWire.members}). `"step"`: on flow-add-step's
+   * `project_root` probe, the client sends the files that the one step it
+   * records (`command` + `args`) makes the tool-server read, and the
+   * recording file and the sibling the recorder checks a nested flow against.
+   * The call's `project_root` bounds what the client sends. Clients that do
+   * not know the field send the file alone.
+   */
+  collect?: "flow" | "step";
+}
+
+/** A {@link FileInputMember} as the tool-server resolved it. */
+export interface ResolvedMember {
+  role: FileInputMember["role"];
+  /** `present`: the bytes arrived (`text` for a flow, `hostPath` for a baseline or a tool file). */
+  state: "present" | "missing" | "refused" | "listed";
+  /** Set for a flow: its real path and spelling on the client. */
+  canonical?: string;
+  spelling?: OnDiskSpelling;
+  text?: string;
+  /** A baseline's or a tool file's bytes, materialized on this host. */
+  hostPath?: string;
+  error?: string;
 }
 
 /** Per-target resolution outcome, passed to the tool via `ctx.fileInputs`. */
@@ -140,6 +214,11 @@ export interface ResolvedFileInput {
    * (which `presentOnHost` deliberately still accepts).
    */
   statVerified?: boolean;
+  /** From a `collect` wire: the client's real path and spelling of `clientPath`. */
+  canonical?: string;
+  spelling?: OnDiskSpelling;
+  /** From a `collect` wire: each member by its key. Present (possibly empty) only when the wire had members. */
+  members?: Record<string, ResolvedMember>;
 }
 
 /** Path-safe flow-name charset: no separators, no "..", no spaces. */
@@ -179,6 +258,8 @@ export interface ClientFileDirective {
   /** Absolute CLIENT-side destination path (the client validates it before writing). */
   path: string;
   content: string;
+  /** `base64`: `content` is binary (a snapshot baseline); absent: UTF-8 text. */
+  encoding?: "base64";
 }
 
 export function isFileInputWire(value: unknown): value is FileInputWire {
@@ -220,4 +301,57 @@ export function interpolateFileInputPath(
     return v;
   });
   return missing ? null : out;
+}
+
+/**
+ * The names a file argument of a `tool:` step may have to travel over a link,
+ * in any case of letters: the files the tools take (`screenshot-diff` PNGs, a
+ * `flow_path`). The tool-server refuses another one before the first step,
+ * and the client sends no other one.
+ */
+export const TOOL_FILE_EXTENSIONS = [".png", ".yaml"] as const;
+
+export function hasToolFileExtension(file: string): boolean {
+  const name = file.toLowerCase();
+  return TOOL_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+/** A file input a `tool:` step fills, and the path its args fill in. */
+export interface ToolStepFile {
+  spec: FileInputSpec;
+  path: string;
+}
+
+/**
+ * The file inputs of `specs` (a tool's declaration) that a `tool:` step's args
+ * fill in: a spec applies when every `${param}` it names is a non-empty string
+ * and no superseding source is set, as when the client wraps a call.
+ */
+export function toolStepFiles(
+  specs: readonly FileInputSpec[] | undefined,
+  args: Record<string, unknown>
+): ToolStepFile[] {
+  const files: ToolStepFile[] = [];
+  for (const spec of specs ?? []) {
+    if (spec.skipWhenSet !== undefined && args[spec.skipWhenSet] !== undefined) continue;
+    const filled = interpolateFileInputPath(spec.path, args);
+    if (filled !== null) files.push({ spec, path: filled });
+  }
+  return files;
+}
+
+/**
+ * A file the client sends for a `tool:` step over a link: a `file` input whose
+ * path is one argument of the step as written (not a path the tool builds out
+ * of several, such as `flow_file`), absolute, with a
+ * {@link TOOL_FILE_EXTENSIONS} name. The client and the runner both decide it
+ * here, so the runner finds every file it reads among the members.
+ */
+export function isClientFileArgument({ spec, path }: ToolStepFile): boolean {
+  return (
+    spec.kind === "file" &&
+    spec.path === `\${${spec.target}}` &&
+    path.startsWith("/") &&
+    hasToolFileExtension(path)
+  );
 }

@@ -316,6 +316,8 @@ interface LaunchAppOptions {
   terminateExisting?: boolean;
   /** Deliver this URL to the app at launch through the payload-url flag. */
   payloadUrl?: string;
+  /** Arguments for the app process. */
+  args?: string[];
 }
 
 /**
@@ -323,6 +325,7 @@ interface LaunchAppOptions {
  *
  * @param opts.terminateExisting kill an already-running instance first.
  * @param opts.payloadUrl pass this URL to the app at launch.
+ * @param opts.args pass these arguments to the app process.
  */
 export async function launchApp(
   udid: string,
@@ -340,6 +343,14 @@ export async function launchApp(
   }
 
   args.push(bundleId);
+
+  // Without `--`, devicectl parses an argument like `-FeatureFlag` as its own
+  // option. The app also receives the `--` as its first argument; UserDefaults
+  // overrides still apply.
+  if (opts.args?.length) {
+    args.push("--", ...opts.args);
+  }
+
   await runDevicectl(args, `launch ${bundleId}`, { bundleId });
 }
 

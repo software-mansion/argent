@@ -27,6 +27,8 @@ const spawned: FakeProc[] = [];
 let lastRun: AmRun = {};
 const adbCalls: string[][] = [];
 let installFails: string | null = null;
+/** What the device answers each `adb shell` probe with; a throw is a refusal. */
+let probe: (cmd: string) => string = () => "package:com.argent.androiddevtools versionCode:1\n";
 
 // `exit` fires with the output still buffered and `close` only once the reader
 // has drained it — node's own ordering, and why the blueprint settles on close.
@@ -63,9 +65,9 @@ vi.mock("../../src/utils/adb", () => ({
     if (args.includes("install") && installFails) throw new Error(installFails);
     return { stdout: "", stderr: "" };
   }),
-  // The probe reports the bundled build as present, so every install here is
-  // one the repair path forced.
-  adbShell: vi.fn(async () => "package:com.argent.androiddevtools versionCode:1\n"),
+  // By default the probe reports the bundled build as present, so every
+  // install in the repair tests is one the repair path forced.
+  adbShell: vi.fn(async (_serial: string, cmd: string) => probe(cmd)),
 }));
 
 vi.mock("../../src/utils/android-binary", () => ({
@@ -95,6 +97,7 @@ import {
   androidDevtoolsBlueprint,
   classifyHelperSpawnFault,
 } from "../../src/blueprints/android-devtools";
+import { ensureAndroidDevtoolsInstalled } from "../../src/utils/android-helper-install";
 
 const DEVICE: DeviceInfo = { id: "emulator-5554", platform: "android", kind: "emulator" };
 
@@ -123,6 +126,7 @@ beforeEach(() => {
   adbCalls.length = 0;
   lastRun = {};
   installFails = null;
+  probe = () => "package:com.argent.androiddevtools versionCode:1\n";
 });
 
 describe("classifyHelperSpawnFault", () => {
@@ -230,5 +234,71 @@ describe("android-devtools helper repair", () => {
     expect((err as Error).message).toContain("Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]");
     expect((err as Error).message).not.toContain("/Users/dev/argent");
     expect(spawned).toHaveLength(1);
+  });
+});
+
+// The mocked manifest is at versionCode 1, so 0 stands for an older helper and
+// 2 for one a newer tool-server sharing the device installed.
+describe("ensureAndroidDevtoolsInstalled", () => {
+  const UPGRADE = [
+    "-s",
+    "emulator-5554",
+    "install",
+    "-r",
+    "-t",
+    "/tmp/argent-android-devtools.apk",
+  ];
+
+  it("upgrades an older helper in place, without -d", async () => {
+    probe = () => "package:com.argent.androiddevtools versionCode:0\n";
+    await ensureAndroidDevtoolsInstalled("emulator-5554");
+    expect(installs()).toEqual([UPGRADE]);
+  });
+
+  it("keeps a newer helper", async () => {
+    probe = () => "package:com.argent.androiddevtools versionCode:2\n";
+    await ensureAndroidDevtoolsInstalled("emulator-5554");
+    expect(installs()).toHaveLength(0);
+  });
+
+  // Every way `cmd package` can fail to give a versionCode falls back to
+  // `dumpsys package`. API 23's shell prints `cmd: not found` and exits 0.
+  const CMD_FAILURES: [string, (cmd: string) => string][] = [
+    [
+      "throws",
+      () => {
+        throw new Error("Error: Unknown option: --show-versioncode");
+      },
+    ],
+    ["prints `cmd: not found` and exits 0", () => "/system/bin/sh: cmd: not found\n"],
+    ["lists the package without a versionCode", () => "package:com.argent.androiddevtools\n"],
+  ];
+  const PACKAGE = (versionCode: number) =>
+    "Packages:\n" +
+    "  Package [com.argent.androiddevtools] (5c1a2b3):\n" +
+    "    userId=10061\n" +
+    `    versionCode=${versionCode} targetSdk=36\n`;
+
+  describe.each(CMD_FAILURES)("where `cmd package` %s", (_name, cmdAnswer) => {
+    const dumpsys = (body: string) => (cmd: string) =>
+      cmd.startsWith("cmd package") ? cmdAnswer(cmd) : body;
+
+    it("upgrades an older helper", async () => {
+      probe = dumpsys(PACKAGE(0));
+      await ensureAndroidDevtoolsInstalled("emulator-5554");
+      expect(installs()).toEqual([UPGRADE]);
+    });
+
+    it("keeps a current helper", async () => {
+      probe = dumpsys(PACKAGE(1));
+      await ensureAndroidDevtoolsInstalled("emulator-5554");
+      expect(installs()).toHaveLength(0);
+    });
+
+    it("installs when the package is absent", async () => {
+      probe = dumpsys("Dexopt state:\n");
+      await ensureAndroidDevtoolsInstalled("emulator-5554");
+      expect(installs()).toEqual([UPGRADE]);
+    });
   });
 });

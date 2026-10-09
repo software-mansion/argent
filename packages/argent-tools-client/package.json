@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tools-client",
-  "version": "0.26.0",
+  "version": "0.28.0",
   "description": "Spawn-and-talk client for the argent tool-server (used by MCP and CLI)",
   "type": "module",
   "main": "dist/index.js",
@@ -9,7 +9,8 @@
   "dependencies": {
     "@argent/archive": "file:../archive",
     "@argent/configuration-core": "file:../configuration-core",
-    "@argent/registry": "file:../registry"
+    "@argent/registry": "file:../registry",
+    "yaml": "^2.8.2"
   },
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",

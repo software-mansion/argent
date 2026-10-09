@@ -10,7 +10,10 @@ import {
   FLOW_FILE_NAME_PATTERN,
   LAUNCH_PLATFORMS,
   SCRIPT_FILE_NAME_PATTERN,
+  completeRunExtension,
   type ClientFileDirective,
+  type OnDiskSpelling,
+  type ToolContext,
 } from "@argent/registry";
 import {
   hasVisibleText,
@@ -33,10 +36,36 @@ import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
 /**
+ * The refusal for a Windows client path on a macOS or Linux tool-server, which
+ * reads `C:\work` as relative: the path is absolute where it was written, so
+ * "must be absolute" would blame its author for a mistake they did not make.
+ * Undefined for every other path.
+ */
+export function windowsPathRefusal(label: string, value: string): string | undefined {
+  if (process.platform === "win32" || path.isAbsolute(value) || !path.win32.isAbsolute(value)) {
+    return undefined;
+  }
+  return (
+    `${label} "${value}" is a Windows path. A tool-server on macOS or Linux cannot open ` +
+    `Windows paths. Use argent on the computer that runs the tool-server, or start the ` +
+    `tool-server on the Windows computer.`
+  );
+}
+
+/**
  * Validate a caller-supplied `project_root`. Absolute and no ".." are what keep
  * a recording's files inside the project the agent named.
  */
 export function assertValidProjectRoot(root: string): void {
+  const windows = windowsPathRefusal("project_root", root);
+  if (windows) {
+    throw new FailureError(windows, {
+      error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
+      failure_stage: "flow_project_root_set",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
   if (!path.isAbsolute(root)) {
     throw new FailureError(
       `project_root must be an absolute path (got "${root}"). ` +
@@ -139,9 +168,11 @@ export function getFlowPath(projectRoot: string, name: string): string {
  * A case-SENSITIVE volume (ext4) keeps `Login` and `login` apart on its own:
  * `realpath` there simply fails to find the variant spelling.
  *
- * "client" mode needs no special case: the caller's root does not exist on this
- * host, so both `realpath` calls fail and the fallback returns
- * {@link getFlowPath} unchanged.
+ * "client" mode needs no special case. When the caller's root does not exist
+ * on this host, both `realpath` calls fail and the fallback returns
+ * {@link getFlowPath} unchanged. When it does (a link to 127.0.0.1, or a
+ * client path this host also has), the key is this host's real path, which is
+ * harmless: the key is only an identity.
  */
 // `async`, so `getFlowPath`'s validation throws land as a rejection like every
 // other failure here rather than synchronously out of a promise-returning call.
@@ -175,61 +206,62 @@ async function resolveFlowKey(projectRoot: string, name: string): Promise<string
 const keyResolutions = new Map<string, Promise<string>>();
 
 /**
- * How the flow file a caller addressed is spelled in its own directory.
- * `listed`: the directory carries that basename byte-for-byte — or its listing
- * could not be read at all (an execute-only parent lets stat through while
- * refusing readdir), which vouches for nothing and so must refuse nothing.
- * `case_folded`: no entry carries it, but one differs only by case — what a
- * case-insensitive filesystem (APFS, NTFS) opens for a spelling nothing on disk
- * has. `absent`: nothing matches even case-insensitively. `addressable` says
- * whether the on-disk spelling is one the flow layer's own ladders accept, so a
- * caller can be pointed at it instead of at a rename.
+ * Where a recording's YAML is persisted:
+ * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
+ *                directly; the caller's project root is on this machine and
+ *                the recording did not start over a link.
+ * - `"client"` — the recording started over a link (`argent link` or
+ *                `ARGENT_TOOLS_URL`, a link to 127.0.0.1 included), or the
+ *                caller's project root is NOT on this machine. The flow lives
+ *                in memory here and every mutating tool returns a
+ *                {@link ClientFileDirective} so the *client* writes the YAML
+ *                into the agent's project.
  */
-export type OnDiskSpelling =
-  | { state: "listed" }
-  | { state: "case_folded"; actual: string; addressable: boolean }
-  | { state: "absent" };
+export type FlowPersistMode = "host" | "client";
 
 /**
- * Classify the supplied basename against `dir`'s listing. One classifier serves
- * every route that turns a caller's spelling into a file it will open — a flow,
- * or since the `script:` step a plain `.mjs` — so they can never drift apart in
- * which spellings they accept.
- *
- * readdir, not realpath: realpath rewrites a symlinked flow to its target's
- * name, and a flow deliberately runs — and composes — under the link's own
- * name. Every call site hands a pure-ASCII basename (the flow-name charset,
- * plus ".yaml" or ".mjs"), so Unicode-normalizing filesystems cannot make the
- * comparison lie.
- *
- * What an `absent` verdict means is the caller's to decide, and they differ:
- * `flow_path` arrives with the boundary's stat already vouching for the file,
- * so a listing that lacks it is itself the phantom-spelling bug, while a `name`
- * may simply not name a saved flow — an ordinary missing-flow error the later
- * read reports far better than a casing complaint could.
+ * The refusal of a flow passed by `name` whose file a case-insensitive
+ * filesystem matched under another spelling: the name keys the report and
+ * `__baselines__/`, and no directory entry carries it.
  */
-export async function classifyOnDiskSpelling(
-  dir: string,
-  base: string,
-  addressable: RegExp = FLOW_FILE_NAME_PATTERN
-): Promise<OnDiskSpelling> {
-  const entries = await fs.readdir(dir).catch(() => null);
-  if (entries === null || entries.includes(base)) return { state: "listed" };
-  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
-  if (actual === undefined) return { state: "absent" };
-  return { state: "case_folded", actual, addressable: addressable.test(actual) };
+export function flowNameCasingError(
+  flowName: string,
+  spelling: Extract<OnDiskSpelling, { state: "case_folded" }>
+): FailureError {
+  // Hand back a name only when one can reach the file: an on-disk .YAML is
+  // addressable by no name at all (the name route always builds
+  // "<name>.yaml"), it is omitted from `argent flow list`, and flow_path
+  // refuses it too.
+  const recovery = spelling.addressable
+    ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
+    : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
+      `lowercase .yaml.`;
+  return new FailureError(
+    `Invalid flow name "${flowName}": no saved flow is named "${flowName}.yaml" — this ` +
+      `filesystem matched it case-insensitively to "${spelling.actual}", so the flow name ` +
+      `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
+      recovery,
+    {
+      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+      failure_stage: "flow_name_casing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 }
 
 /**
- * Where a recording's YAML is persisted:
- * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
- *                directly; the caller's project root is on this machine.
- * - `"client"` — the caller's project root is NOT on this machine (remote
- *                tool-server). The flow lives in memory here and every mutating
- *                tool returns a {@link ClientFileDirective} so the *client*
- *                writes the YAML into the agent's project.
+ * Whether a recorder call is over a link, for every recorder check that asks.
+ * A `client` take is (also one an older client started), and so is a call
+ * that carries the link header, also into a take that started in `host` mode.
+ * Over a link the recorder accepts only what a replay over the same link runs.
  */
-export type FlowPersistMode = "host" | "client";
+export function isLinkedRecorderCall(
+  session: RecordingSession,
+  ctx: Pick<ToolContext, "linked"> | undefined
+): boolean {
+  return session.persist === "client" || ctx?.linked === true;
+}
 
 /**
  * One recorded step's warning, plus the anchor saying WHICH step it judged.
@@ -275,7 +307,8 @@ export interface RecordingSession {
   /**
    * Absolute path of the flow file as the CALLER knows it. A real host path in
    * "host" mode; in "client" mode it names a file on the client's machine and
-   * is only echoed back inside the directive.
+   * is echoed back inside the directive. Over a link it also anchors what the
+   * recorder asks the client to resolve beside the recording.
    */
   filePath: string;
   /** In-memory flow content — authoritative in "client" mode. */
@@ -561,18 +594,25 @@ export function __flowFileLockCountForTesting(): number {
 export type ChromiumLaunch = string | { path: string; args?: string[] };
 
 /**
+ * An ios `launch` target: a bundle id (bare string) or a bundle id plus the
+ * arguments passed to the app process at launch, on a simulator or a physical
+ * iPhone.
+ */
+export type IosLaunch = string | { app: string; args?: string[] };
+
+/**
  * The app a `launch` step starts from scratch. A bare string applies to every
  * platform; the map targets a specific id per platform (chromium takes a path —
- * see {@link ChromiumLaunch}). `native` is a shared id for the installed-app
- * platforms (ios/android/vega), overridden by a specific `ios`/`android`/`vega`
- * key. A flow that BEGINS with a `launch` step is an e2e flow; one that doesn't
+ * see {@link ChromiumLaunch}), and `ios` may carry launch args ({@link IosLaunch}).
+ * `native` is a shared id for the installed-app platforms (ios/android/vega),
+ * overridden by a specific `ios`/`android`/`vega` key. A flow that BEGINS with a `launch` step is an e2e flow; one that doesn't
  * is a fragment.
  */
 export type Launch =
   | string
   | {
       native?: string;
-      ios?: string;
+      ios?: IosLaunch;
       android?: string;
       vega?: string;
       chromium?: ChromiumLaunch;
@@ -830,8 +870,24 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
     if (c === undefined) return null;
     return typeof c === "string" ? c : c.path;
   }
-  const v = (launch as Record<string, string | undefined>)[authoringPlatform(platform)];
+  const key = authoringPlatform(platform);
+  if (key === "ios") {
+    const i = launch.ios;
+    if (i !== undefined) return typeof i === "string" ? i : i.app;
+    return launch.native ?? null;
+  }
+  const v = (launch as Record<string, string | undefined>)[key];
   return v ?? launch.native ?? null;
+}
+
+/**
+ * The launch args an ios `{ app, args }` entry declares, or undefined when it
+ * declares none (a bare-string launch, a bare ios id, or no ios key at all).
+ */
+export function iosLaunchArgs(launch: Launch | undefined): string[] | undefined {
+  if (launch === undefined || typeof launch === "string") return undefined;
+  const i = launch.ios;
+  return i !== undefined && typeof i !== "string" ? i.args : undefined;
 }
 
 /**
@@ -2242,6 +2298,20 @@ export function authoringPlatform(platform: string): string {
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 
 /**
+ * YAML reads an unquoted `5` or `true` as a number or boolean, not a string.
+ * Name that launch arg and say to quote it instead of the generic launch error.
+ */
+function rejectUnquotedLaunchArg(raw: unknown, args: unknown[], where: string): void {
+  const i = args.findIndex((a) => typeof a === "number" || typeof a === "boolean");
+  if (i === -1) return;
+  const v = String(args[i]);
+  badEntry(
+    raw,
+    `${where}.args[${i}] is a ${typeof args[i]} (${v}); quote it so it stays a string: "${v}"`
+  );
+}
+
+/**
  * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
  * Returns null when the shape is invalid (caller reports the launch error).
  */
@@ -2252,8 +2322,29 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
     rejectUnknownKeys({ launch: { chromium: raw } }, b, ["path", "args"], "launch.chromium");
     if (typeof b.path !== "string" || b.path.length === 0) return null;
     if (b.args === undefined) return { path: b.path };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { chromium: raw } }, b.args, "launch.chromium");
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
     return { path: b.path, args: b.args as string[] };
+  }
+  return null;
+}
+
+/**
+ * Parse an ios launch value: a bundle id (bare string) or `{ app, args? }`.
+ * Returns null when the shape is invalid (caller reports the launch error).
+ */
+function parseIosLaunch(raw: unknown): IosLaunch | null {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const b = raw as Record<string, unknown>;
+    rejectUnknownKeys({ launch: { ios: raw } }, b, ["app", "args"], "launch.ios");
+    if (typeof b.app !== "string" || b.app.length === 0) return null;
+    if (b.args === undefined) return { app: b.app };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { ios: raw } }, b.args, "launch.ios");
+    if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
+    return { app: b.app, args: b.args as string[] };
   }
   return null;
 }
@@ -2270,7 +2361,7 @@ function parseLaunch(raw: unknown): Launch {
     if (keys.length > 0) {
       const out: {
         native?: string;
-        ios?: string;
+        ios?: IosLaunch;
         android?: string;
         vega?: string;
         chromium?: ChromiumLaunch;
@@ -2284,6 +2375,13 @@ function parseLaunch(raw: unknown): Launch {
             break;
           }
           out.chromium = c;
+        } else if (k === "ios") {
+          const i = parseIosLaunch(b[k]);
+          if (i === null) {
+            valid = false;
+            break;
+          }
+          out.ios = i;
         } else if (typeof b[k] === "string" && (b[k] as string).length > 0) {
           (out as Record<string, string>)[k] = b[k] as string;
         } else {
@@ -2298,7 +2396,7 @@ function parseLaunch(raw: unknown): Launch {
     { launch: raw },
     `launch needs an app id (bare string) or a per-platform map ` +
       `({ native | ${LAUNCH_PLATFORMS.filter((p) => p !== "chromium").join(" | ")}: <app id>, ` +
-      `chromium: <app path> | { path, args } })`
+      `ios: { app, args }, chromium: <app path> | { path, args } })`
   );
 }
 
@@ -2891,34 +2989,6 @@ function parseRunTarget(raw: unknown, value: unknown): string {
     );
   }
   return target;
-}
-
-/**
- * Complete a `run:` target's optional `.yaml` extension: `run: login` means
- * `login.yaml` beside the containing flow file, exactly as the spelled-out form
- * does. This is the compatibility path for flows written when a `run:` target
- * was a saved-flow NAME looked up in `.argent/flows` — a bare name resolves to
- * the same file it always did, since those flows sit in that one directory.
- *
- * Completed HERE rather than at resolution time so exactly one spelling reaches
- * everything downstream: canonicalFlowPath's read, the fragment's on-disk casing
- * check, the report's `target`, and runDisplayName — which slices a fixed
- * `".yaml".length` off the target and would truncate a real path segment given a
- * bare one (see flow-run.ts). Re-serializing a parsed flow therefore writes the
- * completed spelling back, which is the intended one-way migration.
- *
- * The test is the CANDIDATE's basename, not the supplied value's: basename()
- * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
- * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate cannot
- * name — a wrong extension (`login.yml`), a mis-cased one (`Login.YAML`), an
- * empty target — leaves the value untouched for the caller's extension
- * diagnostics, which name the real problem better than a silent completion to
- * `login.yml.yaml` could.
- */
-function completeRunExtension(value: string): string {
-  if (value.endsWith(".yaml")) return value;
-  const candidate = `${value}.yaml`;
-  return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
 function parseScriptStep(raw: unknown, body: unknown): FlowStep {

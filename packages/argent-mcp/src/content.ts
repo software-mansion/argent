@@ -234,6 +234,11 @@ export type FlowExecuteResult = {
   steps: FlowStepResult[];
   startedAt?: number;
   durationMs?: number;
+  /**
+   * The baselines a run over a link returned: each the path the client
+   * wrote, or `{ path, error }` for one it could not write.
+   */
+  baselineWrites?: unknown[];
 };
 
 const STATUS_GLYPH: Record<string, string> = {
@@ -328,6 +333,15 @@ export async function flowRunToMcpContent(
     // Snapshot steps carry artifacts instead of a result.
     if (isRecord(step.artifacts)) {
       blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx, step.depth)));
+    }
+  }
+
+  // A baseline the run reports written but this client could not store:
+  // the step passed, the file is not there.
+  for (const write of result.baselineWrites ?? []) {
+    const { path, error } = (isRecord(write) ? write : {}) as { path?: unknown; error?: unknown };
+    if (typeof path === "string" && typeof error === "string") {
+      blocks.push({ type: "text", text: `✗ baseline not written: ${path}: ${error}` });
     }
   }
 

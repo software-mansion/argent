@@ -404,7 +404,7 @@ describe("flow-execute chromium boot", () => {
           },
         } as never
       )
-    ).rejects.toThrow(/co-located/i);
+    ).rejects.toThrow(/no link and no ARGENT_TOOLS_URL/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 

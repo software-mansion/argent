@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as dns from "node:dns";
 import * as os from "node:os";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -428,10 +428,14 @@ export function getInstalledVersion(): string | null {
 const PROBE_TIMEOUT_MS = 3_000;
 
 export function getLatestVersion(): string {
-  const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
-    encoding: "utf8",
-    timeout: PROBE_TIMEOUT_MS,
-  });
+  const args = ["view", PACKAGE_NAME, "version", "--registry", NPM_REGISTRY];
+  const opts = { encoding: "utf8", timeout: PROBE_TIMEOUT_MS } as const;
+  // npm is a .cmd shim on Windows, which only cmd.exe can run. A finished command
+  // string (not shell: true + args) avoids Node 24's DEP0190 warning.
+  const result =
+    process.platform === "win32"
+      ? execSync(["npm", ...args].join(" "), opts)
+      : execFileSync("npm", args, opts);
   return result.trim();
 }
 
