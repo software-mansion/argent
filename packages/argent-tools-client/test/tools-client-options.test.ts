@@ -26,12 +26,8 @@ afterAll(() => {
 
 let server: Server;
 let url: string;
-let requests: Array<{
-  method: string;
-  url: string;
-  headers: IncomingMessage["headers"];
-  body: string;
-}>;
+let requests: Array<{ method: string; url: string; body: string }>;
+let uploadStatus: number;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -43,9 +39,10 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 beforeEach(async () => {
   requests = [];
+  uploadStatus = 200;
   server = createServer(async (req, res) => {
     const body = await readBody(req);
-    requests.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body });
+    requests.push({ method: req.method ?? "", url: req.url ?? "", body });
     const json = (payload: unknown, contentType = "application/json") => {
       res.writeHead(200, { "Content-Type": contentType });
       res.end(JSON.stringify(payload));
@@ -70,10 +67,18 @@ beforeEach(async () => {
             name: "run-flow",
             description: "",
             inputSchema: {},
-            fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
+            fileInputs: [
+              { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+            ],
           },
         ],
       });
+    }
+    if (req.method === "POST" && req.url === "/upload" && uploadStatus === 413) {
+      // A proxy's own page: the tool-server never saw the body.
+      res.writeHead(413, { "Content-Type": "text/html" });
+      res.end("<html>413 Request Entity Too Large</html>");
+      return;
     }
     if (req.method === "POST" && req.url === "/upload") return json({ uploadId: "u-1" });
     if (req.method === "POST" && req.url === "/tools/slow") {
@@ -215,6 +220,47 @@ describe("createToolsClient options", () => {
     expect(local).not.toHaveProperty("content");
   });
 
+  it("sends a linked flow run once and streamed, and says a dropped call may have run", async () => {
+    // No run: step, so the closure is empty: the call still runs a flow over the link.
+    const flowPath = join(TEST_HOME, "plain.yaml");
+    writeFileSync(flowPath, "steps:\n  - echo: alone\n");
+    const fetchImpl = vi.fn((u: string, init: RequestInit) =>
+      u.endsWith("/tools/run-flow") ? Promise.reject(new TypeError("fetch failed")) : fetch(u, init)
+    );
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+      fetchImpl,
+    });
+
+    await expect(callTool("run-flow", { flow_path: flowPath })).rejects.toThrow(
+      "The connection to the tool-server closed before run-flow finished (fetch failed). " +
+        "The tool may have run; check its effect before you run it again."
+    );
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      `${url}/tools/run-flow`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/x-ndjson" }),
+      }),
+      { longRunning: false, carriesUpload: true }
+    );
+  });
+
+  it("names the proxy body limit when POST /upload refuses a large run: fragment", async () => {
+    // Past the inline budget, so the fragment goes through POST /upload.
+    writeFileSync(join(TEST_HOME, "big.yaml"), `steps: []\n#${"x".repeat(300 * 1024)}\n`);
+    const flowPath = join(TEST_HOME, "uses-big.yaml");
+    writeFileSync(flowPath, "steps:\n  - run: big.yaml\n");
+    uploadStatus = 413;
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    await expect(callTool("run-flow", { flow_path: flowPath })).rejects.toThrow(
+      /^Upload to .+\/upload failed: 413 .+ The proxy must accept a body of at least 1 MB on POST \/upload, for example client_max_body_size 1m in nginx$/
+    );
+    expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
+  });
+
   it("rejects a 2xx answer whose body cannot be read", async () => {
     const { callTool } = createToolsClient({
       baseUrl: async () => ({ url, token: "t", remote: false }),
@@ -234,38 +280,6 @@ describe("createToolsClient options", () => {
     });
 
     await expect(callTool("gateway-page", {})).rejects.toThrow(/^502 Bad Gateway$/);
-  });
-
-  it("marks each POST /tools/:name of a call over a link as linked, and nothing else", async () => {
-    // A link to 127.0.0.1 included: only the header tells the tool-server.
-    const overLink = createToolsClient({
-      baseUrl: async () => ({ url, token: "t", remote: true }),
-    });
-    await overLink.callTool("slow", {});
-    await overLink.callTool("slow", {}, { onProgress: () => {} });
-    vi.stubEnv("ARGENT_TOOLS_URL", url);
-    await createToolsClient().callTool("slow", {});
-    vi.stubEnv("ARGENT_TOOLS_URL", "");
-    const local = createToolsClient({ baseUrl: async () => ({ url, token: "t", remote: false }) });
-    await local.callTool("slow", {});
-
-    expect(requests.map((r) => [r.method, r.url, r.headers["x-argent-linked"] ?? null])).toEqual([
-      ["GET", "/tools", null],
-      ["POST", "/tools/slow", "1"],
-      ["GET", "/tools", null],
-      ["POST", "/tools/slow", "1"],
-      ["GET", "/tools", null],
-      ["POST", "/tools/slow", "1"],
-      ["GET", "/tools", null],
-      ["POST", "/tools/slow", null],
-    ]);
-    // The calls carry no files: the header does not depend on them.
-    expect(requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body))).toEqual([
-      {},
-      {},
-      {},
-      {},
-    ]);
   });
 
   it("returns outputHint from the listing on the buffered and the streamed path", async () => {

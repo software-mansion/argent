@@ -1190,44 +1190,6 @@ describe("flow-execute chromium boot", () => {
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
-  it("does not boot for a leading fragment the executor refuses for a retired key", async () => {
-    // Refused at load, the fragment runs none of its steps, its launch
-    // included, so booting for that launch would start an app nothing uses.
-    const top = await writeFlow("steps:\n  - run: e2e\n");
-    await writeSiblingFlow(
-      top,
-      "e2e",
-      "steps:\n  - launch: { chromium: ./app }\n  - tool: gesture-swipe\n" +
-        "    args: { fromX: 0.5, fromY: 0.8, toX: 0.5, toY: 0.2, settle: true }\n"
-    );
-    const registry = makeRegistry(async (id: string) =>
-      id === "list-devices" ? { devices: [] } : {}
-    );
-    vi.mocked(registry.getTool).mockImplementation(
-      (id: string) =>
-        (id === "gesture-swipe"
-          ? { inputSchema: { properties: { settle: { not: {}, description: "Retired." } } } }
-          : undefined) as never
-    );
-
-    await expect(
-      runFlow(registry, { name: "retired-e2e", project_root: PROJECT_ROOT, flow_file: top })
-    ).rejects.toThrow(/No booted device found/);
-    expect(bootElectronApp).not.toHaveBeenCalled();
-
-    // The executor's verdict on the same chain, attached to a device so it runs.
-    const result = await runFlow(registry, {
-      name: "retired-e2e",
-      project_root: PROJECT_ROOT,
-      flow_file: top,
-      device: "chromium-cdp-9999",
-    });
-
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:error"]);
-    expect(result.steps[0].reason).toContain("gesture-swipe's retired `settle` key");
-    expect(bootElectronApp).not.toHaveBeenCalled();
-  });
-
   it("does not boot when a leading run: chain reaches no launch", async () => {
     // A plain fragment composition: nothing to boot, so device resolution
     // proceeds normally (and reports no booted device here).

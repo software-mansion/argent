@@ -492,7 +492,7 @@ The CLI also uploads each file argument of the `tool:` steps in the flow, its fr
 
 The other rows of the table still need a run without a link. The tool-server rejects such a step before the first step, in the flow file and in each fragment and nested flow that the CLI uploads.
 
-The CLI puts small fragments, nested flows, baselines and file arguments in the call, up to 256 KiB in total. The CLI sends each other file in its own request to `POST /upload`. A body limit of a reverse proxy therefore applies to one file at a time. With `ARGENT_FLOW_FILES_LOG=1`, the CLI prints one line for each file before the call.
+The CLI puts small fragments, nested flows, baselines and file arguments in the call, up to 256 KiB in total. The CLI sends each other file in its own request to `POST /upload`. A body limit of a reverse proxy therefore applies to one file at a time. When the proxy refuses a file with the status 413, the flow does not run. The error gives the body size that the proxy must accept on `POST /upload`. With `ARGENT_FLOW_FILES_LOG=1`, the CLI prints one line for each file before the call.
 
 For each rejection in the table, the error lists the steps that caused it. The tool-server can serve some steps that an older client cannot serve. For such a step, the error also tells you to update the argent CLI or the MCP adapter. For a `tool:` step that names a file by a relative path, the error tells you to use an absolute path. For a file that does not end in `.png` or `.yaml`, the error says that a `tool:` step can name only such a file.
 
