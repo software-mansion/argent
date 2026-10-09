@@ -373,19 +373,21 @@ export async function runSnapshot(
       // remote capture replacing it says so. Otherwise a cloud refresh of a
       // committed baseline reads exactly like a local one.
       const source = env.device.platform === "ios-remote" ? " from a remote simulator" : "";
-      const written = replaced ? `baseline updated${source}` : `baseline written${source}`;
       // A client's new baseline is on the client, and no file on this host is
       // it: a host path in the report would name the wrong machine. The reason
       // names the client path instead, and a crop file is swept like any
-      // other scratch file.
+      // other scratch file. The client writes the file only once the result
+      // reaches it, so the reason does not say it is written yet.
       if (opts.clientFlowPath !== undefined) {
+        const write = replaced ? "updates" : "writes";
         return {
           ...captureWarned,
           status: "pass",
-          reason: `${written} (${baselinePath})`,
+          reason: `baseline captured${source}; the client ${write} it when the run ends (${baselinePath})`,
           snapshotKey,
         };
       }
+      const written = replaced ? `baseline updated${source}` : `baseline written${source}`;
       const baseline = await store.register({
         hostPath: baselinePath,
         kind: "screenshot",
