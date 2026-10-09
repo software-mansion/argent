@@ -99,3 +99,227 @@ describe("guidance platform-correctness", () => {
     expect(chromium.guidance).toContain("electronAppPath");
   });
 });
+
+describe("guidance content", () => {
+  // A crashed session's console log is reachable only through the note
+  // debugger-log-registry and debugger-connect hand out, and these two strings
+  // are how the answers that carry none — debugger-status', above all — send
+  // the agent to the one that does.
+  // Lose the clause and the answer that reports the app is gone says nothing
+  // about the one artifact the crash left behind, and the agent relaunches over
+  // it. An answer that IS carrying the note says so itself; that is pinned in
+  // log-registry-not-connected.test.ts.
+  it.each(["no_app_connected", "stale_connection"] as const)(
+    "%s guidance points at the note that names the kept log",
+    (reason) => {
+      const { guidance } = buildNotConnected(
+        reason,
+        coded(FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS),
+        {
+          port: 8081,
+          device_id: "emulator-5554",
+        }
+      );
+      expect(guidance).toContain("debugger-log-registry");
+      // Hedged, because a session that captured nothing keeps no file: guidance
+      // that promises one unconditionally sends readers after a path that will
+      // not be in the note.
+      expect(guidance).toContain("when there is one");
+    }
+  );
+
+  // Both tools, not only one. Either reports the record and either spends it,
+  // so on the prescribed route — relaunch, then read — the agent reaches it
+  // through whichever it calls first. A pointer naming one alone sends readers
+  // to a tool a concurrent agent may already have spent it through, and these
+  // strings are the whole of what `debugger-status` and a flow-run step line
+  // hand over.
+  it.each([
+    ["no_app_connected", "emulator-5554"],
+    ["no_app_connected", "chromium-cdp-9222"],
+    ["device_mismatch", "emulator-5554"],
+    ["device_mismatch", "chromium-cdp-9222"],
+    ["stale_connection", "emulator-5554"],
+    ["stale_connection", "chromium-cdp-9222"],
+    ["cdp_unreachable", "emulator-5554"],
+  ] as const)("%s guidance on %s names both tools that report the note", (reason, device_id) => {
+    const { guidance } = buildNotConnected(reason, coded(FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS), {
+      port: 8081,
+      device_id,
+    });
+    expect(guidance).toContain("debugger-log-registry");
+    expect(guidance).toContain("or debugger-connect's note");
+  });
+
+  // Chromium's `cdp_unreachable` is the exception, and deliberately: its device
+  // id IS the CDP port, and `boot-device` draws a free one, so the connect after
+  // a relaunch there is asking under an id the record was never filed under.
+  // Pointing at it would name a route that cannot reach the file.
+  it("cdp_unreachable on Chromium points only at the read that can still reach the record", () => {
+    const { guidance } = buildNotConnected(
+      "cdp_unreachable",
+      coded(FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE),
+      { port: 8081, device_id: "chromium-cdp-9222" }
+    );
+    expect(guidance).toContain("debugger-log-registry's note names it");
+    expect(guidance).toContain("relaunching on a port boot-device picks strands it");
+    expect(guidance).not.toContain("debugger-connect's");
+  });
+
+  // The same hedge on the reason a crashed renderer actually leaves standing.
+  // `keptAt` is `runtimeDied && logWriter.hasFile()`, so a writer whose `open()`
+  // failed has entries and no file — and the note then says those entries went
+  // with it. A pointer that promises the file outright sends the reader after a
+  // path no note will carry, which is what the two strings above hedge against.
+  it.each(["emulator-5554", "chromium-cdp-9222"] as const)(
+    "cdp_unreachable on %s hedges the kept file like its siblings",
+    (device_id) => {
+      const { guidance } = buildNotConnected(
+        "cdp_unreachable",
+        coded(FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED),
+        { port: 8081, device_id }
+      );
+      expect(guidance).toContain("note names it when there is one");
+    }
+  );
+
+  // And scoped to the sessions that keep one: `keepFile` is
+  // `runtimeDied && captured > 0`, so an explicit teardown deletes the file
+  // however much it had captured. Promising the file to every session that
+  // logged sends a reader after a path no note will name.
+  it("no_app_connected: promises the file only to a session whose runtime died", () => {
+    const { guidance } = buildNotConnected(
+      "no_app_connected",
+      coded(FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS),
+      { port: 8081, device_id: "emulator-5554" }
+    );
+    expect(guidance).toContain("whose runtime died holding console logs keeps its file");
+  });
+
+  // The same errand read from the tool that runs it. debugger-log-registry
+  // reports the note itself, so this clause would send an agent holding the
+  // answer back to the tool that produced it — for a note that answer either
+  // already carries or has just said it does not have.
+  it("no_app_connected: the answer that reports the note itself does not send the reader to fetch it", () => {
+    const { guidance } = buildNotConnected(
+      "no_app_connected",
+      coded(FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS),
+      { port: 8081, device_id: "emulator-5554" },
+      { reportsOwnNote: true }
+    );
+    expect(guidance).not.toContain("debugger-log-registry");
+    // Still the same state, and still the same recovery.
+    expect(guidance).toContain("a crashed app reads as this too");
+    expect(guidance).toContain("launch-app / restart-app");
+  });
+
+  // The re-target this reason asks for is the one action that changes the id the
+  // next call asks under, and the record is filed under the id that was refused
+  // — so the shared string has to name the tool, and the tool that carries the
+  // note has to not be sent back to itself for it.
+  it("device_mismatch: the shared string sends the reader to the note, its own answer does not", () => {
+    const params = { port: 8081, device_id: "emulator-5554" };
+    const err = coded(FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH);
+    const shared = buildNotConnected("device_mismatch", err, params).guidance;
+    expect(shared).toContain("read debugger-log-registry's note with this same device_id first");
+    const own = buildNotConnected("device_mismatch", err, params, {
+      reportsOwnNote: true,
+    }).guidance;
+    expect(own).not.toContain("debugger-log-registry");
+    // Same refusal and same recovery from either caller.
+    for (const guidance of [shared, own]) {
+      expect(guidance).toContain("matched by its logicalDeviceId alone");
+      expect(guidance).toContain("give the device its own Metro port");
+    }
+  });
+
+  // Only the reasons whose shared string names the tool need an override, and
+  // the rest must keep reading identically from either caller — an override map
+  // that grew an entry by accident would fork guidance no reason needs.
+  // `stale_connection` names the tool and still needs none: debugger-status
+  // mints it and debugger-log-registry never emits it, so no answer that
+  // carries the note ever carries this string.
+  it("never sends the caller that holds the note back here for it", () => {
+    // Every reason `debugger-log-registry` can emit, on both platforms: the
+    // platform override is consulted before the own-note one, so a pointer
+    // added to a Chromium string would reach the answer carrying the note
+    // however clean the Metro column stayed - and would read as a loop, since
+    // the note it names is in the same result. `stale_connection` is absent
+    // because no code maps there, so this tool never emits it.
+    for (const device_id of ["emulator-5554", "chromium-cdp-9222"]) {
+      for (const reason of [
+        "metro_not_running",
+        "no_app_connected",
+        "device_mismatch",
+        "cdp_unreachable",
+        "runtime_unresponsive",
+        "reconnecting",
+      ] as const) {
+        const err = coded(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING);
+        const params = { port: 8081, device_id };
+        expect(
+          buildNotConnected(reason, err, params, { reportsOwnNote: true }).guidance
+        ).not.toContain("debugger-log-registry");
+      }
+    }
+  });
+
+  it("every other reason reads the same from the tool that reports the note", () => {
+    for (const device_id of ["emulator-5554", "chromium-cdp-9222"]) {
+      const params = { port: 8081, device_id };
+      for (const reason of [
+        "metro_not_running",
+        "runtime_unresponsive",
+        "reconnecting",
+        "stale_connection",
+      ] as const) {
+        const err = coded(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING);
+        expect(buildNotConnected(reason, err, params, { reportsOwnNote: true }).guidance).toBe(
+          buildNotConnected(reason, err, params).guidance
+        );
+      }
+    }
+  });
+
+  // The one reason both platforms reach that also has a pointer to drop, so it
+  // is the only one whose guidance varies along both axes at once. On Chromium
+  // it is also the ONLY reason a crashed renderer produces, which is what makes
+  // the missing pointer cost the whole log rather than an ordering hint.
+  it("points cdp_unreachable at the note, except in the answer that carries it", () => {
+    const err = coded(FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED);
+    const metro = { port: 8081, device_id: "emulator-5554" };
+    const chromium = { port: 8081, device_id: "chromium-cdp-9222" };
+
+    expect(buildNotConnected("cdp_unreachable", err, metro).guidance).toContain(
+      "debugger-log-registry's note names it"
+    );
+    expect(buildNotConnected("cdp_unreachable", err, chromium).guidance).toContain(
+      "debugger-log-registry's note names it"
+    );
+    // Chromium keeps its own recovery in both, rather than falling back to the
+    // RN wording the caller override is written in.
+    for (const opts of [undefined, { reportsOwnNote: true }]) {
+      expect(buildNotConnected("cdp_unreachable", err, chromium, opts).guidance).toContain(
+        "launch-app cannot start a Chromium app"
+      );
+    }
+    // The pointer itself differs by platform, and the Chromium half is the one
+    // that has to say WHY reading it first matters: its record is filed under
+    // the CDP port, and boot-device draws a free one, so a relaunch that does
+    // not pass the old port leaves the record answering to an id nothing will
+    // ask about again. A Metro device keeps its ids across a relaunch and needs
+    // no such warning.
+    expect(buildNotConnected("cdp_unreachable", err, chromium).guidance).toContain(
+      "relaunching on a port boot-device picks strands it"
+    );
+    expect(buildNotConnected("cdp_unreachable", err, metro).guidance).not.toContain(
+      "boot-device picks"
+    );
+    // And the tool holding the record is not sent to fetch it from itself.
+    for (const params of [metro, chromium]) {
+      expect(
+        buildNotConnected("cdp_unreachable", err, params, { reportsOwnNote: true }).guidance
+      ).not.toContain("debugger-log-registry's note");
+    }
+  });
+});
