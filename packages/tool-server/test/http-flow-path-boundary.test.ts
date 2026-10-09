@@ -945,6 +945,37 @@ describe("flow-execute over a link, from the real argent client", () => {
     );
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
+
+  it("tells a client that sends a run: flow without its fragments to update", async () => {
+    const root = await tapThenRun("frag.yaml");
+    await write(".argent/flows/frag.yaml", "steps:\n  - echo: frag\n");
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote: true }),
+      fetchImpl: async (target: string, init: RequestInit) => {
+        if (!target.endsWith("/tools/flow-execute")) return fetch(target, init);
+        // An older client sends the flow file alone, with no members.
+        const body = JSON.parse(String(init.body));
+        const { members: _m, canonical: _c, spelling: _s, ...wire } = body.flow_path;
+        return fetch(target, { ...init, body: JSON.stringify({ ...body, flow_path: wire }) });
+      },
+    });
+
+    const err = await client
+      .callTool("flow-execute", { flow_path: root, project_root: projectRoot, device: DEVICE })
+      .catch((e: unknown) => e);
+
+    expect(String(err)).toContain("  - step 2: run: frag.yaml\n");
+    expect(String(err)).toContain(
+      "This tool-server runs run: steps for a client that sends their fragments with the call. " +
+        "Update the argent CLI or MCP adapter on the client."
+    );
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("flow-execute with run: fragments sent through POST /upload", () => {
