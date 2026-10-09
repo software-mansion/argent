@@ -466,7 +466,12 @@ The tool-server then rejects the flow before the first step. The error gives the
 
 A fragment that does not exist in these directories does not stop the flow before the first step. Its `run:` step reports `error` when the step runs. A `when:` block that does not run does not need its fragments.
 
-The CLI puts fragments in the call until they are 256 KiB in total. The CLI sends each other fragment in a separate request to `POST /upload`. Thus the body limit of a reverse proxy applies to one such fragment at a time. When the proxy refuses a fragment with the status 413, the flow does not run. The error gives the body size that the proxy must accept on `POST /upload`. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload.
+The CLI puts fragments in the call until they are 256 KiB in total. The call carries the flow file and these fragments as base64 text, which is about 4/3 of their size. The CLI sends each other fragment in a separate request to `POST /upload`. Thus a reverse proxy in front of the tool-server must accept these request bodies:
+
+- on `POST /tools/flow-execute`, the flow file and about 350 KiB more
+- on `POST /upload`, one fragment at a time
+
+When the proxy refuses a fragment with the status 413, the flow does not run. The error gives the body size that the proxy must accept on `POST /upload`. When the proxy refuses the call with the status 413, the error gives only the status. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload.
 
 Set `ARGENT_FLOW_FILES_LOG=1` to see what the CLI does with each fragment. The CLI then prints one `[flow-files]` line on stderr for each fragment before the call. With `--json`, each line is a warning object: `{ "event": "warning", "warning": <text> }`.
 
