@@ -26,7 +26,11 @@ function whichFinds(...paths: string[]): void {
 const TEMP_RUNNER_BINS: Array<[string, string]> = [
   ["npx", "/home/u/.npm/_npx/0ba8f3802715c416/node_modules/.bin/argent"],
   [
-    "pnpm 9 dlx",
+    "pnpm 9.0 dlx",
+    "/home/u/.cache/pnpm/dlx/aa7rk2cjl3nbbxmwqgnfoyqywu/pkg/node_modules/.bin/argent",
+  ],
+  [
+    "pnpm 9.15 dlx",
     "/home/u/.cache/pnpm/dlx/bngrqnrvxrzuyhh4gjt7gytap4/1a1222286f6-3bf9dd/node_modules/.bin/argent",
   ],
   [
