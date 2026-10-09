@@ -216,6 +216,43 @@ describe("exportFailureArtifacts", () => {
     ]);
   });
 
+  it.skipIf(!canDenyWrite)(
+    "exports the next failed step's screen when one screen cannot be read",
+    async () => {
+      const unreadable = await writeHandle("s1.png", "unreadable-screen");
+      await fs.chmod(unreadable.hostPath as string, 0o000);
+      const first: StepReport = {
+        index: 0,
+        kind: "tool",
+        status: "fail",
+        artifacts: { screen: unreadable },
+      };
+      const second: StepReport = {
+        index: 1,
+        kind: "tool",
+        status: "error",
+        artifacts: { screen: await writeHandle("s2.png", "error-screen") },
+      };
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let errs: unknown[][];
+      try {
+        await exportFailureArtifacts(mkReport([first, second]), outDir, flowFile, ctx);
+      } finally {
+        errs = [...spy.mock.calls];
+        spy.mockRestore();
+      }
+
+      expect(errs).toHaveLength(1);
+      expect(errs[0]![0]).toMatch(
+        new RegExp(`^warning: could not read the step 1 artifacts of ${flowFile}: `)
+      );
+      expect(first.artifacts?.screen).toBe(unreadable);
+      const dir = path.join(outDir, "checkout");
+      expect(second.artifacts?.screen).toBe(path.join(dir, "step-2-screen.png"));
+      expect(await fs.readFile(path.join(dir, "step-2-screen.png"), "utf8")).toBe("error-screen");
+    }
+  );
+
   it("leaves --output untouched when a failed step's screen cannot be materialized", async () => {
     const step: StepReport = {
       index: 0,
