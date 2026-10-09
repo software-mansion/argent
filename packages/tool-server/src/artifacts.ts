@@ -138,7 +138,7 @@ function streamDirectoryAsArchive(
   // one tar abandoned lacks the trailing zero blocks. The compressor would close
   // a valid frame around either, so cut the response off for the latter and the
   // client's download fails instead of extracting a partial bundle.
-  let tail = Buffer.alloc(0);
+  let tail: Buffer = Buffer.alloc(0);
   child.stdout.on("data", (chunk: Buffer) => {
     tail =
       chunk.length >= TAR_TRAILER_BYTES
