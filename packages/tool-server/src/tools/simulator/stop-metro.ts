@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { ToolDefinition } from "@argent/registry";
+
+// Absolute port probers, resolved once. A tool-server started from a GUI or
+// launchd context inherits a PATH that can be missing `/usr/sbin`, and a bare
+// name then ENOENTs. Bare name only when no canonical location exists.
+const LSOF_BIN = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => existsSync(p)) ?? "lsof";
+const NETSTAT_BIN =
+  [`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\netstat.exe`].find((p) =>
+    existsSync(p)
+  ) ?? "netstat";
 
 /**
  * Deduped PIDs *listening* on `port`, parsed out of `netstat -ano` (Windows).
@@ -44,16 +54,16 @@ export function parseNetstatListeningPids(netstatOutput: string, port: number): 
  */
 function listeningPids(port: number): number[] {
   if (process.platform === "win32") {
-    const output = execFileSync("netstat", ["-ano"], {
+    const output = execFileSync(NETSTAT_BIN, ["-ano"], {
       encoding: "utf-8",
       timeout: 5_000,
-      // `netstat -ano` dumps every socket on the host; overflowing Node's
-      // default 1 MiB throws, which this tool would misread as "port is free".
+      // `netstat -ano` dumps every socket on the host; a busy box easily
+      // exceeds Node's default 1 MiB, which would abort the probe.
       maxBuffer: 16 * 1024 * 1024,
     });
     return parseNetstatListeningPids(output, port);
   }
-  const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+  const output = execFileSync(LSOF_BIN, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
     encoding: "utf-8",
     timeout: 5_000,
   }).trim();
@@ -85,7 +95,7 @@ export const stopMetroTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to stop Metro on port ${params.port}: ${failureSignal.error_code}`,
   },
-  description: `Stop the Metro bundler process listening on a given port (default 8081). Use when ending a React Native session or when Metro must be restarted. Returns { stopped, port, pids }; stopped=false if no process is found on the port. Fails if the port lookup command times out or the process cannot be killed. This is DESTRUCTIVE — always ask the user for confirmation before calling this tool.`,
+  description: `Stop the Metro bundler process listening on a given port (default 8081). Use when ending a React Native session or when Metro must be restarted. Returns { stopped, port, pids }; stopped=false if no process is found on the port. Fails if the port lookup cannot run or times out, or the process cannot be killed. This is DESTRUCTIVE — always ask the user for confirmation before calling this tool.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
@@ -108,9 +118,18 @@ export const stopMetroTool: ToolDefinition<
       }
 
       return { stopped: true, port, pids };
-    } catch {
-      // `lsof` exits non-zero when nothing is listening on the port.
-      return { stopped: false, port, pids: [] };
+    } catch (error) {
+      // A non-zero exit is how the probe reports "nothing is listening". Any
+      // other failure (absent binary, timeout, overflowed output) never read
+      // the port, so it must not be answered with the positive claim
+      // `stopped: false`.
+      if (typeof (error as { status?: unknown }).status === "number") {
+        return { stopped: false, port, pids: [] };
+      }
+      throw new Error(
+        `Could not determine what is listening on port ${port}: ${(error as Error).message}`,
+        { cause: error }
+      );
     }
   },
 };
