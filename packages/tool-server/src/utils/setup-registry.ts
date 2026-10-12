@@ -23,6 +23,7 @@ import { listDevicesTool } from "../tools/devices/list-devices";
 import { createBootDeviceTool } from "../tools/devices/boot-device";
 import { createLaunchAppTool } from "../tools/launch-app";
 import { createRestartAppTool } from "../tools/restart-app";
+import { terminateAppTool } from "../tools/terminate-app";
 import { reinstallAppTool } from "../tools/reinstall-app";
 import { settingsPermissionsTool } from "../tools/settings-permissions";
 import { openUrlTool } from "../tools/open-url";
@@ -130,6 +131,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createBootDeviceTool(registry));
   registry.registerTool(createLaunchAppTool(registry));
   registry.registerTool(createRestartAppTool(registry));
+  registry.registerTool(terminateAppTool);
   registry.registerTool(reinstallAppTool);
   registry.registerTool(settingsPermissionsTool);
   registry.registerTool(openUrlTool);
