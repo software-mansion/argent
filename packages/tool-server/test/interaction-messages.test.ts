@@ -99,10 +99,6 @@ describe("tool interaction messages", () => {
   });
 
   it("does not claim a comparison for a dimension-mismatch screenshot-diff", () => {
-    // dimension_mismatch is not a failure - `execute` returns a summary and the
-    // registry emits the completion event - so the completion message is the only
-    // thing separating the one outcome that compares nothing from a real
-    // comparison in the event log.
     const completedMsg =
       definitionsById(createRegistry()).get("screenshot-diff")!.interaction!.completedMsg!;
     const params = { udid: "device-1", baselinePath: "/a.png", currentPath: "/b.png" };

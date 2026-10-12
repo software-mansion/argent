@@ -113,10 +113,7 @@ function statusLine(status: SummaryStatus): string {
   return `- status: ${status}`;
 }
 
-/**
- * The summary is the only place a tool result carries the status, so callers
- * that need it read it back out of the text written here.
- */
+// The result carries its status only inside the summary text.
 export function summaryReportsDimensionMismatch(summary: string): boolean {
   return summary.split("\n").includes(statusLine("dimension_mismatch"));
 }
