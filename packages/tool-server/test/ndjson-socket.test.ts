@@ -58,12 +58,14 @@ describe("attachNdjsonReader", () => {
 
   it("reports an unparseable frame with byte length and a sanitised preview, then continues", async () => {
     const { stream, messages, dropped } = harness();
-    stream.write("garbage\there\n" + '{"id":9}\n');
+    // Multi-byte frame: 13 characters, 15 UTF-8 bytes. An ASCII frame makes the two
+    // readings equal, so the reported count would pin neither.
+    stream.write("garbage\there✓\n" + '{"id":9}\n');
     await settle();
     expect(messages).toEqual([{ id: 9 }]);
     expect(dropped).toHaveLength(1);
-    expect(dropped[0]!.bytes).toBe(Buffer.byteLength("garbage\there"));
-    expect(dropped[0]!.preview).toBe("garbage·here");
+    expect(dropped[0]!.bytes).toBe(15);
+    expect(dropped[0]!.preview).toBe("garbage·here✓");
   });
 
   it("delivers a trailing frame without newline when the stream ends", async () => {

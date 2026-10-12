@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -79,6 +81,39 @@ describe("LogFileWriter", () => {
     expect(clusters[0].lastId).toBe(9);
     expect(clusters[1].message).toBe("Unique message");
     expect(clusters[1].count).toBe(1);
+  });
+
+  it("merges two messages sharing their first 80 chars, keeping the first arrival's text", () => {
+    const shared = "P".repeat(80);
+    writer.write(makeEntry(0, { message: `${shared}ALPHA` }));
+    writer.write(makeEntry(1, { message: `${shared}BETA` }));
+
+    const clusters = writer.getClusters();
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].message).toBe(`${shared}ALPHA`);
+    expect(clusters[0].count).toBe(2);
+  });
+
+  it("truncates the cluster message to 200 chars, still verbatim in the flat line", () => {
+    const long = "L".repeat(311);
+    writer.write(makeEntry(0, { message: long }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe(long.slice(0, 200));
+
+    const content = fs.readFileSync(writer.getFilePath(), "utf-8");
+    expect(content).toContain(clusters[0].message);
+  });
+
+  it("keeps in the cluster message the newlines the flat line collapses", () => {
+    writer.write(makeEntry(0, { message: "first line\nsecond line" }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe("first line\nsecond line");
+
+    const content = fs.readFileSync(writer.getFilePath(), "utf-8");
+    expect(content).not.toContain(clusters[0].message);
+    expect(content).toContain("first line second line");
   });
 
   it("limits clusters to requested count", () => {
@@ -257,5 +292,41 @@ describe("LogFileWriter", () => {
 
     const clusters = writer.getClusters();
     expect(clusters[0].sourceFile).toBe("src/api/user.ts");
+  });
+});
+
+// Mode bits do not bite on Windows, nor for uid 0.
+const CAN_MAKE_UNWRITABLE = process.platform !== "win32" && process.getuid?.() !== 0;
+
+describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be created", () => {
+  let dir: string;
+  let unwritableWriter: LogFileWriter;
+
+  beforeEach(() => {
+    dir = path.join(os.homedir(), ".argent", "tmp");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o555);
+    unwritableWriter = new LogFileWriter(9998);
+  });
+
+  afterEach(() => {
+    fs.chmodSync(dir, 0o755);
+    unwritableWriter.close();
+  });
+
+  it("keeps no copy of a line it could not write", () => {
+    unwritableWriter.write(makeEntry(0, { message: "unreadable line" }));
+
+    expect(fs.existsSync(unwritableWriter.getFilePath())).toBe(false);
+    expect(unwritableWriter.readAll()).toEqual([]);
+
+    const retainedLines = Object.values(unwritableWriter as unknown as Record<string, unknown>)
+      .filter((value): value is unknown[] => Array.isArray(value))
+      .flat();
+    expect(retainedLines).toEqual([]);
+
+    // The entry itself is still accounted for, through the counts and clusters.
+    expect(unwritableWriter.getStats().totalEntries).toBe(1);
+    expect(unwritableWriter.getClusters()[0].message).toBe("unreadable line");
   });
 });

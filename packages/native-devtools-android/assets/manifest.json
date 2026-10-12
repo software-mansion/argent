@@ -1,7 +1,7 @@
 {
   "packageName": "com.argent.androiddevtools",
   "instrumentationRunner": "com.argent.androiddevtools/.SnapshotInstrumentation",
-  "versionName": "0.1.0",
-  "versionCode": 1,
+  "versionName": "0.2.0",
+  "versionCode": 2,
   "installFlags": ["-r", "-t"]
 }

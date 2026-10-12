@@ -2,6 +2,7 @@ import { access } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAndroidSdkRoot } from "@argent/configuration-core";
 import { commandOnPath } from "./command-on-path";
 
 export type AndroidBinaryName = "adb" | "emulator";
@@ -33,11 +34,12 @@ const cache = new Map<AndroidBinaryName, CacheEntry>();
 /**
  * Resolve an Android SDK binary to an absolute path, or `null`.
  *
- * Order: PATH, `$ANDROID_HOME/<subdir>`, `$ANDROID_SDK_ROOT/<subdir>`, then the
- * OS defaults in `defaultAndroidRoots()`. The defaults matter because a server
- * spawned by a GUI process inherits neither PATH nor the env vars exported from
- * shell rc files; PATH-only lookup then made a working Android Studio install
- * (which sets ANDROID_HOME but not PATH) look like an empty `listAvds()`.
+ * Order: PATH, the `android.sdkRoot` config value, `$ANDROID_HOME/<subdir>`,
+ * `$ANDROID_SDK_ROOT/<subdir>`, then the OS defaults in `defaultAndroidRoots()`.
+ * The defaults matter because a server spawned by a GUI process inherits neither
+ * PATH nor the env vars exported from shell rc files; PATH-only lookup then made
+ * a working Android Studio install (which sets ANDROID_HOME but not PATH) look
+ * like an empty `listAvds()`.
  *
  * Callers that surface the failure to users should funnel through `ensureDep`
  * so the message names the install hint.
@@ -70,11 +72,15 @@ async function probe(name: AndroidBinaryName): Promise<string | null> {
 }
 
 function androidRoots(): string[] {
-  // ANDROID_HOME (canonical) before ANDROID_SDK_ROOT (its legacy alias), so an
-  // explicitly set ANDROID_HOME wins over a stale value inherited from elsewhere.
-  const envRoots = [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT].filter(
-    (v): v is string => Boolean(v && v.trim())
-  );
+  // The configured root is an explicit choice, so it goes before anything
+  // inherited from the environment. Then ANDROID_HOME (canonical) before
+  // ANDROID_SDK_ROOT (its legacy alias), so an explicitly set ANDROID_HOME wins
+  // over a stale value inherited from elsewhere.
+  const envRoots = [
+    getAndroidSdkRoot(),
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+  ].filter((v): v is string => Boolean(v && v.trim()));
   return [...envRoots, ...defaultAndroidRoots()];
 }
 
@@ -87,7 +93,12 @@ function defaultAndroidRoots(): string[] {
     join(home, "android-sdk"), // manual-install convention; no installer picks it
     "/opt/android-sdk",
     "/usr/lib/android-sdk", // Debian/Ubuntu `android-sdk` apt package
-    "/usr/local/share/android-sdk", // Homebrew cask
+    "/usr/local/share/android-sdk", // Homebrew cask (Intel prefix)
+    // Where `brew install --cask android-commandlinetools` roots the SDK, so an
+    // `sdkmanager`-installed platform-tools is found without setting ANDROID_HOME
+    // — otherwise following the missing-adb hint still leaves the tool failing.
+    "/opt/homebrew/share/android-commandlinetools",
+    "/usr/local/share/android-commandlinetools",
   ];
   // Windows Studio default is %LOCALAPPDATA%\Android\Sdk; also probe the
   // canonical AppData\Local layout in case LOCALAPPDATA wasn't inherited.

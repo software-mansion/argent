@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "@argent/registry";
 import { sanitize, ALLOWED } from "../src/sanitize.js";
-import { DEBUGGER_TOOL_OUTCOMES, EVENT_NAMES, PLATFORMS } from "../src/events.js";
+import { DEBUGGER_TOOL_OUTCOMES, DEVICE_KINDS, EVENT_NAMES, PLATFORMS } from "../src/events.js";
 
 describe("sanitize", () => {
   describe("event allowlist", () => {
@@ -58,6 +58,42 @@ describe("sanitize", () => {
       }
       expect(PLATFORMS).toContain("tvos");
       expect(PLATFORMS).toContain("android-tv");
+    });
+
+    it("accepts every device kind on the tool lifecycle events", () => {
+      // `device_kind` rides next to `platform`; `platform: "ios"` + `device_kind:
+      // "device"` is how a physical iPhone is told apart from a simulator.
+      for (const event of ["tool:invoke", "tool:complete", "tool:fail"] as const) {
+        for (const device_kind of DEVICE_KINDS) {
+          expect(sanitize(event, { tool: "describe", platform: "ios", device_kind })).toEqual({
+            tool: "describe",
+            platform: "ios",
+            device_kind,
+          });
+        }
+      }
+      expect(DEVICE_KINDS).toContain("device");
+    });
+
+    it("drops a device kind outside the enum, including the registry's `unknown`", () => {
+      // Mirror of the `platform: "unknown"` rule above: `resolveDevice` never
+      // produces `unknown`, so a bucket for it could only be filled by a bug.
+      for (const device_kind of ["unknown", "iphone", "Simulator", 1, null]) {
+        expect(sanitize("tool:invoke", { tool: "describe", platform: "ios", device_kind })).toEqual(
+          { tool: "describe", platform: "ios" }
+        );
+      }
+    });
+
+    it("drops device_kind on events that do not declare it", () => {
+      expect(
+        sanitize("debugger:tool_outcome", {
+          tool: "debugger-status",
+          outcome: "connected",
+          platform: "ios",
+          device_kind: "device",
+        })
+      ).toEqual({ tool: "debugger-status", outcome: "connected", platform: "ios" });
     });
 
     it("drops the legacy `from_tar` decision (developer-only path is off the books)", () => {

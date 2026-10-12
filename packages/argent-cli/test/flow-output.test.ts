@@ -113,6 +113,37 @@ describe("exportFailureArtifacts", () => {
     }
   });
 
+  it("keeps a remote run's files apart from a local run's of the same key", async () => {
+    // The key names a device class, not a host, so a cloud run and a local run
+    // of one flow report the same key. Exported into one --output, the second
+    // export must not overwrite the first host's evidence.
+    const local: StepReport = {
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      artifacts: { current: await writeFile("local.png", "local-bytes") },
+    };
+    const remote: StepReport = {
+      index: 0,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      snapshotRemote: true,
+      artifacts: { current: await writeFile("remote.png", "remote-bytes") },
+    };
+
+    await exportFailureArtifacts(mkReport([local]), outDir, flowFile, ctx);
+    await exportFailureArtifacts(mkReport([remote]), outDir, flowFile, ctx);
+
+    const localDest = path.join(outDir, "checkout", "home__ios-390x844-current.png");
+    const remoteDest = path.join(outDir, "checkout", "home__ios-390x844-remote-current.png");
+    expect(local.artifacts?.current).toBe(localDest);
+    expect(remote.artifacts?.current).toBe(remoteDest);
+    expect(await fs.readFile(localDest, "utf8")).toBe("local-bytes");
+    expect(await fs.readFile(remoteDest, "utf8")).toBe("remote-bytes");
+  });
+
   it("leaves passed and baseline-seeded snapshots alone (failure-only)", async () => {
     const baseline = await writeFile("b.png", "baseline-bytes");
     const seeded: StepReport = {
@@ -127,6 +158,75 @@ describe("exportFailureArtifacts", () => {
     await exportFailureArtifacts(mkReport([seeded]), outDir, flowFile, ctx);
 
     expect(seeded.artifacts?.baseline).toBe(baseline);
+    await expect(fs.access(outDir)).rejects.toThrow();
+  });
+
+  it("copies each failed step's screen to step-<n>-screen.png, numbered as the report prints steps", async () => {
+    const passedScreen = await writeFile("p.png", "passed-bytes");
+    const failed: StepReport = {
+      index: 2,
+      kind: "tool",
+      status: "fail",
+      artifacts: { screen: await writeHandle("s1.png", "fail-screen") },
+    };
+    // Nested inside a `when:` block: a flat report entry, numbered like any other.
+    const nested: StepReport = {
+      index: 4,
+      kind: "tool",
+      status: "error",
+      depth: 1,
+      artifacts: { screen: await writeFile("s2.png", "error-screen") },
+    };
+    const snapshot: StepReport = {
+      index: 5,
+      kind: "snapshot",
+      status: "fail",
+      snapshotKey: "home__ios-390x844",
+      artifacts: { current: await writeFile("c.png", "current-bytes") },
+    };
+    const passed: StepReport = {
+      index: 1,
+      kind: "tool",
+      status: "pass",
+      artifacts: { screen: passedScreen },
+    };
+    const steps: StepReport[] = [
+      { index: 0, kind: "echo", status: "pass" },
+      passed,
+      failed,
+      { index: 3, kind: "when", status: "pass" },
+      nested,
+      snapshot,
+    ];
+
+    await exportFailureArtifacts(mkReport(steps), outDir, flowFile, ctx);
+
+    const dir = path.join(outDir, "checkout");
+    // The echo is unnumbered, so the failed step is step 2 and the nested one step 4.
+    expect(failed.artifacts?.screen).toBe(path.join(dir, "step-2-screen.png"));
+    expect(nested.artifacts?.screen).toBe(path.join(dir, "step-4-screen.png"));
+    expect(snapshot.artifacts?.current).toBe(path.join(dir, "home__ios-390x844-current.png"));
+    expect(await fs.readFile(path.join(dir, "step-2-screen.png"), "utf8")).toBe("fail-screen");
+    expect(await fs.readFile(path.join(dir, "step-4-screen.png"), "utf8")).toBe("error-screen");
+    expect(passed.artifacts?.screen).toBe(passedScreen);
+    expect((await fs.readdir(dir)).filter((f) => f.endsWith(".png")).sort()).toEqual([
+      "home__ios-390x844-current.png",
+      "step-2-screen.png",
+      "step-4-screen.png",
+    ]);
+  });
+
+  it("leaves --output untouched when a failed step's screen cannot be materialized", async () => {
+    const step: StepReport = {
+      index: 0,
+      kind: "tool",
+      status: "fail",
+      artifacts: { screen: null },
+    };
+
+    await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+    expect(step.artifacts?.screen).toBeNull();
     await expect(fs.access(outDir)).rejects.toThrow();
   });
 

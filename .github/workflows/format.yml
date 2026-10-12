@@ -8,6 +8,12 @@ on:
     branches:
       - main
 
+# Supersede a PR's in-flight run rather than let it hold a runner for a verdict
+# nobody wants. A push to main keeps its run: that is the commit's only record.
+concurrency:
+  group: format-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   format:
     name: Prettier check
@@ -21,6 +27,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "20"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci

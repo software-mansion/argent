@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { CHROMIUM_ID_PREFIX } from "../../utils/device-info";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import { metroPortField } from "../../utils/debugger/metro-port";
 import {
   buildNotConnected,
   classifyNotConnected,
@@ -11,7 +12,7 @@ import {
 } from "./not-connected";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port (ignored for Chromium)"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(

@@ -8,6 +8,12 @@ on:
     branches:
       - main
 
+# Supersede a PR's in-flight run rather than let it hold a runner for a verdict
+# nobody wants. A push to main keeps its run: that is the commit's only record.
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   unit-tests:
     name: Unit tests
@@ -21,6 +27,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "20"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -28,16 +35,39 @@ jobs:
         run: npm install @rollup/rollup-linux-x64-gnu --no-save
 
       - name: Build workspace dependencies
-        run: npx tsc --build
-
-      - name: Typecheck tests
-        run: npm run typecheck:tests --workspaces --if-present
-
-      - name: Typecheck scripts
-        run: npm run typecheck:scripts
+        run: npm run build
 
       - name: Run tests
         run: npm test --workspaces --if-present
 
       - name: Test root scripts
         run: npm run test:scripts
+
+  # Typechecking needs the same install and build as the tests but none of their
+  # output, so running it alongside them takes its ~60s off the critical path
+  # rather than adding to it.
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build workspace dependencies
+        run: npm run build
+
+      - name: Typecheck tests
+        run: npm run typecheck:tests --workspaces --if-present
+
+      - name: Typecheck scripts
+        run: npm run typecheck:scripts

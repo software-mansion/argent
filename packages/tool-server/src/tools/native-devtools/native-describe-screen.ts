@@ -44,13 +44,14 @@ export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
-- raw native point-space frame and tapPoint
-- normalizedFrame and normalizedTapPoint relative to the app's main screen bounds
-- top-level screenFrame metadata
+- raw frame and tapPoint in points, on the portrait axes of the screen
+- normalizedFrame and normalizedTapPoint on the same axes. gesture-tap uses
+  these axes, also when the UI is landscape
+- top-level screenFrame metadata: the screen bounds on these axes
 - traits and optional labels/identifiers
 
 This is a low-level native inspection tool. The normalized fields are intended to help

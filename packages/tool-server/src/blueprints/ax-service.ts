@@ -11,6 +11,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
+import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
@@ -62,13 +63,55 @@ export interface AXDescribeResponse {
   elements: AXDescribeElement[];
 }
 
+/** A `tree` node, in document order; `parentIndex` names its accessibility parent. */
+export interface AXTreeNode extends AXDescribeElement {
+  index: number;
+  parentIndex?: number;
+  roleDescription?: string;
+  covered?: boolean;
+  /** An XCUIElementType value. */
+  elementType?: number;
+  placeholder?: string;
+  /** The input shows its placeholder: it holds no text, and `value` is the placeholder. */
+  hintShowing?: boolean;
+  /** Roots only. */
+  bundleId?: string;
+}
+
+export interface AXTreeResponse {
+  alertVisible: boolean;
+  screenFrame?: { width: number; height: number };
+  nodes: AXTreeNode[];
+  truncated: boolean;
+  foregroundApp?: string;
+  /** 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId. */
+  treeVersion?: number;
+}
+
 export interface AXServiceApi {
   /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
+  /** The front app's full hierarchy; while a system alert shows, the system app first and the app under it second. */
+  tree(): Promise<AXTreeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
+  /**
+   * The display id of the panel the guest renders to (1 the cover panel, 3
+   * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
+   * Null when the daemon names none, as on a device with one panel. Answered
+   * in a few milliseconds; every touch of a foldable asks it
+   * (`utils/foldable.ts`), so its budget is short. A daemon build that
+   * predates the command answers an error.
+   */
+  livePanel(): Promise<number | null>;
 }
+
+/**
+ * How long `live_panel` gets: a healthy daemon answers in a few milliseconds,
+ * and a caller that asks before every touch must not wait on one that hangs.
+ */
+const LIVE_PANEL_TIMEOUT_MS = 2_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -240,6 +283,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         }
       );
     }
+
+    /**
+     * Mechanism gate for provider-supplied devices. Gating here at the
+     * blueprint, rather than per tool is what keeps this bounded. Every tool
+     * built on `AX_SERVICE_NAMESPACE`, now and in future, inherits the check
+     * without being re-audited. A no-op for every device Argent booted itself.
+     */
+    await assertExternalCapability(AX_SERVICE_NAMESPACE, device, "ax-service");
 
     const udid = device.id;
     const host = pickIosHost(device);
@@ -429,6 +480,48 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
         };
+      },
+
+      async tree(): Promise<AXTreeResponse> {
+        let result: Partial<AXTreeResponse>;
+        try {
+          result = (await query("tree", 10_000)) as Partial<AXTreeResponse>;
+        } catch (err) {
+          // A daemon that predates `tree` answers an envelope-level error.
+          if (!(err instanceof Error) || err.message !== "unknown_command") throw err;
+          throw new FailureError("ax-service predates `tree`; update argent", {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_tree",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return {
+          alertVisible: result.alertVisible ?? false,
+          screenFrame: result.screenFrame,
+          nodes: result.nodes ?? [],
+          truncated: result.truncated === true,
+          foregroundApp: result.foregroundApp,
+          treeVersion: result.treeVersion,
+        };
+      },
+
+      async livePanel(): Promise<number | null> {
+        const result = (await query("live_panel", LIVE_PANEL_TIMEOUT_MS)) as {
+          displayId?: number | null;
+          error?: string;
+        };
+        if (result.error) {
+          throw new FailureError(`ax-service live_panel error: ${result.error}`, {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_live_panel",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return typeof result.displayId === "number" && result.displayId > 0
+          ? result.displayId
+          : null;
       },
 
       async alertCheck(): Promise<boolean> {

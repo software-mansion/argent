@@ -16,10 +16,11 @@ import {
   statusBarMaskFraction,
   type PixelFrame,
 } from "../../src/tools/flows/flow-pixels";
+import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../src/blueprints/ios-device-runner";
 import { isAndroidTv } from "../../src/utils/adb";
 import { isTvOsSimulator } from "../../src/utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../src/utils/vega-screen";
-import { tvScreenshot } from "../../src/tools/screenshot";
+import { downscalePngInPlace, tvScreenshot } from "../../src/tools/screenshot";
 import { FIRST_FRAME_WAIT_MS } from "../../src/utils/simulator-client";
 
 // The capture backends shell out to xcrun / adb / a live simulator-server, so
@@ -37,7 +38,10 @@ vi.mock("../../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/adb")>()),
   isAndroidTv: vi.fn(async () => false),
 }));
-vi.mock("../../src/tools/screenshot", () => ({ tvScreenshot: vi.fn() }));
+vi.mock("../../src/tools/screenshot", () => ({
+  tvScreenshot: vi.fn(),
+  downscalePngInPlace: vi.fn(),
+}));
 
 let tmpDir: string;
 
@@ -47,6 +51,7 @@ beforeEach(async () => {
   vi.mocked(isAndroidTv).mockReset().mockResolvedValue(false);
   vi.mocked(captureVegaScreenshotPng).mockReset();
   vi.mocked(tvScreenshot).mockReset();
+  vi.mocked(downscalePngInPlace).mockReset();
 });
 
 afterEach(async () => {
@@ -395,10 +400,12 @@ describe("statusBarMaskFraction", () => {
   });
 
   it("masks the band on a remote iOS simulator too", async () => {
-    // sim-remote drives an ordinary iOS simulator, so its status bar ticks
-    // like a local one — and the run-level `pinStatusBar` does not cover the
-    // platform either. The tvOS probe reads the local simulator list, which
-    // cannot see another machine's device, so it is not asked.
+    // sim-remote drives an ordinary iOS simulator, so it has the same status
+    // bar to mask. The mask's one production reader is `waitForIdle`, which the
+    // run-level `pinStatusBar` does not cover on its own (see
+    // STATUS_BAR_MASK_FRACTION); a snapshot masks the band through the differ
+    // instead. The tvOS probe reads the local simulator list, which cannot see
+    // another machine's device, so it is not asked.
     await expect(
       statusBarMaskFraction({ platform: "ios-remote", kind: "simulator", id: "remote:ios-udid" })
     ).resolves.toBe(0.06);
@@ -410,6 +417,16 @@ describe("statusBarMaskFraction", () => {
     await expect(
       statusBarMaskFraction({ platform: "ios", kind: "simulator", id: "tv-udid" })
     ).resolves.toBe(0);
+  });
+
+  it("masks the band on a physical iPhone without asking the simulator probe", async () => {
+    // A physical device's UDID lives outside simctl's namespace, so the tvOS
+    // probe would answer from the wrong list, and a phone/tablet always
+    // paints a status bar anyway.
+    await expect(
+      statusBarMaskFraction({ platform: "ios", kind: "device", id: "00008120-000E6D0C0ABBA01E" })
+    ).resolves.toBe(0.06);
+    expect(isTvOsSimulator).not.toHaveBeenCalled();
   });
 
   it.each(["chromium", "vega"] as const)("masks nothing on %s", async (platform) => {
@@ -612,6 +629,38 @@ describe("capturePixels routing", () => {
     expect(captureVegaScreenshotPng).toHaveBeenCalledWith({ scale: 0.25 });
     expect(isTvOsSimulator).not.toHaveBeenCalled();
     expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  it("routes a physical iPhone to the resident runner and the shared in-place downscale", async () => {
+    // Straight to the runner: no devicectl attempt (probed or otherwise), and
+    // no simulator-namespace probe for a hardware UDID.
+    const device: DeviceInfo = { platform: "ios", kind: "device", id: "00008120-000E6D0C0ABBA01E" };
+    const png = new PNG({ width: 2, height: 1 });
+    png.data.set([10, 20, 30, 255, 40, 50, 60, 255]);
+    const run = vi.fn(async () => ({ imageBase64: PNG.sync.write(png).toString("base64") }));
+    const resolveService = vi.fn(async () => ({ run, udid: device.id }));
+
+    const pixels = await capture(envFor(device, resolveService));
+
+    expect(pixels).toMatchObject({ width: 2, height: 1 });
+    expect(resolveService).toHaveBeenCalledWith(`${IOS_DEVICE_RUNNER_NAMESPACE}:${device.id}`, {
+      device,
+    });
+    expect(run).toHaveBeenCalledWith(
+      { command: "screenshot" },
+      { readOnly: true, timeoutMs: 4_000 }
+    );
+    // The runner's full-resolution PNG goes through the same shared helper as
+    // the `screenshot` tool's device route, bounded by this capture's signal.
+    expect(downscalePngInPlace).toHaveBeenCalledWith(
+      expect.stringContaining("argent-ios-device-settle-"),
+      0.25,
+      expect.any(AbortSignal)
+    );
+    expect(isTvOsSimulator).not.toHaveBeenCalled();
+    // The temp PNG is scratch: removed as soon as it has been decoded.
+    const file = vi.mocked(downscalePngInPlace).mock.calls[0][0];
+    await expect(fs.access(file)).rejects.toThrow();
   });
 
   // Chromium is the one route that never touches the filesystem, and the one
@@ -823,5 +872,33 @@ describe("capturePixelsWithin", () => {
     expect(pixelCaptureTimeoutMs({ platform: "ios", kind: "simulator", id: "tv-udid" }, true)).toBe(
       FIRST_PIXEL_CAPTURE_TIMEOUT_MS
     );
+    // A physical iPhone captures through the on-device runner: an on-device
+    // PNG encode plus a usbmux transfer, slower than a warm stream on every
+    // capture, so it keeps its own wider ceiling throughout.
+    const physical = {
+      platform: "ios",
+      kind: "device",
+      id: "00008120-000E6D0C0ABBA01E",
+    } as DeviceInfo;
+    expect(pixelCaptureTimeoutMs(physical, true)).toBe(4_000);
+    expect(pixelCaptureTimeoutMs(physical, false)).toBe(4_000);
+  });
+
+  it("widens only the warm bound on a remote simulator", () => {
+    // Every capture on a cloud device is a round trip to another machine, which
+    // the localhost warm bound does not allow for; a timed-out read costs a
+    // whole settle round, since waitForIdle needs two comparable captures.
+    const remote = { platform: "ios-remote", kind: "simulator", id: "remote:SIM" } as DeviceInfo;
+    expect(pixelCaptureTimeoutMs(remote, false)).toBe(4_000);
+    expect(pixelCaptureTimeoutMs(remote, false)).toBeGreaterThan(PIXEL_CAPTURE_TIMEOUT_MS);
+    // The first capture is not narrowed to the remote ceiling. It keeps the
+    // wider one as unused headroom: the MoQ request never enters the
+    // first-frame poll that ceiling is sized for.
+    expect(pixelCaptureTimeoutMs(remote, true)).toBe(FIRST_PIXEL_CAPTURE_TIMEOUT_MS);
+    // No other platform moved.
+    expect(pixelCaptureTimeoutMs(iosDevice, false)).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
+    expect(
+      pixelCaptureTimeoutMs({ platform: "android", kind: "emulator", id: "emulator-5554" }, false)
+    ).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
   });
 });

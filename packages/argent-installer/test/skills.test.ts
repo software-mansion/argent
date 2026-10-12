@@ -96,6 +96,29 @@ describe("refreshArgentSkills", () => {
     );
   });
 
+  it("runs the skills CLI without an inherited npm_config_package", () => {
+    // Under `npx --package @swmansion/argent -- argent ...`, npm exports
+    // npm_config_package; a nested `npx skills` would otherwise reinstall argent
+    // instead of the skills CLI (#1335).
+    listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
+    writeLock(path.join(tmpDir, "skills-lock.json"), { "argent-create-flow": {} });
+    const original = process.env.npm_config_package;
+    process.env.npm_config_package = "@swmansion/argent@latest";
+    try {
+      refreshArgentSkills(tmpDir);
+    } finally {
+      if (original === undefined) delete process.env.npm_config_package;
+      else process.env.npm_config_package = original;
+    }
+
+    expect(execFileSyncMock).toHaveBeenCalled();
+    for (const call of execFileSyncMock.mock.calls) {
+      const opts = call[2] as { env?: NodeJS.ProcessEnv };
+      expect(opts.env).toBeDefined();
+      expect(opts.env).not.toHaveProperty("npm_config_package");
+    }
+  });
+
   it("returns an empty array when no scope tracks argent skills", () => {
     listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
 

@@ -21,6 +21,7 @@ import {
   describeResolution,
 } from "../../../utils/react-profiler/component-names";
 import { promises as fs } from "fs";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const timeWindowSchema = z.object({
@@ -37,7 +38,7 @@ const timeWindowSchema = z.object({
 });
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: metroDeviceIdParam(
     "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
   ),
@@ -453,7 +454,7 @@ Fails if no CPU profile is stored — run react-profiler-stop first.`,
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
-    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
+    const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);
     if (!sessionPaths) {
       throw new FailureError(
         "No profiling data stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first.",

@@ -45,6 +45,12 @@
   // the one thing not to do. Restore the directory instead.
   "treatConfigHintsAsErrors": true,
 
+  // client.ts imports tool-args.generated.js, which the build writes (tool-server's
+  // src/sdk-tool-args.ts). CI runs knip unbuilt, where it does not resolve. An
+  // `ignoreUnresolved` entry would turn into a hint, and so an error, on a built
+  // tree; `ignoreIssues` passes in both. tsc still catches a broken import there.
+  "ignoreIssues": { "packages/argent/src/client.ts": ["unresolved"] },
+
   // Ships from its own repo with its own CI, and eslint and prettier skip it the
   // same way. It becomes a workspace the moment `git submodule update --init`
   // puts a package.json where the root `packages/*` glob matches it.
@@ -132,6 +138,16 @@
     // file here passes too — so the list holds only packages this workspace
     // genuinely cannot declare.
     "packages/tool-server": {
+      // Reached only dynamically, so knip cannot see them: the executor puts
+      // the runner in front of the script as an `--import` preload by path, and
+      // the runner starts each watchdog with `new Worker(url)`.
+      "entry": [
+        // Run by the build as `node dist/sdk-tool-args.js`.
+        "src/sdk-tool-args.ts",
+        "src/tools/flows/script/flow-script-runner.mjs",
+        "src/tools/flows/script/flow-script-watchdog-lifeline.mjs",
+        "src/tools/flows/script/flow-script-watchdog-deadline.mjs",
+      ],
       "ignoreDependencies": [
         // --- Declared in package.json, loaded too dynamically to detect.
         //     Without these: "unused dependencies". ---

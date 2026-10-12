@@ -159,10 +159,10 @@ describe("bootElectronApp — spawn error handling", () => {
   });
 
   it("passes anti-throttling switches so a backgrounded window stays testable", async () => {
-    // Without these, Chromium throttles an unfocused/occluded/minimized
-    // window's compositor: mouse-input acks stall ~5s per event, wheel scrolls
-    // hang, and visibilityState flips to "hidden". Booted apps must stay
-    // drivable wherever the human puts the window.
+    // Chromium throttles an unfocused or occluded window's compositor:
+    // mouse-input acks stall ~5s per event and wheel scrolls hang. These
+    // switches disable that; minimization is outside their reach (see
+    // ANTI_THROTTLING_ARGS).
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
 

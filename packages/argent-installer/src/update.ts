@@ -16,6 +16,7 @@ import {
   type McpServerEntry,
 } from "./mcp-configs.js";
 import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
+import { getConfigValueByKey } from "@argent/configuration-core";
 import {
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
@@ -42,6 +43,7 @@ import { execShellCommandSync, runTrustingDisk } from "./shell.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
+import { writeCliRecord } from "./cli-record.js";
 import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
@@ -626,6 +628,20 @@ export async function update(args: string[]): Promise<void> {
         outcomes.push("failed");
       } else {
         outcomes.push(outcome);
+        /**
+         * Re-point the provider CLI record at this install. Also on "noop":
+         * nothing was bumped, but the record may be stale or missing, and an
+         * update is the natural moment to repair it. Last writer wins when
+         * both targets are present — see `cli-record.ts`.
+         */
+        if (outcome === "updated" || outcome === "noop") {
+          const installedVersion =
+            mode === "local"
+              ? (readLocalPackageVersionUncached(projectRoot) ??
+                getLocallyInstalledVersion(projectRoot))
+              : getGloballyInstalledVersion();
+          writeCliRecord({ mode, projectRoot, version: installedVersion ?? "unknown" });
+        }
       }
     }
 
@@ -721,14 +737,21 @@ export async function update(args: string[]): Promise<void> {
         );
       }
 
-      // Allowlists only for scopes that already had argent configured.
-      for (const [scope, adapters] of adaptersByScope) {
-        for (const adapter of adapters) {
-          if (!adapter.addAllowlist) continue;
-          try {
-            adapter.addAllowlist(projectRoot, scope);
-          } catch {
-            // non-fatal
+      // Allowlists only for scopes that already had argent configured — unless
+      // the user opted out (`argent config set allowlist.enabled false`): then
+      // update leaves editor allowlists entirely alone. Unset keeps the
+      // refresh, so nothing changes for existing installs.
+      const allowlistDisabled =
+        getConfigValueByKey("allowlist.enabled", { cwd: projectRoot }) === false;
+      if (!allowlistDisabled) {
+        for (const [scope, adapters] of adaptersByScope) {
+          for (const adapter of adapters) {
+            if (!adapter.addAllowlist) continue;
+            try {
+              adapter.addAllowlist(projectRoot, scope);
+            } catch {
+              // non-fatal
+            }
           }
         }
       }
@@ -742,6 +765,12 @@ export async function update(args: string[]): Promise<void> {
       ];
 
       spinner.stop("Configuration refreshed.");
+
+      if (allowlistDisabled) {
+        p.log.info(
+          pc.dim("Left editor auto-approve allowlists alone (allowlist.enabled is false).")
+        );
+      }
 
       if (results.length > 0) {
         p.note(results.join("\n"), "MCP Configs Updated");

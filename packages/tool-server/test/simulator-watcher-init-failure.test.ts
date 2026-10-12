@@ -66,6 +66,8 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
       throw new Error("stub ensureEnv failure");
     },
     reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
     getInitFailure: () => initFailure,
     isConnected: () => false,
     isAppRunning: async () => false,
@@ -168,6 +170,8 @@ describe("simulator-watcher with api-owned init failure state", () => {
         calls += 1;
       },
       reverifyEnv: async () => {},
+      armsEnv: true,
+      withdrawEnv: async () => {},
       getInitFailure: () => null,
       isConnected: () => false,
       isAppRunning: async () => false,

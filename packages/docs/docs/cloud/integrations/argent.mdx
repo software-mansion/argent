@@ -1,0 +1,48 @@
+---
+sidebar_position: 1
+sidebar_label: Argent
+title: Argent
+sidebar_custom_props:
+  icon: brand-argent
+---
+
+Argent, the toolkit for AI agents, uses `sim-remote` to drive the hosted simulators. You install Argent as usual, log in with `sim-remote`, and the agent sees the hosted simulators next to your local devices.
+
+## Setup
+
+1. Install [Argent](/docs/fundamentals/installation) and [sim-remote](/docs/cloud/fundamentals/installation).
+2. Run `sim-remote login`.
+3. Ask the agent to list the devices.
+
+Argent finds the `sim-remote` binary on your `PATH` and reuses your session. If `sim-remote` is not installed or you are not logged in, Argent shows no hosted simulators and reports no error.
+
+## What the agent does on a hosted simulator
+
+The agent lists a hosted simulator with the `remote:` prefix before its UDID. On this device, the agent can:
+
+- boot the simulator, launch, restart and reinstall the app, and open a URL,
+- press the hardware buttons,
+- see the screen, tap, swipe and type,
+- wait for a screen to settle or for an element to appear,
+- inspect the native view hierarchy and the native network log,
+- record and replay flows.
+
+The screen and the input go through a live video stream between Argent and the machine. The agent does not need a window for the simulator.
+
+## Metro and the debugger
+
+When the agent connects the debugger or starts Metro, Argent opens a reverse tunnel for the port on its own. The hosted simulator loads the bundle from the Metro server on your computer. See [Connect to local servers](/docs/cloud/guides/local-servers).
+
+## Example instructions
+
+- "List the devices and boot the hosted iPhone."
+- "Install `./build/MyApp.app` on the remote simulator and open the login screen."
+- "Tap the Sign in button on the remote simulator and take a screenshot."
+- "Run the checkout flow on the remote simulator."
+
+## Limits
+
+- Argent supports iOS simulators on Argent Cloud. There are no hosted Android devices at this moment.
+- The idle release of the machine also applies to the agent. See [Manage machines](/docs/cloud/guides/machines).
+
+The [tools reference](/docs/reference/tools) lists the Argent tools. The [CLI reference](/docs/cloud/reference/cli) lists the `sim-remote` commands.

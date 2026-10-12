@@ -257,6 +257,16 @@ describe("chromium CDP discovery classifications", () => {
     expect(getFailureSignal(err)?.network_failure).toBe("connection_refused");
   });
 
+  it("classifies a port that accepts and never answers as CHROMIUM_CDP_UNREACHABLE", async () => {
+    // A handler that never responds: the TCP handshake completes and the
+    // headers never arrive. The only other bound on an unsignalled request is
+    // undici's 300s headers timeout, well past any caller's own deadline.
+    const port = await startServer(() => {});
+    const err = await captureError(ensureCdpReachable(port));
+    expectCode(err, FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
+    expect(getFailureSignal(err)?.network_failure).toBe("timeout");
+  }, 20_000);
+
   it("classifies an endpoint with no page targets as CHROMIUM_CDP_NO_PAGE_TARGET", async () => {
     const port = await startServer((path, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });

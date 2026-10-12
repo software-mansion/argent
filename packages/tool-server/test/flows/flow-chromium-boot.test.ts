@@ -225,6 +225,63 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPort).not.toHaveBeenCalled();
   });
 
+  it("counts the hoisted boot in the launch that settles it, as a later launch counts its own", async () => {
+    // Only Date is faked and only a boot moves it, so each time is the boots
+    // that step owns.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      bootElectronApp.mockImplementation(async (opts) => {
+        vi.setSystemTime(Date.now() + 6000);
+        return defaultBoot(opts);
+      });
+      const flowFile = await writeFlow(
+        "steps:\n  - echo: start\n  - launch: { chromium: ./app1 }\n  - launch: { chromium: ./app2 }\n"
+      );
+
+      const result = await runFlow(makeRegistry(), {
+        name: "boot-timing",
+        project_root: PROJECT_ROOT,
+        flow_file: flowFile,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.steps.map((s) => [s.kind, s.durationMs])).toEqual([
+        ["echo", 0],
+        ["launch", 6000],
+        ["launch", 6000],
+      ]);
+      expect(result.durationMs).toBe(12000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("boots the leading launch of a flow that seeds a backend before it", async () => {
+    const flowFile = await writeFlow(
+      "steps:\n  - script: { path: ./seed.mjs }\n  - launch: { chromium: ./app }\n"
+    );
+    const flowDir = path.dirname(flowFile);
+    await fs.writeFile(path.join(flowDir, "seed.mjs"), "", "utf8");
+    const registry = makeRegistry();
+
+    const result = await runFlow(registry, {
+      name: "seed-then-launch",
+      project_root: flowDir,
+      flow_file: flowFile,
+    });
+
+    expect(bootElectronApp).toHaveBeenCalledTimes(1);
+    expect(bootElectronApp.mock.calls[0][0].appPath).toBe(path.join(flowDir, "app"));
+    expect(result.device).toBe("chromium-cdp-12345");
+    expect(result.ok).toBe(true);
+    expect(result.steps[1]).toMatchObject({
+      kind: "launch",
+      status: "pass",
+      reason: "booted chromium instance chromium-cdp-12345",
+    });
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+  });
+
   it("forwards extra CLI args and boots when --platform chromium disambiguates a multi-platform launch", async () => {
     const flowFile = await writeFlow(
       "steps:\n  - launch: { ios: com.acme.app, chromium: { path: ./app, args: [--e2e] } }\n"
@@ -347,7 +404,7 @@ describe("flow-execute chromium boot", () => {
           },
         } as never
       )
-    ).rejects.toThrow(/co-located/i);
+    ).rejects.toThrow(/no link and no ARGENT_TOOLS_URL/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
 
@@ -1771,6 +1828,24 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     await expect(
       runFlowRaw(registry, {
         name: "indirect-prereq-notice",
+        project_root: PROJECT_ROOT,
+        flow_file: fragment,
+      })
+    ).rejects.toThrow(/must not declare executionPrerequisite/i);
+    expect(bootElectronApp).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prerequisite fragment that seeds a backend before the run: into a launch", async () => {
+    const fragment = await writeFlow(
+      'executionPrerequisite: "the counter must already read taps: 1"\n' +
+        "steps:\n  - script: { path: seed.mjs }\n  - run: e2e-a\n"
+    );
+    await writeSiblingFlow(fragment, "e2e-a", "steps:\n  - launch: { chromium: ./app }\n");
+    const registry = makeRegistry();
+
+    await expect(
+      runFlowRaw(registry, {
+        name: "seed-prereq",
         project_root: PROJECT_ROOT,
         flow_file: fragment,
       })

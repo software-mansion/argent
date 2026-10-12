@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, wrapFailure, type FailureSignal } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
@@ -14,6 +14,8 @@ import {
   type TouchActionName,
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
+import { assertAllowedSimServerEndpoint } from "./external-devices";
+import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel } from "./foldable";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -34,6 +36,12 @@ const NO_IMAGE_ERROR = /no image to export/i;
 export const FIRST_FRAME_WAIT_MS = 6_000;
 const FIRST_FRAME_POLL_MS = 250;
 
+/**
+ * The input surface `sendCommand` re-encodes onto when a device has no local
+ * WebSocket, which today means only ios-remote's MoQ session. Every send is
+ * awaitable so a transport that can fail says so; the `| void` half keeps one
+ * that cannot from having to be async.
+ */
 export interface SimulatorServerTransport {
   touch(opts: {
     type: TouchActionName;
@@ -41,11 +49,11 @@ export interface SimulatorServerTransport {
     y: number;
     secondX?: number;
     secondY?: number;
-  }): void;
-  button(opts: { direction: KeyActionName; button: ButtonName }): void;
-  rotate(direction: RotationName): void;
+  }): Promise<void> | void;
+  button(opts: { direction: KeyActionName; button: ButtonName }): Promise<void> | void;
+  rotate(direction: RotationName): Promise<void> | void;
   paste(text: string): Promise<void> | void;
-  pressKey(direction: KeyActionName, keyCode: number): void;
+  pressKey(direction: KeyActionName, keyCode: number): Promise<void> | void;
   screenshot(opts?: {
     rotation?: RotationName;
     scale?: number;
@@ -53,43 +61,479 @@ export interface SimulatorServerTransport {
   }): Promise<{ url: string; path: string }>;
 }
 
-const connections = new Map<string, WebSocket>();
+// A command ack is a localhost round-trip behind an already-open socket: 0.06ms
+// p50 / 0.17ms max, measured over 200 sends against a booted iOS sim. The budget
+// is for a server that is reachable but no longer answering (a wedged device),
+// not for normal latency, so it can be generous without ever being reached in a
+// healthy run.
+const COMMAND_ACK_TIMEOUT_MS = 5_000;
+
+interface PendingCommand {
+  settle: (err?: FailureError) => void;
+  cmd: string;
+}
+
+interface Connection {
+  ws: WebSocket;
+  /**
+   * Outstanding commands in send order. simulator-server answers in the order
+   * it received them, and `sendCommand` awaits each ack, so this normally holds
+   * at most one entry — the ordering matters only for an id-less reply (below)
+   * when two tools drive one device at once.
+   */
+  pending: Map<string, PendingCommand>;
+}
+
+const connections = new Map<string, Connection>();
 let cmdId = 0;
 
-function getOrCreateWs(api: SimulatorServerApi): WebSocket {
+/**
+ * A reply to a command. simulator-server echoes the request id on success
+ * (`{"id":"7","status":"ok"}`) but NOT on failure — a rejected command answers
+ * `{"status":"error","message":"parse error: unknown variant ..."}` with no id
+ * at all, so an error can only be matched positionally, against the oldest
+ * command still outstanding.
+ */
+interface CommandAck {
+  id?: string;
+  status?: string;
+  message?: string;
+}
+
+function failAllPending(conn: Connection, makeError: (cmd: string) => FailureError): void {
+  const entries = [...conn.pending.values()];
+  conn.pending.clear();
+  for (const entry of entries) entry.settle(makeError(entry.cmd));
+}
+
+/** A command that never reached the device, whichever transport dropped it. */
+const COMMAND_TRANSPORT_FAILURE: FailureSignal = {
+  error_code: FAILURE_CODES.SIMULATOR_COMMAND_TRANSPORT_FAILED,
+  failure_stage: "simulator_command_transport",
+  failure_area: "tool_server",
+  error_kind: "network",
+  network_failure: "connection_reset",
+  failure_command: "simulator_server",
+};
+
+function transportError(cmd: string, apiUrl: string, detail: string): FailureError {
+  return new FailureError(
+    `simulator-server did not accept the '${cmd}' command: ${detail}. ` +
+      `The command was NOT delivered to the device. Check that the simulator is still booted ` +
+      `and the simulator-server for ${apiUrl} is running.`,
+    COMMAND_TRANSPORT_FAILURE
+  );
+}
+
+/**
+ * The MoQ twin of `transportError`: the send itself rejected, so the input was
+ * never written to the remote simulator.
+ */
+function remoteTransportError(cmd: string, cause: unknown): FailureError {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return wrapFailure(
+    cause,
+    COMMAND_TRANSPORT_FAILURE,
+    `The remote simulator did not accept the '${cmd}' command: ${detail}. ` +
+      `The command was NOT delivered to the device. Call stop-simulator-server for this ` +
+      `device and retry - the next call opens a new cloud session. If the machine itself ` +
+      `was released, acquire one again before retrying.`
+  );
+}
+
+function getOrCreateConnection(api: SimulatorServerApi): Connection {
   const key = api.apiUrl;
   const existing = connections.get(key);
   if (
     existing &&
-    (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
+    (existing.ws.readyState === WebSocket.OPEN || existing.ws.readyState === WebSocket.CONNECTING)
   ) {
     return existing;
   }
+  /**
+   * `ws:` unconditionally, because `apiUrl` is `http:` unconditionally.
+   * Argent's own spawn path reads it off the binary's `api_ready` line and the
+   * provider contract refuses any other scheme, so there is no `https:` apiUrl
+   * to mistake for a `wss:` endpoint that nothing serves.
+   */
   const { host } = new URL(api.apiUrl);
   const ws = new WebSocket(`ws://${host}/ws`);
-  ws.on("error", () => connections.delete(key));
-  ws.on("close", () => connections.delete(key));
-  connections.set(key, ws);
-  return ws;
+  const conn: Connection = { ws, pending: new Map() };
+
+  ws.on("message", (data: WebSocket.RawData) => {
+    const text = Buffer.isBuffer(data)
+      ? data.toString()
+      : Array.isArray(data)
+        ? Buffer.concat(data).toString()
+        : Buffer.from(data).toString();
+    let ack: CommandAck;
+    try {
+      ack = JSON.parse(text) as CommandAck;
+    } catch {
+      return; // Not a command reply; the socket carries nothing else today.
+    }
+    if (ack.status !== "ok" && ack.status !== "error") return;
+
+    // A reply that names an id argent is no longer waiting on is stale — a late
+    // ack for a command that already timed out. Dropping it matters: falling
+    // back to positional matching here would settle whatever command is in
+    // flight *now* with an answer meant for an earlier one, reintroducing the
+    // phantom success this whole change exists to remove.
+    if (ack.id != null && !conn.pending.has(ack.id)) return;
+    // Only an id-less reply (i.e. an error) is matched positionally, against
+    // the oldest outstanding command, which is what an in-order server means by it.
+    const id = ack.id ?? conn.pending.keys().next().value;
+    if (id == null) return;
+    const entry = conn.pending.get(id);
+    if (entry == null) return;
+    conn.pending.delete(id);
+
+    if (ack.status === "ok") {
+      entry.settle();
+      return;
+    }
+    entry.settle(
+      new FailureError(
+        `simulator-server rejected the '${entry.cmd}' command: ${ack.message ?? "unknown error"}. ` +
+          `The command was NOT delivered to the device.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_COMMAND_REJECTED,
+          failure_stage: "simulator_command_rejected",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+          failure_command: "simulator_server",
+        }
+      )
+    );
+  });
+
+  // A socket that dies with commands in flight is the shut-the-simulator-down
+  // case: nothing was delivered, and without this the callers would hang until
+  // their ack timeout instead of failing at once.
+  ws.on("error", (err: Error) => {
+    connections.delete(key);
+    failAllPending(conn, (cmd) => transportError(cmd, key, err.message));
+  });
+  ws.on("close", () => {
+    connections.delete(key);
+    failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
+  });
+
+  connections.set(key, conn);
+  return conn;
 }
 
 /**
- * Send a JSON command to the simulator-server. Call sites always speak the
- * WebSocket command shape (`{cmd: "touch", ...}`); with `api.transport` set it
- * is re-encoded onto MoQ instead.
+ * Send a JSON command to the simulator-server and resolve once it has been
+ * acknowledged. Call sites always speak the WebSocket command shape
+ * (`{cmd: "touch", ...}`); with `api.transport` set it is re-encoded onto MoQ
+ * instead.
+ *
+ * Rejects — rather than reporting a phantom success — when the server answers
+ * `status: "error"`, when the socket fails or closes with the command in
+ * flight, or when no reply arrives within `COMMAND_ACK_TIMEOUT_MS`. Awaiting
+ * the ack is what separates a delivered input from a lost one: every one of
+ * those cases used to be indistinguishable from a landed tap
+ * (https://github.com/software-mansion/argent/issues/932).
+ *
+ * MoQ has no per-command ack, so it reports less: a send the session refuses
+ * (a closed track, a released machine) rejects, while a send that goes out is
+ * reported as delivered. That is strictly narrower than the WebSocket ack, and
+ * it is still the difference between a failed gesture and `{ tapped: true }`.
  */
-export function sendCommand(api: SimulatorServerApi, cmd: Record<string, unknown>): void {
+export async function sendCommand(
+  api: SimulatorServerApi,
+  cmd: Record<string, unknown>
+): Promise<SendCommandOutcome> {
+  const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
+  // MoQ carries no screen: a remote simulator is driven on its main screen.
   if (api.transport) {
-    routeViaTransport(api.transport, cmd);
-    return;
+    await sendViaTransport(api.transport, cmd, cmdName);
+    return {};
   }
-  const ws = getOrCreateWs(api);
-  const payload = JSON.stringify({ id: String(++cmdId), ...cmd });
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(payload);
-  } else {
-    ws.once("open", () => ws.send(payload));
+  const conn = getOrCreateConnection(api);
+  const { cmd: targeted, warning } = await withActiveScreen(api, cmd);
+  const id = String(++cmdId);
+  const payload = JSON.stringify({ id, ...targeted });
+
+  await new Promise<void>((resolve, reject) => {
+    let done = false;
+    const settle = (err?: FailureError) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      conn.pending.delete(id);
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(
+      () =>
+        settleAndDropConnection(
+          new FailureError(
+            `simulator-server did not acknowledge the '${cmdName}' command within ` +
+              `${COMMAND_ACK_TIMEOUT_MS}ms. The command may not have reached the device — ` +
+              `the simulator may be wedged or the simulator-server unresponsive.`,
+            {
+              error_code: FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT,
+              failure_stage: "simulator_command_ack",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              network_failure: "timeout",
+              failure_command: "simulator_server",
+            }
+          )
+        ),
+      COMMAND_ACK_TIMEOUT_MS
+    );
+    // `unref` so a pending ack never holds the process open on shutdown.
+    timer.unref?.();
+
+    // A timeout leaves the reply stream permanently out of step with `pending`:
+    // the answer to this command is still owed, and once it lands nothing can
+    // tell it apart from the answer to a later one. Drop the socket instead of
+    // guessing — the next command reconnects, and `close` fails anything else
+    // still in flight rather than leaving it to mismatch.
+    const settleAndDropConnection = (err: FailureError) => {
+      settle(err);
+      connections.delete(api.apiUrl);
+      conn.ws.close();
+    };
+
+    conn.pending.set(id, { settle, cmd: cmdName });
+
+    const write = () =>
+      conn.ws.send(payload, (err) => {
+        if (err) settle(transportError(cmdName, api.apiUrl, err.message));
+      });
+    // A socket still CONNECTING queues the write; if it never opens, the
+    // `error`/`close` handlers above fail the command instead of dropping it.
+    if (conn.ws.readyState === WebSocket.OPEN) write();
+    else conn.ws.once("open", write);
+  });
+  return warning !== undefined ? { warning } : {};
+}
+
+/**
+ * What `sendCommand` reports back besides delivery: on a foldable, a warning
+ * when the panel a touch should name could not be resolved and it went to
+ * the main screen. Empty for every other device and command.
+ */
+export interface SendCommandOutcome {
+  warning?: string;
+}
+
+/**
+ * The panel the touch sequence in flight on a server started on, from its
+ * Down to its Up. Keyed by the api object, which is one per attached server.
+ */
+const gestureScreens = new WeakMap<SimulatorServerApi, number>();
+
+/**
+ * The screen a touch is for, on a foldable. The simulator-server captures
+ * every panel and follows none: a command that names no screen goes to
+ * screen 1, the cover panel, which is black once the device is open. So on a
+ * foldable every touch names the panel the guest renders to, resolved at that
+ * moment (`utils/foldable.ts`): the accessibility service's answer, else
+ * CoreDevice's, else the main screen with a warning the tool carries. Touches
+ * are the only screen-taking command the tool-server sends; the preview page
+ * names the screen on its own touches and wheels.
+ *
+ * A gesture completes on the panel it started on: a fold made outside argent
+ * in the middle of a swipe would otherwise send the swipe's tail to the other
+ * panel, leaving a finger down on the first and the next tap on the second
+ * consumed by its lift. So the screen a `Down` resolved is kept for every
+ * `Move` and the `Up` of that touch sequence, and only the `Down` resolves.
+ *
+ * `api.display` is set only when the device profile is foldable AND the server
+ * reported its panels, so the payload of every other device is byte-identical
+ * to what it was. A caller that already named a screen keeps it.
+ */
+async function withActiveScreen(
+  api: SimulatorServerApi,
+  cmd: Record<string, unknown>
+): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
+  if (!api.display?.foldable || cmd.screen !== undefined) return { cmd };
+  if (cmd.cmd !== "touch") return { cmd };
+  const udid = api.deviceId ?? "";
+  let screen = cmd.type !== "Down" ? gestureScreens.get(api) : undefined;
+  let warning: string | undefined;
+  if (screen === undefined) {
+    const panel = await resolveLivePanel(udid);
+    screen = panel.screen;
+    if (panel.source === "unknown") {
+      warning = unresolvedPanelNote(udid, panel.reason, "this touch went to", api.display.panels);
+      process.stderr.write(`[sim ${udid.slice(0, 8)}] ${warning}\n`);
+    }
   }
+  if (cmd.type === "Up") gestureScreens.delete(api);
+  else gestureScreens.set(api, screen);
+  return { cmd: { ...cmd, screen }, ...(warning !== undefined ? { warning } : {}) };
+}
+
+/**
+ * The display state a simulator-server reports (`GET /api/display`): whether
+ * the device is foldable and, if so, the panels it captures. `hingeAngle` is
+ * only what that server last set; the hinge can be moved by others and its
+ * angle cannot be read back.
+ */
+export interface SimulatorDisplayState {
+  foldable: boolean;
+  panels: FoldablePanel[];
+  hingeAngle: number | null;
+}
+
+function parseDisplayState(body: unknown): SimulatorDisplayState | null {
+  const b = body as { foldable?: unknown; panels?: unknown; hingeAngle?: unknown } | null;
+  if (!b || typeof b.foldable !== "boolean" || !Array.isArray(b.panels)) return null;
+  const panels: FoldablePanel[] = [];
+  for (const p of b.panels as Array<Record<string, unknown>>) {
+    if (
+      typeof p?.screenId === "number" &&
+      typeof p.width === "number" &&
+      typeof p.height === "number"
+    ) {
+      panels.push({ screenId: p.screenId, width: p.width, height: p.height });
+    }
+  }
+  return {
+    foldable: b.foldable,
+    panels,
+    hingeAngle: typeof b.hingeAngle === "number" ? b.hingeAngle : null,
+  };
+}
+
+/**
+ * Read the server's display state. Null for a server that has no such route
+ * (a build that predates foldable support, a provider's), for a remote
+ * simulator, and on any network failure: the caller then treats the device as
+ * single-panel, which is what every client got before there were foldables.
+ */
+export async function fetchDisplayState(
+  api: SimulatorServerApi,
+  signal?: AbortSignal
+): Promise<SimulatorDisplayState | null> {
+  if (api.transport) return null;
+  try {
+    if (api.external) assertAllowedSimServerEndpoint("/api/display");
+    const res = await fetch(`${api.apiUrl}/api/display`, { signal });
+    if (!res.ok) return null;
+    return parseDisplayState(await res.json());
+  } catch {
+    return null;
+  }
+}
+
+/** What `POST /api/hinge` takes: an angle or a posture, and where the hinge is. */
+export interface HingeRequest {
+  angle?: number;
+  posture?: "closed" | "half-open" | "open";
+  from?: number | "closed" | "half-open" | "open";
+}
+
+/**
+ * Move the hinge of a foldable (`POST /api/hinge`). Resolves with the display
+ * state once the sweep has been sent; the guest hands over to the other panel
+ * some time after that, which the caller waits out by resolving the live
+ * panel until it changes. Rejects with the server's own reason on a device
+ * that is not foldable, and names the missing route on a build that predates
+ * the hinge.
+ */
+export async function postHinge(
+  api: SimulatorServerApi,
+  request: HingeRequest,
+  signal?: AbortSignal
+): Promise<SimulatorDisplayState> {
+  if (api.transport) {
+    throw new FailureError(
+      "Fold failed: a remote simulator is driven on its main screen and has no hinge control.",
+      {
+        error_code: FAILURE_CODES.IOS_FOLD_UNSUPPORTED,
+        failure_stage: "simulator_hinge_transport",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+  if (api.external) assertAllowedSimServerEndpoint("/api/hinge");
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}/api/hinge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError("Fold", err, api.apiUrl);
+  }
+  if (res.status === 404) {
+    const fix = api.external
+      ? "The provider that supplied this device would have to ship a simulator-server build with foldable support."
+      : "Update argent so its bundled simulator-server includes foldable support.";
+    throw new FailureError(
+      `Fold failed: this simulator-server build has no hinge endpoint. ${fix}`,
+      {
+        error_code: FAILURE_CODES.IOS_FOLD_UNSUPPORTED,
+        failure_stage: "simulator_hinge_endpoint_missing",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+  const body = (await res.json().catch(() => null)) as { error?: string } | null;
+  if (!res.ok || body?.error) {
+    throw new FailureError(`Fold failed: ${body?.error ?? `HTTP ${res.status}`}.`, {
+      error_code: FAILURE_CODES.IOS_FOLD_FAILED,
+      failure_stage: "simulator_hinge_rejected",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+      failure_command: "simulator_server",
+    });
+  }
+  const display = parseDisplayState(body);
+  if (!display) {
+    throw new FailureError(
+      "Fold failed: simulator-server answered the hinge request without a display state.",
+      {
+        error_code: FAILURE_CODES.SIMULATOR_MISSING_RESPONSE_FIELDS,
+        failure_stage: "simulator_hinge_response_shape",
+        failure_area: "tool_server",
+        error_kind: "network",
+        network_failure: "invalid_response",
+      }
+    );
+  }
+  return display;
+}
+
+/**
+ * The panel a capture of a foldable is of, resolved now, and the note the
+ * result carries about it — which panel it is, or why it is the main screen;
+ * `warning` is that note again when nothing resolved the panel, for the
+ * callers whose result carries only warnings. Undefined for any device that
+ * is not foldable, so their results are unchanged. The caller hands `screen`
+ * to {@link httpScreenshot}, so the capture asks nothing again.
+ */
+export async function resolveCapturePanel(
+  api: SimulatorServerApi
+): Promise<{ screen: number; note: string; warning?: string } | undefined> {
+  if (!api.display?.foldable || !api.deviceId) return undefined;
+  const panel = await resolveLivePanel(api.deviceId);
+  if (panel.source === "unknown") {
+    const note = unresolvedPanelNote(
+      api.deviceId,
+      panel.reason,
+      "this capture is of",
+      api.display.panels
+    );
+    return { screen: panel.screen, note, warning: note };
+  }
+  return {
+    screen: panel.screen,
+    note:
+      `This foldable simulator renders to ${screenLabel(panel.screen, api.display.panels)}, which ` +
+      "this capture shows; describe frames and touch coordinates are in the same space.",
+  };
 }
 
 /**
@@ -123,6 +567,7 @@ async function pointerPost(
   // Remote (MoQ) sims are gated out of recording and expose no HTTP pointer
   // endpoint; their stubbed apiUrl simply makes this fetch fail and return false.
   try {
+    if (api.external) assertAllowedSimServerEndpoint("/api/pointer");
     const res = await fetch(`${api.apiUrl}/api/pointer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -140,36 +585,55 @@ async function pointerPost(
   }
 }
 
+/** What simulator-server's `{ error }` says when it refuses `sensitive` text. */
+const SENSITIVE_TEXT_REFUSED = "refused to set sensitive text";
+
 /**
  * Put `text` on the DEVICE clipboard through simulator-server's
- * `POST /api/clipboard/text`; the host clipboard is untouched. Resolves once the
- * device pasteboard holds the text, so a paste keystroke sent afterwards cannot
- * race the fill.
+ * `POST /api/clipboard/text`. Resolves once the device pasteboard holds the
+ * text, so a paste keystroke sent afterwards cannot race the fill.
  *
- * A simulator-server built without clipboard support answers the route with a
- * bare 404, reported as "unsupported" rather than as a network fault.
+ * The host clipboard is untouched, unless Device Hub (Xcode 27) has the
+ * simulator open with Use Shared Clipboard on. With `sensitive`,
+ * simulator-server refuses the text on any simulator Device Hub has opened
+ * since it booted, whatever that setting, and this resolves `"refused"`
+ * without setting anything. Builds without `sensitive` ignore it.
+ *
+ * A simulator-server built without clipboard support — an older build, or a
+ * provider's — answers the route with a bare 404, reported as "unsupported"
+ * rather than as a network fault.
  */
 export async function setSimulatorClipboardText(
   api: SimulatorServerApi,
   text: string,
-  signal?: AbortSignal
-): Promise<void> {
+  options: { sensitive?: boolean; signal?: AbortSignal } = {}
+): Promise<"set" | "refused"> {
+  const { sensitive = false, signal } = options;
+  if (api.external) assertAllowedSimServerEndpoint("/api/clipboard/text");
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}/api/clipboard/text`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(sensitive ? { text, sensitive } : { text }),
       signal,
     });
   } catch (err) {
     throw toSimulatorNetworkError("Paste", err, api.apiUrl);
   }
   if (res.status === 404) {
+    /**
+     * A provider's binary is not argent's, so "update argent" would be the
+     * wrong advice there.
+     */
+    const fix = api.external
+      ? "The provider that supplied this device would have to ship a build with " +
+        "clipboard support. Type the text with the keyboard tool instead."
+      : "Update argent so its bundled simulator-server includes clipboard support, " +
+        "or type the text with the keyboard tool instead.";
     throw new FailureError(
-      "Paste failed: this simulator-server build has no clipboard endpoint. " +
-        "Update argent so its bundled simulator-server includes clipboard support, " +
-        "or type the text with the keyboard tool instead.",
+      "Paste failed: this simulator-server build has no clipboard endpoint. " + fix,
       {
         error_code: FAILURE_CODES.PASTE_CLIPBOARD_UNSUPPORTED,
         failure_stage: "simulator_clipboard_endpoint_missing",
@@ -181,6 +645,7 @@ export async function setSimulatorClipboardText(
   // Like the other simulator-server POST routes, this one answers HTTP 200 for
   // both outcomes and reports a failure in-band (`{ error }`).
   const body = (await res.json().catch(() => null)) as { status?: string; error?: string } | null;
+  if (sensitive && body?.error?.includes(SENSITIVE_TEXT_REFUSED)) return "refused";
   if (!res.ok || body?.status !== "ok") {
     throw new FailureError(
       `Paste failed: could not set the device clipboard (${body?.error ?? `HTTP ${res.status}`}).`,
@@ -192,6 +657,7 @@ export async function setSimulatorClipboardText(
       }
     );
   }
+  return "set";
 }
 
 /**
@@ -206,6 +672,12 @@ async function simulatorPost<T>(
   signal?: AbortSignal,
   fallbackHint?: string
 ): Promise<{ res: Response; body: T }> {
+  /**
+   * Parity rule: on a server Argent did not spawn, use only the endpoints its
+   * own build serves.
+   */
+  if (api.external) assertAllowedSimServerEndpoint(endpoint);
+
   let res: Response;
   try {
     res = await fetch(`${api.apiUrl}${endpoint}`, {
@@ -238,11 +710,24 @@ async function simulatorPost<T>(
   return { res, body };
 }
 
+/** One warning per distinct value: the parse runs on every capture. */
+let warnedScaleValue: string | undefined;
+
 export function getScreenshotScale(): number {
   const v = process.env.ARGENT_SCREENSHOT_SCALE;
   if (v) {
     const n = parseFloat(v);
-    if (!Number.isNaN(n) && n > 0 && n <= 1) return n;
+    // Below the floor the `scale` parameter enforces, a capture rounds towards
+    // zero pixels and screenshot-diff reports the resulting dimension mismatch
+    // as if the screens differed.
+    if (!Number.isNaN(n) && n >= 0.01 && n <= 1) return n;
+    if (v !== warnedScaleValue) {
+      warnedScaleValue = v;
+      console.warn(
+        `[screenshot] Ignoring ARGENT_SCREENSHOT_SCALE=${v}: expected a number between 0.01 and 1.0. ` +
+          `Using ${DEFAULT_SCREENSHOT_SCALE}.`
+      );
+    }
   }
   return DEFAULT_SCREENSHOT_SCALE;
 }
@@ -256,7 +741,13 @@ export async function httpScreenshot(
   api: SimulatorServerApi,
   rotation?: string,
   signal?: AbortSignal,
-  scale?: number
+  scale?: number,
+  /**
+   * The panel to capture on a foldable, from {@link resolveCapturePanel};
+   * resolved here when the caller did not. Never sent for a device that is
+   * not foldable, so its request body is unchanged.
+   */
+  screen?: number
 ): Promise<{ url: string; path: string }> {
   if (api.transport) {
     return api.transport.screenshot({
@@ -269,6 +760,10 @@ export async function httpScreenshot(
   const body: Record<string, unknown> = {};
   if (rotation) body.rotation = rotation;
   if (resolvedScale !== 1.0) body.scale = resolvedScale;
+  const resolvedScreen =
+    screen ??
+    (api.display?.foldable ? (await resolveLivePanel(api.deviceId ?? "")).screen : undefined);
+  if (resolvedScreen !== undefined) body.screen = resolvedScreen;
 
   const deadline = Date.now() + FIRST_FRAME_WAIT_MS;
   for (;;) {
@@ -334,34 +829,51 @@ export async function httpScreenshot(
   }
 }
 
+/**
+ * `sendCommand` over `api.transport`. Async, so an unknown command rejects
+ * instead of throwing out of a function that returns a promise, and routed
+ * outside the `try`, so that caller bug is not reported as a refused send.
+ */
+async function sendViaTransport(
+  transport: SimulatorServerTransport,
+  cmd: Record<string, unknown>,
+  cmdName: string
+): Promise<void> {
+  const sent = routeViaTransport(transport, cmd);
+  try {
+    await sent;
+  } catch (cause) {
+    throw remoteTransportError(cmdName, cause);
+  }
+}
+
 function routeViaTransport(
   transport: SimulatorServerTransport,
   cmd: Record<string, unknown>
-): void {
+): Promise<void> | void {
   switch (cmd.cmd) {
     case "touch": {
       // Call sites speak the WebSocket protocol's snake_case second_x/second_y
       // (null when absent); the proto encoder takes optional secondX/secondY.
       const sx = (cmd.second_x ?? cmd.secondX) as number | null | undefined;
       const sy = (cmd.second_y ?? cmd.secondY) as number | null | undefined;
-      transport.touch({
+      return transport.touch({
         type: cmd.type as TouchActionName,
         x: cmd.x as number,
         y: cmd.y as number,
         secondX: sx == null ? undefined : sx,
         secondY: sy == null ? undefined : sy,
       });
-      return;
     }
     case "button":
-      transport.button({
+      return transport.button({
         direction: cmd.direction as KeyActionName,
         button: cmd.button as ButtonName,
       });
-      return;
     case "rotate":
-      transport.rotate(cmd.direction as RotationName);
-      return;
+      return transport.rotate(cmd.direction as RotationName);
+    case "key":
+      return transport.pressKey(cmd.direction as KeyActionName, cmd.code as number);
     default:
       throw new Error(`MoQ transport does not implement sendCommand cmd '${String(cmd.cmd)}'`);
   }
@@ -386,8 +898,8 @@ export function createMoqTransport(
   };
 
   return {
-    touch(opts) {
-      void moq.sendControl(
+    async touch(opts) {
+      await moq.sendControl(
         encodeTouch({
           action: opts.type,
           x: opts.x,
@@ -397,19 +909,19 @@ export function createMoqTransport(
         })
       );
     },
-    button(opts) {
-      void moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
+    async button(opts) {
+      await moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
     },
-    rotate(direction) {
-      void moq.sendControl(encodeRotate(direction));
+    async rotate(direction) {
+      await moq.sendControl(encodeRotate(direction));
     },
     async paste(text) {
       // The pasteboard fill and ⌘V pair live in the caller's `pasteText`, so
       // this transport stays platform-agnostic.
       await options.pasteText(text);
     },
-    pressKey(direction, keyCode) {
-      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+    async pressKey(direction, keyCode) {
+      await moq.sendControl(encodeKey({ action: direction, code: keyCode }));
     },
     async screenshot(opts) {
       const scale = opts?.scale ?? getScreenshotScale();

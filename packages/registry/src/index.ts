@@ -1,5 +1,5 @@
 export { TypedEventEmitter } from "./event-emitter";
-export { ServiceState, isLiveServiceState } from "./types";
+export { LINKED_CALL_HEADER, ServiceState, isLiveServiceState } from "./types";
 export type {
   ServiceEvents,
   ServiceInstance,
@@ -31,17 +31,37 @@ export {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_NAME_PATTERN,
+  TOOL_FILE_EXTENSIONS,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,
+  hasToolFileExtension,
+  isClientFileArgument,
+  toolStepFiles,
 } from "./file-inputs";
 export type {
   FileInputWire,
   FileInputKind,
   FileInputSpec,
+  FileInputMember,
   ResolvedFileInput,
+  ResolvedMember,
   ClientFileDirective,
+  ToolStepFile,
 } from "./file-inputs";
+export {
+  baselineKeyFor,
+  canonicalFlowPath,
+  classifyOnDiskSpelling,
+  collectFlowRequests,
+  completeRunExtension,
+  flowMemberKey,
+  MAX_RUN_DEPTH,
+  nestedFlowTarget,
+  resolveFlowRelativeFile,
+} from "./flow-file-refs";
+export type { NestedFlowTarget, OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

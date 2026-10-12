@@ -8,9 +8,10 @@ import type {
 } from "../../../utils/react-profiler/types/input";
 import { readCpuProfile } from "../../../utils/react-profiler/debug/dump";
 import { isArgentProfilerFunction } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
@@ -135,7 +136,7 @@ Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
-    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
+    const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);
     if (!sessionPaths?.cpuProfilePath) {
       throw new FailureError(
         "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop.",

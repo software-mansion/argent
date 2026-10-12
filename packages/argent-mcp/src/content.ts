@@ -215,6 +215,9 @@ export type FlowStepResult = {
    * wire data: a non-handle value renders as text or is skipped.
    */
   artifacts?: Record<string, unknown>;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
+  durationMs?: number;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
 };
@@ -229,6 +232,13 @@ export type FlowExecuteResult = {
   skipped?: number;
   errored?: number;
   steps: FlowStepResult[];
+  startedAt?: number;
+  durationMs?: number;
+  /**
+   * The baselines a run over a link returned: each the path the client
+   * wrote, or `{ path, error }` for one it could not write.
+   */
+  baselineWrites?: unknown[];
 };
 
 const STATUS_GLYPH: Record<string, string> = {
@@ -252,6 +262,14 @@ function stepIndent(depth: unknown): string {
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
 }
 
+function durationSuffix(ms: unknown): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "";
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return ` (${(tenths / 10).toFixed(1)}s)`;
+  const seconds = Math.round(ms / 1000);
+  return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
+}
+
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
   if (step.tool) return step.tool;
@@ -266,7 +284,8 @@ function stepLabel(step: FlowStepResult): string {
 /**
  * Unpack flow-execute's structured step report into MCP content blocks. Only
  * steps that carry a tool result surface their (image-bearing) content inline;
- * directive steps render as a status line.
+ * every other kind renders as a status line, with a `script` step's captured
+ * output following it as a block of its own.
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
@@ -292,10 +311,20 @@ export async function flowRunToMcpContent(
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    const timing = step.kind === "echo" ? "" : durationSuffix(step.durationMs);
     blocks.push({
       type: "text",
-      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
+      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${timing}${suffix}${warning}`,
     });
+
+    const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
+    const scriptLogTruncated = step.scriptLogTruncated === true;
+    if (scriptLog || scriptLogTruncated) {
+      const parts = [`${stepIndent(step.depth)}script output:`];
+      if (scriptLog) parts.push(scriptLog.endsWith("\n") ? scriptLog.slice(0, -1) : scriptLog);
+      if (scriptLogTruncated) parts.push("… output truncated");
+      blocks.push({ type: "text", text: parts.join("\n") });
+    }
 
     if (step.result !== undefined) {
       blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
@@ -307,6 +336,15 @@ export async function flowRunToMcpContent(
     }
   }
 
+  // A baseline the run reports written but this client could not store:
+  // the step passed, the file is not there.
+  for (const write of result.baselineWrites ?? []) {
+    const { path, error } = (isRecord(write) ? write : {}) as { path?: unknown; error?: unknown };
+    if (typeof path === "string" && typeof error === "string") {
+      blocks.push({ type: "text", text: `✗ baseline not written: ${path}: ${error}` });
+    }
+  }
+
   if (result.ok !== undefined) {
     // Echo steps are narration and go uncounted, so an all-echo flow counts
     // nothing — say so rather than reporting four zeros on a passing run.
@@ -315,7 +353,7 @@ export async function flowRunToMcpContent(
     const note = result.ok && counted === 0 ? " (no test steps)" : "";
     blocks.push({
       type: "text",
-      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}`,
+      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
     });
   } else {
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });

@@ -65,7 +65,7 @@ describe("fetchFlowTree without a full-hierarchy source", () => {
 
   it("throws on Android instead of degrading to the trimmed uiautomator tree", async () => {
     await expect(fetchFlowTree(deadRegistry(), device("android"))).rejects.toThrow(
-      /android devtools helper is unavailable/
+      /argent android helper is unavailable/
     );
   });
 

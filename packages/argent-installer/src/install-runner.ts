@@ -12,6 +12,7 @@ import {
   localInstallCommand,
   projectInstallCommand,
   formatShellCommand,
+  shellQuotePath,
   resolveProjectRoot,
   hasProjectPackageJson,
   isGloballyInstalled,
@@ -169,7 +170,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
           ? `${installError}`
           : `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
       );
-      p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
+      p.log.info(
+        `Install manually with: ${pc.cyan(`cd ${shellQuotePath(projectRoot)} && ${cmdStr}`)}`
+      );
     }
     await tel.trackPackageAction(
       "fresh_install",

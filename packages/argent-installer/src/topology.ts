@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { resolvePackageRoot } from "./package-root.js";
@@ -32,8 +32,11 @@ function isTempRunnerPath(binaryPath: string): boolean {
  */
 function getGlobalBinaryPath(): string | null {
   try {
-    const cmd = process.platform === "win32" ? "where" : "which -a";
-    const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
+    const [cmd, args] =
+      process.platform === "win32"
+        ? ["where", [MCP_BINARY_NAME]]
+        : ["which", ["-a", MCP_BINARY_NAME]];
+    const output = execFileSync(cmd, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -202,6 +205,26 @@ export function readLocalPackageVersionUncached(projectRoot: string): string | n
   }
 }
 
+/**
+ * The package-relative path of argent's CLI entrypoint (today `dist/cli.js`),
+ * read from the installed `package.json`'s `bin` rather than hard-coded, so a
+ * rename can never leave a caller pointing at a file that isn't there.
+ */
+export function argentBinSubpath(pkgDir: string): string | null {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
+      bin?: string | Record<string, string>;
+    };
+    if (typeof pkg.bin === "string") return pkg.bin;
+    if (pkg.bin && typeof pkg.bin === "object") {
+      return pkg.bin[MCP_BINARY_NAME] ?? Object.values(pkg.bin)[0] ?? null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Project-relative POSIX path to the local argent CLI entrypoint (e.g.
 // "node_modules/@swmansion/argent/dist/cli.js"). Derived from the installed
 // package.json `bin` and existence-checked so it never writes a dead command;
@@ -209,17 +232,7 @@ export function readLocalPackageVersionUncached(projectRoot: string): string | n
 export function getLocalArgentBinRelPath(projectRoot: string): string | null {
   const pkgDir = resolveLocalArgentDir(projectRoot);
   if (!pkgDir) return null;
-  let binSub: string | undefined;
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
-      bin?: string | Record<string, string>;
-    };
-    if (typeof pkg.bin === "string") binSub = pkg.bin;
-    else if (pkg.bin && typeof pkg.bin === "object")
-      binSub = pkg.bin[MCP_BINARY_NAME] ?? Object.values(pkg.bin)[0];
-  } catch {
-    return null;
-  }
+  const binSub = argentBinSubpath(pkgDir);
   if (!binSub) return null;
   // Realpath the root so a symlinked project dir (macOS /var → /private/var)
   // doesn't derail the relative path with spurious ".." segments.

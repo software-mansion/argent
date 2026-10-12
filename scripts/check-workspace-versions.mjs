@@ -17,8 +17,10 @@ const serverJsonPath = join(repoRoot, "server.json");
 
 // Not workspace members, so not part of the lockstep versioning: the docs site is
 // excluded from the root `workspaces` glob (it keeps its own lockfile) and carries
-// a standalone version that must not be read as drift.
-const NON_WORKSPACE_DIRS = new Set(["docs"]);
+// a standalone version that must not be read as drift. argent-alias (the `argent`
+// npm package) is excluded the same way: publish-npm.yml stamps its version and
+// its @swmansion/argent pin at publish time.
+const NON_WORKSPACE_DIRS = new Set(["docs", "argent-alias"]);
 
 /**
  * Everything server.json has to keep in step with the npm package it points at,

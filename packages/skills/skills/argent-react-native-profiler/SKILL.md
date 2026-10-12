@@ -5,6 +5,8 @@ description: Profile a React Native Hermes app to measure re-render and CPU perf
 
 This skill is complementary to `argent-react-native-optimization`, not a replacement for it.
 
+Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Profile on a simulator.
+
 ## 2. Tool Overview
 
 ### React Profiler (Hermes / React commits)

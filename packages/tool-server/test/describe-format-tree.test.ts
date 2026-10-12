@@ -292,6 +292,53 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("tap_y = frame.y + frame.height / 2");
   });
 
+  // Physical iOS: the XCUITest runner is single-finger only, so the header
+  // must not recommend gesture-pinch (agents follow it verbatim, straight into
+  // a capability reject) and must say where zoom lives instead.
+  it("omits gesture-pinch from the xcuitest-runner header and names the alternative", () => {
+    const root: DescribeNode = {
+      role: "Application",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "Zoom in",
+          frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 },
+        }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "xcuitest-runner" });
+    expect(out).toContain("Source: xcuitest-runner");
+    expect(out).toContain("Mode: nested");
+    expect(out).not.toContain("gesture-pinch");
+    expect(out).toContain(
+      "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
+        "No two-finger gestures on physical iOS."
+    );
+  });
+
+  // format-tree.ts is deployed shared code: the xcuitest-runner branch above
+  // must leave every other source byte-identical. Pin the full simulator
+  // (ax-service) output, not a substring, so any accidental drift in deployed
+  // header text fails loudly.
+  it("keeps the simulator-source output byte-identical to the deployed string", () => {
+    const empty: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [],
+    };
+    const out = formatDescribeTree(empty, { source: "ax-service" });
+    expect(out).toBe(
+      "Source: ax-service\n" +
+        "Mode: flat\n" +
+        "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.\n" +
+        "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.\n" +
+        "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n" +
+        "\n" +
+        "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n"
+    );
+  });
+
   // Bluesky-style names mix emoji, ZWJ sequences, and bidirectional isolate
   // markers (U+202A/U+202C). Those must pass through escapeForLine unchanged
   // — only ASCII control chars (\\n, \\r, \\t) get backslash-escaped.
@@ -484,6 +531,49 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
     expect(elementLines(out)).toHaveLength(0);
+  });
+
+  // The Chromium walker sets `checked` alone, so a ticked box has to render
+  // differently from an unticked one without any `checkable` companion.
+  it("renders checked on a node that carries no checkable", () => {
+    const box = (checked: boolean): DescribeNode => ({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "input",
+          label: "Accept terms",
+          identifier: "terms",
+          frame: { x: 0, y: 0.1, width: 0.04, height: 0.04 },
+          clickable: true,
+          checked,
+        }),
+      ],
+    });
+    const ticked = elementLines(formatDescribeTree(box(true), { source: "cdp-dom" }));
+    const unticked = elementLines(formatDescribeTree(box(false), { source: "cdp-dom" }));
+    expect(ticked[0]).toContain("[clickable,checked]");
+    expect(unticked[0]).toContain("[clickable]");
+    expect(ticked[0]).not.toEqual(unticked[0]);
+  });
+
+  // A `<div role="checkbox" aria-checked="true">` carries no other content
+  // signal, so hasContent() has to count `checked` or the node is dropped.
+  it("keeps an unlabeled node whose only content signal is checked", () => {
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "div",
+          frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+          checked: true,
+        }),
+      ],
+    };
+    const lines = elementLines(formatDescribeTree(root, { source: "cdp-dom" }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("[checked]");
   });
 
   // Regression: nested mode previously keyed on "uiautomator" only, so

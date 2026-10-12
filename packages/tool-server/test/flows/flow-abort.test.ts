@@ -117,6 +117,7 @@ describe("run cancellation mid-directive", () => {
     // "no visible element matched … add a scroll-to step" hint.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.steps[0].durationMs).toBeUndefined();
     expect(result.ok).toBe(false);
     expect(calls).not.toContain("gesture-tap");
   });

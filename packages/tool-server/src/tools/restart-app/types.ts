@@ -6,7 +6,10 @@ import type {
 export interface RestartAppParams {
   udid: string;
   bundleId: string;
+  /** Android-only: ignored on iOS. */
   activity?: string;
+  /** Apple-only: appended to the simctl / devicectl launch argv after the bundle id. */
+  launchArgs?: string[];
 }
 
 export type RestartAppResult =

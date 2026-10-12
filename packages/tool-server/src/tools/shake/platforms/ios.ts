@@ -46,9 +46,12 @@ function rejectTv(toolId: string, device: DeviceInfo): never {
 }
 
 function shakeFailure(udid: string, detail: string, cause?: Error): FailureError {
-  // The state error simctl raises for a shut-down device says nothing about
+  // The wording splits by verb: `simctl spawn` says "device is not booted", the
+  // host-side verbs "Unable to lookup in current state: Shutdown". Neither says
   // what to do next.
-  const shutdownHint = /current state:\s*shutdown|unable to lookup/i.test(detail)
+  const shutdownHint = /current state:\s*shutdown|unable to lookup|device is not booted/i.test(
+    detail
+  )
     ? " The simulator must be booted first — use boot-device."
     : "";
   return new FailureError(

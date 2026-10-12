@@ -31,6 +31,7 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
+import { removeCliRecordFor } from "./cli-record.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
@@ -205,9 +206,13 @@ export function removeBundledSkillInstalls(
   for (const skillName of skillNames) {
     const targetPath = path.join(targetDir, skillName);
     try {
-      if (!fs.existsSync(targetPath)) continue;
+      // lstat, not existsSync: an editor dir holds symlinks into .agents/skills,
+      // which this run has already emptied, so the links are dangling.
+      // existsSync follows the link and reports them missing; lstat sees the
+      // link itself.
+      const stats = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+      if (!stats) continue;
 
-      const stats = fs.lstatSync(targetPath);
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         fs.rmSync(targetPath, { recursive: true, force: true });
       } else {
@@ -702,6 +707,15 @@ export async function uninstall(args: string[]): Promise<void> {
         // mode:"local" record keeps `update`/`uninstall` targeting a gone devDependency.
         if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
           p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
+        }
+
+        /**
+         * Only when the record points inside the install just removed. The
+         * two modes coexist and orphaning a record that names a surviving
+         * install would break provider CLI discovery for no reason.
+         */
+        if (removeCliRecordFor(removable.installDir)) {
+          p.log.info(pc.dim("Removed ~/.argent/cli.json (provider CLI discovery record)."));
         }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);

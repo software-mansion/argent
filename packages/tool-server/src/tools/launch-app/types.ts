@@ -8,10 +8,16 @@ export interface LaunchAppParams {
   bundleId: string;
   /** Android-only. */
   activity?: string;
+  /** Apple-only: appended to the simctl / devicectl launch argv after the bundle id. */
+  launchArgs?: string[];
 }
 
 export type LaunchAppResult =
-  | { launched: boolean; bundleId: string }
+  | {
+      launched: boolean;
+      bundleId: string;
+      note?: string;
+    }
   | NativeDevtoolsInitFailedResult;
 
 export interface LaunchAppIosServices {

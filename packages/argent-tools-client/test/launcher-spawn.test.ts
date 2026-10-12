@@ -1,13 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { copyFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // Same HOME-redirection pattern as launcher-state.test.ts so killToolServer
 // reads/writes the per-file isolated state directory and never touches the
 // developer's real ~/.argent.
 let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
+let restoreHome: () => void;
 
 const FAKE_BUNDLE = resolve(__dirname, "fixtures/fake-tool-server.cjs");
 
@@ -19,17 +22,14 @@ const fakePaths = (): import("../src/launcher.js").ToolsServerPaths => ({
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-spawn-test-"));
-  // os.homedir() — which STATE_DIR and the link file are built from — reads
-  // USERPROFILE on Windows and HOME elsewhere, so pin both or the redirect
-  // is inert there and these tests operate on the real ~/.argent.
-  process.env.HOME = TEST_HOME;
-  process.env.USERPROFILE = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   expect(existsSync(FAKE_BUNDLE)).toBe(true);
 });
 
 afterAll(() => {
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
@@ -90,6 +90,23 @@ describe("spawnToolsServer", () => {
       delete process.env.FAKE_MODE;
     }
   });
+
+  it("rejects with a clear message instead of crashing when `node` is not on PATH", async () => {
+    // Pose as Bun so the launcher falls back to `node` on PATH, then empty PATH.
+    const savedBun = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    Object.defineProperty(process.versions, "bun", { value: "1.0.0", configurable: true });
+    const savedPath = process.env.PATH;
+    process.env.PATH = TEST_HOME;
+    try {
+      await expect(trackedSpawn()).rejects.toThrow(
+        "Could not start the argent tool-server: `node` was not found on PATH."
+      );
+    } finally {
+      process.env.PATH = savedPath;
+      if (savedBun) Object.defineProperty(process.versions, "bun", savedBun);
+      else delete (process.versions as Record<string, string>).bun;
+    }
+  });
 });
 
 describe("killToolServer — full lifecycle", () => {
@@ -105,7 +122,7 @@ describe("killToolServer — full lifecycle", () => {
 
     expect(launcher.isToolsServerProcessAlive(pid)).toBe(true);
 
-    await launcher.killToolServer(FAKE_BUNDLE);
+    expect(await launcher.killToolServer(FAKE_BUNDLE)).toBe(true);
 
     expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
     expect(await launcher.readToolsServerState(FAKE_BUNDLE)).toBeNull();
@@ -144,6 +161,99 @@ describe("killToolServer — full lifecycle", () => {
     }
   );
 
+  // The launcher reads ps in this locale; a host without it (glibc with no
+  // C.UTF-8 installed) has no UTF-8 locale left to render the path in.
+  const hasForcedLocale = (() => {
+    if (process.platform === "win32") return true;
+    try {
+      const charmap = execFileSync("locale", ["charmap"], {
+        encoding: "utf8",
+        env: { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return charmap.trim() === "UTF-8";
+    } catch {
+      return false;
+    }
+  })();
+
+  it.skipIf(!hasForcedLocale)(
+    "stops a server under a non-ASCII path when the caller has no UTF-8 locale",
+    async () => {
+      // Outside a UTF-8 locale ps escapes non-ASCII bytes (`M-E` on macOS, `?`
+      // on procps), so the identity guard must not depend on the caller's one.
+      const dir = mkdtempSync(join(tmpdir(), "argent-zażółć-"));
+      const bundlePath = join(dir, "tool-server.cjs");
+      copyFileSync(FAKE_BUNDLE, bundlePath);
+      const saved = {
+        LANG: process.env.LANG,
+        LC_ALL: process.env.LC_ALL,
+        LC_CTYPE: process.env.LC_CTYPE,
+      };
+      try {
+        const { port, pid } = await launcher.spawnToolsServer(
+          { ...fakePaths(), bundlePath },
+          await launcher.findFreePort()
+        );
+        spawnedPids.push(pid);
+        await launcher.writeToolsServerState({
+          port,
+          pid,
+          startedAt: new Date().toISOString(),
+          bundlePath,
+          host: "127.0.0.1",
+        });
+        delete process.env.LANG;
+        delete process.env.LC_CTYPE;
+        process.env.LC_ALL = "C";
+
+        expect(await launcher.killToolServer(bundlePath)).toBe(true);
+
+        expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
+        expect(await launcher.readToolsServerState(bundlePath)).toBeNull();
+      } finally {
+        for (const [key, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  // win32 has no `ps`, so the guard is deliberately disabled there.
+  it.skipIf(process.platform === "win32")(
+    "leaves alone a process whose bundle path follows a no-break space",
+    async () => {
+      // ps joins argv with plain spaces; a UTF-8 read must not let a no-break
+      // space inside another program's argv pass for that boundary.
+      const decoy = spawn(
+        process.execPath,
+        ["-e", "setInterval(() => {}, 1000)", `xx\u00a0${FAKE_BUNDLE}`, "start"],
+        { stdio: "ignore" }
+      );
+      spawnedPids.push(decoy.pid!);
+      await launcher.writeToolsServerState({
+        port: 1,
+        pid: decoy.pid!,
+        startedAt: new Date().toISOString(),
+        bundlePath: FAKE_BUNDLE,
+        host: "127.0.0.1",
+      });
+      const savedLcAll = process.env.LC_ALL;
+      try {
+        for (const lcAll of ["C", "en_US.UTF-8"]) {
+          process.env.LC_ALL = lcAll;
+          expect(await launcher.killToolServer(FAKE_BUNDLE)).toBe(false);
+        }
+      } finally {
+        if (savedLcAll === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = savedLcAll;
+      }
+      expect(launcher.isToolsServerProcessAlive(decoy.pid!)).toBe(true);
+    }
+  );
+
   it("clears state when the recorded pid is already dead before killToolServer is called", async () => {
     const { pid } = await trackedSpawn();
     process.kill(pid, "SIGKILL");
@@ -159,7 +269,7 @@ describe("killToolServer — full lifecycle", () => {
       host: "127.0.0.1",
     });
 
-    await launcher.killToolServer(FAKE_BUNDLE);
+    expect(await launcher.killToolServer(FAKE_BUNDLE)).toBe(false);
     expect(await launcher.readToolsServerState(FAKE_BUNDLE)).toBeNull();
   });
 });
