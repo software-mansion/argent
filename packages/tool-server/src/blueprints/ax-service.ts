@@ -94,6 +94,20 @@ export interface AXForegroundAppResponse {
   name?: string;
 }
 
+/** The `fill` command's answer. Never carries text: only whether it matched, and a length. */
+export interface AXFillResponse {
+  /** False when nothing holds keyboard focus. */
+  focused: boolean;
+  /** The focused input now holds the requested text (a secure field: as many bullets). */
+  verified: boolean;
+  /** Length of the text the input holds, in UTF-16 units. */
+  length?: number;
+  /** A clear the field ignored with its text still selected; one backspace removes it. */
+  needsBackspace?: boolean;
+  /** A native secure field, which drops inserted text: left untouched, to be typed into. */
+  secure?: boolean;
+}
+
 export interface AXServiceApi {
   /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
@@ -104,6 +118,12 @@ export interface AXServiceApi {
   foregroundApp(): Promise<AXForegroundAppResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
+  /**
+   * Set the focused input's text ("" clears it) through the AX text
+   * operations, then read it back; with `check`, only read it back. Null when
+   * the daemon predates the command.
+   */
+  fill(text: string, options?: { check?: boolean }): Promise<AXFillResponse | null>;
   /**
    * The display id of the panel the guest renders to (1 the cover panel, 3
    * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
@@ -120,6 +140,9 @@ export interface AXServiceApi {
  * and a caller that asks before every touch must not wait on one that hangs.
  */
 const LIVE_PANEL_TIMEOUT_MS = 2_000;
+
+/** `fill` edits through the app and then polls its read-back for up to a second. */
+const FILL_TIMEOUT_MS = 10_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -436,7 +459,11 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       throw err;
     }
 
-    function query(command: string, timeoutMs = 5000): Promise<unknown> {
+    function query(
+      command: string,
+      timeoutMs = 5000,
+      params?: Record<string, unknown>
+    ): Promise<unknown> {
       return new Promise((resolve, reject) => {
         if (!daemonSocket || daemonSocket.destroyed) {
           reject(
@@ -464,7 +491,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           }
         }, timeoutMs);
         pendingRpc.set(id, { resolve, reject, timer });
-        daemonSocket.write(JSON.stringify({ id, command }) + "\n");
+        daemonSocket.write(
+          JSON.stringify(params === undefined ? { id, command } : { id, command, params }) + "\n"
+        );
       });
     }
 
@@ -534,6 +563,39 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         return typeof result.displayId === "number" && result.displayId > 0
           ? result.displayId
           : null;
+      },
+
+      async fill(text: string, options: { check?: boolean } = {}): Promise<AXFillResponse | null> {
+        let result: {
+          verified?: boolean;
+          length?: number;
+          needsBackspace?: boolean;
+          secure?: boolean;
+        };
+        try {
+          result = (await query("fill", FILL_TIMEOUT_MS, {
+            text,
+            ...(options.check ? { check: true } : {}),
+          })) as typeof result;
+        } catch (err) {
+          // Envelope-level errors carry only the daemon's code, never text.
+          if (err instanceof Error && err.message === "unknown_command") return null;
+          // A focused element that takes no text is no field to fill either.
+          if (
+            err instanceof Error &&
+            (err.message === "no_focused_field" || err.message === "not_editable")
+          ) {
+            return { focused: false, verified: false };
+          }
+          throw err;
+        }
+        return {
+          focused: true,
+          verified: result.verified === true,
+          ...(typeof result.length === "number" ? { length: result.length } : {}),
+          ...(result.needsBackspace === true ? { needsBackspace: true } : {}),
+          ...(result.secure === true ? { secure: true } : {}),
+        };
       },
 
       async alertCheck(): Promise<boolean> {

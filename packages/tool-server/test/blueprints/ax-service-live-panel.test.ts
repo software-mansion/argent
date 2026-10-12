@@ -13,6 +13,10 @@ import type { IosEndpoint } from "../../src/utils/ios-host";
 const HANG = Symbol("hang");
 const answers = new Map<string, unknown>();
 const daemons: net.Socket[] = [];
+/** Each request envelope's `params`, by command. */
+const received: Array<{ command: string; params?: unknown }> = [];
+/** An answer that fails the envelope with this code, as the daemon's own errors do. */
+const envelopeError = (code: string) => ({ __envelopeError: code });
 
 function fakeDaemon(endpoint: IosEndpoint): ChildProcess {
   if (endpoint.transport !== "unix") throw new Error("unix only here");
@@ -36,14 +40,22 @@ function fakeDaemon(endpoint: IosEndpoint): ChildProcess {
       const line = buffered.slice(0, newline);
       buffered = buffered.slice(newline + 1);
       if (!line.trim()) continue;
-      const { id, command } = JSON.parse(line) as { id: number; command: string };
+      const { id, command, params } = JSON.parse(line) as {
+        id: number;
+        command: string;
+        params?: unknown;
+      };
+      received.push({ command, params });
       const answer = answers.get(command);
       if (answer === HANG) continue;
+      const failed = (answer as { __envelopeError?: string } | undefined)?.__envelopeError;
       // A command the daemon does not know fails the whole envelope, as the real one does.
       const reply =
         answer === undefined
           ? { id, error: "unknown_command", result: { error: "unknown_command" } }
-          : { id, result: answer };
+          : failed
+            ? { id, error: failed, result: { error: failed } }
+            : { id, result: answer };
       socket.write(JSON.stringify(reply) + "\n");
     }
   });
@@ -85,6 +97,63 @@ afterEach(async () => {
   for (const dispose of disposers.splice(0)) await dispose();
   for (const socket of daemons.splice(0)) socket.destroy();
   answers.clear();
+  received.length = 0;
+});
+
+describe("ax-service fill", () => {
+  it("sends the text as params and answers the daemon's verdict, never text", async () => {
+    answers.set("fill", { verified: true, length: 5, fillVersion: 1 });
+    const api = await attach();
+    expect(await api.fill("hello")).toEqual({ focused: true, verified: true, length: 5 });
+    expect(received.at(-1)).toEqual({ command: "fill", params: { text: "hello" } });
+  });
+
+  it("sends check only when asked", async () => {
+    answers.set("fill", { verified: false, length: 2 });
+    const api = await attach();
+    expect(await api.fill("", { check: true })).toEqual({
+      focused: true,
+      verified: false,
+      length: 2,
+    });
+    expect(received.at(-1)).toEqual({ command: "fill", params: { text: "", check: true } });
+  });
+
+  it("passes on the secure and needsBackspace hints", async () => {
+    answers.set("fill", { verified: false, length: 8, secure: true, needsBackspace: true });
+    const api = await attach();
+    expect(await api.fill("x")).toEqual({
+      focused: true,
+      verified: false,
+      length: 8,
+      secure: true,
+      needsBackspace: true,
+    });
+  });
+
+  it.each(["no_focused_field", "not_editable"])("answers focused: false for %s", async (code) => {
+    answers.set("fill", envelopeError(code));
+    const api = await attach();
+    expect(await api.fill("x")).toEqual({ focused: false, verified: false });
+  });
+
+  it("answers null on a daemon that predates the command", async () => {
+    const api = await attach();
+    expect(await api.fill("x")).toBeNull();
+  });
+
+  it("fails on any other daemon error", async () => {
+    answers.set("fill", envelopeError("fill_failed"));
+    const api = await attach();
+    await expect(api.fill("x")).rejects.toThrow("fill_failed");
+  });
+
+  it("sends no params on the commands that take none", async () => {
+    answers.set("live_panel", { displayId: null });
+    const api = await attach();
+    await api.livePanel();
+    expect(received.at(-1)).toEqual({ command: "live_panel" });
+  });
 });
 
 describe("ax-service livePanel", () => {

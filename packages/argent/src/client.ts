@@ -106,6 +106,23 @@ export interface ForegroundApp {
   alertVisible?: boolean;
 }
 
+/**
+ * The `fill` result. It never carries the field's text or the text that was
+ * asked for: either may be a credential.
+ */
+export interface FillResult {
+  /**
+   * How the text got into the field: `accessibility` (iOS ax-service), `helper`
+   * (Android devtools helper), `cdp` (Chromium page) or `keys` (a delete-key
+   * burst, then typed keys).
+   */
+  method: "accessibility" | "helper" | "cdp" | "keys";
+  /** The field was read back and holds the text. Null when nothing could read it back. */
+  verified: boolean | null;
+  /** Length of the text the field holds afterwards, in UTF-16 units, when read back. */
+  length?: number;
+}
+
 export interface CallToolOptions {
   /** Receive progress events while a long-running tool works. */
   onProgress?: (event: unknown) => void;

@@ -50,6 +50,7 @@ function makeSequencedAXService(
     alertCheck: async () => false,
     livePanel: async () => null,
     foregroundApp: async () => ({ alertVisible: false }),
+    fill: async () => null,
     tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => true,
   };
@@ -67,6 +68,7 @@ function makeFailingAXService(): AXServiceApi {
     alertCheck: async () => false,
     livePanel: async () => null,
     foregroundApp: async () => ({ alertVisible: false }),
+    fill: async () => null,
     tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => false,
   };
@@ -917,6 +919,7 @@ describe("await-ui-element tool", () => {
       alertCheck: async () => false,
       livePanel: async () => null,
       foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => null,
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };
@@ -1131,6 +1134,7 @@ describe("await-ui-element tool", () => {
       alertCheck: async () => false,
       livePanel: async () => null,
       foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => null,
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };
@@ -1169,6 +1173,7 @@ describe("await-ui-element tool", () => {
       alertCheck: async () => false,
       livePanel: async () => null,
       foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => null,
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };
@@ -1200,6 +1205,7 @@ describe("await-ui-element tool", () => {
       alertCheck: async () => false,
       livePanel: async () => null,
       foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => null,
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };

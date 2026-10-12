@@ -74,9 +74,36 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures |
 | `keyboard`               | Type text or press special keys                                 |
 | `paste`                  | Put text on the device clipboard and paste it (sim/emu only)    |
+| `fill` (SDK only)        | Set the text of the focused text field                          |
 | `run-sequence`           | Execute several interaction steps in a single call              |
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
+
+`fill` is hidden from MCP. Call it with the [Argent SDK](./node-client.mdx), which exports its `FillResult` result type. Tap the text field first. `fill` then replaces the text of the focused field with `text`. An empty `text` clears the field. `text` accepts `{{secret:<NAME>}}` placeholders, like `keyboard`. The app gets the change as a usual edit, and its change events fire.
+
+| Platform                   | Method          | How `fill` sets the text                                              |
+| -------------------------- | --------------- | --------------------------------------------------------------------- |
+| iOS simulator              | `accessibility` | The ax-service selects all text, then inserts or deletes text         |
+| Android emulator or device | `helper`        | The devtools helper sends `ACTION_SET_TEXT` to the focused node       |
+| Chromium                   | `cdp`           | The page selects all text, then runs its own insert or delete command |
+| Physical iPhone            | `keys`          | The runner presses Delete 100 times, then types the text              |
+
+After the change, `fill` reads the field again. The result is `{ method, verified, length }`. The result never contains the text of the field.
+
+- `verified` is `true` when the field holds `text`. For a password field, `fill` compares only the length.
+- `verified` is `null` when `fill` cannot read the field. This occurs for the `keys` method on a physical iPhone, and for an ax-service or a devtools helper from argent 0.28.0 or earlier.
+- `length` is the number of UTF-16 code units in the field.
+
+On an iOS simulator and on Android, when the first method does not give `text`, `fill` presses keys: 100 Backspace and 100 Delete keys, then the keys of `text`. A secure text field in an iOS app accepts only typed text, so `fill` types `text` there with keys. Keys can type only the characters of a hardware keyboard on iOS, and only printable ASCII on Android.
+
+| Error code                       | Cause                                                                                                                                                |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FILL_NO_FOCUSED_FIELD`          | No text field has keyboard focus. `fill` changed nothing                                                                                             |
+| `FILL_NOT_VERIFIED`              | `fill` changed the field, but the field does not hold `text`                                                                                         |
+| `FILL_UNSUPPORTED_FIELD`         | The field cannot take `text`: a date or time input, a disabled or read-only field, or an iOS secure text field and a character that keys cannot type |
+| `KEYBOARD_CHARACTER_UNSUPPORTED` | Only keys can fill the field, and `text` has a character that keys cannot type. `fill` changed nothing                                               |
+
+`fill` does not support Apple TV, Android TV and Vega.
 
 ## JavaScript runtime debugging
 

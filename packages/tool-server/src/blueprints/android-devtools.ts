@@ -58,11 +58,30 @@ export interface HierarchyResult {
   sdkInt?: number;
 }
 
+/** The `setText` RPC's answer. Never carries text: only whether it matched, and a length. */
+export interface SetTextResult {
+  /** False when no editable node that takes ACTION_SET_TEXT holds input focus. */
+  focused: boolean;
+  /** ACTION_SET_TEXT returned true. Absent for a check. */
+  performed?: boolean;
+  /** The node now holds the requested text (a password: as many characters). */
+  verified: boolean;
+  password?: boolean;
+  /** Length of the text the node holds, in UTF-16 units. */
+  length?: number;
+}
+
 export interface AndroidDevtoolsApi {
   isReady(): boolean;
   getHierarchy(options?: GetHierarchyOptions): Promise<HierarchyResult>;
   getScreenSize(): Promise<{ width: number; height: number; rotation: number }>;
   ping(): Promise<{ ok: boolean; idleMs: number; protocol: string }>;
+  /**
+   * Set the input-focused node's text ("" clears it) with ACTION_SET_TEXT,
+   * then read it back; with `check`, only read it back. Null when the
+   * installed helper predates the RPC.
+   */
+  setText(text: string, options?: { check?: boolean }): Promise<SetTextResult | null>;
 }
 
 const READY_TIMEOUT_MS = 30_000;
@@ -482,6 +501,26 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       },
       ping() {
         return client.request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
+      },
+      async setText(text: string, setOpts: { check?: boolean } = {}) {
+        let result: Partial<SetTextResult>;
+        try {
+          result = await client.request<Partial<SetTextResult>>("setText", {
+            text,
+            ...(setOpts.check ? { check: true } : {}),
+          });
+        } catch (err) {
+          // A helper older than 3 answers the dispatcher's own rejection.
+          if (err instanceof Error && err.message.includes("Unknown method: setText")) return null;
+          throw err;
+        }
+        return {
+          focused: result.focused === true,
+          verified: result.verified === true,
+          ...(typeof result.performed === "boolean" ? { performed: result.performed } : {}),
+          ...(typeof result.password === "boolean" ? { password: result.password } : {}),
+          ...(typeof result.length === "number" ? { length: result.length } : {}),
+        };
       },
     };
 
