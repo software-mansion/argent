@@ -122,6 +122,7 @@ On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field f
 One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
+    alwaysLoad: true,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
     services: () => ({}),
