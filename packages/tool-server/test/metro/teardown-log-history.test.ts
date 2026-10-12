@@ -195,32 +195,34 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
   });
 
   it("is dropped by an explicit debugger-connect, which starts a capture of its own", async () => {
-    // The consumer is gated on an EMPTY registry, so a breadcrumb survives every
-    // read that finds entries — and would then attach "a teardown ate your logs"
-    // to some later, unrelated empty read. An explicit connect makes it wrong
-    // anyway: from there the capture is this session's own, so empty honestly
-    // means nothing has been logged since. Same discipline as the
-    // screen-recording and native-profiler starts.
+    // The consumer is gated on an empty or not-connected read, so a breadcrumb
+    // survives every read that finds entries — and would then attach "a teardown
+    // ate your logs" to some later, unrelated empty read. An explicit connect
+    // makes it wrong anyway: from there the capture is this session's own, so
+    // empty honestly means nothing has been logged since. Same discipline as
+    // the screen-recording and native-profiler starts.
     const urn = await connectAndCapture(LOGICAL_ID, 40);
     await registry.disposeService(urn);
 
-    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: LOGICAL_ID });
+    const connect = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { note?: string };
 
     const result = (await registry.invokeTool("debugger-log-registry", {
       port: mockPort,
       device_id: LOGICAL_ID,
     })) as { totalEntries: number; note?: string };
 
+    expect(connect.note).toBeUndefined();
     expect(result.totalEntries).toBe(0);
     expect(result.note).toBeUndefined();
   });
 
   describe("when the connect id and the logicalDeviceId differ", () => {
-    // Every case above connects with LOGICAL_ID, so `api.logicalDeviceId ===
-    // deviceId` and the disposer's SECOND recordReapedSession never fires —
-    // that is the Chromium/Vega shape. On iOS/Android the caller connects with
-    // a udid/serial and Metro echoes its own logical id, so one teardown writes
-    // two breadcrumbs. They describe one event and must be spent as one.
+    // Every case above connects with LOGICAL_ID (the Chromium/Vega shape). On
+    // iOS/Android the caller connects with a udid/serial and Metro echoes its
+    // own logical id, so the disposer files one breadcrumb under both ids.
     const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
 
     beforeEach(async () => {
