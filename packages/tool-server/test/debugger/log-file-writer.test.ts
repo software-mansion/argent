@@ -201,6 +201,22 @@ describe("LogFileWriter", () => {
     expect(fs.existsSync(filePath)).toBe(false);
   });
 
+  it("a new writer deletes argent-logs files idle for over 24h, keeping fresher ones", () => {
+    const dir = path.dirname(writer.getFilePath());
+    const stale = path.join(dir, "argent-logs-1-1.log");
+    const fresh = path.join(dir, "argent-logs-2-2.log");
+    fs.writeFileSync(stale, "");
+    fs.writeFileSync(fresh, "");
+    const dayAgo = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(stale, dayAgo - 60, dayAgo - 60);
+    fs.utimesSync(fresh, dayAgo + 60, dayAgo + 60);
+
+    new LogFileWriter(9998).close();
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
   it("close() is idempotent", () => {
     writer.close();
     expect(() => writer.close()).not.toThrow();

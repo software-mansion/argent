@@ -369,26 +369,30 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     return {
       api,
       dispose: async () => {
-        // `logWriter.close()` below unlinks the log file, and this dispose is
-        // routinely another agent's `stop-all-simulator-servers`. Breadcrumb so
-        // `debugger-log-registry`'s bare `totalEntries: 0` can explain the lost
-        // history — only when there was history to lose, and under both ids,
-        // since `forgetDeviceAlias` below drops the only join between them.
+        // `logWriter.close()` below unlinks the log file unless the socket
+        // dropped (likely an app crash, so the log is evidence), and this
+        // dispose is routinely another agent's `stop-all-simulator-servers`.
+        // Breadcrumb so `debugger-log-registry`'s bare `totalEntries: 0` can
+        // explain the lost history — only when there was history to lose, and
+        // under both ids, since `forgetDeviceAlias` below drops the only join
+        // between them.
         const captured = logWriter.getStats().totalEntries;
+        const keepFile = captured > 0 && !cdp.isConnected();
         if (captured > 0) {
-          const salvage =
-            `The ${captured} captured console ${captured === 1 ? "entry" : "entries"} went with ` +
-            `it — the log file is deleted on teardown, so this registry starts empty rather ` +
-            `than the app having logged nothing.`;
-          recordReapedSession("js-runtime-debugger", deviceId, salvage);
+          const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
+          const salvage = keepFile
+            ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
+            : `The ${entries} went with it — the log file is deleted on teardown, so this ` +
+              `registry starts empty rather than the app having logged nothing.`;
+          recordReapedSession("js-runtime-debugger", deviceId, salvage, keepFile);
           if (api.logicalDeviceId && api.logicalDeviceId !== deviceId) {
-            recordReapedSession("js-runtime-debugger", api.logicalDeviceId, salvage);
+            recordReapedSession("js-runtime-debugger", api.logicalDeviceId, salvage, keepFile);
           }
         }
         forgetDeviceAlias(api.logicalDeviceId);
         forgetLogicalKeyedDevice(deviceId);
         await consoleServer.close();
-        logWriter.close();
+        logWriter.close({ keepFile });
         await cdp.disconnect();
       },
       events,

@@ -229,23 +229,28 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
-        // `logWriter.close()` below unlinks the log file, and this dispose is
+        // `logWriter.close()` below unlinks the log file unless the socket
+        // dropped (likely an app crash), and this dispose is
         // routinely triggered by another agent's `stop-all-simulator-servers`
         // (`ChromiumJsRuntimeDebugger` is in `DEVICE_OWNED_NAMESPACES`). The
         // breadcrumb is what keeps `debugger-log-registry`'s promise that an
         // empty result with no note means the app logged nothing. Only one key
         // to write, unlike Hermes: here `logicalDeviceId` IS `device.id`.
         const captured = logWriter.getStats().totalEntries;
+        const keepFile = captured > 0 && !cdp.isConnected();
         if (captured > 0) {
+          const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
           recordReapedSession(
             "js-runtime-debugger",
             device.id,
-            `The ${captured} captured console ${captured === 1 ? "entry" : "entries"} went with ` +
-              `it — the log file is deleted on teardown, so this registry starts empty rather ` +
-              `than the app having logged nothing.`
+            keepFile
+              ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
+              : `The ${entries} went with it — the log file is deleted on teardown, so this ` +
+                  `registry starts empty rather than the app having logged nothing.`,
+            keepFile
           );
         }
-        logWriter.close();
+        logWriter.close({ keepFile });
         // Deliberately no `cdp.disconnect()` (unlike the Hermes blueprint): the
         // session belongs to ChromiumCdp and its other consumers — screenshot,
         // describe, gesture-tap, ...

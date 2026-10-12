@@ -47,6 +47,7 @@ interface ClusterState {
 }
 
 const MAX_ENTRIES = 50_000;
+const STALE_LOG_MS = 24 * 60 * 60 * 1000;
 const CLUSTER_KEY_LENGTH = 80;
 const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
@@ -67,6 +68,7 @@ export class LogFileWriter {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
     fs.mkdirSync(dir, { recursive: true });
+    pruneStaleLogs(dir);
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
     this.open();
   }
@@ -190,7 +192,8 @@ export class LogFileWriter {
     return { entries: filtered, total };
   }
 
-  close(): void {
+  /** `keepFile` leaves the log for a later writer to sweep once it is 24h stale. */
+  close({ keepFile = false }: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
     if (this.fd !== null) {
@@ -201,10 +204,24 @@ export class LogFileWriter {
       }
       this.fd = null;
     }
+    if (keepFile) return;
     try {
       fs.unlinkSync(this.filePath);
     } catch {
       // file may already be gone
+    }
+  }
+}
+
+function pruneStaleLogs(dir: string): void {
+  const cutoff = Date.now() - STALE_LOG_MS;
+  for (const name of fs.readdirSync(dir)) {
+    if (!/^argent-logs-.*\.log$/.test(name)) continue;
+    const file = path.join(dir, name);
+    try {
+      if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file);
+    } catch {
+      // already gone
     }
   }
 }
