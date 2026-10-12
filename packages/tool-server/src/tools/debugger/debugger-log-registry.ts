@@ -62,9 +62,7 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
       try {
         const api = await resolveDebuggerService(registry, params);
         // No socket-state gate (unlike debugger-status): captured logs are
-        // readable over a dead socket, and disposing the stale service would
-        // close the LogFileWriter — destroying the post-crash logs the caller
-        // came for.
+        // readable over a dead socket.
         const stats = api.logWriter.getStats();
         const clusters = api.logWriter.getClusters(20);
 

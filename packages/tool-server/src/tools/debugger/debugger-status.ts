@@ -79,12 +79,9 @@ Use when you need to verify connectivity before using other debugger tools. Neve
             return result;
           }
           // Metro path owns its CDPClient: discard the stale node so the next
-          // call reconnects fresh. Tradeoff: dispose closes the LogFileWriter,
-          // which DELETES the captured log file — including a path a prior
-          // debugger-log-registry call returned (that tool has no socket gate,
-          // so it never triggers this). A concurrent terminated cascade may
-          // remove the node first; that end state is what we wanted, so a
-          // failed dispose is absorbed.
+          // call reconnects fresh. A concurrent terminated cascade may remove
+          // the node first; that end state is what we wanted, so a failed
+          // dispose is absorbed.
           //
           // Track BEFORE disposing: dispose forgets the device alias, and the
           // outcome's platform classifies through it — tracking after would
