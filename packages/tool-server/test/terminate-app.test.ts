@@ -22,7 +22,17 @@ vi.mock("../src/utils/adb", async (importActual) => ({
   }),
 }));
 
+const vegaCalls: string[][] = [];
+vi.mock("../src/utils/vega-cli", async (importActual) => ({
+  ...(await importActual<typeof import("../src/utils/vega-cli")>()),
+  vegaDevice: vi.fn(async (_serial: string, args: string[]) => {
+    vegaCalls.push(args);
+    return { stdout: "", stderr: "" };
+  }),
+}));
+
 import { terminateAppTool } from "../src/tools/terminate-app";
+import { UnsupportedOperationError } from "../src/utils/capability";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
@@ -40,8 +50,9 @@ beforeEach(() => {
   execFailure = null;
   execFileMock.mockClear();
   shellCalls.length = 0;
+  vegaCalls.length = 0;
   __resetDepCacheForTests();
-  __primeDepCacheForTests(["xcrun", "sim-remote", "adb"]);
+  __primeDepCacheForTests(["xcrun", "sim-remote", "adb", "vega"]);
 });
 
 describe("terminate-app", () => {
@@ -61,15 +72,41 @@ describe("terminate-app", () => {
     ]);
   });
 
+  it("runs simctl terminate over sim-remote with the remote: prefix stripped", async () => {
+    await expect(run(`remote:${IOS_UDID}`)).resolves.toEqual({
+      terminated: true,
+      bundleId: BUNDLE_ID,
+    });
+    expect(execFileMock.mock.calls.map(([cmd, args]) => [cmd, args])).toEqual([
+      ["sim-remote", ["simctl", "terminate", IOS_UDID, BUNDLE_ID]],
+    ]);
+  });
+
   it.each([
     ["iOS", IOS_UDID],
     ["ios-remote", `remote:${IOS_UDID}`],
-  ])("succeeds on %s when there is nothing to terminate", async (_name, udid) => {
+  ])("reports terminated: false on %s when there is nothing to terminate", async (_name, udid) => {
     execFailure = {
       message: "Command failed: xcrun simctl terminate",
       stderr: NOTHING_TO_TERMINATE,
     };
-    await expect(run(udid)).resolves.toEqual({ terminated: true, bundleId: BUNDLE_ID });
+    await expect(run(udid)).resolves.toEqual({ terminated: false, bundleId: BUNDLE_ID });
+  });
+
+  it("runs vega terminate-app on a Vega Virtual Device", async () => {
+    await expect(run("amazon-4a27df03c9777152")).resolves.toEqual({
+      terminated: true,
+      bundleId: BUNDLE_ID,
+    });
+    expect(vegaCalls).toEqual([["terminate-app", "-a", BUNDLE_ID]]);
+  });
+
+  it.each([
+    ["a physical iPhone", "00008110-000000000000001E"],
+    ["a Chromium app", "chromium-cdp-9222"],
+  ])("rejects %s as unsupported", async (_name, udid) => {
+    await expect(run(udid)).rejects.toBeInstanceOf(UnsupportedOperationError);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("propagates other simctl failures", async () => {
