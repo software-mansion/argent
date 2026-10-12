@@ -53,6 +53,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the record. 
 ## Limits
 
 - Argent starts the capture at one of these three moments: the debugger connects, Argent attaches to the Chromium app, or you activate the native inspection. Argent does not capture the earlier requests. Do the operation again after the agent connects.
+- After the agent reads the JS record one time, Argent continues the capture when the agent restarts the app. Argent starts the capture again before the app sends its first request. Thus the agent sees the requests that the app sends at launch.
 - The record keeps the most recent requests only. The limits are 2000 requests for the JS layer and 1000 requests for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native record holds fewer than 1000 requests.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
 - The `NSURLProtocol` layer is available on iOS only. On Android, use the JS layer.

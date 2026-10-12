@@ -12,6 +12,8 @@ import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
+import { wantsNetworkCapture } from "../utils/debugger/network-capture-intent";
+import { NETWORK_INTERCEPTOR_SCRIPT } from "../utils/debugger/scripts/network-interceptor";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -280,6 +282,13 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       });
       consoleEvents.emit("log", entry);
     });
+
+    // The agent watched this device's network before: install the interceptor
+    // now, ahead of the setup below, so a relaunched app's first requests are
+    // captured (see network-capture-intent.ts).
+    if (wantsNetworkCapture(`${port}:${deviceId}`)) {
+      await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+    }
 
     try {
       const sourceMaps = new SourceMapsRegistry();

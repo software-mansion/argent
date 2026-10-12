@@ -129,6 +129,10 @@ function runningDebuggerSessions(registry: Registry, udid: string): string[] {
 
 const REATTACH_BUDGET_MS = 30_000;
 const REATTACH_INTERVAL_MS = 250;
+// The relaunched app sends its first requests about half a second after its
+// runtime appears on Metro, so watch Metro's target list closely and connect
+// the moment one shows up; a full connect attempt every 250ms lost that race.
+const TARGET_POLL_MS = 50;
 
 /**
  * Reconnect a debugger session as soon as the relaunched app's runtime shows up
@@ -138,13 +142,34 @@ const REATTACH_INTERVAL_MS = 250;
  * behaviour) dropped the whole cold start.
  */
 async function reattachDebugger(registry: Registry, urn: string): Promise<void> {
+  const port = urn.split(":")[1];
   const deadline = Date.now() + REATTACH_BUDGET_MS;
+  let nextAttempt = 0;
+  let targetsAtLastAttempt = -1;
   while (Date.now() < deadline) {
-    try {
-      await registry.resolveService(urn);
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, REATTACH_INTERVAL_MS));
+    const targets = await metroTargetCount(port);
+    // Retry at once when a target appears, otherwise every REATTACH_INTERVAL_MS
+    // (another device's app on the same Metro must not turn this into a busy loop).
+    if (Date.now() >= nextAttempt || targets > targetsAtLastAttempt) {
+      try {
+        await registry.resolveService(urn);
+        return;
+      } catch {
+        nextAttempt = Date.now() + REATTACH_INTERVAL_MS;
+        targetsAtLastAttempt = targets;
+      }
     }
+    await new Promise((r) => setTimeout(r, TARGET_POLL_MS));
+  }
+}
+
+/** How many runtimes Metro lists right now, or -1 when it can't be read. */
+async function metroTargetCount(port: string | undefined): Promise<number> {
+  try {
+    const res = await fetch(`http://localhost:${port}/json/list`);
+    const targets: unknown = await res.json();
+    return Array.isArray(targets) ? targets.length : -1;
+  } catch {
+    return -1;
   }
 }
