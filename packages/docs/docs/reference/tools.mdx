@@ -90,18 +90,29 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 After the change, `fill` reads the field again. The result is `{ method, verified, length }`. The result never contains the text of the field.
 
-- `verified` is `true` when the field holds `text`. For a password field, `fill` compares only the length.
-- `verified` is `null` when `fill` cannot read the field. This occurs for the `keys` method on a physical iPhone, and for an ax-service or a devtools helper from argent 0.28.0 or earlier.
+- `verified` is `true` when the field holds `text`. For a password field, `fill` compares only the length of the text.
+- `verified` is `null` when `fill` cannot read the field. This occurs on a physical iPhone, and in some cases of the `keys` fallback below.
 - `length` is the number of UTF-16 code units in the field.
 
-On an iOS simulator and on Android, when the first method does not give `text`, `fill` presses keys: 100 Backspace and 100 Delete keys, then the keys of `text`. A secure text field in an iOS app accepts only typed text, so `fill` types `text` there with keys. Keys can type only the characters of a hardware keyboard on iOS, and only printable ASCII on Android.
+When the field does not hold `text` after the change, `fill` fails with `FILL_NOT_VERIFIED`. `fill` does not try again with keys. For example, a single-line field removes a newline, and a number input refuses letters.
 
-| Error code                       | Cause                                                                                                                                                |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FILL_NO_FOCUSED_FIELD`          | No text field has keyboard focus. `fill` changed nothing                                                                                             |
-| `FILL_NOT_VERIFIED`              | `fill` changed the field, but the field does not hold `text`                                                                                         |
-| `FILL_UNSUPPORTED_FIELD`         | The field cannot take `text`: a date or time input, a disabled or read-only field, or an iOS secure text field and a character that keys cannot type |
-| `KEYBOARD_CHARACTER_UNSUPPORTED` | Only keys can fill the field, and `text` has a character that keys cannot type. `fill` changed nothing                                               |
+`fill` presses keys only in these cases:
+
+- A secure text field in an iOS app accepts only typed text. The ax-service clears the field, then `fill` types `text` with keys. Keys can type only the characters of a hardware keyboard, on one line.
+- An ax-service or a devtools helper from argent 0.28.0 or earlier does not have the `fill` command. `fill` then deletes the text with keys and types `text`. Keys can type only the characters of a hardware keyboard on iOS, and only printable ASCII on Android. When the old component can read the screen, `fill` finds the focused field first and reads the text again after typing. Argent installs the new devtools helper on the next use, so on Android this case is temporary.
+
+Other platform behavior:
+
+- On Android, the first text field of a screen often has focus before a tap. `fill` without a tap then writes into that field.
+- On Android, `fill` with an empty `text` on an empty field can send one change event to the app.
+- On iOS, Safari shows a picker for a date or time input. `fill` fails there with `FILL_NO_FOCUSED_FIELD` or `FILL_UNSUPPORTED_FIELD`.
+
+| Error code                       | Cause                                                                                                                                                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FILL_NO_FOCUSED_FIELD`          | No text field has keyboard focus. `fill` changed nothing                                                                                                                                                        |
+| `FILL_NOT_VERIFIED`              | The field does not hold `text` after the change, or the app did not answer in time                                                                                                                              |
+| `FILL_UNSUPPORTED_FIELD`         | The field cannot take `text`: a date or time input, a disabled or read-only field, a newline for a single-line field, or a character that keys cannot type for an iOS secure text field. `fill` changed nothing |
+| `KEYBOARD_CHARACTER_UNSUPPORTED` | Only keys can fill the field, and `text` has a character that keys cannot type. `fill` changed nothing                                                                                                          |
 
 `fill` does not support Apple TV, Android TV and Vega.
 

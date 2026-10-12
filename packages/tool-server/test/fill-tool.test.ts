@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFailureSignal } from "@argent/registry";
-import type { AXFillResponse } from "../src/blueprints/ax-service";
+import type { AXFillResponse, AXTreeNode, AXTreeResponse } from "../src/blueprints/ax-service";
 import type { SetTextResult } from "../src/blueprints/android-devtools";
+import type { UiTree, UiTreeNode } from "../src/tools/ui-tree";
 
 vi.mock("../src/utils/check-deps", () => ({ ensureDeps: vi.fn(async () => {}) }));
 vi.mock("../src/utils/ios-devices", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/ios-devices")>();
   return { ...actual, isTvOsSimulator: vi.fn(async () => false) };
+});
+vi.mock("../src/utils/sim-remote", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/sim-remote")>();
+  return { ...actual, isRemoteTvOsSimulator: vi.fn(async () => false) };
 });
 vi.mock("../src/utils/adb", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/adb")>();
@@ -15,6 +20,10 @@ vi.mock("../src/utils/adb", async (importOriginal) => {
 vi.mock("../src/utils/android-input", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/android-input")>();
   return { ...actual, injectAndroidText: vi.fn(async () => {}) };
+});
+vi.mock("../src/tools/ui-tree/android", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/tools/ui-tree/android")>();
+  return { ...actual, readAndroidUiTree: vi.fn() };
 });
 vi.mock("../src/utils/ios-device/app-session", () => ({
   requireCurrentIosDeviceApp: vi.fn(() => "com.example.app"),
@@ -25,29 +34,38 @@ vi.mock("../src/utils/ios-device/runner-commands", async (importOriginal) => {
 });
 
 import { createFillTool } from "../src/tools/fill";
+import { KEY_TIMING } from "../src/tools/fill/keys";
+import { textMatches } from "../src/tools/fill/text-match";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { isRemoteTvOsSimulator } from "../src/utils/sim-remote";
 import { adbShell, isAndroidTv } from "../src/utils/adb";
 import { injectAndroidText } from "../src/utils/android-input";
+import { readAndroidUiTree } from "../src/tools/ui-tree/android";
 import { typeText } from "../src/utils/ios-device/runner-commands";
 import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
 
 const IOS = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0000";
+const REMOTE = "remote:AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0000";
 const ANDROID = "emulator-5554";
 const CHROMIUM = "chromium-cdp-9222";
 const VEGA = "amazon-1234567890";
 const IPHONE = "00008120-000154913A05A01E";
+
+const BACKSPACE = 42;
+const ARROW_RIGHT = 79;
 
 /** Records every key the simulator-server is asked to press. */
 function simulatorServer() {
   const keys: Array<[string, number]> = [];
   return {
     keys,
+    downs: () => keys.filter(([dir]) => dir === "Down").map(([, code]) => code),
     api: { pressKey: async (dir: string, code: number) => void keys.push([dir, code]) },
   };
 }
 
 interface Services {
-  ax?: { fill: ReturnType<typeof vi.fn> };
+  ax?: { fill: ReturnType<typeof vi.fn>; tree?: ReturnType<typeof vi.fn> };
   helper?: { setText: ReturnType<typeof vi.fn> } | Error;
   sim?: ReturnType<typeof simulatorServer>;
   cdp?: { send: ReturnType<typeof vi.fn> };
@@ -72,13 +90,38 @@ function registryWith(services: Services) {
 function axAnswers(...answers: Array<AXFillResponse | null>) {
   const fill = vi.fn();
   for (const a of answers) fill.mockResolvedValueOnce(a);
-  return { fill };
+  return { fill, tree: vi.fn(async (): Promise<AXTreeResponse> => treeOf()) };
 }
+
+function treeOf(...nodes: Array<Partial<AXTreeNode>>): AXTreeResponse {
+  return {
+    alertVisible: false,
+    truncated: false,
+    nodes: nodes.map((n, index) => ({ index, ...n })),
+  };
+}
+
+const focusedIos = (extra: Partial<AXTreeNode> = {}): Partial<AXTreeNode> => ({
+  traits: ["textEntry", "isEditing"],
+  ...extra,
+});
 
 function helperAnswers(...answers: Array<SetTextResult | null>) {
   const setText = vi.fn();
   for (const a of answers) setText.mockResolvedValueOnce(a);
   return { setText };
+}
+
+function androidTree(...nodes: Array<Partial<UiTreeNode>>): UiTree {
+  return {
+    schemaVersion: 1,
+    source: "android-devtools",
+    truncated: false,
+    unsupportedFields: [],
+    roots: [
+      { role: "Screen", children: nodes.map((n) => ({ role: "TextField", children: [], ...n })) },
+    ],
+  };
 }
 
 async function run(services: Services, udid: string, text: string) {
@@ -95,19 +138,22 @@ async function failure(services: Services, udid: string, text: string) {
   throw new Error("expected fill to fail");
 }
 
-const BACKSPACE = 42;
-const FORWARD_DELETE = 76;
+const savedTiming = { ...KEY_TIMING };
 
 beforeEach(() => {
+  Object.assign(KEY_TIMING, { holdMs: 0, cadenceMs: 0, settleMs: 0, typeDelayMs: 0 });
   vi.mocked(isTvOsSimulator).mockResolvedValue(false);
+  vi.mocked(isRemoteTvOsSimulator).mockResolvedValue(false);
   vi.mocked(isAndroidTv).mockResolvedValue(false);
   vi.mocked(adbShell).mockClear();
   vi.mocked(injectAndroidText).mockClear();
+  vi.mocked(readAndroidUiTree).mockReset();
   vi.mocked(typeText).mockReset();
   vi.mocked(typeText).mockResolvedValue({ reactivated: false });
 });
 
 afterEach(() => {
+  Object.assign(KEY_TIMING, savedTiming);
   vi.unstubAllEnvs();
 });
 
@@ -120,18 +166,14 @@ describe("fill: iOS simulator", () => {
       verified: true,
       length: 5,
     });
-    expect(ax.fill).toHaveBeenCalledWith("hello");
+    expect(ax.fill).toHaveBeenCalledWith("hello", { typeable: true });
     expect(sim.keys).toHaveLength(0);
   });
 
-  it("clears with an empty text", async () => {
-    const ax = axAnswers({ focused: true, verified: true, length: 0 });
-    await expect(run({ ax }, IOS, "")).resolves.toEqual({
-      method: "accessibility",
-      verified: true,
-      length: 0,
-    });
-    expect(ax.fill).toHaveBeenCalledWith("");
+  it("tells the daemon text with a newline cannot be typed into a secure field", async () => {
+    const ax = axAnswers({ focused: true, verified: true, length: 3 });
+    await run({ ax }, IOS, "a\nb");
+    expect(ax.fill).toHaveBeenCalledWith("a\nb", { typeable: false });
   });
 
   it("fails with FILL_NO_FOCUSED_FIELD and presses nothing when nothing has focus", async () => {
@@ -145,47 +187,65 @@ describe("fill: iOS simulator", () => {
     expect(sim.keys).toHaveLength(0);
   });
 
-  it("falls back to keys, unverified, on an ax-service that predates fill", async () => {
+  it("fails with FILL_UNSUPPORTED_FIELD on a date or time input", async () => {
+    const ax = axAnswers({ focused: true, verified: false, unsupported: true });
     const sim = simulatorServer();
-    await expect(run({ ax: axAnswers(null), sim }, IOS, "ab")).resolves.toEqual({
-      method: "keys",
-      verified: null,
-    });
-    const downs = sim.keys.filter(([dir]) => dir === "Down").map(([, code]) => code);
-    // 100 (backspace, forward delete) pairs, then a (4) and b (5).
-    expect(downs.slice(0, 200).filter((c) => c === BACKSPACE)).toHaveLength(100);
-    expect(downs.slice(0, 200).filter((c) => c === FORWARD_DELETE)).toHaveLength(100);
-    expect(downs.slice(200)).toEqual([4, 5]);
-  });
-
-  it("refuses text the key fallback cannot type before deleting anything", async () => {
-    const sim = simulatorServer();
-    const err = await failure({ ax: axAnswers(null), sim }, IOS, "Zażółć");
-    expect(getFailureSignal(err)?.error_code).toBe("KEYBOARD_CHARACTER_UNSUPPORTED");
-    expect(sim.keys).toHaveLength(0);
-  });
-
-  it("types into a native secure field the daemon left untouched, then checks it", async () => {
-    const ax = axAnswers(
-      { focused: true, verified: false, secure: true, length: 4 },
-      { focused: true, verified: true, length: 6 }
-    );
-    const sim = simulatorServer();
-    await expect(run({ ax, sim }, IOS, "s3cret")).resolves.toEqual({
-      method: "keys",
-      verified: true,
-      length: 6,
-    });
-    expect(ax.fill).toHaveBeenLastCalledWith("s3cret", { check: true });
-  });
-
-  it("refuses untypeable text for a native secure field without touching it", async () => {
-    const ax = axAnswers({ focused: true, verified: false, secure: true, length: 4 });
-    const sim = simulatorServer();
-    const err = await failure({ ax, sim }, IOS, "pässword");
+    const err = await failure({ ax, sim }, IOS, "2024-01-01");
     expect(getFailureSignal(err)?.error_code).toBe("FILL_UNSUPPORTED_FIELD");
     expect(sim.keys).toHaveLength(0);
+  });
+
+  it("fails with FILL_NOT_VERIFIED, and never falls back to keys, when the write does not read back", async () => {
+    const ax = axAnswers({ focused: true, verified: false, length: 3 });
+    const sim = simulatorServer();
+    const err = await failure({ ax, sim }, IOS, "abc");
+    expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+    expect(sim.keys).toHaveLength(0);
     expect(ax.fill).toHaveBeenCalledTimes(1);
+  });
+
+  describe("secure field", () => {
+    it("types into the field the daemon cleared, then checks it", async () => {
+      const ax = axAnswers(
+        { focused: true, verified: false, secure: true, cleared: true, length: 0 },
+        { focused: true, verified: true, length: 2 }
+      );
+      const sim = simulatorServer();
+      await expect(run({ ax, sim }, IOS, "ab")).resolves.toEqual({
+        method: "keys",
+        verified: true,
+        length: 2,
+      });
+      // No delete burst: the daemon cleared it. Only a (4) and b (5).
+      expect(sim.downs()).toEqual([4, 5]);
+      expect(ax.fill).toHaveBeenLastCalledWith("ab", { check: true });
+    });
+
+    it("fails without typing when the daemon could not clear it", async () => {
+      const ax = axAnswers({ focused: true, verified: false, secure: true, cleared: false });
+      const sim = simulatorServer();
+      const err = await failure({ ax, sim }, IOS, "ab");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+      expect(sim.keys).toHaveLength(0);
+    });
+
+    it("refuses text keys cannot type, and the daemon left the field as it was", async () => {
+      const ax = axAnswers({ focused: true, verified: false, secure: true });
+      const sim = simulatorServer();
+      const err = await failure({ ax, sim }, IOS, "pässword");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_UNSUPPORTED_FIELD");
+      expect(ax.fill).toHaveBeenCalledWith("pässword", { typeable: false });
+      expect(sim.keys).toHaveLength(0);
+    });
+
+    it("fails when the typed text does not read back", async () => {
+      const ax = axAnswers(
+        { focused: true, verified: false, secure: true, cleared: true },
+        { focused: true, verified: false, length: 1 }
+      );
+      const err = await failure({ ax, sim: simulatorServer() }, IOS, "ab");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+    });
   });
 
   it("clears a web password input with one backspace when the daemon asks for it", async () => {
@@ -205,42 +265,125 @@ describe("fill: iOS simulator", () => {
     ]);
   });
 
-  it("retries with keys when the write does not read back, and fails if the keys do not either", async () => {
+  it("fails when the backspace did not clear the web password input", async () => {
     const ax = axAnswers(
-      { focused: true, verified: false, length: 3 },
-      { focused: true, verified: false, length: 3 }
+      { focused: true, verified: false, needsBackspace: true, length: 8 },
+      { focused: true, verified: false, length: 8 }
     );
     const sim = simulatorServer();
-    const err = await failure({ ax, sim }, IOS, "abc");
+    const err = await failure({ ax, sim }, IOS, "");
     expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
-    expect(err.message).toContain("keys");
-    expect(sim.keys.length).toBeGreaterThan(400);
+    expect(sim.downs()).toEqual([BACKSPACE]);
   });
 
-  it("answers keys when the retry reads back", async () => {
-    const ax = axAnswers(
-      { focused: true, verified: false, length: 0 },
-      { focused: true, verified: true, length: 3 }
-    );
-    await expect(run({ ax, sim: simulatorServer() }, IOS, "abc")).resolves.toEqual({
-      method: "keys",
-      verified: true,
-      length: 3,
+  describe("ax-service without fill", () => {
+    it("sizes the burst from the focused input, then reads the text back", async () => {
+      const ax = axAnswers(null);
+      ax.tree
+        .mockResolvedValueOnce(treeOf({ label: "App" }, focusedIos({ value: "abcd" })))
+        .mockResolvedValueOnce(treeOf({ label: "App" }, focusedIos({ value: "Hi" })));
+      const sim = simulatorServer();
+      await expect(run({ ax, sim }, IOS, "Hi")).resolves.toEqual({
+        method: "keys",
+        verified: true,
+        length: 2,
+      });
+      // 5 Right Arrows put the caret at the end, 5 Backspaces clear, then H i.
+      expect(sim.downs()).toEqual([
+        ...Array(5).fill(ARROW_RIGHT),
+        ...Array(5).fill(BACKSPACE),
+        225, // Shift for H
+        11,
+        12,
+      ]);
     });
-  });
 
-  it("fails without typing when the write does not read back and keys cannot type the text", async () => {
-    const ax = axAnswers({ focused: true, verified: false, length: 0 });
-    const sim = simulatorServer();
-    const err = await failure({ ax, sim }, IOS, "你好");
-    expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
-    expect(sim.keys).toHaveLength(0);
+    it("fails with FILL_NOT_VERIFIED when the typed text reads back different", async () => {
+      // iOS capitalized the first letter.
+      const ax = axAnswers(null);
+      ax.tree
+        .mockResolvedValueOnce(treeOf(focusedIos({ value: "" })))
+        .mockResolvedValueOnce(treeOf(focusedIos({ value: "Abc" })));
+      const err = await failure({ ax, sim: simulatorServer() }, IOS, "abc");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+    });
+
+    it("accepts a placeholder as an empty field after a clear", async () => {
+      const ax = axAnswers(null);
+      ax.tree
+        .mockResolvedValueOnce(treeOf(focusedIos({ value: "abc" })))
+        .mockResolvedValueOnce(
+          treeOf(focusedIos({ value: "Email", placeholder: "Email", hintShowing: true }))
+        );
+      await expect(run({ ax, sim: simulatorServer() }, IOS, "")).resolves.toEqual({
+        method: "keys",
+        verified: true,
+        length: 0,
+      });
+    });
+
+    it("fails with FILL_NO_FOCUSED_FIELD, sending nothing, when the tree has no focused input", async () => {
+      const ax = axAnswers(null);
+      ax.tree.mockResolvedValueOnce(treeOf({ label: "App" }, { traits: ["textEntry"] }));
+      const sim = simulatorServer();
+      const err = await failure({ ax, sim }, IOS, "x");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_NO_FOCUSED_FIELD");
+      expect(sim.keys).toHaveLength(0);
+    });
+
+    it("refuses a newline for a single-line input, and allows it in a text view", async () => {
+      const ax = axAnswers(null);
+      ax.tree.mockResolvedValueOnce(treeOf(focusedIos({ value: "" })));
+      const sim = simulatorServer();
+      const err = await failure({ ax, sim }, IOS, "a\nb");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_UNSUPPORTED_FIELD");
+      expect(sim.keys).toHaveLength(0);
+
+      const view = axAnswers(null);
+      view.tree
+        .mockResolvedValueOnce(
+          treeOf(focusedIos({ value: "", traits: ["textEntry", "isEditing", "textView"] }))
+        )
+        .mockResolvedValueOnce(
+          treeOf(focusedIos({ value: "a\nb", traits: ["textEntry", "isEditing", "textView"] }))
+        );
+      await expect(run({ ax: view, sim: simulatorServer() }, IOS, "a\nb")).resolves.toMatchObject({
+        method: "keys",
+        verified: true,
+      });
+    });
+
+    it("sends the full burst, unverified, when the daemon has no tree either", async () => {
+      const ax = axAnswers(null);
+      ax.tree.mockRejectedValue(new Error("ax-service predates `tree`; update argent"));
+      const sim = simulatorServer();
+      await expect(run({ ax, sim }, IOS, "")).resolves.toEqual({ method: "keys", verified: null });
+      expect(sim.downs().filter((c) => c === BACKSPACE)).toHaveLength(100);
+      expect(sim.downs().filter((c) => c === ARROW_RIGHT)).toHaveLength(100);
+    });
+
+    it("refuses text the keys cannot type before anything is read or sent", async () => {
+      const ax = axAnswers(null);
+      const sim = simulatorServer();
+      const err = await failure({ ax, sim }, IOS, "Zażółć");
+      expect(getFailureSignal(err)?.error_code).toBe("KEYBOARD_CHARACTER_UNSUPPORTED");
+      expect(ax.tree).not.toHaveBeenCalled();
+      expect(sim.keys).toHaveLength(0);
+    });
   });
 
   it("refuses a tvOS simulator before touching it", async () => {
     vi.mocked(isTvOsSimulator).mockResolvedValue(true);
     const ax = axAnswers();
     const err = await failure({ ax }, IOS, "x");
+    expect(getFailureSignal(err)?.error_code).toBe("TOOL_CAPABILITY_UNSUPPORTED_OPERATION");
+    expect(ax.fill).not.toHaveBeenCalled();
+  });
+
+  it("refuses a remote tvOS simulator before touching it", async () => {
+    vi.mocked(isRemoteTvOsSimulator).mockResolvedValue(true);
+    const ax = axAnswers();
+    const err = await failure({ ax }, REMOTE, "x");
     expect(getFailureSignal(err)?.error_code).toBe("TOOL_CAPABILITY_UNSUPPORTED_OPERATION");
     expect(ax.fill).not.toHaveBeenCalled();
   });
@@ -264,44 +407,72 @@ describe("fill: Android", () => {
     expect(adbShell).not.toHaveBeenCalled();
   });
 
-  it("falls back to one keyevent burst and input text on a helper without setText", async () => {
-    await expect(run({ helper: helperAnswers(null) }, ANDROID, "abc")).resolves.toEqual({
-      method: "keys",
-      verified: null,
-    });
-    expect(adbShell).toHaveBeenCalledTimes(1);
-    const command = vi.mocked(adbShell).mock.calls[0]![1];
-    expect(command.startsWith("input keyevent ")).toBe(true);
-    expect(command.match(/\b67\b/g)).toHaveLength(100);
-    expect(command.match(/\b112\b/g)).toHaveLength(100);
-    expect(injectAndroidText).toHaveBeenCalledWith(ANDROID, "abc");
+  it("fails with FILL_NOT_VERIFIED, and never falls back to keys, when the write does not read back", async () => {
+    const helper = helperAnswers({ focused: true, performed: true, verified: false, length: 2 });
+    const err = await failure({ helper }, ANDROID, "x\ny");
+    expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+    expect(adbShell).not.toHaveBeenCalled();
+    expect(helper.setText).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to keys when the helper cannot start", async () => {
+  describe("helper without setText", () => {
+    it("sizes the burst from the focused field and reads the text back", async () => {
+      vi.mocked(readAndroidUiTree)
+        .mockResolvedValueOnce(androidTree({ focused: true, editable: true, value: "abcd" }))
+        .mockResolvedValueOnce(androidTree({ focused: true, editable: true, value: "abc" }));
+      await expect(run({ helper: helperAnswers(null) }, ANDROID, "abc")).resolves.toEqual({
+        method: "keys",
+        verified: true,
+        length: 3,
+      });
+      const command = vi.mocked(adbShell).mock.calls[0]![1];
+      expect(command.match(/\b67\b/g)).toHaveLength(5);
+      expect(command.match(/\b112\b/g)).toHaveLength(5);
+      expect(injectAndroidText).toHaveBeenCalledWith(ANDROID, "abc");
+    });
+
+    it("fails with FILL_NO_FOCUSED_FIELD, sending nothing, when no editable node has focus", async () => {
+      vi.mocked(readAndroidUiTree).mockResolvedValueOnce(
+        androidTree({ focused: false, editable: true, value: "a" })
+      );
+      const err = await failure({ helper: helperAnswers(null) }, ANDROID, "x");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_NO_FOCUSED_FIELD");
+      expect(adbShell).not.toHaveBeenCalled();
+    });
+
+    it("gives a password the full burst and answers unverified", async () => {
+      vi.mocked(readAndroidUiTree).mockResolvedValueOnce(
+        androidTree({ focused: true, editable: true, password: true })
+      );
+      await expect(run({ helper: helperAnswers(null) }, ANDROID, "pw")).resolves.toEqual({
+        method: "keys",
+        verified: null,
+      });
+      expect(vi.mocked(adbShell).mock.calls[0]![1].match(/\b67\b/g)).toHaveLength(100);
+    });
+
+    it("fails with FILL_NOT_VERIFIED when the typed text reads back different", async () => {
+      vi.mocked(readAndroidUiTree)
+        .mockResolvedValueOnce(androidTree({ focused: true, editable: true, value: "" }))
+        .mockResolvedValueOnce(androidTree({ focused: true, editable: true, value: "ab" }));
+      const err = await failure({ helper: helperAnswers(null) }, ANDROID, "abc");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+    });
+  });
+
+  it("falls back to the full burst, unverified, when the helper cannot start", async () => {
     await expect(run({ helper: new Error("install failed") }, ANDROID, "")).resolves.toEqual({
       method: "keys",
       verified: null,
     });
+    expect(readAndroidUiTree).not.toHaveBeenCalled();
+    expect(vi.mocked(adbShell).mock.calls[0]![1].match(/\b67\b/g)).toHaveLength(100);
     expect(injectAndroidText).not.toHaveBeenCalled();
   });
 
-  it("retries with keys and checks again when the write does not read back", async () => {
-    const helper = helperAnswers(
-      { focused: true, performed: true, verified: false, length: 1 },
-      { focused: true, verified: true, length: 3 }
-    );
-    await expect(run({ helper }, ANDROID, "abc")).resolves.toEqual({
-      method: "keys",
-      verified: true,
-      length: 3,
-    });
-    expect(helper.setText).toHaveBeenLastCalledWith("abc", { check: true });
-  });
-
-  it("fails without typing when the write does not read back and keys cannot type the text", async () => {
-    const helper = helperAnswers({ focused: true, performed: true, verified: false });
-    const err = await failure({ helper }, ANDROID, "😀");
-    expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+  it("refuses text the keys cannot type before anything is sent", async () => {
+    const err = await failure({ helper: helperAnswers(null) }, ANDROID, "😀");
+    expect(getFailureSignal(err)?.error_code).toBe("KEYBOARD_CHARACTER_UNSUPPORTED");
     expect(adbShell).not.toHaveBeenCalled();
   });
 
@@ -317,7 +488,7 @@ describe("fill: Android", () => {
     vi.mocked(injectAndroidText).mockRejectedValueOnce(
       new Error("adb shell input text 'correct horse battery' failed")
     );
-    const err = await failure({ helper: helperAnswers(null) }, ANDROID, "correct horse battery");
+    const err = await failure({ helper: new Error("no helper") }, ANDROID, "correct horse battery");
     expect(err.message).not.toContain("correct horse");
     expect(err.stack ?? "").not.toContain("correct horse");
   });
@@ -375,22 +546,35 @@ describe("fill: unsupported targets", () => {
   });
 });
 
+describe("textMatches", () => {
+  it.each([
+    ["abc", "abc", true],
+    ["Abc", "abc", false],
+    ["•••", "abc", true],
+    ["••c", "abc", true],
+    ["••", "abc", false],
+    ["", "", true],
+    ["", "a", false],
+    // The same text, decomposed: AX may answer either form.
+    ["Zażółć", "Zażółć", true],
+  ])("%j shows %j: %s", (current, expected, result) => {
+    expect(textMatches(current, expected)).toBe(result);
+  });
+});
+
 describe("fill: secrets and leaks", () => {
   it("resolves a secret placeholder and returns nothing of it", async () => {
     vi.stubEnv("ARGENT_SECRET_FILL_PW", "hunter2-secret");
     const ax = axAnswers({ focused: true, verified: true, length: 14 });
     const result = await run({ ax }, IOS, "{{secret:FILL_PW}}");
-    expect(ax.fill).toHaveBeenCalledWith("hunter2-secret");
+    expect(ax.fill).toHaveBeenCalledWith("hunter2-secret", { typeable: true });
     expect(JSON.stringify(result)).not.toContain("hunter2");
     expect(JSON.stringify(result)).not.toContain("FILL_PW");
   });
 
   it("names neither the text nor the secret in a failure", async () => {
     vi.stubEnv("ARGENT_SECRET_FILL_PW", "hunter2-secret");
-    const ax = axAnswers(
-      { focused: true, verified: false, length: 0 },
-      { focused: true, verified: false, length: 0 }
-    );
+    const ax = axAnswers({ focused: true, verified: false, length: 0 });
     const err = await failure({ ax, sim: simulatorServer() }, IOS, "{{secret:FILL_PW}}");
     expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
     expect(err.message).not.toContain("hunter2");
@@ -398,21 +582,16 @@ describe("fill: secrets and leaks", () => {
 
   it("keeps the text out of every result and error message", async () => {
     const text = "Sup3r-Secr3t-Value";
-    const outcomes: unknown[] = [];
+    const legacy = axAnswers(null);
+    legacy.tree
+      .mockResolvedValueOnce(treeOf(focusedIos({ value: "old" })))
+      .mockResolvedValueOnce(treeOf(focusedIos({ value: "other" })));
     const cases: Array<[Services, string]> = [
       [{ ax: axAnswers({ focused: true, verified: true, length: 18 }) }, IOS],
       [{ ax: axAnswers({ focused: false, verified: false }) }, IOS],
-      [{ ax: axAnswers(null), sim: simulatorServer() }, IOS],
+      [{ ax: legacy, sim: simulatorServer() }, IOS],
       [{ helper: helperAnswers({ focused: true, verified: true, length: 18 }) }, ANDROID],
-      [
-        {
-          helper: helperAnswers(
-            { focused: true, verified: false },
-            { focused: true, verified: false }
-          ),
-        },
-        ANDROID,
-      ],
+      [{ helper: helperAnswers({ focused: true, verified: false }) }, ANDROID],
       [
         {
           cdp: {
@@ -422,6 +601,7 @@ describe("fill: secrets and leaks", () => {
         CHROMIUM,
       ],
     ];
+    const outcomes: unknown[] = [];
     for (const [services, udid] of cases) {
       try {
         outcomes.push(await run(services, udid, text));

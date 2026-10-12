@@ -4,6 +4,7 @@ import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { isAndroidTv } from "../../utils/adb";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { isRemoteTvOsSimulator } from "../../utils/sim-remote";
 import { redactSecretsFromError, resolveSecretPlaceholders } from "../../utils/secrets";
 import { iosRequires } from "../describe/platforms/ios";
 import { androidRequires } from "../describe/platforms/android";
@@ -56,7 +57,12 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
     },
     iosRemote: {
       requires: ["sim-remote"],
-      handler: async (_services, params, device) => fillIos(registry, device, params.text),
+      handler: async (_services, params, device) => {
+        if (await isRemoteTvOsSimulator(device.id)) {
+          throw new UnsupportedOperationError("fill", device, "tvOS");
+        }
+        return fillIos(registry, device, params.text);
+      },
     },
     iosDevice: {
       requires: ["xcrun"],
@@ -89,9 +95,9 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
       failedMsg: ({ failureSignal }) => `Failed to fill the field: ${failureSignal.error_code}`,
     },
     description: `Set the text of the focused text field to exactly \`text\`, replacing what it holds; "" clears it. For SDK callers such as an e2e engine, which taps the field first.
-iOS simulator: AX text operations through the ax-service. Android: ACTION_SET_TEXT through the devtools helper. Chromium: the page's editing commands. The app sees an ordinary edit.
-Returns { method: "accessibility" | "helper" | "cdp" | "keys", verified, length? }, never the text. \`verified\` is null when the field could not be read back (the key fallback on an older ax-service or helper, and on a physical iPhone).
-Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text, FILL_UNSUPPORTED_FIELD for a field that cannot take text (a date or time input). Not supported on TV targets or Vega.`,
+iOS simulator: AX text operations through the ax-service (a secure field is cleared that way, then typed into with keys). Android: ACTION_SET_TEXT through the devtools helper. Chromium: the page's editing commands. The app sees an ordinary edit. Keys (a delete burst, then typing) are used only where none of these exists: an older ax-service or helper, and a physical iPhone.
+Returns { method: "accessibility" | "helper" | "cdp" | "keys", verified, length? }, never the text. \`verified\` is null when the field could not be read back.
+Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text (no keys are tried after that), FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field). Not supported on TV targets or Vega.`,
     hideFromMcp: true,
     zodSchema,
     capability,

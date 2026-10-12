@@ -5,6 +5,7 @@ import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   TypedEventEmitter,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -104,8 +105,15 @@ export interface AXFillResponse {
   length?: number;
   /** A clear the field ignored with its text still selected; one backspace removes it. */
   needsBackspace?: boolean;
-  /** A native secure field, which drops inserted text: left untouched, to be typed into. */
+  /**
+   * A native secure field, which drops inserted text. The daemon cleared it
+   * (`cleared` says whether that read back) for the caller to type into, or
+   * left it untouched when the caller said it cannot type the text.
+   */
   secure?: boolean;
+  cleared?: boolean;
+  /** The focused element is no text input: a web date or time input. Nothing was changed. */
+  unsupported?: boolean;
 }
 
 export interface AXServiceApi {
@@ -123,7 +131,10 @@ export interface AXServiceApi {
    * operations, then read it back; with `check`, only read it back. Null when
    * the daemon predates the command.
    */
-  fill(text: string, options?: { check?: boolean }): Promise<AXFillResponse | null>;
+  fill(
+    text: string,
+    options?: { check?: boolean; typeable?: boolean }
+  ): Promise<AXFillResponse | null>;
   /**
    * The display id of the panel the guest renders to (1 the cover panel, 3
    * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
@@ -141,8 +152,11 @@ export interface AXServiceApi {
  */
 const LIVE_PANEL_TIMEOUT_MS = 2_000;
 
-/** `fill` edits through the app and then polls its read-back for up to a second. */
-const FILL_TIMEOUT_MS = 10_000;
+/**
+ * The daemon answers `fill` within its own 3 s budget; this only catches a
+ * daemon whose main thread is held by another command against a hung app.
+ */
+const FILL_TIMEOUT_MS = 6_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -565,27 +579,44 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           : null;
       },
 
-      async fill(text: string, options: { check?: boolean } = {}): Promise<AXFillResponse | null> {
+      async fill(
+        text: string,
+        options: { check?: boolean; typeable?: boolean } = {}
+      ): Promise<AXFillResponse | null> {
         let result: {
           verified?: boolean;
           length?: number;
           needsBackspace?: boolean;
           secure?: boolean;
+          cleared?: boolean;
         };
         try {
           result = (await query("fill", FILL_TIMEOUT_MS, {
             text,
             ...(options.check ? { check: true } : {}),
+            ...(options.typeable === false ? { typeable: false } : {}),
           })) as typeof result;
         } catch (err) {
           // Envelope-level errors carry only the daemon's code, never text.
-          if (err instanceof Error && err.message === "unknown_command") return null;
+          const code = err instanceof Error ? err.message : "";
+          if (code === "unknown_command") return null;
           // A focused element that takes no text is no field to fill either.
-          if (
-            err instanceof Error &&
-            (err.message === "no_focused_field" || err.message === "not_editable")
-          ) {
+          if (code === "no_focused_field" || code === "not_editable") {
             return { focused: false, verified: false };
+          }
+          if (code === "unsupported_field") {
+            return { focused: true, verified: false, unsupported: true };
+          }
+          // The edit ran out of its budget, overlapped one that did, or threw:
+          // the field's state is unknown. A daemon that did not answer at all
+          // is the same verdict.
+          if (
+            code === "fill_timeout" ||
+            code === "fill_busy" ||
+            code === "fill_failed" ||
+            getFailureSignal(err)?.error_code === FAILURE_CODES.AX_QUERY_TIMEOUT
+          ) {
+            return { focused: true, verified: false };
           }
           throw err;
         }
@@ -595,6 +626,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           ...(typeof result.length === "number" ? { length: result.length } : {}),
           ...(result.needsBackspace === true ? { needsBackspace: true } : {}),
           ...(result.secure === true ? { secure: true } : {}),
+          ...(typeof result.cleared === "boolean" ? { cleared: result.cleared } : {}),
         };
       },
 

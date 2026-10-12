@@ -142,10 +142,49 @@ describe("ax-service fill", () => {
     expect(await api.fill("x")).toBeNull();
   });
 
-  it("fails on any other daemon error", async () => {
-    answers.set("fill", envelopeError("fill_failed"));
+  it("answers unsupported for a focused element that is no text input", async () => {
+    answers.set("fill", envelopeError("unsupported_field"));
     const api = await attach();
-    await expect(api.fill("x")).rejects.toThrow("fill_failed");
+    expect(await api.fill("x")).toEqual({ focused: true, verified: false, unsupported: true });
+  });
+
+  it.each(["fill_timeout", "fill_busy", "fill_failed"])(
+    "answers not verified for %s, as the field's state is unknown",
+    async (code) => {
+      answers.set("fill", envelopeError(code));
+      const api = await attach();
+      expect(await api.fill("x")).toEqual({ focused: true, verified: false });
+    }
+  );
+
+  it("answers not verified when the daemon does not answer in time", async () => {
+    answers.set("fill", HANG);
+    const api = await attach();
+    vi.useFakeTimers();
+    const fill = api.fill("x");
+    await vi.advanceTimersByTimeAsync(6_000);
+    await expect(fill).resolves.toEqual({ focused: true, verified: false });
+  });
+
+  it("sends typeable only when the caller cannot type the text, and passes cleared on", async () => {
+    answers.set("fill", { verified: false, secure: true, cleared: true, length: 0 });
+    const api = await attach();
+    expect(await api.fill("x", { typeable: false })).toEqual({
+      focused: true,
+      verified: false,
+      secure: true,
+      cleared: true,
+      length: 0,
+    });
+    expect(received.at(-1)).toEqual({ command: "fill", params: { text: "x", typeable: false } });
+    await api.fill("x", { typeable: true });
+    expect(received.at(-1)).toEqual({ command: "fill", params: { text: "x" } });
+  });
+
+  it("fails on any other daemon error", async () => {
+    answers.set("fill", envelopeError("invalid_params"));
+    const api = await attach();
+    await expect(api.fill("x")).rejects.toThrow("invalid_params");
   });
 
   it("sends no params on the commands that take none", async () => {

@@ -13,29 +13,39 @@ import { noFocusedFieldError, untypeableTextError } from "./errors";
 
 /**
  * The `keys` method: empty the focused field with a delete-key burst, then type
- * the text. Used where the native fill is missing — an ax-service or Android
- * helper older than `fill`, or a physical iPhone — and as the second try when a
- * native fill did not read back.
+ * the text. Used only where no native fill exists: an ax-service or Android
+ * helper older than `fill`, a helper that cannot start, or a physical iPhone.
+ * On an iOS secure field the ax-service clears and this only types.
  *
- * The burst is bounded: 100 backspaces interleaved with 100 forward deletes
- * clear 100 characters on each side of the caret. A tap leaves the caret at
- * the end, so a longer value keeps its start.
+ * The burst clears `pairs` characters wherever the caret is. On iOS it moves
+ * the caret right `pairs` times, then sends `pairs` backspaces; on Android
+ * one `input keyevent` sends backspaces interleaved with forward deletes.
+ * Callers size it from the field's length when they can read it, up to 100.
  */
-const CLEAR_KEY_PAIRS = 100;
+const MAX_CLEAR_KEY_PAIRS = 100;
 
-// USB HID usages. `NAMED_KEYS.backspace` is 42; forward delete (76) has no
-// named key.
-const FORWARD_DELETE_HID = 76;
+// USB HID usage of Right Arrow; `NAMED_KEYS.backspace` is 42.
+const ARROW_RIGHT_HID = 79;
 // android.view.KeyEvent: KEYCODE_DEL, KEYCODE_FORWARD_DEL.
 const ANDROID_DEL = 67;
 const ANDROID_FORWARD_DEL = 112;
 // XCUIKeyboardKey.delete: XCTest's typeText presses Delete for it.
 const XCTEST_DELETE = "\u0008";
 
-const CLEAR_KEY_CADENCE_MS = 2;
-// The keys are fire-and-forget; let the app drain the burst before typing.
-const CLEAR_SETTLE_MS = 300;
-const TYPE_DELAY_MS = 20;
+/**
+ * Key timing. Measured in Safari on iOS 26.5 with the 0.28.0 ax-service: keys
+ * held for 2 ms and sent 2 ms apart lose about one delete in four; held 20 ms
+ * and sent 20 ms apart, every delete lands. Native fields keep up with
+ * either. The keys are fire-and-forget, so the app gets `settleMs` to drain
+ * the burst before typing. Mutable for tests only.
+ */
+export const KEY_TIMING = { holdMs: 20, cadenceMs: 20, settleMs: 300, typeDelayMs: 30 };
+
+/** Delete-key pairs for a field holding `length` characters. */
+export function clearPairsFor(length: number | undefined): number {
+  if (length === undefined) return MAX_CLEAR_KEY_PAIRS;
+  return Math.min(MAX_CLEAR_KEY_PAIRS, length + 1);
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -84,45 +94,65 @@ export async function pressSimulatorBackspace(
   const ref = simulatorServerRef(device);
   const api = await registry.resolveService<SimulatorServerApi>(ref.urn, ref.options);
   await api.pressKey("Down", NAMED_KEYS.backspace!);
+  await sleep(KEY_TIMING.holdMs);
   await api.pressKey("Up", NAMED_KEYS.backspace!);
-  await sleep(CLEAR_SETTLE_MS);
+  await sleep(KEY_TIMING.settleMs);
 }
 
-/** iOS simulator (local or remote): HID keys over simulator-server. */
-export async function fillBySimulatorKeys(
+/** iOS simulator (local or remote): types `text` with HID keys over simulator-server. */
+export async function typeOnSimulator(
   registry: Registry,
   device: DeviceInfo,
   text: string
 ): Promise<void> {
   if (!typeableOnSimulator(text)) throw untypeableTextError("fill_keys_untypeable_ios");
+  if (!text) return;
+  await withoutTextInErrors("fill_keys_ios", () =>
+    typeSimulatorServer(registry, device, {
+      udid: device.id,
+      text,
+      delayMs: KEY_TIMING.typeDelayMs,
+    })
+  );
+}
+
+/** iOS simulator (local or remote): a delete burst, then the text, as HID keys. */
+export async function fillBySimulatorKeys(
+  registry: Registry,
+  device: DeviceInfo,
+  text: string,
+  pairs: number = MAX_CLEAR_KEY_PAIRS
+): Promise<void> {
+  if (!typeableOnSimulator(text)) throw untypeableTextError("fill_keys_untypeable_ios");
   const ref = simulatorServerRef(device);
   const api = await registry.resolveService<SimulatorServerApi>(ref.urn, ref.options);
   await withoutTextInErrors("fill_keys_ios", async () => {
-    for (let i = 0; i < CLEAR_KEY_PAIRS; i++) {
-      for (const key of [NAMED_KEYS.backspace!, FORWARD_DELETE_HID]) {
+    // The caret goes to the end with Right Arrow, then Backspace deletes
+    // everything before it. Forward delete is no use here: WebKit ignores it,
+    // stalls on it and drops the keys that follow.
+    for (const key of [ARROW_RIGHT_HID, NAMED_KEYS.backspace!]) {
+      for (let i = 0; i < pairs; i++) {
         await api.pressKey("Down", key);
+        await sleep(KEY_TIMING.holdMs);
         await api.pressKey("Up", key);
-        await sleep(CLEAR_KEY_CADENCE_MS);
+        await sleep(KEY_TIMING.cadenceMs);
       }
     }
-    await sleep(CLEAR_SETTLE_MS);
-    if (text) {
-      await typeSimulatorServer(registry, device, {
-        udid: device.id,
-        text,
-        delayMs: TYPE_DELAY_MS,
-      });
-    }
+    await sleep(KEY_TIMING.settleMs);
   });
+  await typeOnSimulator(registry, device, text);
 }
 
 /** Android phone or tablet: one `input keyevent` burst, then `input text`. */
-export async function fillByAndroidKeys(serial: string, text: string): Promise<void> {
+export async function fillByAndroidKeys(
+  serial: string,
+  text: string,
+  pairs: number = MAX_CLEAR_KEY_PAIRS
+): Promise<void> {
   if (!typeableOnAndroid(text)) throw untypeableTextError("fill_keys_untypeable_android");
-  const burst = Array.from(
-    { length: CLEAR_KEY_PAIRS },
-    () => `${ANDROID_DEL} ${ANDROID_FORWARD_DEL}`
-  ).join(" ");
+  const burst = Array.from({ length: pairs }, () => `${ANDROID_DEL} ${ANDROID_FORWARD_DEL}`).join(
+    " "
+  );
   await withoutTextInErrors("fill_keys_android", async () => {
     await adbShell(serial, `input keyevent ${burst}`, { timeoutMs: 30_000 });
     if (text) await injectAndroidText(serial, text);
@@ -152,6 +182,6 @@ export async function fillByDeviceKeys(
       throw err;
     }
   };
-  await type(XCTEST_DELETE.repeat(CLEAR_KEY_PAIRS));
+  await type(XCTEST_DELETE.repeat(MAX_CLEAR_KEY_PAIRS));
   if (text) await withoutTextInErrors("fill_keys_ios_device", () => type(text));
 }
