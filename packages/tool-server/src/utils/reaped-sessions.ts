@@ -21,6 +21,8 @@ type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-de
 interface ReapedSession {
   kind: ReapedSessionKind;
   deviceId: string;
+  /** Every id it is filed under; taking it by one spends them all. */
+  ids: string[];
   /** Teardown time, for the "…N seconds ago" phrasing. */
   atMs: number;
   /**
@@ -45,23 +47,25 @@ function key(kind: ReapedSessionKind, deviceId: string): string {
  */
 export function recordReapedSession(
   kind: ReapedSessionKind,
-  deviceId: string,
+  deviceIds: string | Array<string | undefined>,
   salvage?: string,
   connectionLost = false
 ): void {
-  const entry: ReapedSession = { kind, deviceId, atMs: Date.now() };
+  const ids = [deviceIds].flat().filter((id): id is string => id !== undefined);
+  const entry: ReapedSession = { kind, deviceId: ids[0]!, ids, atMs: Date.now() };
   if (salvage) entry.salvage = salvage;
   if (connectionLost) entry.connectionLost = true;
-  reaped.set(key(kind, deviceId), entry);
+  for (const id of ids) reaped.set(key(kind, id), entry);
 }
 
 export function takeReapedSession(
   kind: ReapedSessionKind,
   deviceId: string
 ): ReapedSession | undefined {
-  const k = key(kind, deviceId);
-  const entry = reaped.get(k);
-  if (entry) reaped.delete(k);
+  const entry = reaped.get(key(kind, deviceId));
+  for (const id of entry?.ids ?? []) {
+    if (reaped.get(key(kind, id)) === entry) reaped.delete(key(kind, id));
+  }
   return entry;
 }
 
@@ -84,7 +88,8 @@ export function takeReapedSessionAnyId(
  *
  * `Registry._teardown` calls a blueprint's `dispose()` with no caller, so the
  * disposer that left the breadcrumb cannot see which teardown triggered it —
- * hence a message naming the family rather than asserting one member.
+ * hence a message naming the family rather than asserting one member. A
+ * dropped connection it can see, so that gets its own message.
  */
 export function describeReapedSession(entry: ReapedSession, what: string): string {
   const secondsAgo = Math.max(0, Math.round((Date.now() - entry.atMs) / 1000));

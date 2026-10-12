@@ -81,11 +81,10 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
         // capture, and consuming a breadcrumb there would attach a stale
         // explanation to a healthy result.
         if (stats.totalEntries === 0) {
-          // Every id this device answers to, unconditionally — not `a ?? b`. The
-          // disposer writes one breadcrumb under both the connect id and the
-          // `logicalDeviceId` Metro echoed; leaving either behind would explain a
-          // later, unrelated empty read. `forgetDeviceAlias` ran in that same
-          // dispose, so only the freshly resolved api still knows the logical id.
+          // Every id this device answers to: the disposer files the breadcrumb
+          // under the connect id and the `logicalDeviceId` Metro echoed, and
+          // `forgetDeviceAlias` ran in that same dispose, so only the freshly
+          // resolved api still knows the logical id.
           const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
             canonicalDeviceId(params.device_id),
             params.device_id,

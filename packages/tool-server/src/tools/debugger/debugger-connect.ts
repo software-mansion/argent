@@ -46,10 +46,10 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    // Take this device's teardown breadcrumb: `debugger-log-registry` reads it
-    // only on an EMPTY registry, so one left here outlives every read that
-    // finds entries and later blames an unrelated empty read on a teardown. An
-    // explicit connect makes it wrong anyway — from here the capture is this
+    // Take this device's breadcrumb: `debugger-log-registry` reads it only on
+    // an empty or not-connected read, so one left here outlives every read that
+    // finds entries and later pins an unrelated empty read on the old session.
+    // An explicit connect makes it wrong anyway — from here the capture is this
     // session's.
     //
     // Not in the blueprint's factory: that also runs for the implicit resolve

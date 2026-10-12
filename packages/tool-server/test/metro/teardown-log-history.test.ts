@@ -326,4 +326,32 @@ describe("a debugger session whose app crashed", () => {
 
     expect(result.note).toContain(`kept at ${file}`);
   });
+
+  it("reports the crash once when the connect id and the logicalDeviceId differ", async () => {
+    const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
+    const file = await crash(await connectAndCapture(CONNECT_ID, 3));
+
+    const first = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { status: string; note?: string };
+    expect(first.status).toBe("not_connected");
+    expect(first.note).toContain(`kept at ${file}`);
+
+    appRunning = true;
+    const emptyRead = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { status: string; note?: string };
+    const reconnect = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { note?: string };
+
+    expect(emptyRead.status).toBe("connected");
+    expect(emptyRead.note).toBeUndefined();
+    expect(reconnect.note).toBeUndefined();
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`);
+  });
 });

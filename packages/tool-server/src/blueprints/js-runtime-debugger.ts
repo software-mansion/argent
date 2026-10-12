@@ -372,10 +372,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         // `logWriter.close()` below unlinks the log file unless the socket
         // dropped (likely an app crash, so the log is evidence), and this
         // dispose is routinely another agent's `stop-all-simulator-servers`.
-        // Breadcrumb so `debugger-log-registry`'s bare `totalEntries: 0` can
-        // explain the lost history — only when there was history to lose, and
-        // under both ids, since `forgetDeviceAlias` below drops the only join
-        // between them.
+        // Breadcrumb so `debugger-log-registry` can say where the history went
+        // — only when there was history, and under both ids, since
+        // `forgetDeviceAlias` below drops the only join between them.
         const captured = logWriter.getStats().totalEntries;
         const keepFile = captured > 0 && !cdp.isConnected();
         if (captured > 0) {
@@ -384,10 +383,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
             ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
             : `The ${entries} went with it — the log file is deleted on teardown, so this ` +
               `registry starts empty rather than the app having logged nothing.`;
-          recordReapedSession("js-runtime-debugger", deviceId, salvage, keepFile);
-          if (api.logicalDeviceId && api.logicalDeviceId !== deviceId) {
-            recordReapedSession("js-runtime-debugger", api.logicalDeviceId, salvage, keepFile);
-          }
+          recordReapedSession(
+            "js-runtime-debugger",
+            [deviceId, api.logicalDeviceId],
+            salvage,
+            keepFile
+          );
         }
         forgetDeviceAlias(api.logicalDeviceId);
         forgetLogicalKeyedDevice(deviceId);

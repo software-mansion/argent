@@ -230,8 +230,8 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
         // `logWriter.close()` below unlinks the log file unless the socket
-        // dropped (likely an app crash), and this dispose is
-        // routinely triggered by another agent's `stop-all-simulator-servers`
+        // dropped (likely an app crash), and this dispose is routinely
+        // triggered by another agent's `stop-all-simulator-servers`
         // (`ChromiumJsRuntimeDebugger` is in `DEVICE_OWNED_NAMESPACES`). The
         // breadcrumb is what keeps `debugger-log-registry`'s promise that an
         // empty result with no note means the app logged nothing. Only one key

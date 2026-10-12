@@ -54,6 +54,9 @@ const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 
+// A quiet live session's file goes stale by mtime too; the sweep must spare it.
+const liveLogFiles = new Set<string>();
+
 export class LogFileWriter {
   private filePath: string;
   private fd: number | null = null;
@@ -70,6 +73,7 @@ export class LogFileWriter {
     fs.mkdirSync(dir, { recursive: true });
     pruneStaleLogs(dir);
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
+    liveLogFiles.add(this.filePath);
     this.open();
   }
 
@@ -196,6 +200,7 @@ export class LogFileWriter {
   close({ keepFile = false }: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
+    liveLogFiles.delete(this.filePath);
     if (this.fd !== null) {
       try {
         fs.closeSync(this.fd);
@@ -215,9 +220,16 @@ export class LogFileWriter {
 
 function pruneStaleLogs(dir: string): void {
   const cutoff = Date.now() - STALE_LOG_MS;
-  for (const name of fs.readdirSync(dir)) {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
     if (!/^argent-logs-.*\.log$/.test(name)) continue;
     const file = path.join(dir, name);
+    if (liveLogFiles.has(file)) continue;
     try {
       if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file);
     } catch {

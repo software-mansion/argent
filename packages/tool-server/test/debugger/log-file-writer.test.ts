@@ -217,6 +217,26 @@ describe("LogFileWriter", () => {
     expect(fs.existsSync(fresh)).toBe(true);
   });
 
+  it("a new writer's sweep spares a live writer's file however long it has been quiet", () => {
+    const filePath = writer.getFilePath();
+    const twoDaysAgo = (Date.now() - 48 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+
+    new LogFileWriter(9998).close();
+
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("constructs when the log directory cannot be listed", () => {
+    const dir = path.dirname(writer.getFilePath());
+    fs.chmodSync(dir, 0o300);
+    try {
+      expect(() => new LogFileWriter(9998).close()).not.toThrow();
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+  });
+
   it("close() is idempotent", () => {
     writer.close();
     expect(() => writer.close()).not.toThrow();
