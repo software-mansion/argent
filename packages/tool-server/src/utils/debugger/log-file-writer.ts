@@ -54,8 +54,8 @@ const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 
-// A quiet live session's file goes stale by mtime too; the sweep must spare it.
-const liveLogFiles = new Set<string>();
+// Exempt from the mtime sweep: live logs, and kept ones a breadcrumb may name.
+const sparedLogFiles = new Set<string>();
 
 export class LogFileWriter {
   private filePath: string;
@@ -73,7 +73,7 @@ export class LogFileWriter {
     fs.mkdirSync(dir, { recursive: true });
     pruneStaleLogs(dir);
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}.log`);
-    liveLogFiles.add(this.filePath);
+    sparedLogFiles.add(this.filePath);
     this.open();
   }
 
@@ -196,11 +196,10 @@ export class LogFileWriter {
     return { entries: filtered, total };
   }
 
-  /** `keepFile` leaves the log for a later writer to sweep once it is 24h stale. */
+  /** `keepFile` spares the log for this process, and for others until 24h after the close. */
   close({ keepFile = false }: { keepFile?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
-    liveLogFiles.delete(this.filePath);
     if (this.fd !== null) {
       try {
         fs.closeSync(this.fd);
@@ -209,7 +208,16 @@ export class LogFileWriter {
       }
       this.fd = null;
     }
-    if (keepFile) return;
+    if (keepFile) {
+      try {
+        const now = new Date();
+        fs.utimesSync(this.filePath, now, now);
+      } catch {
+        // never opened
+      }
+      return;
+    }
+    sparedLogFiles.delete(this.filePath);
     try {
       fs.unlinkSync(this.filePath);
     } catch {
@@ -229,7 +237,7 @@ function pruneStaleLogs(dir: string): void {
   for (const name of names) {
     if (!/^argent-logs-.*\.log$/.test(name)) continue;
     const file = path.join(dir, name);
-    if (liveLogFiles.has(file)) continue;
+    if (sparedLogFiles.has(file)) continue;
     try {
       if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file);
     } catch {

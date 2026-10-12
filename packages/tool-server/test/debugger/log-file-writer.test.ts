@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -224,6 +224,22 @@ describe("LogFileWriter", () => {
 
     new LogFileWriter(9998).close();
 
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("a kept file outlives the sweep, in this process and for 24h in a fresh one", async () => {
+    const filePath = writer.getFilePath();
+    const twoDaysAgo = (Date.now() - 48 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+    writer.close({ keepFile: true });
+
+    vi.resetModules();
+    const fresh = await import("../../src/utils/debugger/log-file-writer");
+    new fresh.LogFileWriter(9998).close();
+    expect(fs.existsSync(filePath)).toBe(true);
+
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+    new LogFileWriter(9998).close();
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
