@@ -329,6 +329,20 @@ describe("a debugger session whose app crashed", () => {
     expect(result.note).toContain(`kept at ${file}`);
   });
 
+  it("names the kept file to a read by the logicalDeviceId of a udid connect", async () => {
+    const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
+    const file = await crash(await connectAndCapture(CONNECT_ID, 3));
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; note?: string };
+
+    expect(result.status).toBe("not_connected");
+    expect(result.note).toContain(`kept at ${file}`);
+  });
+
   it("reports the crash once when the connect id and the logicalDeviceId differ", async () => {
     const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
     await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
