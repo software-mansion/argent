@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,7 +31,7 @@ describe("LogFileWriter", () => {
 
   it("creates a flat log file in ~/.argent/tmp", () => {
     const filePath = writer.getFilePath();
-    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+\.log$/);
+    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+-p\d+\.log$/);
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
@@ -201,13 +202,16 @@ describe("LogFileWriter", () => {
     expect(fs.existsSync(filePath)).toBe(false);
   });
 
-  it("a new writer deletes argent-logs files idle for over 24h, keeping fresher ones", () => {
+  const dayAgo = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
+  const twoDaysAgo = (Date.now() - 48 * 60 * 60 * 1000) / 1000;
+
+  it("a new writer deletes a dead process's argent-logs files idle for over 24h, keeping fresher ones", () => {
     const dir = path.dirname(writer.getFilePath());
-    const stale = path.join(dir, "argent-logs-1-1.log");
-    const fresh = path.join(dir, "argent-logs-2-2.log");
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+    const stale = path.join(dir, `argent-logs-1-1-p${deadPid}.log`);
+    const fresh = path.join(dir, `argent-logs-2-2-p${deadPid}.log`);
     fs.writeFileSync(stale, "");
     fs.writeFileSync(fresh, "");
-    const dayAgo = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
     fs.utimesSync(stale, dayAgo - 60, dayAgo - 60);
     fs.utimesSync(fresh, dayAgo + 60, dayAgo + 60);
 
@@ -219,7 +223,6 @@ describe("LogFileWriter", () => {
 
   it("a new writer's sweep spares a live writer's file however long it has been quiet", () => {
     const filePath = writer.getFilePath();
-    const twoDaysAgo = (Date.now() - 48 * 60 * 60 * 1000) / 1000;
     fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
 
     new LogFileWriter(9998).close();
@@ -227,20 +230,28 @@ describe("LogFileWriter", () => {
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
-  it("a kept file outlives the sweep, in this process and for 24h in a fresh one", async () => {
+  it("a new writer's sweep spares a quiet file of another live process", () => {
+    const dir = path.dirname(writer.getFilePath());
+    const other = path.join(dir, `argent-logs-1-1-p${process.ppid}.log`);
+    fs.writeFileSync(other, "");
+    fs.utimesSync(other, twoDaysAgo, twoDaysAgo);
+
+    new LogFileWriter(9998).close();
+
+    expect(fs.existsSync(other)).toBe(true);
+  });
+
+  it("a kept file outlives the sweep for 24h from the close, then is swept", () => {
     const filePath = writer.getFilePath();
-    const twoDaysAgo = (Date.now() - 48 * 60 * 60 * 1000) / 1000;
     fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
     writer.close({ keepFile: true });
 
-    vi.resetModules();
-    const fresh = await import("../../src/utils/debugger/log-file-writer");
-    new fresh.LogFileWriter(9998).close();
+    new LogFileWriter(9998).close();
     expect(fs.existsSync(filePath)).toBe(true);
 
     fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
     new LogFileWriter(9998).close();
-    expect(fs.existsSync(filePath)).toBe(true);
+    expect(fs.existsSync(filePath)).toBe(false);
   });
 
   it("constructs when the log directory cannot be listed", () => {
