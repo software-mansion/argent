@@ -230,15 +230,18 @@ describe("LogFileWriter", () => {
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
-  it("a new writer's sweep spares a quiet file of another live process", () => {
+  it("a new writer's sweep spares quiet files of other live processes, signalable or not", () => {
     const dir = path.dirname(writer.getFilePath());
-    const other = path.join(dir, `argent-logs-1-1-p${process.ppid}.log`);
-    fs.writeFileSync(other, "");
-    fs.utimesSync(other, twoDaysAgo, twoDaysAgo);
+    // pid 1 refuses a non-root signal with EPERM.
+    const others = [process.ppid, 1].map((pid) => path.join(dir, `argent-logs-1-1-p${pid}.log`));
+    for (const other of others) {
+      fs.writeFileSync(other, "");
+      fs.utimesSync(other, twoDaysAgo, twoDaysAgo);
+    }
 
     new LogFileWriter(9998).close();
 
-    expect(fs.existsSync(other)).toBe(true);
+    expect(others.map((other) => fs.existsSync(other))).toEqual([true, true]);
   });
 
   it("a kept file outlives the sweep for 24h from the close, then is swept", () => {
