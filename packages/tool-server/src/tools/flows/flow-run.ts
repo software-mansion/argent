@@ -2,17 +2,24 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  baselineKeyFor,
+  canonicalFlowPath,
+  classifyOnDiskSpelling,
   FAILURE_CODES,
   FailureError,
-  FLOW_NAME_PATTERN,
   getFailureSignal,
+  flowMemberKey,
   isLiveServiceState,
+  MAX_RUN_DEPTH,
+  nestedFlowTarget,
   wrapFailure,
 } from "@argent/registry";
 import type {
+  ClientFileDirective,
   DeviceInfo,
   FailureSignal,
   FileInputSpec,
+  OnDiskSpelling,
   Registry,
   ResolvedFileInput,
   ToolContext,
@@ -20,31 +27,43 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  authoringPlatform,
   assertSafeFlowName,
   assertValidProjectRoot,
   blockSteps,
   chromiumLaunchSpec,
-  classifyOnDiskSpelling,
-  describeSelector,
-  describeTextExpectation,
+  flowNameCasingError,
   getFlowPath,
+  iosLaunchArgs,
   isBlockStep,
   parseFlow,
+  precedesLeadingLaunch,
   runTargetName,
-  swipeByLabel,
   type BlockStep,
   type FlowFile,
-  type FlowSelector,
-  type GestureTarget,
   type FlowStep,
   type Launch,
-  type WhenCondition,
-  LAUNCH_PLATFORMS,
-  SELECTOR_RELATIONS,
+  SELECTABLE_PLATFORMS,
+  windowsPathRefusal,
 } from "./flow-utils";
-import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
+import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
+import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
+import {
+  UPLOAD_STAGE_BY_KIND,
+  prepareToolStepInputs,
+  toolFilePathHints,
+  toolStepUploadIssue,
+  uploadUpdateHint,
+  withClientPaths,
+  type PreparedToolStep,
+  type ToolFileFix,
+} from "./flow-tool-inputs";
+import { RECORDING_TOOL_IDS } from "./flow-add-step";
+import { runFlowScriptStep } from "./flow-script-step";
+import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
@@ -82,8 +101,10 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
+import type { ArtifactHandle } from "../../artifacts";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
@@ -98,7 +119,7 @@ const zodSchema = z
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, and baselines all resolve beside the YAML instead, so pass the agent's cwd."
+        "Absolute path to the calling agent's project root — the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
       ),
     flow_file: z
       .string()
@@ -110,7 +131,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a co-located flow .yaml on the client and tool server's shared filesystem. This must be supplied through the file-input boundary. For remote execution, pass name + project_root instead."
+        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, its run: fragments and the snapshot baselines of each run, and the tool-server runs those copies. Keep run: fragments under project_root or beside the flow file. With updateBaselines, the client writes the new baselines when the run ends. The client also uploads each absolute .png or .yaml path that a tool: step takes as a file argument, when the file is under project_root or beside the flow file. A tool: flow-execute step that names a flow with name and an absolute project_root without a .. segment runs: the client also uploads that flow and its own files. Over a link, the uploaded flows must not have: script: steps; tool: steps that run a flow another way or record a flow; tool: steps that take a directory, an app or an output directory; tool: steps whose tool builds a file path from several arguments; tool: steps that name a relative path or a file other than .png or .yaml. Without a link, the tool-server reads the files in place and all step kinds run."
       ),
     device: z
       .string()
@@ -119,16 +140,16 @@ const zodSchema = z
         "Device id to run against (iOS UDID, Android/Vega serial, Chromium id) — the id list-devices reports. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform`); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
       ),
     platform: z
-      .enum(LAUNCH_PLATFORMS)
+      .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for an e2e flow - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or an e2e launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only — pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for an e2e flow - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or an e2e launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
       ),
     updateBaselines: z
       .boolean()
       .optional()
       .describe(
-        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them."
+        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the flows that tool: flow-execute steps run, unless such a step sets updateBaselines itself."
       ),
     prerequisiteAcknowledged: z
       .boolean()
@@ -168,12 +189,14 @@ const fileInputs: FileInputSpec[] = [
     kind: "file",
     optional: true,
     unwrapWhenSet: "name",
+    collect: "flow",
   },
   {
     target: "flow_file",
     path: "${project_root}/.argent/flows/${name}.yaml",
     kind: "file",
     skipWhenSet: "flow_path",
+    collect: "flow",
   },
 ];
 
@@ -186,9 +209,10 @@ export interface StepReport {
   /**
    * Machine-readable explanation of the outcome. Always set when the step did
    * not pass; also set on some passing reports whose result is self-narrating —
-   * the `when:` guard marker, snapshot passes, and a chromium `launch` whose
-   * instance the runner booted and owns. An attach to an instance the runner
-   * does not own reports no reason.
+   * the `when:` guard marker, snapshot passes, a `script` step carrying an
+   * executor note (`scriptVerdict`, in flow-script-step.ts), and a chromium
+   * `launch` whose instance the runner booted and owns. An attach to an instance
+   * the runner does not own reports no reason.
    */
   reason?: string;
   /**
@@ -232,14 +256,34 @@ export interface StepReport {
    * exporting them (the CLI's `--output`) name files by it.
    */
   snapshotKey?: string;
-  /** Snapshot-step artifacts (baseline/current/diff) as materializable handles. */
-  artifacts?: SnapshotArtifacts;
+  /**
+   * Set beside `snapshotKey` when a remote simulator took the capture. The key
+   * names a device class, not a host, so a local run of the same class reports
+   * the same one, and a client naming files by it needs this to keep the two
+   * runs' files apart.
+   */
+  snapshotRemote?: true;
+  /**
+   * Snapshot-step artifacts (baseline/current/diff), or `screen` on any other
+   * step that failed: the device as it was when the step failed. Materializable
+   * handles.
+   */
+  artifacts?: SnapshotArtifacts | { screen: ArtifactHandle };
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
   /**
    * Nesting depth for display: omitted at top level, +1 inside each nesting
    * step's expanded steps. The report is a flat list with no block-end marker,
    * so renderers cannot reconstruct depth downstream.
    */
   depth?: number;
+  /**
+   * Wall-clock milliseconds the runner spent on this step. Absent on a step
+   * that reports `skip`, except an unmet `when:` marker. A `when:` marker times
+   * only its guard and a `run:` marker only the fragment load; the steps they
+   * expand time themselves.
+   */
+  durationMs?: number;
 }
 
 export interface FlowRunResult {
@@ -257,6 +301,14 @@ export interface FlowRunResult {
   skipped: number;
   errored: number;
   steps: StepReport[];
+  startedAt: number;
+  durationMs: number;
+  /**
+   * The snapshot baselines a run over a link wrote, as base64 client-file
+   * directives: the client writes each into the run's baseline directory and
+   * puts its path, or `{ path, error }`, in its place.
+   */
+  baselineWrites?: ClientFileDirective[];
 }
 
 export interface FlowPrerequisiteNotice {
@@ -266,10 +318,35 @@ export interface FlowPrerequisiteNotice {
 }
 
 /**
- * Longest `run:` chain a flow may nest. Exported so the boundary tests build
- * their chains from the real limit.
+ * The tools a `tool:` step can start a nested `flow-execute` with: itself, and
+ * `flow-add-step` with `command: flow-execute`, which runs the call live.
  */
-export const MAX_RUN_DEPTH = 20;
+const FLOW_STARTING_TOOLS: ReadonlySet<string> = new Set(["flow-execute", "flow-add-step"]);
+
+/**
+ * The args a nested `flow-execute` is dispatched with: a run that updates its
+ * baselines updates those of the flows it runs too, unless the step sets
+ * `updateBaselines` itself. Every other tool gets its args as they are.
+ */
+function nestedRunArgs(
+  state: Pick<ExecState, "updateBaselines">,
+  tool: string,
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  return tool === "flow-execute" && state.updateBaselines && args.updateBaselines === undefined
+    ? { ...args, updateBaselines: true }
+    : args;
+}
+
+/** A nested run refused by the cycle or depth guard before anything ran. */
+function nestingFailure(message: string): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+    failure_stage: "flow_run_validate",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
 
 /**
  * Grace period to let a freshly (re)launched app settle before the first step
@@ -443,6 +520,15 @@ export function flowLaunchGateReason(
         `${measured} This step already performed that one restart, so re-run the flow at most once more ` +
         `before restarting the tool-server rather than the app.`
       );
+    case "provider_attached":
+      // The measured text offers a retry to a reader whose app has only just
+      // started; this step already spent that wait. What survives is the half
+      // that does not ask argent to restart a process the provider owns.
+      return (
+        `${measured} This step already waited ${LAUNCH_TO_VERDICT_MS} ms after launching it, so the ` +
+        `provider is lending a different app rather than one still connecting. Re-run the flow only ` +
+        `once it is lending this one; otherwise drive the app by coordinate.`
+      );
   }
 }
 
@@ -479,13 +565,18 @@ async function waitForVegaAutomation(device: DeviceInfo, signal?: AbortSignal): 
  * handshake in the factory) or it can't run on this device. Hence a one-shot
  * probe, not a poll.
  */
-async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Promise<boolean> {
+async function androidDevtoolsReady(
+  registry: Registry,
+  device: DeviceInfo
+): Promise<{ ready: boolean; reason?: string }> {
   try {
     const ref = androidDevtoolsRef(device);
     const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-    return api.isReady();
-  } catch {
-    return false;
+    return { ready: api.isReady() };
+  } catch (err) {
+    // The factory's own message says whether the helper is missing, could not
+    // be installed or refused to start; a boolean throws all three away.
+    return { ready: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -500,6 +591,17 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * aborted, and for an iOS app the native tools refuse to target (see
  * {@link waitForNativeDevtools}) — there the launch is not what failed.
  * Otherwise the reason to report.
+ *
+ * The iOS wait is per bundle, and it does more than confirm readiness. A
+ * successful launch pins later tree reads to this bundle
+ * ({@link FlowTreeTarget}), so the read no longer has to agree with
+ * auto-targeting about which app is frontmost — but the pin only names the app,
+ * it does not prove the app can serve a hierarchy. This wait is the closest
+ * evidence the gate has, so a launch that skips it hands the next selector step
+ * a pin to a process whose tree source is not up yet. It is not a guarantee:
+ * the wait ends on `isConnected`, which simulator-wide injection lets a
+ * `com.apple.*` process satisfy, and the first selector read refuses that pin
+ * anyway (see `queryFullHierarchyTree`).
  */
 async function treeSourceGate(
   registry: Registry,
@@ -507,7 +609,24 @@ async function treeSourceGate(
   bundleId: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  if (device.platform === "ios" && !signal?.aborted) {
+  if (isIosPhysicalDevice(device) && !signal?.aborted) {
+    // Physical devices read the XCUITest runner, not native devtools.
+    // Resolve it here. Cold start must not eat the next step's auto-wait.
+    try {
+      const ref = iosDeviceRunnerRef(device);
+      await registry.resolveService(ref.urn, ref.options);
+      return null;
+    } catch (err) {
+      return (
+        `the on-device XCUITest runner did not become ready for ${device.id}: ` +
+        `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+  // Both iOS simulator platforms gate the same way: `waitForNativeDevtools`
+  // resolves the service through `nativeDevtoolsRef(device)`, which the
+  // blueprint serves over TCP for a remote sim.
+  if ((device.platform === "ios" || device.platform === "ios-remote") && !signal?.aborted) {
     const reason = await waitForNativeDevtools(registry, device, bundleId, signal);
     if (reason !== null && !signal?.aborted) {
       // Every reason names the bundle id, so the prefix must not: doubled, it
@@ -516,12 +635,11 @@ async function treeSourceGate(
     }
   }
   if (device.platform === "android" && !signal?.aborted) {
-    const ready = await androidDevtoolsReady(registry, device);
+    const { ready, reason } = await androidDevtoolsReady(registry, device);
     if (!ready && !signal?.aborted) {
-      return (
-        `could not reach the Android devtools helper (full-hierarchy source for testID selectors). ` +
-        `Confirm the device is unlocked and the argent helper can be installed (\`adb install -t\`); a locked device or a blocked install is the usual cause. Re-run once resolved.`
-      );
+      return reason
+        ? `the argent android helper is unavailable: ${reason}`
+        : `the argent android helper is unavailable (full-hierarchy source for testID selectors).`;
     }
   }
   if (device.platform === "vega" && !signal?.aborted) {
@@ -560,17 +678,24 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 
   const bundleId = appIdForPlatform(app, device.platform);
   if (!bundleId) {
+    // Name the platform the AUTHOR can write: "ios-remote" is not a launch-map
+    // key, so quoting it would send the reader to a key the parser rejects.
     return {
       ok: false,
-      reason: `no app id declared for platform "${device.platform}" — add a launch entry for it`,
+      reason: `no app id declared for platform "${authoringPlatform(device.platform)}" — add a launch entry for it`,
     };
   }
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
+  // An ios `{ app, args }` entry's args reach only an iOS device.
+  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
   let restart: unknown;
   try {
-    restart = await invokeOnDevice(env, "restart-app", { bundleId });
+    restart = await invokeOnDevice(env, "restart-app", {
+      bundleId,
+      ...(launchArgs ? { launchArgs } : {}),
+    });
   } catch (err) {
     // A cancellation makes the sub-tool reject; that rejection is the abort,
     // not an app failure, so it must not be attributed to restart-app.
@@ -883,8 +1008,9 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   deviceIsExplicit: boolean;
   /**
    * The ROOT flow file's canonical (realpath'd) directory — the anchor for
-   * snapshot baselines and a chromium launch's relative app path, so a
-   * symlinked root flow anchors beside its real file. `run:` targets instead
+   * snapshot baselines on this host ({@link clientFlowPath} anchors them on
+   * the client) and a chromium launch's relative app path, so a symlinked root
+   * flow anchors beside its real file. `run:` targets instead
    * anchor to the containing flow file's own directory ({@link scopeFlowDir}).
    */
   flowsDir: string;
@@ -894,9 +1020,20 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   viaUpload: boolean;
   /**
+   * Where this run's `run:` targets resolve and its snapshot baselines are read
+   * and written: this host, or the files the client sent.
+   */
+  project: ProjectAccess;
+  /**
+   * The real CLIENT path of the root flow, set only when {@link project} is the
+   * client: snapshot baselines anchor and key beside it there, as they do
+   * beside {@link flowsDir} on this host.
+   */
+  clientFlowPath?: string;
+  /**
    * The `__baselines__/<segment>` this run's snapshots key their store under —
-   * the ROOT flow's CANONICAL stem, so the key agrees with {@link flowsDir}
-   * (see {@link baselineKeyFor}). Deliberately NOT the run's caller-visible
+   * the ROOT flow's CANONICAL stem, so the key agrees with {@link flowsDir}, or
+   * with {@link clientFlowPath} in client mode (see {@link baselineKeyFor}). Deliberately NOT the run's caller-visible
    * identity: the report's `flow`, the runStack seed's display name, and the
    * CLI's `--output` directory all keep the as-written name.
    */
@@ -912,6 +1049,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * {@link resolveRunDevice}, so that one is here before step 1.
    */
   owned: BootedChromium[];
+  /**
+   * Time the hoisted boot took before step 1. The first `launch` step settles
+   * that instance, so it adds this time to its own.
+   */
+  hoistedBootMs?: number;
   /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
   /**
@@ -920,6 +1062,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * baseline-collision guard, never persisted and never part of the key.
    */
   snapshotApps: Map<string, string>;
+  /**
+   * True once a step carrying a `{{secret:…}}` placeholder ran. The value may
+   * still be on screen, so a later failure takes no screenshot.
+   */
+  secretTyped?: boolean;
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
@@ -935,6 +1082,8 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * `attached:` identity, having never been told what the instance runs.
    */
   attachedAppPath?: string;
+  projectRoot: string;
+  scriptLogBudget: FlowScriptLogBudget;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -980,7 +1129,8 @@ function displayFlowName(params: { name?: string; flow_path?: string }): string 
  * Yield every parsed step, recursing into a block directive's children through
  * {@link blockSteps}: this is the sole feeder of
  * {@link assertUploadSelfContained}, so a block absent from the recursion would
- * carry an uploaded flow's nested `run:`/`snapshot` past the preflight.
+ * carry an uploaded flow's nested `run:`, `script:` or `snapshot` past the
+ * preflight.
  *
  * Each step arrives with its AUTHORED position - its place in the file as
  * written, every entry counted, `echo` included. A pre-run refusal has no report
@@ -1128,45 +1278,188 @@ function retiredArgReason(use: RetiredArgUse): string {
 }
 
 /**
- * Reject an uploaded root flow that is not self-contained — one with a `run:`
- * or `snapshot` step at any depth — before anything executes, so a mid-run or
- * guard-gated error cannot execute half the flow first. Both step kinds anchor
- * at the flow file's real directory, which an uploaded flow does not have: a
- * run: step's referenced files stayed on the client, and against a per-call temp
- * materialization a plain snapshot can only fail (no baseline) while
- * updateBaselines writes PNGs no later run can find.
+ * Why a loaded `run:` fragment is refused before any of its steps runs, or
+ * undefined: the root flow's load-time gate, applied to the fragment at the
+ * only moment its steps exist. One function for both callers:
+ * {@link execRunStep}, which charges the refusal to the `run:` step, and
+ * {@link scanLeadingLaunch}, which must not follow a launch into a fragment
+ * the executor refuses.
  */
-function assertUploadSelfContained(flow: FlowFile): void {
-  for (const { step } of walkSteps(flow.steps)) {
-    if (step.kind === "run") {
-      throw new FailureError(
-        `This flow uses run: composition ("run: ${step.flow}"), which requires a co-located ` +
-          `client and tool server — an uploaded flow's referenced files are not available on ` +
-          `this host.`,
-        {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "flow_upload_run_composition",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
+function fragmentLoadRefusal(
+  registry: Registry,
+  fragment: FlowFile,
+  target: string
+): string | undefined {
+  const retiredArg = findRetiredToolArg(registry, fragment.steps);
+  return retiredArg ? `fragment "${target}" ${retiredArgReason(retiredArg)}` : undefined;
+}
+
+/**
+ * Reject an uploaded flow that is not self-contained — one with a `script:` or
+ * `snapshot` step, or a `tool:` step that takes a file the client does not
+ * send, runs a flow the client does not send, or records a flow, at any depth,
+ * in the flow or in any flow its `run:` and nested `tool: flow-execute` steps
+ * reach — before anything executes, so a mid-run or guard-gated error cannot
+ * execute half the flow first. All of them read or write project files, which
+ * stay on the client: a script step's `.mjs` (and whatever it imports), a
+ * snapshot's baselines (against a per-call temp materialization a plain
+ * snapshot can only fail, while updateBaselines writes PNGs no later run can
+ * find), the flow a nested `flow-execute` names under the client's
+ * project_root, the file arguments of any other tool, and the flow a
+ * recording tool writes. A `tool:` step's file argument is a client path: a
+ * tool that opens it on THIS host gets ENOENT after the earlier steps drove
+ * the device, or, when the same path exists here, the server's own file
+ * reported as a pass (and reinstall-app uninstalls the app before its install
+ * fails).
+ *
+ * A `run:` step is self-contained when the client sent its fragment with the
+ * call (`closure`, the members of the root's file input), and so is a nested
+ * `tool: flow-execute` step that names its flow with `name` and an absolute
+ * `project_root`: the client sends that flow with the call too. The check
+ * then walks every flow the client sent, breadth first and as deep as the
+ * runner resolves, every `when:` branch included, since which branch runs is
+ * decided on the device. A flow the client refused to send (outside its
+ * roots, a link to a file that is not YAML, over the size cap) is listed with
+ * the client's reason, unless the runner never reads it: a `run:` past the
+ * depth limit fails with the depth error first, as it does on the host. A
+ * flow the client does not have is not listed: it fails at its own step,
+ * which may never run. A flow that does not parse fails at its step too. A
+ * `snapshot` step is self-contained with a closure too: the
+ * client sent the run's baselines with it, and gets the new ones back in the
+ * result. So is a `tool:` step whose file inputs are each one
+ * {@link servedToolInput} accepts, a file argument at an absolute path: the
+ * client sent it with the call, and the runner hands it to the tool
+ * ({@link prepareToolStepInputs}). Whether the client had that file, under
+ * its roots and of a kind it sends, is said when the step runs. One rule
+ * decides both `tool:` kinds, for this check and for the recorder
+ * ({@link toolStepUploadIssue}). A directory, an app bundle and
+ * `screenshot-diff`'s `outputDir` do not travel with the call, so they are
+ * refused for every client, and so is a nested step that names its flow
+ * another way. Without a closure (an older client), every `run:`, nested
+ * flow, `snapshot` and file argument is refused, and the error says that an
+ * updated client gets it run; a relative file argument is told to be
+ * absolute.
+ *
+ * Every offending step is listed, in walk order, so the author sees the whole
+ * repair at once rather than one step per run. The stage is the first
+ * offender's, and the stages stay distinct: each names a different file the
+ * link does not carry, and each is lifted on its own once it does. A nested
+ * run checks its own flow again when it starts (a `flow-add-step` call runs
+ * one without this check first); `origin` words the refusal for that flow.
+ */
+function assertUploadSelfContained(
+  registry: Registry,
+  flow: FlowFile,
+  closure: { project: ClientProjectAccess; rootCanonical: string } | undefined,
+  origin: { subject: string; arrival: string } = {
+    subject: "This flow",
+    arrival: "it arrived as an upload",
+  }
+): void {
+  const offending: { kind: keyof typeof UPLOAD_STAGE_BY_KIND; line: string }[] = [];
+  const toolFileFixes = new Set<ToolFileFix>();
+  // A nested step that names its flow with `name` runs for a client that
+  // sends the flow with the call; an update does not help a `flow_path` one.
+  let namedNestedFlow = false;
+  const queue = [{ flow, canonical: closure?.rootCanonical ?? "", within: "", hop: 0 }];
+  const seen = new Set<string>();
+  /** A flow the client sent for a step of `file`: listed when refused, walked when present. */
+  const follow = (
+    file: (typeof queue)[number],
+    anchorDir: string,
+    target: string,
+    entry: { kind: "run" | "nested"; line: string }
+  ): void => {
+    // The runner checks the depth of a `run:` step before it reads the target.
+    if (entry.kind === "run" && file.hop + 1 >= MAX_RUN_DEPTH) return;
+    const key = flowMemberKey(anchorDir, target);
+    if (closure === undefined || seen.has(key)) return;
+    seen.add(key);
+    const member = closure.project.member(anchorDir, target);
+    if (member?.state === "refused") {
+      offending.push({ kind: entry.kind, line: `${entry.line} (${member.error})` });
+    } else if (
+      member?.state === "present" &&
+      member.canonical !== undefined &&
+      file.hop + 1 < MAX_RUN_DEPTH
+    ) {
+      let next: FlowFile;
+      try {
+        next = parseFlow(member.text ?? "");
+      } catch {
+        return;
+      }
+      queue.push({
+        flow: next,
+        canonical: member.canonical,
+        within: ` in ${member.canonical}`,
+        hop: file.hop + 1,
+      });
     }
-    if (step.kind === "snapshot") {
-      throw new FailureError(
-        `This flow uses a snapshot step ("snapshot: ${step.name}"), whose baselines live ` +
-          `beside the flow's file — an uploaded flow materializes to a fresh temp directory ` +
-          `each call, so a plain snapshot can never find a baseline and updateBaselines ` +
-          `(--update-baselines) writes PNGs no later run can read. Use name + project_root ` +
-          `with a co-located client and tool server for snapshot flows.`,
-        {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "flow_upload_snapshot_baseline",
-          failure_area: "tool_server",
-          error_kind: "validation",
+  };
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    for (const { step, where } of walkSteps(file.flow.steps, file.within)) {
+      if (step.kind === "run") {
+        const line = `${where}: run: ${step.flow}`;
+        if (!closure) offending.push({ kind: "run", line });
+        else follow(file, path.dirname(file.canonical), step.flow, { kind: "run", line });
+      } else if (step.kind === "script") {
+        offending.push({ kind: "script", line: `${where}: script: { path: ${step.path} }` });
+      } else if (step.kind === "snapshot") {
+        if (closure) continue;
+        offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
+      } else if (step.kind === "tool" && RECORDING_TOOL_IDS.has(step.name)) {
+        offending.push({
+          kind: "recording",
+          line: `${where}: tool: ${step.name} (records a flow)`,
+        });
+      } else if (step.kind === "tool") {
+        const issue = toolStepUploadIssue(registry, step.name, step.args, closure !== undefined);
+        const target = step.name === "flow-execute" ? nestedFlowTarget(step.args) : undefined;
+        if (issue !== undefined) {
+          offending.push({ kind: issue.kind, line: `${where}: ${issue.line}` });
+          for (const fix of issue.fixes) toolFileFixes.add(fix);
+          if (target?.kind === "name") namedNestedFlow = true;
+        } else if (target?.kind === "name") {
+          follow(file, path.dirname(target.path), `${target.name}.yaml`, {
+            kind: "nested",
+            line: `${where}: tool: flow-execute (name: ${target.name})`,
+          });
         }
-      );
+      }
     }
   }
+  if (offending.length === 0) return;
+  const servable = [
+    ...(!closure && offending.some((o) => o.kind === "run")
+      ? ["run: steps for a client that sends their fragments with the call"]
+      : []),
+    ...(!closure && namedNestedFlow
+      ? [
+          "tool: flow-execute steps that name a flow with name, for a client that sends those flows with the call",
+        ]
+      : []),
+    ...(!closure && offending.some((o) => o.kind === "snapshot")
+      ? ["snapshot: steps for a client that sends their baselines with the call"]
+      : []),
+    ...(toolFileFixes.has("update")
+      ? ["tool: steps with file arguments for a client that sends them with the call"]
+      : []),
+  ];
+  throw new FailureError(
+    `${origin.subject} is not self-contained, and ${origin.arrival}. The steps below read ` +
+      `or write project files, which stay on the client:\n` +
+      offending.map((o) => `  - ${o.line}`).join("\n") +
+      `\nRun the flow on the computer that runs the tool-server, with no link and no ` +
+      `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.` +
+      `${uploadUpdateHint(servable)}${toolFilePathHints(toolFileFixes)}`,
+    {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: UPLOAD_STAGE_BY_KIND[offending[0]!.kind],
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 }
 
 export function createRunFlowTool(
@@ -1180,89 +1473,36 @@ export function createRunFlowTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
-    description: `Run a saved flow from the .argent/flows/ directory, or an explicit boundary-managed flow_path.
-Use when a scenario is already authored as YAML and the whole of it should replay in one call with a
-per-step verdict; reach for the individual gesture tools when nothing is authored yet, and for
-run-sequence when the steps are an ad-hoc list rather than a stored flow.
-Steps run in order: \`launch\` starts an app from scratch (terminate + relaunch) and waits until it is
-ready (on iOS it also pins later element lookups to that app rather than auto-detecting the frontmost
-one); \`tool\` calls dispatch through the registry (a raw \`tool\` step ends that iOS pin, so lookups
-auto-detect again until the next \`launch\`, though a tool that cannot change the foreground app leaves the
-launched id as a fallback for a timed-out auto-detect, and \`launch-app\`/\`restart-app\` leave the id they
-started as that fallback instead); \`tap\`/\`long-press\`/\`type\` resolve a selector to an
-element and act on it (\`tap: { on, times: 2 }\` double-taps; \`long-press: { on, duration }\` presses and
-holds; \`tap\`/\`long-press\` alternatively take a raw normalized point — bare \`{ x, y }\` or \`on: { x, y }\`;
-any selector may scope its matches geometrically, the CSS combinators read off frames: \`within: <selector>\`
-(descendant — inside that container's frame), \`after: <selector>\` (CSS \`~\` — following it in reading
-order), \`next: <selector>\` (CSS \`+\` — the nearest such follower, which unlike CSS reaches past a
-non-matching neighbour rather than failing), plus \`any: true\` (CSS \`*\` — legal only WITH a scope and
-never beside text/id/role). Scopes nest to disambiguate — \`within: { id: card, within: { id: list } }\`
-reads "inside card inside list", each container's frame inside the next);
-\`swipe\` performs one finger flick (\`swipe: left\`, or \`swipe: { from?, direction|to|by, momentum?, duration? }\` —
-direction is the FINGER's travel, the opposite sense of scroll-to's content direction; \`by: { x?, y? }\` — signed
-0–1 screen fractions, combined length at least 0.03 (a diagonal clears it where neither axis does); duration in ms,
-default 300, minimum 150, maximum 10000; each bound is a parse error that rejects the file before any step runs;
-\`momentum: false\` lands exactly where the finger lifts instead of flinging);
-\`scroll-to\` scrolls (momentum-free) until a target is visible; \`pinch\` zooms
-(\`pinch: { on?, scale }\` — scale > 1 in, < 1 out; screen center when \`on\` is omitted); \`rotate\` is the
-two-finger rotation gesture (\`rotate: { on?, by }\` — degrees, + clockwise, within ±3000°; screen center
-when \`on\` is omitted; distinct from the \`rotate\` tool, which changes device orientation); \`await\` waits
-for a UI condition, and additionally takes the one condition that has no selector: \`idle: true\` waits
-until the screen has content and stops moving in BOTH the UI tree and the rendered pixels (it never
-fails a run — a screen that never settles passes carrying a \`warning\`, which is what makes it safe to
-persist; the one idle outcome that does stop the run is an \`error\` for a tree source THIS step could not
-read at all — a broken window rather than a verdict about the app, which leaves the run not-ok and skips
-every later step; it says nothing about WHICH screen settled — a dropped tap leaves the source screen
-perfectly idle — so pair it with the element check that names the destination); \`wait\` pauses for a fixed number of milliseconds; \`assert\` checks one now; \`snapshot\`
-diffs a screenshot — or, with \`cropOn: <selector>\`, one element's cropped region — against a stored
-baseline (a missing baseline fails the step — set updateBaselines to adopt the current screen; a
-cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
-inline — a YAML path resolved against the directory of the flow file that references it (co-located
-runs only).
-A selector-less gesture — a coordinate \`tap\`/\`long-press\`/\`swipe\`, or a \`pinch\`/\`rotate\` with no \`on\` — resolves
-no frame out of the tree, so an unreadable tree source does NOT stop it the way it stops \`idle\`: it
-settles best-effort, dispatches anyway, and the step PASSES carrying a \`warning\` that quotes the source's
-own error. That green says the gesture was SENT, not that it landed. Restore the tree source (usually
-relaunch the app so the instrumentation loads), or accept the warning where the app can serve no tree;
-the first such gesture proves the outage and later ones spend that verdict without paying the settle
-window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the
-next gesture pay a fresh window, and it warns again if the source is still down.
-A \`when:\` block (condition + \`steps:\`, no else) runs its steps only if the condition holds —
-checked once with the short assert grace — for one-sided divergences like interstitials and coach
-marks; a skipped block reports distinctly and failures inside an entered block are real failures.
-A flow that begins with a \`launch\` step is a self-contained e2e flow; one that doesn't runs against the
-device's current state. Device id is injected by the runner (flows store none) — pass \`device\` or
-\`platform\` to pick one, else the single booted device is used. On Chromium a \`launch\` step's value is an
-Electron app path ({ chromium: <path> | { path, args } }) the runner boots (on the tool-server host) rather
-than an installed app id it relaunches. With no explicit \`device\`, a run whose leading launch is
-unambiguously chromium (\`platform: chromium\`, or a lone \`{ chromium: … }\` target) boots that app and
-starts there — following a leading \`run:\`, so a fragment that composes a chromium e2e flow boots too;
-otherwise the first launch attaches to an already-running instance and never kills it. Every later
-launch — a nested e2e flow's own, or a mid-flow relaunch — boots a fresh instance the run moves onto;
-an instance the run already owns for that same app is killed first (its exit awaited) so the
-replacement can't lose the race against its single-instance lock. Instances the runner still owns at
-run end are torn down then. A launch declaring no id for the run's platform is an error, not a cue to
-switch platforms. Every step hard-stops the flow on failure; later steps are reported as skipped.
-Returns a structured report ({ flow, device, executionPrerequisite, ok, aborted?, passed, failed,
-skipped, errored, steps }) — \`device\` is the device the run STARTED on; when launches moved it onto
-runner-booted instances, each names its instance in that step's reason and marks the move — \`run moved
-off <id>\`, or \`retired <id> (same app relaunched)\` when the instance it left was the one killed —
-a relaunch that retired an older owned instance names both.
-
-If a fragment has an execution prerequisite and prerequisiteAcknowledged is not set to true, the tool
-returns a notice with the prerequisite instead of running.
-Pass exactly one flow source: name for a saved flow under project_root, or flow_path for an explicit YAML — both together, or neither, fails the call.`,
+    description: `Run a saved YAML flow end to end. Use when
+asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
+one-off interaction use the gesture tools instead, and to author a flow use flow-start-recording. Pass
+exactly one flow source: name (under project_root) or flow_path.
+Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
     longRunning: true,
     zodSchema,
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
+      const runStartedAt = Date.now();
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload } = await resolveFlowSource(
         params,
         ctx?.fileInputs?.flow_file,
         ctx?.fileInputs?.flow_path
       );
+      // Where the run's file references resolve: on this host, unless the
+      // root flow arrived as an upload with the files its steps reach (the
+      // members of its file input) — then in those files. A nested run gets
+      // the members of the call that runs it. A call with no link reads the
+      // file in place (viaUpload false) and stays on the host, so a run without
+      // a link never changes behavior.
+      const rootInput = viaUpload
+        ? (ctx?.fileInputs?.flow_path ?? ctx?.fileInputs?.flow_file)
+        : undefined;
+      const clientProject = rootInput?.members
+        ? new ClientProjectAccess(rootInput.members)
+        : undefined;
+      const project: ProjectAccess = clientProject ?? new HostProjectAccess();
       // Canonicalize the root path ONCE and derive every root anchor from it:
       // flowsDir (a relative chromium app path + snapshot baselines) and the
       // runStack seed (`run:` targets) must agree, or a symlinked root flow
@@ -1271,7 +1511,26 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       const canonicalPath = await canonicalFlowPath(filePath);
       const flowsDir = path.dirname(canonicalPath);
       const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
-      if (viaUpload) assertUploadSelfContained(flow);
+      if (viaUpload) {
+        assertUploadSelfContained(
+          registry,
+          flow,
+          clientProject && rootInput
+            ? {
+                project: clientProject,
+                rootCanonical: rootInput.canonical ?? rootInput.clientPath,
+              }
+            : undefined,
+          // A nested run's refusal is quoted in the step or the call that runs
+          // it, so it names its own flow, whose steps it numbers.
+          ctx?.flowStack !== undefined
+            ? {
+                subject: `The nested flow "${flowName}"`,
+                arrival: "the client sent it with the call",
+              }
+            : undefined
+        );
+      }
       // Refused before the prerequisite handshake and before any step touches
       // the device: a mid-run refusal would land after earlier steps had already
       // driven it (see findRetiredToolArg).
@@ -1286,8 +1545,32 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       }
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
-      // another refuses.
-      const rootEntry: RunStackEntry = { canonical: canonicalPath, display: flowName };
+      // another refuses. In client mode the seed is the root flow's CLIENT
+      // path, as the client canonicalized it ({@link clientRootCanonical}):
+      // `run:` targets anchor to the directory of the file that names them,
+      // and that directory is on the client, not the temp dir this host
+      // materialized the upload into.
+      const rootEntry: RunStackEntry = {
+        canonical:
+          clientProject && rootInput
+            ? clientRootCanonical(rootInput, params.name, flow)
+            : canonicalPath,
+        display: flowName,
+      };
+      // A nested run continues the run stack of the flows that run it
+      // (`ctx.flowStack`, from the `tool:` step that started it), so the cycle
+      // and depth guards of execRunStep cover `run:` fragments and nested runs
+      // together, in the same order. Without them a flow that runs itself
+      // through `tool: flow-execute` never stops. Checked before the
+      // prerequisite handshake and before any device work.
+      const enclosing = ctx?.flowStack ?? [];
+      if (enclosing.some((entry) => entry.canonical === rootEntry.canonical)) {
+        throw nestingFailure(
+          `cyclic flow reference: ${[...enclosing, rootEntry].map((entry) => entry.display).join(" → ")}`
+        );
+      }
+      if (enclosing.length >= MAX_RUN_DEPTH) throw nestingFailure("max run depth exceeded");
+      const seed: RunStackEntry[] = [...enclosing, rootEntry];
 
       // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
       // one file, but a leading `run:` chain crosses files — a fragment whose
@@ -1305,7 +1588,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // `launch` there is restart-app, which terminates and relaunches whatever
       // device it is handed, so those stay refused.
       if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
-        const leading = await leadingLaunch(flow, [rootEntry]);
+        const leading = await leadingLaunch(flow, seed, { registry, project });
         if (leading) {
           // Offer the pin only where it is a real way out (see
           // chromiumPinnable): the guard also fires for unpinned runs of every
@@ -1344,14 +1627,16 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // Resolve the run device (a run whose leading launch — direct, or reached
       // through a leading run: chain — is chromium boots + owns its own app; see
       // resolveRunDevice). Any instance it booted is torn down in the finally.
+      const resolveStartedAt = Date.now();
       const resolved = await resolveRunDevice(
         registry,
         ctx,
         flow,
         params,
         flowsDir,
-        rootEntry,
-        viaUpload
+        seed,
+        viaUpload,
+        project
       );
       // The device the run STARTS on — `state.device` moves when a chromium
       // launch boots one, so the status-bar restore below must not follow it.
@@ -1361,15 +1646,24 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level
       // override independent of the app, so an e2e flow's leading launch step
       // (relaunch + settle) doubles as propagation headroom. No-op (returns
-      // false) on chromium/vega; restored on teardown.
-      const statusBarPinned = device !== null && (await pinStatusBar(device));
+      // false) on chromium/vega and on a run already cancelled; restored on
+      // teardown.
+      const statusBarPinned = device !== null && (await pinStatusBar(device, signal));
 
       // The chromium equivalent: front the page so a backgrounded window doesn't
       // throttle rendering — wheel-event acks (scroll steps) stall on a throttled
       // compositor. Covers the instance the run starts on; a launch that boots
-      // one fronts it itself. Best-effort: bringToFront can focus a page but
-      // cannot unhide a minimized window (gesture-scroll fails fast on that).
-      if (device?.platform === "chromium") await frontChromiumPage(registry, device);
+      // one fronts it itself. Best-effort: whether bringToFront un-minimizes is
+      // runtime-dependent (measured: Chrome restores the window and unthrottles
+      // input, Electron leaves it minimized and hidden). Resolving the session
+      // applies focus emulation, which keeps input unthrottled even while
+      // minimized, and gesture-tap/-drag/-scroll carry
+      // assertChromiumWindowVisible for sessions where it could not apply. Like
+      // the status-bar pin, skipped on a run already cancelled: no step will
+      // use the page.
+      if (device?.platform === "chromium" && !signal?.aborted) {
+        await frontChromiumPage(registry, device);
+      }
 
       const state: ExecState = {
         registry,
@@ -1383,16 +1677,31 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
         // its own, which is why that step spends this verdict rather than
         // inheriting whatever the sub-run proved.
         treeOutage: {},
+        // Same shape and sharing as `treeOutage`: what the last read said about
+        // the UI's orientation, for the directives that turn a direction.
+        lastRead: {},
         flowsDir,
         viaUpload,
-        baselineKey: baselineKeyFor(canonicalPath, flowName),
+        project,
+        // In client mode the baselines live beside the root flow's real file
+        // on the client, so they anchor and key on that path: the stem of the
+        // temp copy is the sanitized basename of the client's spelling, which
+        // a symlinked root flow does not share with its real file.
+        ...(project.mode === "client" ? { clientFlowPath: rootEntry.canonical } : {}),
+        baselineKey: baselineKeyFor(
+          project.mode === "client" ? rootEntry.canonical : canonicalPath,
+          flowName
+        ),
         updateBaselines: Boolean(params.updateBaselines),
         reports: [],
         stopped: false,
         pinned: statusBarPinned,
         owned: resolved.booted ? [resolved.booted] : [],
+        ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
+        projectRoot: params.project_root,
+        scriptLogBudget: createScriptLogBudget(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -1402,7 +1711,8 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       let aborted: boolean;
       try {
         await execSteps(state, flow.steps, {
-          runStack: [rootEntry],
+          runStack: seed,
+          rootDisplay: rootEntry.display,
           depth: 0,
         });
       } finally {
@@ -1422,13 +1732,20 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // The starting device: a run that switched says so on the launch step.
       // Empty when the flow needed no device — the run is not attributed to one
       // it never touched.
-      return summarize(
+      const result = summarize(
         flowName,
         device?.id ?? "",
         flow.executionPrerequisite,
         state.reports,
-        aborted
+        aborted,
+        { startedAt: runStartedAt, durationMs: Date.now() - runStartedAt }
       );
+      // The baselines this call wrote go back with the result of its outermost
+      // run, those of its nested runs included: the client writes them into
+      // the baseline directory of each run.
+      const baselineWrites =
+        ctx?.flowStack === undefined ? (clientProject?.baselineDirectives() ?? []) : [];
+      return baselineWrites.length > 0 ? { ...result, baselineWrites } : result;
     },
   };
 }
@@ -1443,7 +1760,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
  * never boots here — only a launch step beyond the first moves off it onto an
  * instance the runner owns ({@link bootChromiumForLaunch}). `flowDir` is the
  * root flow file's canonical directory — the base for a relative chromium app
- * path.
+ * path. `runStack` is the executor's seed: the enclosing runs, then the root.
  *
  * Returns null when no step in the flow acts on a device: demanding one would
  * fail a flow that could have succeeded, and picking whichever device happens to
@@ -1455,13 +1772,14 @@ async function resolveRunDevice(
   flow: FlowFile,
   params: Params,
   flowDir: string,
-  rootEntry: RunStackEntry,
-  viaUpload: boolean
+  runStack: RunStackEntry[],
+  viaUpload: boolean,
+  project: ProjectAccess
 ): Promise<{ device: DeviceInfo | null; booted: BootedChromium | null }> {
   if (!params.device) {
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
-    const leading = await leadingLaunch(flow, [rootEntry]);
+    const leading = await leadingLaunch(flow, runStack, { registry, project });
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
       let booted: BootedChromium;
@@ -1560,6 +1878,39 @@ function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
 const NO_EXECUTABLE_STEP = "no-executable-step";
 
 /**
+ * Where the root flow REALLY lives on the client — what a co-located run gets
+ * from `canonicalFlowPath` before it anchors anything. The client's spelling
+ * may be a symlink, and a `run:` target and the snapshot baselines resolve
+ * beside the real file, so the client sends the root's real path and its
+ * spelling with the root itself. Read only when the flow reads the anchor at
+ * all, through a `run:` or a `snapshot` step. A snapshot in a fragment needs
+ * no case of its own, since a fragment exists only behind a `run:` step and
+ * keys to the root.
+ *
+ * The spelling says how the client's listing spells the root's basename. A
+ * case-folded match is refused with the error a co-located run gives for the
+ * same call ({@link resolveFlowSource}), chosen by the argument the caller
+ * named the flow with (`name`, else `flow_path`): the spelling keys the report
+ * and `__baselines__/`, and no directory entry carries it.
+ */
+function clientRootCanonical(
+  root: ResolvedFileInput,
+  name: string | undefined,
+  flow: FlowFile
+): string {
+  const anchors = [...walkSteps(flow.steps)].some(
+    ({ step }) => step.kind === "run" || step.kind === "snapshot"
+  );
+  if (!anchors) return root.clientPath;
+  if (root.spelling?.state === "case_folded") {
+    throw name === undefined
+      ? flowPathCasingError(root.clientPath, root.spelling)
+      : flowNameCasingError(name, root.spelling);
+  }
+  return root.canonical ?? root.clientPath;
+}
+
+/**
  * The launch the RUN begins with, following a leading `run:` — a fragment whose
  * first step composes an e2e flow starts with that flow's launch, and the runner
  * has to know that before step 1 to boot a chromium app for it (and to refuse a
@@ -1570,9 +1921,12 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  */
 async function leadingLaunch(
   flow: FlowFile,
-  stack: RunStackEntry[]
+  stack: RunStackEntry[],
+  env: Pick<ExecState, "registry" | "project">
 ): Promise<{ app: Launch; flow: string } | null> {
-  const found = await scanLeadingLaunch(flow, stack);
+  // The root of this run is the top of the seed; the entries below it are
+  // the runs that enclose it.
+  const found = await scanLeadingLaunch(flow, stack, stack.at(-1)!.display, env);
   return found === NO_EXECUTABLE_STEP ? null : found;
 }
 
@@ -1587,41 +1941,49 @@ async function leadingLaunch(
  * would skip and the prerequisite guard would wave through a run that destroys
  * the state it just asked the caller to establish.
  *
- * The walk below IS the executor's, run ahead of time: the same `runStack`, each
- * hop resolved exactly as {@link execRunStep} resolves it — anchored at the
- * containing file's canonical directory, by concatenation so a `..` reaches the
- * kernel uncollapsed — under the same cycle, depth, and on-disk-casing guards. A
- * chain the executor refuses never reaches its launch, so any hop it would error
- * on stays `null` (give up) here, never transparent. Anything unreadable is
- * `null` too.
+ * The walk below IS the executor's, run ahead of time: it takes the same
+ * `runStack` (seeded with the enclosing runs and the root flow) and the same
+ * `rootDisplay` the hops are named against, and resolves each hop through the same
+ * {@link ProjectAccess.resolveFlowFile} {@link execRunStep} uses, then applies
+ * the same cycle, depth, and on-disk-casing guards and the same load-time
+ * gates ({@link fragmentLoadRefusal}). A chain the executor refuses never
+ * reaches its launch, so any hop it would error on stays `null` (give up)
+ * here, never transparent. Anything unreadable is `null` too — a fragment the
+ * client did not send included: the executor reports that when it executes
+ * the step.
  */
 async function scanLeadingLaunch(
   flow: FlowFile,
-  stack: RunStackEntry[]
+  stack: RunStackEntry[],
+  rootDisplay: string,
+  env: Pick<ExecState, "registry" | "project">
 ): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
   const top = stack[stack.length - 1]!;
   for (const step of flow.steps) {
-    if (step.kind === "echo") continue;
+    if (precedesLeadingLaunch(step)) continue;
     if (step.kind === "launch") return { app: step.app, flow: top.display };
     if (step.kind !== "run") return null;
-    const spelled = path.dirname(top.canonical) + path.sep + step.flow;
     let nested: FlowFile;
     let canonical: string;
     try {
-      canonical = await canonicalFlowPath(spelled);
+      const hop = await env.project.resolveFlowFile(path.dirname(top.canonical), step.flow);
+      canonical = hop.canonical;
       if (stack.some((entry) => entry.canonical === canonical)) return null;
       if (stack.length >= MAX_RUN_DEPTH) return null;
-      const supplied = path.posix.basename(step.flow);
-      const spelling = await classifyOnDiskSpelling(path.dirname(spelled), supplied);
-      if (spelling.state === "case_folded") return null;
-      nested = parseFlow(await fs.readFile(canonical, "utf8"));
+      if (hop.spelling.state === "case_folded") return null;
+      const text = await hop.read();
+      if (text === null) return null;
+      nested = parseFlow(text);
     } catch {
       return null;
     }
-    const inner = await scanLeadingLaunch(nested, [
-      ...stack,
-      { canonical, display: runDisplayFor(step.flow, stack[0]!.display) },
-    ]);
+    if (fragmentLoadRefusal(env.registry, nested, step.flow) !== undefined) return null;
+    const inner = await scanLeadingLaunch(
+      nested,
+      [...stack, { canonical, display: runDisplayFor(step.flow, rootDisplay) }],
+      rootDisplay,
+      env
+    );
     if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
   return NO_EXECUTABLE_STEP;
@@ -1692,8 +2054,8 @@ async function bootChromiumForFlow(
   if (viaUpload && !path.isAbsolute(spec.path)) {
     throw new FailureError(
       `A relative chromium app path ("${spec.path}") resolves against the flow file's ` +
-        `directory, which requires a co-located client and tool server — an uploaded flow ` +
-        `has no real flow directory on this host. Use an absolute tool-server path instead.`,
+        `directory, which requires a run with no link and no ARGENT_TOOLS_URL — an uploaded ` +
+        `flow has no real flow directory on this host. Use an absolute tool-server path instead.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_upload_chromium_app_path",
@@ -1751,7 +2113,8 @@ function summarize(
   deviceId: string,
   executionPrerequisite: string,
   steps: StepReport[],
-  aborted: boolean
+  aborted: boolean,
+  timing: { startedAt: number; durationMs: number }
 ): FlowRunResult {
   let passed = 0;
   let failed = 0;
@@ -1781,6 +2144,7 @@ function summarize(
     skipped,
     errored,
     steps,
+    ...timing,
   };
 }
 
@@ -1792,126 +2156,6 @@ function summarize(
 function pushReport(state: ExecState, report: StepReport): void {
   state.reports.push(report);
   state.onStepReport?.(report);
-}
-
-function selectorLabel(sel: FlowSelector): string {
-  const parts: string[] = [];
-  // The universal selector prints as CSS spells it, so a scope-only target
-  // never renders as an empty label.
-  if (sel.any) parts.push("*");
-  if (sel.text !== undefined) parts.push(`"${sel.text}"`);
-  if (sel.textMatches !== undefined) parts.push(`/${sel.textMatches}/`);
-  if (sel.identifier) parts.push(`id=${sel.identifier}`);
-  if (sel.role) parts.push(`role=${sel.role}`);
-  // Each relational scope renders after the fields, parenthesized and
-  // recursive, so two steps that differ only by scope don't collapse to the
-  // same target label — mirroring `describeSelector`'s spelling so the two
-  // surfaces stay in lockstep (see `conditionLabel`).
-  for (const relation of SELECTOR_RELATIONS) {
-    const scope = sel[relation];
-    if (scope !== undefined) parts.push(`${relation} (${selectorLabel(scope)})`);
-  }
-  return parts.join(" ");
-}
-
-/**
- * One template for rendering an await/assert/when-guard UI condition,
- * parameterized by selector spelling — {@link selectorLabel} for report
- * targets, `describeSelector` for reason strings — so the two surfaces share
- * a single shape and cannot drift.
- */
-function conditionLabel(
-  cond: {
-    condition: WaitCondition;
-    selector: FlowSelector;
-    expectedText?: string;
-    textMatch?: TextMatchMode;
-  },
-  renderSelector: (sel: FlowSelector) => string
-): string {
-  const sel = renderSelector(cond.selector);
-  // A text condition checks expectedText against the element the selector
-  // locates; the other conditions are about the selector itself.
-  if (cond.condition === "text") {
-    return `${sel} ${describeTextExpectation(cond.expectedText, cond.textMatch)}`;
-  }
-  return `${cond.condition} ${sel}`;
-}
-
-/** Human-readable selector/point spelling shared by gesture reports. */
-function gestureTargetLabel(target: GestureTarget): string {
-  return "selector" in target ? selectorLabel(target.selector) : `(${target.x}, ${target.y})`;
-}
-
-/** Display-only "what this step acts on" for {@link StepReport.target}. */
-function stepTarget(step: FlowStep): string | undefined {
-  switch (step.kind) {
-    case "tap":
-    case "long-press":
-      if (step.selector) return selectorLabel(step.selector);
-      if (step.x !== undefined && step.y !== undefined) return `(${step.x}, ${step.y})`;
-      return undefined;
-    case "swipe": {
-      let travel: string;
-      if (step.direction !== undefined) {
-        travel = step.direction;
-      } else if (step.by !== undefined) {
-        travel = `by ${swipeByLabel(step.by)}`;
-      } else if (step.to !== undefined) {
-        travel = `to ${gestureTargetLabel(step.to)}`;
-      } else {
-        return undefined;
-      }
-      return `${travel}${step.from ? ` from ${gestureTargetLabel(step.from)}` : ""}`;
-    }
-    case "type":
-      return `into ${selectorLabel(step.into)}`;
-    case "await":
-    case "assert":
-      return conditionLabel(step, selectorLabel);
-    case "idle":
-      // No target beyond the screen itself, and the caller already prints the
-      // kind.
-      return undefined;
-    case "when":
-      return step.condition.kind === "platform"
-        ? `platform ${step.condition.platform}`
-        : conditionLabel(step.condition, selectorLabel);
-    case "scroll-to": {
-      const dir = step.direction !== "down" ? ` (${step.direction})` : "";
-      return `${selectorLabel(step.target)}${dir}`;
-    }
-    case "pinch": {
-      const scale = `scale ${step.scale}`;
-      return step.selector ? `${selectorLabel(step.selector)} (${scale})` : scale;
-    }
-    case "rotate": {
-      const by = `by ${step.by}°`;
-      return step.selector ? `${selectorLabel(step.selector)} (${by})` : by;
-    }
-    case "snapshot":
-      return step.cropOn ? `"${step.name}" cropOn ${selectorLabel(step.cropOn)}` : `"${step.name}"`;
-    case "run":
-      // The as-written path, so a report line shows exactly what the flow
-      // references (`run ../shared/login.yaml`), not just the attribution stem.
-      return step.flow;
-    case "echo":
-    case "tool":
-      // Each carries its subject in a report field of its own (`message`,
-      // `tool`) that renderers print in the target's place.
-      return undefined;
-    case "launch":
-      // A launch's app id may be per-platform (`appIdForPlatform`), and a step
-      // alone does not know the run device.
-      return undefined;
-    case "wait":
-      return undefined;
-    default: {
-      const unclassified: never = step;
-      void unclassified;
-      return undefined;
-    }
-  }
 }
 
 /**
@@ -1927,10 +2171,13 @@ interface RunStackEntry {
  * Where a list of steps executes: the `run:` chain (cycle/depth guards) plus
  * the display nesting depth. Attribution and anchor directory derive from the
  * chain's top entry ({@link scopeFlow} / {@link scopeFlowDir}), so no second
- * field can drift out of lockstep with the stack.
+ * field can drift out of lockstep with the stack. The chain starts with the
+ * runs that enclose this one (a nested `flow-execute`), so `rootDisplay`, the
+ * name of this run's own root flow, is kept apart from it.
  */
 interface StepScope {
   runStack: RunStackEntry[];
+  rootDisplay: string;
   depth: number;
 }
 
@@ -1957,7 +2204,7 @@ function scopeFlow(scope: StepScope): string {
  * forbids in the root's name.
  */
 function runDisplayName(target: string, scope: StepScope): string {
-  return runDisplayFor(target, scope.runStack[0]!.display);
+  return runDisplayFor(target, scope.rootDisplay);
 }
 
 /**
@@ -1984,8 +2231,9 @@ function stepFlow(step: FlowStep, scope: StepScope): string {
 }
 
 /**
- * The directory `run:` paths resolve against — the canonical containing
- * file's, so a symlinked flow anchors where its real file and siblings live.
+ * The directory a step's file reference resolves against — a `run:` target and
+ * a `script:` path alike. The canonical containing file's, so a symlinked flow
+ * anchors where its real file, its sibling fragments and its scripts live.
  */
 function scopeFlowDir(scope: StepScope): string {
   return path.dirname(scope.runStack[scope.runStack.length - 1]!.canonical);
@@ -2013,6 +2261,16 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     const index = state.reports.length;
 
     if (state.stopped) {
+      // A hard stop needs no reason of its own: the step above it carries the
+      // failure that explains every line below. A CANCELLED run does — and it
+      // reaches this branch rather than the abort guard below, because a
+      // `script` step cancelled after its process started reports `error`
+      // (what it already did to the backend is done) and an error stops the
+      // run. Without this the steps after a cancelled script read as collateral
+      // of a failure, with nothing on the line saying the run was cancelled,
+      // while the same cancellation during any other step reports "run
+      // aborted" on each of them.
+      const stopReason = state.signal?.aborted ? "run aborted" : undefined;
       pushReport(state, {
         index,
         kind: step.kind,
@@ -2020,6 +2278,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         flow: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
+        ...(stopReason ? { reason: stopReason } : {}),
         // Carry the echo's message so a skipped narration renders as a skip
         // line rather than vanishing — matching reportBlockSkipped.
         ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -2027,7 +2286,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       // A block directive's literal steps are known — expand them so the report
       // keeps one line per authored step no matter where the stop landed.
       const inner = blockSteps(step);
-      if (inner) reportBlockSkipped(state, inner, childScope(scope));
+      if (inner) reportBlockSkipped(state, inner, childScope(scope), stopReason);
       continue;
     }
     // The flow was resolved as needing no device, yet a step that acts on one
@@ -2077,16 +2336,42 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       continue;
     }
 
+    let startedAt = Date.now();
+    if (step.kind === "launch" && state.hoistedBootMs !== undefined) {
+      startedAt -= state.hoistedBootMs;
+      state.hoistedBootMs = undefined;
+    }
+    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
     const report = await execLeafStep(state, step, index, scope);
+    if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
+    if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
+      const screen = await captureFailureScreen(state);
+      if (screen) report.artifacts = { screen };
+    }
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
   }
 }
 
-/** A compact rendering of a when guard for report reasons. */
-function describeWhenCondition(cond: WhenCondition): string {
-  if (cond.kind === "platform") return `platform ${cond.platform}`;
-  return conditionLabel(cond, describeSelector);
+/**
+ * Screenshot of the device at a failed step, so the report shows what was on
+ * screen. Best-effort: no device, a cancelled run, a typed secret, or a
+ * capture that throws (the app or device is gone) all yield no image, and the
+ * step keeps its own failure either way.
+ */
+async function captureFailureScreen(state: ExecState): Promise<ArtifactHandle | undefined> {
+  if (!state.device || state.signal?.aborted || state.secretTyped) return undefined;
+  try {
+    // Full resolution: the image is a file in the report, never in an agent's
+    // context (the MCP client prints only its path).
+    const shot = (await invokeOnDevice(deviceEnv(state), "screenshot", {
+      scale: 1.0,
+      includeImageInContext: false,
+    })) as { image?: ArtifactHandle };
+    return shot.image;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -2167,14 +2452,15 @@ async function execWhenStep(
     ...depthOf(scope),
   } as const;
   const inner = childScope(scope);
+  const guardStartedAt = Date.now();
 
   let met: boolean;
   if (step.condition.kind === "platform") {
-    // "ios-remote" is an iOS simulator driven through sim-remote — for a
-    // platform guard it IS ios. The parser rejects "ios-remote" as a guard
-    // spelling, so without this fold iOS-only blocks would silently skip there.
+    // A guard names an authoring platform ({@link authoringPlatform}): the
+    // parser rejects "ios-remote" as a guard spelling, so without the fold
+    // every iOS-only block would silently skip on a remote simulator.
     const guardEnv = deviceEnv(state);
-    const platform = guardEnv.device.platform === "ios-remote" ? "ios" : guardEnv.device.platform;
+    const platform = authoringPlatform(guardEnv.device.platform);
     met = platform === step.condition.platform;
   } else {
     const probe = await probeWhenCondition(deviceEnv(state), step.condition);
@@ -2188,6 +2474,7 @@ async function execWhenStep(
         ...marker,
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+        durationMs: Date.now() - guardStartedAt,
       });
       state.stopped = true;
       reportBlockSkipped(state, step.steps, inner, "when guard errored");
@@ -2202,6 +2489,7 @@ async function execWhenStep(
       ...marker,
       status: "skip",
       reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
+      durationMs: Date.now() - guardStartedAt,
     });
     reportBlockSkipped(state, step.steps, inner, "when block skipped");
     return;
@@ -2209,73 +2497,13 @@ async function execWhenStep(
 
   // Marker for the block, then the guarded steps inline — same fragment
   // attribution, one level deeper, failures hard-stop as anywhere else.
-  pushReport(state, { ...marker, status: "pass", reason: `condition met (${label})` });
+  pushReport(state, {
+    ...marker,
+    status: "pass",
+    reason: `condition met (${label})`,
+    durationMs: Date.now() - guardStartedAt,
+  });
   await execSteps(state, step.steps, inner);
-}
-
-/**
- * Canonicalize a flow path — the cycle guard's identity key and the root
- * anchor derivation (flowsDir + runStack seed). The input must arrive with any
- * `..` segments intact (no path.resolve/path.join over the string): a `..` that
- * follows a symlinked directory component names the parent of the link's
- * TARGET, which only the kernel can know. fs/promises' realpath keeps kernel
- * semantics (like callback fs.realpath.native — unlike callback fs.realpath,
- * which path.resolve()s first), so the un-collapsed string is sufficient.
- *
- * When realpath fails (the file is gone), the containing directory is still
- * kernel-resolved before the basename is re-appended, so the subsequent read
- * names the file the spelling denotes rather than an existing impostor; when the
- * directory chain itself is broken, the spelling is returned verbatim so the read
- * fails with the kernel's ENOENT for the spelling instead of succeeding on a
- * collapse. That failed read hard-stops the flow before any runStack entry is
- * pushed, so the verbatim key never reaches the cycle guard.
- *
- * Callers must pass an absolute path — every return value, including the
- * verbatim fallback, is consumed as absolute with no resolve step after this
- * point.
- */
-async function canonicalFlowPath(p: string): Promise<string> {
-  try {
-    return await fs.realpath(p);
-  } catch {
-    try {
-      return path.join(await fs.realpath(path.dirname(p)), path.basename(p));
-    } catch {
-      return p;
-    }
-  }
-}
-
-/**
- * The `__baselines__/<segment>` a run's snapshots key their baseline store
- * under. The store is `<flowsDir>/__baselines__/<key>` and `flowsDir` is the
- * CANONICAL root flow's directory, so the key must name the canonical file too.
- * With the as-written stem it does not, and the disagreement merges distinct
- * flows: two projects whose `.argent/flows/smoke.yaml` are symlinks into one
- * shared vault (`vault/a-smoke.yaml`, `vault/b-smoke.yaml`) both anchor at
- * `vault/` and both key "smoke", so a single `vault/__baselines__/smoke/` holds
- * one PNG the two flows silently overwrite in turn while each
- * `--update-baselines` run reports "baseline updated". For a root flow that is a
- * regular file the canonical stem IS the as-written one, so only symlinked roots
- * move.
- *
- * The canonical stem is the symlink TARGET's filename, which nothing validates:
- * `assertSafeFlowName` and `classifyOnDiskSpelling` only run against the
- * as-written spelling, so a vault file may legitimately be called `...yaml` —
- * whose stem after `.yaml` is `..`, and
- * `path.join(flowsDir, "__baselines__", "..")` IS `flowsDir`, so every baseline
- * would land beside the flow files themselves (the escape
- * `flow-path-baseline-escape.test.ts` pins for the as-written spelling). Hence
- * the pattern check, against the same charset every other flow name is held to.
- * An unsafe stem falls back to the always-validated `flowName` rather than
- * throwing: an unusually named vault file is not the caller's error to fix
- * mid-run.
- */
-function baselineKeyFor(canonicalPath: string, flowName: string): string {
-  // path.basename leaves a bare ".yaml" intact (stripping it would leave
-  // nothing) — the pattern rejects that spelling too, so it falls back as well.
-  const stem = path.basename(canonicalPath, ".yaml");
-  return FLOW_NAME_PATTERN.test(stem) ? stem : flowName;
 }
 
 async function execRunStep(
@@ -2289,6 +2517,7 @@ async function execRunStep(
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
   const display = runDisplayName(target, scope);
+  const startedAt = Date.now();
 
   const fail = (reason: string): void => {
     pushReport(state, {
@@ -2299,9 +2528,22 @@ async function execRunStep(
       target,
       reason,
       ...depthOf(scope),
+      durationMs: Date.now() - startedAt,
     });
     state.stopped = true;
   };
+
+  // One resolution through the project seam: on this host, or in the files
+  // the client sent with an uploaded flow (a member carries its text, which
+  // `read` below hands over). A target the client did not send fails this
+  // step with the reason.
+  let hop: Awaited<ReturnType<ProjectAccess["resolveFlowFile"]>>;
+  try {
+    hop = await state.project.resolveFlowFile(scopeFlowDir(scope), target);
+  } catch (err) {
+    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+  }
+  const { canonical, spelling } = hop;
 
   // The cycle guard deliberately runs before the depth guard. A loop that
   // happens to close on the MAX_RUN_DEPTH-th hop is still a loop, and reporting
@@ -2309,14 +2551,6 @@ async function execRunStep(
   // nesting instead of the repeated reference — and would drop the chain, the
   // one piece of output that identifies the offending edge. The depth guard
   // immediately below still stops the recursion.
-  //
-  // Joined by concatenation, NOT path.resolve/path.join: those collapse a `..`
-  // lexically before the kernel ever sees the spelling, and parseRunTarget
-  // deliberately admits `..` (shared fragments may live outside the flows
-  // dir) — after a symlinked directory component the collapse names a
-  // different file than the one on disk (see canonicalFlowPath). The anchor
-  // is absolute and the target relative, so the concatenation is well-formed.
-  const canonical = await canonicalFlowPath(scopeFlowDir(scope) + path.sep + target);
   if (scope.runStack.some((entry) => entry.canonical === canonical)) {
     return fail(
       `cyclic flow reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
@@ -2327,29 +2561,15 @@ async function execRunStep(
     return fail("max run depth exceeded");
   }
 
-  // Nothing above consulted the directory: canonicalFlowPath resolves the
-  // spelling by the FILESYSTEM's rules, and a case-insensitive one (APFS, NTFS)
-  // opens a file really named "frag.yaml" for `run: Frag.yaml`. Every expanded
-  // step is then attributed to a fragment no directory entry carries, and the
-  // identical tree fails with ENOENT on a case-sensitive volume (Linux CI).
-  // parseRunTarget already holds this line for the ".yaml" extension of this
-  // same string, and resolveFlowSource for the root flow's own basename. Only a
-  // case-folded verdict refuses: a basename matching nothing at all is an
-  // ordinary missing fragment, which the read's own ENOENT reports far better,
-  // and an unreadable listing vouches for nothing so it must refuse nothing.
-  //
-  // Listed against the directory the target is SPELLED in — NOT
-  // path.dirname(canonical): realpath rewrites a symlinked fragment to its
-  // target's name, so `run: alias.yaml` (alias.yaml → a.yaml) — a legitimate
-  // layout the cycle guard already relies on — would be refused for not being
-  // named "a.yaml". path.dirname removes a segment without collapsing `..`, so a
-  // `..` in the target still reaches readdir intact for the kernel to resolve.
-  // Only the basename is checked, matching the two root-flow routes' scope.
+  // The canonical path above resolves the spelling by the FILESYSTEM's rules,
+  // and a case-insensitive one (APFS, NTFS) opens a file really named
+  // "frag.yaml" for `run: Frag.yaml`. Every expanded step is then attributed to
+  // a fragment no directory entry carries, and the identical tree fails with
+  // ENOENT on a case-sensitive volume (Linux CI). Only a case-folded verdict
+  // refuses: a basename matching nothing at all is an ordinary missing fragment,
+  // which the read's own ENOENT reports far better, and an unreadable listing
+  // vouches for nothing so it must refuse nothing.
   const suppliedBase = path.posix.basename(target);
-  const spelling = await classifyOnDiskSpelling(
-    path.dirname(scopeFlowDir(scope) + path.sep + target),
-    suppliedBase
-  );
   if (spelling.state === "case_folded") {
     // Quote a replacement target only when parseRunTarget would accept one —
     // `addressable` tests the same FLOW_FILE_NAME_PATTERN that gate applies —
@@ -2368,31 +2588,47 @@ async function execRunStep(
     );
   }
 
-  // There is deliberately NO path fence between here and the read. A `run:`
-  // target is reachable exactly when the tool-server user can read it, the same
-  // reach the front door already grants: an operator can point flow_path at any
-  // YAML on the host, so restricting composition below that only breaks
-  // documented layouts — a fragment shared sideways (`../shared/login.yaml`),
-  // and a flows dir symlinked to a tree kept outside the project. The one route
-  // that carries untrusted content, an uploaded flow, never arrives here:
-  // assertUploadSelfContained rejects every `run:` step on that path.
+  // There is deliberately NO path fence on the host read. A `run:` target is
+  // reachable exactly when the tool-server user can read it, the same reach the
+  // front door already grants: an operator can point flow_path at any YAML on
+  // the host, so restricting composition below that only breaks documented
+  // layouts — a fragment shared sideways (`../shared/login.yaml`), and a flows
+  // dir symlinked to a tree kept outside the project. The one route that
+  // carries untrusted content, an uploaded flow, never reads from this host:
+  // assertUploadSelfContained refuses its `run:` steps unless the client sent
+  // their fragments, and then the resolution above is a lookup of what the
+  // client resolved on its own disk, fenced to the roots the client chose: the
+  // project, its .argent/flows, the root flow's directory, and the project of a
+  // flow saved under .argent/flows. Over a link each layout above works alone,
+  // but a sideways fragment of a flows dir symlinked outside the project lands
+  // under none of those roots, so the client refuses it and the run stops
+  // before step 1.
+  //
+  // A missing file reports the same ENOENT shape on both sides, so a reason
+  // reads the same whichever machine lacked the fragment.
   let fragment: FlowFile;
   try {
-    fragment = parseFlow(await fs.readFile(canonical, "utf8"));
+    const text = await hop.read();
+    if (text === null) {
+      return fail(
+        `could not load fragment "${target}": ENOENT: no such file or directory, open '${canonical}'`
+      );
+    }
+    fragment = parseFlow(text);
   } catch (err) {
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
 
-  // The root flow's load-time gate, applied to the fragment at the only moment
-  // its steps exist. Charged to the run: step, so the fragment is refused whole
-  // rather than part-executed up to the offending step.
-  const retiredArg = findRetiredToolArg(state.registry, fragment.steps);
-  if (retiredArg) return fail(`fragment "${target}" ${retiredArgReason(retiredArg)}`);
+  // Charged to the run: step, so the fragment is refused whole rather than
+  // part-executed up to the offending step.
+  const refusal = fragmentLoadRefusal(state.registry, fragment, target);
+  if (refusal !== undefined) return fail(refusal);
 
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
   // becomes the anchor for `run:` paths inside it; baselines stay anchored to
-  // the root flow (state.flowsDir / state.baselineKey).
+  // the root flow (state.flowsDir, or state.clientFlowPath, and
+  // state.baselineKey).
   pushReport(state, {
     index,
     kind: "run",
@@ -2400,6 +2636,7 @@ async function execRunStep(
     flow: display,
     target,
     ...depthOf(scope),
+    durationMs: Date.now() - startedAt,
   });
   await execSteps(
     state,
@@ -2408,9 +2645,111 @@ async function execRunStep(
   );
 }
 
+type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;
+
+/**
+ * A `script` step is the one step whose `reason` is written by something other
+ * than this server: the child's own `throw` message crosses into it verbatim,
+ * and a multi-line message is the ordinary shape of a rethrown API error. Every
+ * surface that renders a step is one line per step and interpolates the reason
+ * raw — the CLI's step line, `flowRunToMcpContent`, and the lift in
+ * `flow-nested-outcome.ts` — so a newline in it puts script-controlled text at
+ * column 0, below a `✗` line and above the real summary. A forged
+ * "PASS — 3 passed, 0 failed" reads there as the run's own verdict.
+ *
+ * Escaped rather than stripped, and here rather than in each renderer: the
+ * original characters stay recoverable, and the one step whose reason is not
+ * server-composed is the one that pays for it. `describe`'s tree renderer takes
+ * the same measure for the same reason (`format-tree.ts`), on labels read off a
+ * device — a less hostile source than a local process's uncaught throw.
+ *
+ * Length is left to the executor's own `SCRIPT_MAX_FAILURE_MESSAGE_CHARS`: it
+ * is the budget that decides what a failed script may say about itself, and a
+ * second ceiling here would cut the step's only diagnostic without moving that
+ * decision anywhere a reader can find it.
+ */
+function oneLineReason(text: string): string {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+}
+
+async function runScriptStep(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "script" }>,
+  scope: StepScope
+): Promise<ScriptStepOutcome> {
+  const { outcome } = await runFlowScriptStep({
+    flowDir: scopeFlowDir(scope),
+    step,
+    projectRoot: state.projectRoot,
+    logBudget: state.scriptLogBudget,
+    ...(state.signal ? { signal: state.signal } : {}),
+  });
+  return outcome.reason === undefined
+    ? outcome
+    : { ...outcome, reason: oneLineReason(outcome.reason) };
+}
+
+type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
+
+/** Raw tool steps that can change how the UI lies on the screen. */
+const UI_TURNING_TOOLS = new Set(["rotate", "fold"]);
+
+/**
+ * A `fold:` step runs the `fold` tool on the run device. The app survives a
+ * fold, so the pinned tree target stays; what changes is the panel and its
+ * coordinate space, and the runner caches no screen geometry — every gesture
+ * that needs the screen aspect reads it afresh (`fetchScreenAspect`). A proven
+ * tree outage is retired the way a relaunch retires it: the screen the verdict
+ * was proven on is gone. So is the UI orientation the last read reported: a
+ * fold can turn the UI, and until a read reports the new one, a direction must
+ * not be turned by the old one.
+ */
+async function runFold(
+  state: ExecState,
+  step: Extract<FlowStep, { kind: "fold" }>
+): Promise<DirectiveOutcome> {
+  const { registry, ctx, signal } = state;
+  const device = deviceEnv(state).device;
+  if (signal?.aborted) return ABORTED_OUTCOME;
+  if (state.treeOutage) state.treeOutage.proven = undefined;
+  if (state.lastRead) state.lastRead.uiOrientation = undefined;
+  const args = bindDeviceArgs(registry, "fold", device.id, {
+    ...(step.posture !== undefined ? { posture: step.posture } : {}),
+    ...(step.angle !== undefined ? { angle: step.angle } : {}),
+  });
+  try {
+    const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
+      activeScreen?: number;
+      screen?: { panel?: string; width?: number; height?: number };
+      warning?: string;
+    };
+    const size =
+      result.screen?.width !== undefined && result.screen?.height !== undefined
+        ? ` ${result.screen.width}x${result.screen.height}`
+        : "";
+    // The step's own target, not the result's posture: that is set only at a
+    // preset angle, and a mid angle can leave either panel live.
+    const target = step.posture ?? `${step.angle}°`;
+    return {
+      ok: true,
+      reason: `${target}: screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`,
+      ...(result.warning !== undefined ? { warning: result.warning } : {}),
+    };
+  } catch (err) {
+    // The tool rejects when cancelled mid-fold; per ABORTED_OUTCOME that must
+    // read as an aborted skip, never a step failure with the tool's message.
+    if (signal?.aborted) return ABORTED_OUTCOME;
+    return { ok: false, reason: errMsg(err) };
+  }
+}
+
 async function execLeafStep(
   state: ExecState,
-  step: FlowStep,
+  step: LeafStep,
   index: number,
   scope: StepScope
 ): Promise<StepReport> {
@@ -2482,11 +2821,24 @@ async function execLeafStep(
       return { ...base, status: "pass" };
     }
 
+    case "fold": {
+      const r = await runFold(state, step);
+      if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "fail",
+        reason: r.reason,
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
+    }
+
     case "snapshot": {
       try {
         const r = await runSnapshot(deviceEnv(state), {
           flowsDir: state.flowsDir,
           flowName: state.baselineKey,
+          project: state.project,
+          ...(state.clientFlowPath !== undefined ? { clientFlowPath: state.clientFlowPath } : {}),
           name: step.name,
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
@@ -2498,7 +2850,11 @@ async function execLeafStep(
           ...base,
           status: r.status,
           reason: r.reason,
+          ...(r.warning !== undefined ? { warning: r.warning } : {}),
           snapshotKey: r.snapshotKey,
+          ...(r.snapshotKey !== undefined && state.device?.platform === "ios-remote"
+            ? { snapshotRemote: true as const }
+            : {}),
           artifacts: r.artifacts,
         };
       } catch (err) {
@@ -2552,8 +2908,29 @@ async function execLeafStep(
       if (isNestedOrchestratorTool(step.name) && state.treeOutage) {
         state.treeOutage.proven = undefined;
       }
+      // A raw `rotate` or `fold` can turn the UI, like the `fold:` directive
+      // (see runFold): the orientation the last read reported no longer holds.
+      if (UI_TURNING_TOOLS.has(step.name) && state.lastRead) {
+        state.lastRead.uiOrientation = undefined;
+      }
+      // A file argument the client sent becomes a file on this host for the
+      // invoke only; the report keeps the client path the flow names. So does
+      // the flow a nested `flow-execute` names, which gets the files the client
+      // sent with the call for its own steps.
+      let prepared: PreparedToolStep | undefined;
       try {
-        const result = await invokeSubTool(registry, ctx, step.name, args);
+        prepared = await prepareToolStepInputs(
+          registry,
+          state.project,
+          step.name,
+          nestedRunArgs(state, step.name, args)
+        );
+        const result = await invokeSubTool(registry, ctx, step.name, prepared.args, {
+          ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
+          // The two tools that can start a nested run continue this run's
+          // stack, so a flow that runs itself stops at the cycle guard.
+          ...(FLOW_STARTING_TOOLS.has(step.name) ? { flowStack: scope.runStack } : {}),
+        });
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
           return {
@@ -2631,13 +3008,35 @@ async function execLeafStep(
         if (signal?.aborted) {
           return { ...base, status: "skip", tool: step.name, reason: ABORTED_OUTCOME.reason };
         }
-        const reframed = describeNestedParamError(registry, err, step.name, args, step.args ?? {});
-        return { ...base, status: "error", tool: step.name, reason: reframed ?? errMsg(err) };
+        const reframed = describeNestedParamError(
+          registry,
+          err,
+          step.name,
+          prepared?.args ?? args,
+          step.args ?? {}
+        );
+        const reason = reframed ?? errMsg(err);
+        return {
+          ...base,
+          status: "error",
+          tool: step.name,
+          reason: prepared ? withClientPaths(prepared, reason) : reason,
+        };
+      } finally {
+        await prepared?.cleanup();
       }
     }
 
-    default:
+    case "script": {
+      const outcome = await runScriptStep(state, step, scope);
+      return { ...base, ...outcome };
+    }
+
+    default: {
+      const unexecuted: never = step;
+      void unexecuted;
       return { ...base, status: "error", reason: `unsupported step kind` };
+    }
   }
 }
 
@@ -2646,22 +3045,157 @@ function errMsg(err: unknown): string {
 }
 
 /**
+ * The two rules on the shape of a flow_path string itself, apart from how it
+ * reached us, so they are reported apart from the boundary gate — a caller
+ * that did use the boundary must not be told to use the boundary. A host path
+ * is checked as the string execute() will open; an upload's client spelling is
+ * checked as the path the caller wrote, the one every message quotes.
+ */
+function assertFlowPathShape(flowPath: string): void {
+  // Reject a relative path: this string seeds canonicalFlowPath in execute(),
+  // which requires an absolute input — its realpath, the read, and every root
+  // anchor derived from the one canonical result would otherwise resolve
+  // against the tool server's working directory, which is not the caller's.
+  // `argent flow list` prints relative paths, so this is the spelling an agent
+  // is most likely to pass back.
+  const windows = windowsPathRefusal("flow_path", flowPath);
+  if (windows) {
+    throw new FailureError(windows, {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_path_absolute",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
+  if (!path.isAbsolute(flowPath)) {
+    throw new FailureError(
+      `Invalid flow_path "${flowPath}": flow paths must be absolute — a relative path ` +
+        `is resolved against the tool server's working directory, not the caller's. Pass the ` +
+        `absolute path to the flow's YAML.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_path_absolute",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
+  // Reject ".." segments: execute() canonicalizes this path ONCE with kernel
+  // semantics (canonicalFlowPath) and derives the read, flowsDir, and the
+  // runStack seed from that one result, so a ".." spelling can no longer split
+  // the read from its anchors. What it still can do is carry two readings —
+  // after a symlinked component, the kernel's ".." and a lexical collapse name
+  // different files — or, when the directory chain is broken, slip through
+  // canonicalFlowPath's verbatim fallback to fail later as a raw readFile
+  // ENOENT on the unresolved spelling. Rejecting up front means every admitted
+  // flow_path has exactly one reading. The argent client rejects ".." segments
+  // before sending; only a direct MCP/HTTP caller can pass an unresolved
+  // flow_path.
+  if (flowPath.split(/[\\/]+/).includes("..")) {
+    throw new FailureError(
+      `Invalid flow_path "${flowPath}": flow paths must not contain ".." segments — ` +
+        `a ".." after a symlinked directory can name a different file than the spelling ` +
+        `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
+        `resolved absolute path to the flow's YAML.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_path_dotdot",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+}
+
+/**
+ * The flow name a flow_path carries — the basename minus `.yaml`, held to the
+ * charset of a saved flow's name, since it keys the report, __baselines__/ and
+ * --output. Judged on the client's spelling: over HTTP a host path and its
+ * client spelling are one string, and for an upload the client's is the only
+ * spelling there is.
+ */
+function flowNameOf(clientPath: string): string {
+  const clientExt = path.extname(clientPath);
+  // path.extname reads a basename that is only the extension as an
+  // extensionless dotfile, so clientExt is "" for ".yaml" (and ".YAML") and
+  // the arms below would blame the extension of a path that visibly ends in
+  // .yaml. What is actually missing is the filename stem — fall past this
+  // check and let assertSafeFlowName name it.
+  const bareExtension = path.basename(clientPath).toLowerCase() === ".yaml";
+  if (!bareExtension && clientExt !== ".yaml") {
+    // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
+    const detail =
+      clientExt.toLowerCase() === ".yaml"
+        ? `flow files must use the lowercase .yaml extension, not "${clientExt}".`
+        : `flow files must use the .yaml extension.`;
+    throw new FailureError(`Invalid flow_path "${clientPath}": ${detail}`, {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_path_extension",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
+  // basename leaves a suffix in place when stripping it would leave nothing,
+  // and strips only an exact-case one — so both ".yaml" and ".YAML" would
+  // otherwise be reported as a flow *named* that, not as a missing stem.
+  const flowName = bareExtension ? "" : path.basename(clientPath, ".yaml");
+  assertSafeFlowName(flowName);
+  return flowName;
+}
+
+/**
+ * The refusal of a `flow_path` whose basename is not in its directory's listing
+ * as spelled. Thrown for the listing on this host ({@link resolveFlowSource})
+ * and for the one on the client, which a linked run that composes reads from
+ * the root's wire ({@link clientRootCanonical}), so one call fails alike on
+ * both routes.
+ */
+function flowPathCasingError(
+  clientPath: string,
+  spelling: Exclude<OnDiskSpelling, { state: "listed" }>
+): FailureError {
+  const suppliedBase = path.basename(clientPath);
+  // Hint the real spelling only when this same ladder would accept it (a
+  // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
+  // needs a rename.
+  const recovery =
+    spelling.state === "absent"
+      ? `Pass the basename exactly as it appears on disk.`
+      : spelling.addressable
+        ? `Pass flow_path with the on-disk basename "${spelling.actual}".`
+        : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`;
+  return new FailureError(
+    `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
+      `filesystem matched "${suppliedBase}" case-insensitively` +
+      (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
+      `, so the flow name (which keys the report and __baselines__/) would be one no ` +
+      `directory entry carries. ${recovery}`,
+    {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_path_casing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
  * Resolve the flow YAML source a tool reads. An explicit `flow_path` is accepted
- * only when the file-input boundary resolved the exact client path in place on
- * this host AND matched the client-recorded stat (`statVerified`) — presence
- * alone is satisfiable by a hand-crafted stat-less wrapper, so it is not
- * containment. Uploaded explicit paths are rejected: the uploaded root YAML
- * would lose sibling `run:` files, baseline reads, and baseline write-back. A
- * remote `name` call uploads the same way and is accepted below, so this
- * rejection only keeps `flow_path`, whose whole contract is that those resolve
- * beside the caller's YAML, from silently meaning a temp directory instead.
+ * in two shapes. An upload (`viaUpload`) is a temp file this process wrote from
+ * the client's content; it runs under the client's spelling, and execute()
+ * refuses it when its steps need the files beside it, which the upload does not
+ * carry (assertUploadSelfContained). A host path is accepted only when the
+ * file-input boundary resolved the exact client path in place on this host AND
+ * matched the client-recorded stat (`statVerified`) — presence alone is
+ * satisfiable by a hand-crafted stat-less wrapper, so it is not containment.
  *
  * With no `flow_path` or `flow_file`, derive the saved-flow path from
  * project_root + name. When `flow_file` is set it must be one of the two shapes
  * its file-input boundary legitimately produces: the exact
- * `${project_root}/.argent/flows/${name}.yaml` path (co-located client), or a
+ * `${project_root}/.argent/flows/${name}.yaml` path (an unlinked client), or a
  * temp file THIS server materialized from uploaded content
- * (`fileInput.viaUpload` — remote client). Anything else is rejected: the schema
+ * (`fileInput.viaUpload` — a linked client). Anything else is rejected: the schema
  * marks `flow_file` internal, and honoring an arbitrary path would let a caller
  * execute (and, under --update-baselines, write PNGs next to) any YAML on the
  * host through a parameter no caller is supposed to set — `flow_path`, gated on
@@ -2703,28 +3237,30 @@ export async function resolveFlowSource(
   // Before either branch, so both are covered. `getFlowPath` validates the root
   // on the `name` branch only, and deleting `setActiveProjectRoot` — which ran
   // here, unconditionally, and whose body is today's assertValidProjectRoot —
-  // removed the check on the `flow_path` branch entirely. Nothing reads
-  // project_root on that branch today, so this restores a guardrail rather than
-  // fixing a live exploit.
+  // removed the check on the `flow_path` branch entirely, letting relative and
+  // ".."-bearing roots through. That branch is no longer free of reads either:
+  // ExecState.projectRoot carries it to a script: step as the child's
+  // working directory, so this guard is what keeps a relative or
+  // ".."-bearing root from becoming a script's cwd.
   assertValidProjectRoot(params.project_root);
 
   if (params.flow_path !== undefined) {
+    // An upload is the client's own file, materialized by this process into a
+    // temp directory it created (see file-inputs.ts): no host file is opened
+    // on the caller's say-so, so the boundary gate below has nothing to
+    // judge, and the on-disk-spelling gate has no directory to list — the one
+    // that could disagree is the client's, which this process reads only when
+    // the flow composes, from the root's wire (clientRootCanonical). The
+    // client's spelling still names the flow (report, __baselines__/,
+    // --output), so it is held to the same shape rules as a host path. What
+    // the upload cannot supply is the directory beside the file: execute()
+    // reads it through the client when the client serves it, and otherwise
+    // refuses a flow whose steps read it (assertUploadSelfContained). The temp
+    // dir is the flowsDir the run gets.
     if (flowPathInput?.viaUpload) {
-      throw new FailureError(
-        `Invalid flow_path "${flowPathInput.clientPath}": explicit flow paths require a ` +
-          `co-located client and tool server with a shared filesystem, and this one arrived as ` +
-          `an upload — sibling run: files, baselines, and baseline write-back all resolve beside ` +
-          `the copy this server materialized, alone in a temp directory. Pass name + ` +
-          `project_root to run a self-contained flow from a remote client; name uploads the same ` +
-          `way, so a flow with run: or snapshot: steps needs the client and tool server on one ` +
-          `filesystem.`,
-        {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "flow_path_shared_filesystem",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
+      const clientPath = flowPathInput.clientPath;
+      assertFlowPathShape(clientPath);
+      return { filePath: params.flow_path, flowName: flowNameOf(clientPath), viaUpload: true };
     }
 
     // The last conjunct is not containment — over HTTP both sides come from the
@@ -2750,83 +3286,9 @@ export async function resolveFlowSource(
       );
     }
 
-    // The two rules below are about the shape of the path string itself, not
-    // about how it reached us, so they are reported apart from the boundary
-    // gate above — a caller that did use the boundary must not be told to use
-    // the boundary.
-
-    // Reject a relative path: this string seeds canonicalFlowPath in execute(),
-    // which requires an absolute input — its realpath, the read, and every root
-    // anchor derived from the one canonical result would otherwise resolve
-    // against the tool server's working directory, which is not the caller's.
-    // `argent flow list` prints relative paths, so this is the spelling an agent
-    // is most likely to pass back.
-    if (!path.isAbsolute(params.flow_path)) {
-      throw new FailureError(
-        `Invalid flow_path "${params.flow_path}": flow paths must be absolute — a relative path ` +
-          `is resolved against the tool server's working directory, not the caller's. Pass the ` +
-          `absolute path to the flow's YAML.`,
-        {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "flow_path_absolute",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
-    }
-
-    // Reject ".." segments: execute() canonicalizes this path ONCE with kernel
-    // semantics (canonicalFlowPath) and derives the read, flowsDir, and the
-    // runStack seed from that one result, so a ".." spelling can no longer split
-    // the read from its anchors. What it still can do is carry two readings —
-    // after a symlinked component, the kernel's ".." and a lexical collapse name
-    // different files — or, when the directory chain is broken, slip through
-    // canonicalFlowPath's verbatim fallback to fail later as a raw readFile
-    // ENOENT on the unresolved spelling. Rejecting up front means every admitted
-    // flow_path has exactly one reading. The argent client rejects ".." segments
-    // before sending; only a direct MCP/HTTP caller can pass an unresolved
-    // flow_path.
-    if (params.flow_path.split(/[\\/]+/).includes("..")) {
-      throw new FailureError(
-        `Invalid flow_path "${params.flow_path}": flow paths must not contain ".." segments — ` +
-          `a ".." after a symlinked directory can name a different file than the spelling ` +
-          `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
-          `resolved absolute path to the flow's YAML.`,
-        {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "flow_path_dotdot",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
-    }
-
+    assertFlowPathShape(params.flow_path);
     const clientPath = flowPathInput!.clientPath;
-    const clientExt = path.extname(clientPath);
-    // path.extname reads a basename that is only the extension as an
-    // extensionless dotfile, so clientExt is "" for ".yaml" (and ".YAML") and
-    // the arms below would blame the extension of a path that visibly ends in
-    // .yaml. What is actually missing is the filename stem — fall past this
-    // check and let assertSafeFlowName name it.
-    const bareExtension = path.basename(clientPath).toLowerCase() === ".yaml";
-    if (!bareExtension && clientExt !== ".yaml") {
-      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
-      const detail =
-        clientExt.toLowerCase() === ".yaml"
-          ? `flow files must use the lowercase .yaml extension, not "${clientExt}".`
-          : `flow files must use the .yaml extension.`;
-      throw new FailureError(`Invalid flow_path "${clientPath}": ${detail}`, {
-        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-        failure_stage: "flow_path_extension",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      });
-    }
-    // basename leaves a suffix in place when stripping it would leave nothing,
-    // and strips only an exact-case one — so both ".yaml" and ".YAML" would
-    // otherwise be reported as a flow *named* that, not as a missing stem.
-    const flowName = bareExtension ? "" : path.basename(clientPath, ".yaml");
-    assertSafeFlowName(flowName);
+    const flowName = flowNameOf(clientPath);
 
     // The boundary's stat matched the basename by the filesystem's rules, which
     // on a case-insensitive filesystem (APFS, NTFS) finds a file really named
@@ -2838,32 +3300,11 @@ export async function resolveFlowSource(
     // refuses either way here — unlike the name branch below, this path arrives
     // with the boundary's stat vouching for the file, so a listing that lacks it
     // entirely is the same phantom spelling.
-    const suppliedBase = path.basename(clientPath);
-    const spelling = await classifyOnDiskSpelling(path.dirname(params.flow_path), suppliedBase);
-    if (spelling.state !== "listed") {
-      // Hint the real spelling only when this same ladder would accept it (a
-      // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
-      // needs a rename.
-      const recovery =
-        spelling.state === "absent"
-          ? `Pass the basename exactly as it appears on disk.`
-          : spelling.addressable
-            ? `Pass flow_path with the on-disk basename "${spelling.actual}".`
-            : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`;
-      throw new FailureError(
-        `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
-          `filesystem matched "${suppliedBase}" case-insensitively` +
-          (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
-          `, so the flow name (which keys the report and __baselines__/) would be one no ` +
-          `directory entry carries. ${recovery}`,
-        {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "flow_path_casing",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
-      );
-    }
+    const spelling = await classifyOnDiskSpelling(
+      path.dirname(params.flow_path),
+      path.basename(clientPath)
+    );
+    if (spelling.state !== "listed") throw flowPathCasingError(clientPath, spelling);
 
     return { filePath: params.flow_path, flowName, viaUpload: false };
   }
@@ -2876,12 +3317,14 @@ export async function resolveFlowSource(
   // returned ahead of the on-disk-spelling gate below deliberately: the only
   // directory there is to list is that temp dir, whose single entry this server
   // named from `name` itself, so the comparison could only ever agree with
-  // itself. The listing that could disagree is the remote client's, on a host
-  // this process cannot read. That temp dir is also what a run takes flowsDir
-  // from, so a remote `name` run resolves `run:` targets and `__baselines__/`
-  // there and finds neither — what this branch buys a remote caller is a
-  // self-contained flow, and one that composes or snapshots fails against that
-  // temp dir rather than naming the missing co-location that is the real cause.
+  // itself. The listing that could disagree is the remote client's, which a
+  // flow that composes reports on in the root's wire (clientRootCanonical).
+  // That temp dir is also what a run takes flowsDir
+  // from, where `run:` targets and `__baselines__/` are not — the same contract
+  // as an uploaded flow_path above: a self-contained flow runs; execute()
+  // refuses one whose steps use files on the client before any step, naming
+  // those steps rather than a missing fragment or baseline, and runs one that
+  // composes from the fragments the client sent with it.
   if (params.flow_file && fileInput?.viaUpload)
     return { filePath: params.flow_file, flowName, viaUpload: true };
   if (
@@ -2912,27 +3355,7 @@ export async function resolveFlowSource(
   // matches nothing at all is an ordinary missing flow, and the read that
   // follows says so far better than a casing complaint would.
   const spelling = await classifyOnDiskSpelling(path.dirname(expected), `${flowName}.yaml`);
-  if (spelling.state === "case_folded") {
-    // Hand back a name only when one can reach the file: an on-disk .YAML is
-    // addressable by no name at all (this branch always builds "<name>.yaml"),
-    // it is omitted from `argent flow list`, and flow_path refuses it too.
-    const recovery = spelling.addressable
-      ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
-      : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — flow files must be ` +
-        `lowercase .yaml.`;
-    throw new FailureError(
-      `Invalid flow name "${flowName}": no saved flow is named "${flowName}.yaml" — this ` +
-        `filesystem matched it case-insensitively to "${spelling.actual}", so the flow name ` +
-        `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
-        recovery,
-      {
-        error_code: FAILURE_CODES.FLOW_NAME_INVALID,
-        failure_stage: "flow_name_casing",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
-  }
+  if (spelling.state === "case_folded") throw flowNameCasingError(flowName, spelling);
 
   // Either the boundary's own path for this flow (containment-checked above,
   // so it resolves to `expected`) or `expected` itself.

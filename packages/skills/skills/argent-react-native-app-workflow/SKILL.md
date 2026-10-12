@@ -3,6 +3,8 @@ name: argent-react-native-app-workflow
 description: Step-by-step workflows for developing or debugging React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
+Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject it. Use a simulator.
+
 ## 1. Starting the React Native App
 
 ### 1.1 Explore Configuration (MANDATORY — Do This First)
@@ -159,7 +161,7 @@ For full simulator setup workflow, refer to the `argent-ios-simulator-setup` ski
 
 | Problem type                      | Tool / Where to look                                                                                                                                                                                                                                              |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search. If it returns `status: "not_connected"`, no log file is returned — follow its `guidance` to reconnect first.                                                        |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep` to search. If it returns `status: "not_connected"`, no log file is returned — follow its `guidance` to reconnect first.                                                               |
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific logical pixel coordinates (not normalized 0-1).                                                                                                                     |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, but prefer `describe` or `debugger-component-tree` for actual navigation and target discovery. If a permission prompt or system-owned modal overlay is not exposed reliably, then fall back to `screenshot`. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                                                                                                                                              |

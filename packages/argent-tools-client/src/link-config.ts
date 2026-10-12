@@ -102,16 +102,6 @@ export async function getResolvedToolsUrl(): Promise<ResolvedToolsUrl> {
   return { url: null, source: "none" };
 }
 
-/**
- * True when an env var or link file routes requests to an external tool-server.
- * The MCP server gates auto-spawn and health restarts on it — a remote target
- * must never silently fall back to a local spawn.
- */
-export async function isRemoteRouted(): Promise<boolean> {
-  const { url } = await getResolvedToolsUrl();
-  return url !== null;
-}
-
 export const LINK_PATHS = { LINK_DIR, LINK_FILE };
 
 // `argent://[<token>@]<host>:<port>`: the pairing string `argent server start`

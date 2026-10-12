@@ -20,6 +20,9 @@
     "scripts/**/*.cjs",
     "scripts/**/*.mjs",
     "packages/argent/scripts/**/*.cjs",
+    "packages/tool-server/scripts/**/*.mjs",
+    // Shipped runtime code `tsc --build` never sees: no `allowJs` anywhere.
+    "packages/tool-server/src/tools/flows/script/**/*.mjs",
     "packages/skills/scripts/**/*.js"
   ]
 }

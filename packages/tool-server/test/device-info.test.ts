@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { classifyDevice, isAndroidEmulatorSerial, resolveDevice } from "../src/utils/device-info";
+import { nativeIdPlatform } from "@argent/device-providers";
+import {
+  classifyDevice,
+  isAndroidEmulatorSerial,
+  isIosPhysicalDevice,
+  isIosSimulator,
+  resolveDevice,
+} from "../src/utils/device-info";
 
 describe("classifyDevice", () => {
   it("classifies iOS simulator UUIDs as ios", () => {
@@ -14,6 +21,24 @@ describe("classifyDevice", () => {
 
   it("classifies amazon-prefixed serials as vega", () => {
     expect(classifyDevice("amazon-4a27df03c9777152")).toBe("vega");
+  });
+
+  /**
+   * `argent providers check` cannot reach this classifier, so it asks
+   * `nativeIdPlatform` in the contract package instead. The two have to give
+   * one answer or the check would pass a descriptor the tool-server drops. This
+   * holds it to that for every id a provider may declare, which is every id
+   * without one of the prefixes above.
+   */
+  it.each([
+    "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+    "01234567-89ab-cdef-0123-456789abcdef",
+    "00008110-000978540290401E",
+    "emulator-5554",
+    "HT82A0203045",
+    "192.168.1.5:5555",
+  ])("agrees with the contract's nativeIdPlatform on %s", (nativeId) => {
+    expect(classifyDevice(nativeId)).toBe(nativeIdPlatform(nativeId));
   });
 });
 
@@ -47,6 +72,33 @@ describe("resolveDevice", () => {
     const d = resolveDevice("amazon-4a27df03c9777152");
     expect(d.platform).toBe("vega");
     expect(d.kind).toBe("vvd");
+  });
+});
+
+describe("isIosPhysicalDevice", () => {
+  it("is true for a physical iPhone UDID", () => {
+    expect(isIosPhysicalDevice(resolveDevice("00008110-000978540290401E"))).toBe(true);
+  });
+
+  it("is false for an iOS simulator", () => {
+    expect(isIosPhysicalDevice(resolveDevice("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))).toBe(false);
+  });
+
+  it("is false for physical Android hardware (kind 'device' too, the bare-kind hazard)", () => {
+    const android = resolveDevice("HT82A0203045");
+    expect(android.kind).toBe("device");
+    expect(isIosPhysicalDevice(android)).toBe(false);
+  });
+});
+
+describe("isIosSimulator", () => {
+  it.each([
+    ["a local iOS simulator", "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", true],
+    ["a remote iOS simulator", "remote:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", true],
+    ["a physical iPhone", "00008110-000978540290401E", false],
+    ["an Android emulator", "emulator-5554", false],
+  ])("is %s: %s", (_case, id, expected) => {
+    expect(isIosSimulator(resolveDevice(id))).toBe(expected);
   });
 });
 

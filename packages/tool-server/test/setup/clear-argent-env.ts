@@ -19,7 +19,10 @@
 // `test/clear-argent-env.test.ts` re-imports it against planted sentinels
 // instead.
 for (const name of Object.keys(process.env)) {
-  if (name.startsWith("ARGENT_")) {
+  // Upper-cased first: Windows env lookups are case-insensitive while the keys
+  // enumerate with the casing they were set in, so a `set argent_host=…`
+  // survives a literal prefix match and still reads back as ARGENT_HOST.
+  if (name.toUpperCase().startsWith("ARGENT_")) {
     delete process.env[name];
   }
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { dispatchByPlatform, type PlatformImpl } from "../src/utils/cross-platform-tool";
 import { __resetDepCacheForTests, __primeDepCacheForTests } from "../src/utils/check-deps";
-import { UnsupportedOperationError } from "../src/utils/capability";
-import type { ToolCapability } from "@argent/registry";
+import { NotImplementedOnPlatformError, UnsupportedOperationError } from "../src/utils/capability";
+import { FAILURE_CODES, getFailureSignal, type ToolCapability } from "@argent/registry";
 
 const capabilityBoth: ToolCapability = {
   apple: { simulator: true, device: true },
@@ -20,6 +20,8 @@ const capabilityRemote: ToolCapability = {
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const iosRemoteUdid = `remote:${iosUdid}`;
+// Modern physical-iPhone shape (8+16 hex): resolves to ios / device.
+const iosDeviceUdid = "00008110-000978540290401E";
 const androidUdid = "emulator-5554";
 
 beforeEach(() => {
@@ -92,6 +94,45 @@ describe("dispatchByPlatform", () => {
 
     await expect(execute({}, { udid: iosRemoteUdid })).rejects.toThrow(
       /declares ios-remote capability but has no iosRemote branch/
+    );
+  });
+
+  it("throws a 501 with corrected hardware guidance when a physical device hits a missing iosDevice branch", async () => {
+    // Reaching this throw requires assertSupported to have already passed
+    // apple: { device: true }, and the hardware file convention is
+    // platforms/ios-device.ts, so the appended hint must override the shared
+    // template's "fill in platforms/ios.ts + add the capability block" advice,
+    // which is wrong on both counts for hardware.
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
+      toolId: "no-device-branch",
+      capability: capabilityBoth,
+      ios: { handler: async () => "should-not-run" },
+      android: { handler: async () => "should-not-run" },
+    });
+
+    const err: unknown = await execute({}, { udid: iosDeviceUdid }).then(
+      () => {
+        throw new Error("expected the missing iosDevice branch to reject");
+      },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(NotImplementedOnPlatformError);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_PLATFORM_NOT_IMPLEMENTED);
+    // Pin the full 501 message: shared template (unchanged, deployed) first,
+    // then the branch-added hint that corrects it for hardware.
+    expect((err as Error).message).toBe(
+      "Tool 'no-device-branch' is not yet implemented on ios. " +
+        "The cross-platform architecture is in place — fill in " +
+        "tools/no-device-branch/platforms/ios.ts and add the matching " +
+        "'ios' block to the tool's capability declaration. " +
+        "For physical iOS devices, implement " +
+        "tools/no-device-branch/platforms/ios-device.ts instead; the capability " +
+        "block already exists."
     );
   });
 

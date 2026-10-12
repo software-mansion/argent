@@ -3,8 +3,10 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
+import { iosDeviceImpl } from "./platforms/ios-device";
 import { androidImpl } from "./platforms/android";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
@@ -18,6 +20,13 @@ const zodSchema = z.object({
     .string()
     .describe(
       "URL or scheme to open (e.g. https://example.com, messages://, tel:555, geo:37.0,-122.0). For Chromium this navigates the renderer."
+    ),
+  bundleId: z
+    .string()
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
+    .optional()
+    .describe(
+      "Physical iOS only: the app that receives the URL. Defaults to Safari for http(s); required for any other scheme. Ignored elsewhere."
     ),
 });
 
@@ -54,6 +63,7 @@ export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
 Use to navigate to a web page or deep-link into an app. On Chromium, this navigates the primary renderer to the given URL.
 Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.
 Deep-linking caveat: an https:// link opens the native app only when an installed app is verified for the link's domain (iOS Universal Links / Android App Links) — otherwise it opens in the browser, and on iOS simulators it may open in Safari even when the owning app is installed. To reliably open an installed app, use its custom scheme (scheme://path) or launch-app with its bundle id.
+On a physical iPhone, http(s) URLs default to Safari and any other scheme needs bundleId; the receiving app becomes the app under automation.
 Returns { opened, url, note? }. note carries the deep-linking caveat when a web URL was opened on a native device. Fails if no app is registered to handle the URI (iOS/Android) or the renderer rejects the navigation (Chromium).`,
   zodSchema,
   capability,
@@ -74,6 +84,7 @@ Returns { opened, url, note? }. note carries the deep-linking caveat when a web 
     toolId: "open-url",
     capability,
     ios: iosImpl,
+    iosDevice: iosDeviceImpl,
     android: androidImpl,
     iosRemote: iosRemoteImpl,
     chromium: chromiumImpl,

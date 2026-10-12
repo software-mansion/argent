@@ -377,13 +377,16 @@ export async function link(argv: string[]): Promise<void> {
   let url = flags.url ?? formatToolsServerUrl(host, port);
 
   if (!flags.yes && existing) {
-    if (existing.url === url) {
+    const sameUrl = existing.url === url;
+    if (sameUrl && existing.token === token) {
       p.log.info(`Already linked to ${pc.cyan(url)}.`);
       p.outro("No changes.");
       return;
     }
     const overwrite = await p.confirm({
-      message: `Replace existing link ${pc.dim(existing.url)} with ${pc.cyan(url)}?`,
+      message: sameUrl
+        ? `Replace the token for ${pc.cyan(url)}?`
+        : `Replace existing link ${pc.dim(existing.url)} with ${pc.cyan(url)}?`,
       initialValue: true,
     });
     if (p.isCancel(overwrite) || !overwrite) {

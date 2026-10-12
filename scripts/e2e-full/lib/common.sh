@@ -28,12 +28,63 @@ group() { printf '\n%s\n' "${C_BLU}==== $* ====${C_RST}" >&2; }
 TOOL_TIMEOUT="${TOOL_TIMEOUT:-120}"                       # seconds per tool call
 E2E_OS="${E2E_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
 
+# A stand-in for coreutils' timeout(1), for the machines that do not have it.
+# Stock macOS is one, which is most of the machines this harness runs on, so
+# this is the common path rather than the fallback it looks like. perl does ship
+# with macOS.
+#
+# `exec { $ARGV[0] } @ARGV` runs argv directly, with no shell between, the way
+# timeout(1) does. The exit codes are timeout(1)'s too, because the assertions
+# read them: 124 for the alarm, 127 for a command that could not be run and the
+# child's own status otherwise. TERM first and KILL half a second later, so a
+# tool that traps TERM cannot hold the run open anyway.
+_perl_timeout() { # seconds cmd [args...]
+  perl -e '
+    my $secs = shift;
+    my $pid  = fork();
+    die "fork: $!\n" unless defined $pid;
+    if ($pid == 0) { exec { $ARGV[0] } @ARGV; exit 127 }
+    local $SIG{ALRM} = sub {
+      kill "TERM", $pid;
+      select undef, undef, undef, 0.5;
+      kill "KILL", $pid;
+      waitpid $pid, 0;
+      exit 124;
+    };
+    alarm $secs;
+    waitpid $pid, 0;
+    alarm 0;
+    my $status = $?;
+    exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
+  ' "$@"
+}
+
+# GNU coreutils' `timeout`, under whichever name it has here, else the perl
+# stand-in. Used as `${TIMEOUT_BIN:+...}`, which word-splits into argv; a shell
+# function resolves there just as a binary does.
+#
+# Never empty if it can be helped. An unbounded call does not fail, it hangs
+# and every 124 branch in `rt_detail` and `assert_reject` is dead while it does,
+# including the one that stops a wedged server from reporting a green validation
+# tier.
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+elif command -v perl >/dev/null 2>&1; then
+  TIMEOUT_BIN="_perl_timeout"
+else
+  TIMEOUT_BIN=""
+  warn "no timeout/gtimeout/perl on PATH — tool calls run unbounded (brew install coreutils)"
+fi
+
 # argent_cli <args...> — run the CLI under timeout(1). Combined output lands in
-# CLI_OUT; the CLI's exit code is the return value.
+# CLI_OUT; the CLI's exit code is the return value. The command is rebuilt from
+# ARGENT_BIN each call so it tracks the value run-e2e.sh sets after installing.
 argent_cli() {
   local out rc cmd
   read -ra cmd <<< "${ARGENT_BIN:?ARGENT_BIN not set yet}"
-  out=$(timeout "$TOOL_TIMEOUT" "${cmd[@]}" "$@" 2>&1); rc=$?
+  out=$(${TIMEOUT_BIN:+$TIMEOUT_BIN "$TOOL_TIMEOUT"} "${cmd[@]}" "$@" 2>&1); rc=$?
   CLI_OUT="$out"
   return "$rc"
 }
@@ -45,9 +96,9 @@ run_tool() {
   local errf cmd; errf=$(mktemp)
   read -ra cmd <<< "${ARGENT_BIN:?ARGENT_BIN not set yet}"
   if [ -n "$args" ]; then
-    RT_JSON=$(timeout "$TOOL_TIMEOUT" "${cmd[@]}" run "$tool" --args "$args" 2>"$errf"); RT_RC=$?
+    RT_JSON=$(${TIMEOUT_BIN:+$TIMEOUT_BIN "$TOOL_TIMEOUT"} "${cmd[@]}" run "$tool" --args "$args" 2>"$errf"); RT_RC=$?
   else
-    RT_JSON=$(timeout "$TOOL_TIMEOUT" "${cmd[@]}" run "$tool" 2>"$errf"); RT_RC=$?
+    RT_JSON=$(${TIMEOUT_BIN:+$TIMEOUT_BIN "$TOOL_TIMEOUT"} "${cmd[@]}" run "$tool" 2>"$errf"); RT_RC=$?
   fi
   RT_ERR=$(cat "$errf"); rm -f "$errf"
   RT_OUT="${RT_JSON}
@@ -232,7 +283,7 @@ capture_screenshot() { # udid outfile
   # report the previous success's path and size.
   SHOT_PATH=""; SHOT_SIZE=0; SHOT_RC=0
   rm -f "$out"
-  timeout "$TOOL_TIMEOUT" "${cmd[@]}" run screenshot --udid "$udid" --out "$out" >/dev/null 2>&1
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN "$TOOL_TIMEOUT"} "${cmd[@]}" run screenshot --udid "$udid" --out "$out" >/dev/null 2>&1
   SHOT_RC=$?
   [ -f "$out" ] || return 1
   SHOT_SIZE="$(wc -c <"$out" | tr -d ' ')"

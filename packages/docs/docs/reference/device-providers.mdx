@@ -1,0 +1,127 @@
+---
+sidebar_position: 7
+sidebar_label: Device providers
+title: Device providers
+sidebar_custom_props:
+  icon: plug
+---
+
+Argent can drive a simulator or an emulator that a different application already runs. Argent attaches to the device of that application. Argent does not start a second device.
+
+The application that offers the device is a **provider**. A provider is usually an editor extension or an IDE. The contract is vendor-neutral. Argent needs no change to support a new provider.
+
+## How a provider offers a device
+
+A provider writes one JSON file into `~/.argent/providers/`. The file lists the devices and the mechanisms that Argent may use on each device.
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "id": "acme-3f2a9c",
+  "name": "Acme IDE",
+  "pid": 41234,
+  "supportUrl": "https://github.com/acme/acme-ide/issues",
+  "workspace": { "name": "my-app", "path": "/Users/me/src/my-app" },
+  "devices": [
+    {
+      "nativeId": "1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809",
+      "platform": "ios",
+      "kind": "simulator",
+      "name": "iPhone 16 Pro",
+      "state": "Booted",
+      "capabilities": ["simulator-server", "simctl", "ax-service"],
+      "simulatorServer": {
+        "apiUrl": "http://127.0.0.1:52001",
+        "streamUrl": "http://127.0.0.1:52001/stream.mjpeg",
+      },
+      "metroPort": 8081,
+    },
+  ],
+}
+```
+
+`apiUrl` and `streamUrl` must start with `http://`. The simulator-server sends plaintext on a local port. Argent also opens `/ws` on the same host. A WebSocket selects its scheme before it connects, thus `https://` promises a `wss://` endpoint that nothing serves. `supportUrl` is a page for a person, thus it accepts `http://` and `https://`.
+
+`platform` must agree with the shape of `nativeId`. Argent reads the shape: an 8-4-4-4-12 hexadecimal id is `ios` and every other id is `android`. Argent ignores a device that declares the other platform, because an adb serial given to `xcrun` reaches nothing. `argent providers check` reports this as an error.
+
+Argent reads the file again on every tool call. Argent keeps no cache. Thus a new grant, a smaller grant, or a withdrawal takes effect immediately.
+
+Argent writes one line to `stderr` and reports no external device if the file is absent, damaged or stale. A provider cannot make Argent fail.
+
+## What the agent sees
+
+An external device appears in `list-devices` with the other devices. Its id starts with `ext:`. The entry contains these additional fields.
+
+| Field          | Content                                                                        |
+| -------------- | ------------------------------------------------------------------------------ |
+| `external`     | Always `true`. It marks the device as the device of a provider.                |
+| `provider`     | The id and the name of the provider, and the project that the provider opened. |
+| `capabilities` | The mechanisms that the provider granted for this device.                      |
+
+The agent drives an external device with the usual tools. Two rules are different:
+
+- The agent selects the device whose `provider.workspace.path` is equal to the project of the agent.
+- The agent does not call `boot-device`. The provider owns the lifecycle of the device.
+
+Argent sends these rules to the agent in the result of `list-devices`, and only when the list contains an external device. An installation without a provider receives no text about this feature.
+
+## Capabilities
+
+Each token grants one mechanism. Argent refuses a tool that needs a mechanism that the provider withheld. The message names the provider and its support URL.
+
+| Token              | Argent may                                                          |
+| ------------------ | ------------------------------------------------------------------- |
+| `simulator-server` | attach to `apiUrl` and `streamUrl` for input, screenshots and video |
+| `simctl`           | run `xcrun simctl` verbs                                            |
+| `adb`              | drive `nativeId` as an adb serial                                   |
+| `ax-service`       | start the accessibility service in the simulator                    |
+| `native-profiler`  | profile the app with Instruments or Perfetto                        |
+| `js-debugger`      | attach a debugger client to the JavaScript runtime                  |
+| `native-devtools`  | inject the native inspection agent (iOS only)                       |
+
+Argent ignores an unknown token. Thus a provider can declare a capability of a newer Argent version.
+
+Argent uses `native-devtools` on iOS only. `argent providers check` reports an error for an Android device that declares this token.
+
+### One grant, both names of the device
+
+A device has two names. The first name is the `ext:` id. The second name is the real udid or serial. The agent sees both names, because the `ext:` id contains the real name.
+
+Argent applies a grant to the device, not to one name of the device. Argent refuses a withheld mechanism under both names. A provider does not have to hide the real name of its device.
+
+### A provider can change a grant at any moment
+
+Argent reads the file of the provider again on every call. A provider can narrow a grant, or withdraw a device, while an agent works.
+
+The next call uses the new declaration. Argent also removes the handles that it holds for the device, under both names. A narrowed grant takes effect immediately.
+
+Argent tries to remove every handle. If one handle does not close, Argent stops the call and reports an error. Argent does not send the call to a service that the provider withdrew.
+
+## Limits that Argent applies to itself
+
+Argent never starts, restarts or shuts down the device of a provider. `boot-device` refuses the device, also under its real udid or serial. `stop-simulator-server` stops no server of the provider. It removes the handles that Argent holds.
+
+Argent never removes the file of a provider. Argent uses only the endpoints that its own simulator-server build supplies.
+
+Argent does not adopt a physical iPhone that a provider offers. Argent drives an iPhone through its own `devicectl` backend, which reaches the hardware directly and so passes the simulator-server of the provider and the grants of the descriptor. Argent refuses such a device instead and `argent providers check` reports it. Simulators and Android devices, physical ones included, are unaffected.
+
+Argent examines the booted simulators and injects its own native agent into them. A provider that boots a simulator can publish its descriptor a moment later. Argent can inject in this interval.
+
+Argent removes that injection when it reads the new descriptor. Argent removes only its own library and its own endpoint variable. Argent keeps the entries of a different application. Then Argent uses the socket of the provider, if the provider grants `native-devtools`.
+
+## Commands
+
+| Command                             | Description                                                         |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| `argent providers list`             | Show the devices that Argent sees at this moment                    |
+| `argent providers check`            | Validate every registered provider against the contract             |
+| `argent providers check --file <p>` | Validate one descriptor file                                        |
+| `argent providers publish`          | Write a descriptor for a provider                                   |
+| `argent providers withdraw <id>`    | Remove the descriptor of a provider                                 |
+| `argent providers prune`            | Remove the descriptors of every provider whose process is not alive |
+
+`argent providers publish` also removes the descriptors of your own crashed instances. It finds them by the first segment of your provider id. Thus a provider that publishes on each device change needs no scheduled cleanup. Publish never removes the descriptor of a different provider. Only `argent providers prune` does that, because the user asks for it.
+
+Run `argent providers check` in your continuous integration if you write a provider. The command uses the same validators as the tool-server. Thus your implementation and Argent cannot diverge without a signal.
+
+Set `ARGENT_DISABLE_DEVICE_PROVIDERS=1` to switch off this feature.

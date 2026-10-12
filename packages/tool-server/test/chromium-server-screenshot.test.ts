@@ -42,7 +42,8 @@ describe("chromium-server/screenshot", () => {
 
   it("calls Page.captureScreenshot with format png + no captureBeyondViewport", async () => {
     const cdp = stubCdp();
-    await captureScreenshot({ cdp, deviceId: "test" });
+    const out = await captureScreenshot({ cdp, deviceId: "test" });
+    filesToCleanup.push(out.path);
     const send = (cdp as unknown as { send: ReturnType<typeof vi.fn> }).send;
     expect(send).toHaveBeenCalledWith("Page.captureScreenshot", {
       format: "png",

@@ -1,15 +1,11 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { PERMISSION_ACTIONS, PERMISSION_NAMES } from "./types";
 import type { SettingsPermissionsResult, SettingsPermissionsServices } from "./types";
 import { iosImpl, iosRemoteImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
-
-// Mirrors launch-app / restart-app: the leading-letter rule stops a bundleId
-// like `--user` masquerading as a flag in `pm …`. shellQuote is the real
-// injection guard; this is defense in depth.
-const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
   udid: z
@@ -28,7 +24,7 @@ const zodSchema = z.object({
     ),
   bundleId: z
     .string()
-    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
       "App to change the permission for — required for every action. iOS: bundle id (e.g. com.example.app). Android: package name. `reset` is per-app too: simctl's device-wide reset (no bundleId) silently leaves existing per-app grants untouched on recent iOS, so the permission is always reset for this one app."
     ),

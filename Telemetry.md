@@ -1,6 +1,6 @@
 # Argent Privacy Notice (Telemetry)
 
-Effective date: 31 July 2026 · Version: 1.03
+Effective date: 7 September 2026 · Version: 1.04
 
 This notice is a product-specific supplement to the [Software Mansion Privacy Policy](https://swmansion.com/) (the "Policy") and applies to telemetry collected by Argent, a Software Mansion Software Product. Capitalised terms used but not defined here (including Personal Data, Usage Data, Legitimate Interest, EEA and Software Mansion Software Product) have the meaning given to them in the Policy. Where this notice and the Policy differ in respect of Argent telemetry, this notice prevails.
 
@@ -63,7 +63,8 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 
 - Argent version, Node.js version, operating system, processor architecture;
 - whether the process runs in an interactive terminal and whether it runs in a CI environment;
-- whether Argent is used in connection with Android, iOS, tvOS (Apple TV), Android TV, VegaOS, or a Chromium-based target.
+- whether Argent is used in connection with Android, iOS, tvOS (Apple TV), Android TV, VegaOS, or a Chromium-based target, and whether that target is a simulator or emulator, a virtual device, a physical device, or a desktop application. This category is inferred from the form of the device identifier; the identifier itself is never recorded;
+- when a device is supplied by an external device provider, a short label for that provider (the leading segment of the name the provider registers under), never the identifier of the device it supplies.
 
 ### Diagnostics
 

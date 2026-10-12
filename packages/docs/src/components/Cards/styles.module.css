@@ -1,0 +1,75 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+
+.card,
+:global(.markdown) .card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  border-radius: var(--swm-radius);
+  border: none;
+  background-color: var(--swm-off-background);
+  color: var(--ifm-font-color-base);
+  font-weight: 400;
+  text-decoration: none;
+}
+
+/*
+ * `.markdown a` gives every link in the article a bottom border and underlines
+ * the code inside it. The card is a flat surface, so both are switched off.
+ */
+.card:hover,
+.card:focus-visible,
+:global(.markdown) .card:hover {
+  color: var(--ifm-font-color-base);
+  text-decoration: none;
+}
+
+:global(.markdown) .card code {
+  text-decoration: none;
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--swm-sidebar-icon-color);
+  outline-offset: 2px;
+}
+
+.icon {
+  flex-shrink: 0;
+  color: var(--swm-sidebar-icon-color);
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--swm-body-font);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.arrow {
+  flex-shrink: 0;
+  color: var(--swm-sidebar-icon-color);
+  transition: transform 0.15s;
+}
+
+.card:hover .arrow {
+  transform: translateX(3px);
+}
+
+.description {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--swm-navy-light-60);
+}
+
+:root[data-theme="dark"] .description {
+  color: var(--swm-navy-dark-40);
+}

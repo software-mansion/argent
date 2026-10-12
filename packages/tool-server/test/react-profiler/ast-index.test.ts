@@ -1,8 +1,20 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { afterEach, describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { buildAstIndexWithDiagnostics } from "../../src/utils/react-profiler/pipeline/06-resolve/ast-index";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 /**
  * react-profiler-component-source returned found:false for every component in a
@@ -15,7 +27,7 @@ import { buildAstIndexWithDiagnostics } from "../../src/utils/react-profiler/pip
  */
 describe("buildAstIndexWithDiagnostics", () => {
   it("indexes export-default-function, plain-function, and arrow TSX components", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-"));
+    const dir = makeTempDir("ast-index-");
     mkdirSync(join(dir, "components"), { recursive: true });
     writeFileSync(
       join(dir, "components", "foo.tsx"),
@@ -43,7 +55,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     // entirely and returned found:false — and profiler findings are
     // disproportionately memo-wrapped. memo => isMemoized true; forwardRef alone
     // => false.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-wrap-"));
+    const dir = makeTempDir("ast-index-wrap-");
     mkdirSync(join(dir, "components"), { recursive: true });
     writeFileSync(
       join(dir, "components", "wrapped.tsx"),
@@ -74,7 +86,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     // were thrown away, so a lookup could hand back the wrong platform variant's
     // source. Now the base file is the deterministic primary and the variants
     // are surfaced under otherMatches.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-dup-"));
+    const dir = makeTempDir("ast-index-dup-");
     mkdirSync(join(dir, "components"), { recursive: true });
     const base = join(dir, "components", "List.tsx");
     const web = join(dir, "components", "List.web.tsx");
@@ -96,7 +108,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     // Only platform variants — there is no base file to prefer, so the tie
     // breaks on path (walk-order independent) rather than whatever the directory
     // happened to yield first.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-dup2-"));
+    const dir = makeTempDir("ast-index-dup2-");
     mkdirSync(join(dir, "components"), { recursive: true });
     const android = join(dir, "components", "List.android.tsx");
     const ios = join(dir, "components", "List.ios.tsx");
@@ -112,7 +124,7 @@ describe("buildAstIndexWithDiagnostics", () => {
   });
 
   it("omits otherMatches when a component name is unique", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-uniq-"));
+    const dir = makeTempDir("ast-index-uniq-");
     writeFileSync(join(dir, "Solo.tsx"), `export function Solo() { return <View>x</View>; }\n`);
 
     const res = await buildAstIndexWithDiagnostics(dir);
@@ -126,7 +138,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     // (not an inline `const X = memo(...)`). The decoy `memo(Ghost)` lives only
     // in a comment and a string literal — tree-sitter never emits a call node
     // there, so Ghost stays unmemoized. The old raw-source regex flagged it.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-memo-ref-"));
+    const dir = makeTempDir("ast-index-memo-ref-");
     mkdirSync(join(dir, "components"), { recursive: true });
     writeFileSync(
       join(dir, "components", "ref.tsx"),

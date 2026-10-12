@@ -10,6 +10,40 @@ and position).
 - `reference/` holds the **hard technical details**: tool names, parameters, values,
   limits and exact behaviour.
 
+## Products
+
+The site documents more than one product. `products.js` lists them, and the sidebar
+switcher at the top of the docs sidebar (`src/theme/ProductSwitcher/`) shows them in that
+order.
+
+- **Argent** is the `default` product. Its pages live at the root of `docs/` and
+  its URLs at `/docs/...`.
+- **Argent Cloud** lives in `docs/cloud/` with URLs at `/docs/cloud/...`.
+
+Every product is its own docs plugin instance with the same options and the same
+`sidebars.js`. Every product has `fundamentals/` and `reference/`. The middle section depends
+on the product: `features/` for a product with many capabilities, `guides/` for a product with
+one capability and several user tasks. `docusaurus.config.js` builds the instances from
+`products.js`, so a product folder holds content only.
+
+Argent Cloud uses `fundamentals/`, `guides/`, `integrations/` and `reference/`:
+
+- `guides/` holds one page per user task on a hosted simulator, with the commands to run.
+  No exhaustive option tables; those stay in `reference/`.
+- `integrations/` holds one page per external tool (Argent, Maestro, Appium, GitHub
+  Actions) that mixes the concept with the exact options of that tool.
+
+To add a product:
+
+1. Add an entry to `products.js` with an `id`, a `label`, a `dir` under `docs/` and a
+   `routeBasePath` under `docs/`. The shared theme treats a route as documentation only
+   when it starts with `/docs`, and its llms.txt plugin only walks `docs/`.
+2. Create the folder with at least `fundamentals/` and `reference/` categories, plus
+   `features/` or `guides/`, and at least one page in each.
+
+Links between pages are absolute from the site root: `/docs/...` for the toolkit and
+`/docs/cloud/...` for Argent Cloud.
+
 ## Writing style
 
 All prose in `docs/` is written in **Simplified Technical English (ASD-STE100)**:
@@ -24,6 +58,11 @@ All prose in `docs/` is written in **Simplified Technical English (ASD-STE100)**
 - Put parallel items in a list or a table instead of a sentence with subordinate clauses.
 
 `docs/features/network.mdx` is the reference for the target style.
+
+## Verify claims
+
+Check every factual claim against the code or the repository before writing it. Do not cite
+the check in the prose.
 
 ## Adding a page
 
