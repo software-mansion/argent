@@ -3,8 +3,6 @@ name: argent-react-native-profiler
 description: Profile a React Native Hermes app to measure re-render and CPU performance using argent profiler tools. Use when optimizing for performance, measuring before/after a fix, spotting slow components, diagnosing re-renders, checking CPU hotspots, or producing a ranked issue report.
 ---
 
-This skill is complementary to `argent-react-native-optimization`, not a replacement for it.
-
 Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Profile on a simulator.
 
 ## 2. Tool Overview
@@ -37,9 +35,7 @@ For native profiling (CPU hotspots, UI hangs, memory leaks), see the `argent-nat
 
 ## 3. Agent Behavior Guidelines
 
-Follow these rules throughout the profiling workflow:
-
-- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message). Both need `device_id`; use the same UDID for both so their data can be correlated later. This gives best coverage.
+- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message). Both need `device_id`; use the same UDID for both so their data can be correlated later.
 - If the user only wants native profiling, use the `argent-native-profiler` skill workflow. Only skip `native-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
 
 ### After analysis: ask about next steps
@@ -66,7 +62,7 @@ When you apply a fix, always re-profile the same scenario afterward. Compare bef
 
 ### Use flows for reproducible profiling
 
-When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as a flow** using the `argent-create-flow` skill before the first profiling run. Then replay the same flow for every subsequent run. This eliminates interaction variance as a confounder and makes before/after comparisons meaningful. Especially important when:
+When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as a flow** using the `argent-create-flow` skill before the first profiling run. Then replay the same flow for every subsequent run. Especially important when:
 
 - You are about to re-profile after applying a fix (Step 8).
 - The user asks you to compare multiple profiling sessions.
@@ -80,7 +76,7 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 
 ### Step 1: Start profiling
 
-Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it for annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
+Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it for annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. On success:
 
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-device-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
@@ -109,15 +105,13 @@ The analyze report includes **CPU hotspots per commit** — showing exactly whic
 
 ### Step 4: Assess results
 
-Analyze whether the results give you a proper image of what is wrong with the application - **do not assume improvement always exists**, verify results logically with reference to how react-native works. Make sure to give honest feedback and be ready to change the approach if needed.
+Analyze whether the results give you a proper image of what is wrong with the application - **do not assume improvement always exists**, verify results logically with reference to how react-native works.
 
 ### Step 5: Present findings and ask about next steps
 
 Present a concise summary of the key findings - present whether possibilities for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline — ask whether to investigate further, implement fixes (if available), or stop.
 
-### Step 6: Drill-down investigation (iterative)
-
-Based on findings from the report, use query tools to investigate deeper:
+### Step 6: Drill-down investigation based on findings from the report (iterative)
 
 - **Slow component?** -> `profiler-cpu-query` mode=`component_cpu` component_name=`AppNavigator` — shows what JS functions ran during that component's commits.
 - **Want to see the call tree?** -> `profiler-cpu-query` mode=`call_tree` function_name=`expensiveFunction` — shows callers and callees.
