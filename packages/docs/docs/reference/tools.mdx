@@ -59,6 +59,8 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
+In an Expo development build on iOS, a floating Tools button can cover app controls near the top-right corner. Its touch area is larger than its icon. The element tree adds a note to each element under that area, because a tap there can open the Expo developer menu. To remove the button, turn off **Tools button** in that menu.
+
 `ui-tree` and `foreground-app` are hidden from MCP; call them with the [Argent SDK](./node-client.mdx), which exports their `UiTree` and `ForegroundApp` result types. Fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.
 
 ## Interacting

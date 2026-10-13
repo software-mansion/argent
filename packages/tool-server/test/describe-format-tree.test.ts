@@ -603,3 +603,62 @@ describe("formatDescribeTree", () => {
     expect(out).toMatch(/Button\s+"Like"/);
   });
 });
+
+describe("formatDescribeTree — Expo dev Tools button", () => {
+  const node = (role: string, x: number, y: number, w: number, h: number, extra = {}) => ({
+    role,
+    frame: { x, y, width: w, height: h },
+    children: [],
+    ...extra,
+  });
+  // Frames from an Expo app's list screen in a dev build.
+  const root = {
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      node("AXGroup", 0.861, 0.071, 0.1, 0.047, { identifier: "list-settings-button" }),
+      node("AXGroup", 0.746, 0.071, 0.1, 0.047, { identifier: "list-invites-button" }),
+      node("AXImage", 0.866, 0.11, 0.065, 0.03, {
+        identifier: "gearshape.fill",
+        label: "gearshape.fill",
+      }),
+      node("AXTextField", 0.07, 0.133, 0.861, 0.046, { identifier: "list-search-input" }),
+    ],
+  };
+
+  it("marks a control whose centre is under the button", () => {
+    const out = formatDescribeTree(root as any, { source: "ax-service" });
+    const settings = out.split("\n").find((l) => l.includes("list-settings-button"))!;
+    expect(settings).toContain("under the Expo dev Tools button");
+    expect(settings).toContain("'Tools button'");
+  });
+
+  it("leaves controls whose centre is clear alone", () => {
+    const out = formatDescribeTree(root as any, { source: "ax-service" });
+    for (const id of ["list-invites-button", "list-search-input"]) {
+      expect(out.split("\n").find((l) => l.includes(id))).not.toContain("Expo");
+    }
+  });
+
+  it("ignores the dev launcher's Settings tab icon", () => {
+    // Frames from the Expo dev launcher's home screen.
+    const launcher = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        node("AXGroup", 0, 0.905, 1, 0.095, { label: "Tab Bar" }),
+        node("AXButton", 0.597, 0.91, 0.234, 0.062, { label: "Settings" }),
+        node("AXImage", 0.679, 0.916, 0.07, 0.032, {
+          identifier: "gearshape.fill",
+          label: "gearshape.fill",
+        }),
+      ],
+    };
+    expect(formatDescribeTree(launcher as any, { source: "ax-service" })).not.toContain("Expo");
+  });
+
+  it("adds nothing without the button", () => {
+    const plain = { ...root, children: root.children.filter((n) => n.role !== "AXImage") };
+    expect(formatDescribeTree(plain as any, { source: "ax-service" })).not.toContain("Expo");
+  });
+});
