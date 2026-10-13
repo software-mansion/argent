@@ -25,6 +25,7 @@ import {
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
+import { TAIL_MAX } from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -369,5 +370,102 @@ describe("a debugger session whose app crashed", () => {
     expect(emptyRead.note).toBeUndefined();
     expect(reconnect.note).toBeUndefined();
     await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`);
+  });
+});
+
+describe("debugger-log-registry tail", () => {
+  beforeEach(async () => {
+    // A session another case connected under a different id still answers to
+    // LOGICAL_ID, so drop every debugger before reading this one.
+    for (const urn of registry.getSnapshot().services.keys()) {
+      if (urn.startsWith("JsRuntimeDebugger:")) await registry.disposeService(urn).catch(() => {});
+    }
+  });
+
+  async function connectWith(
+    entries: Array<{ level: string; message: string; url?: string }>
+  ): Promise<void> {
+    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: LOGICAL_ID });
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:${LOGICAL_ID}`
+    );
+    entries.forEach(({ level, message, url }, i) =>
+      api.logWriter.write({
+        id: i,
+        timestamp: new Date(1710000000000 + i * 1000).toISOString(),
+        level,
+        message,
+        ...(url
+          ? {
+              stackTrace: {
+                callFrames: [
+                  { functionName: "f", scriptId: "1", url, lineNumber: 7, columnNumber: 0 },
+                ],
+              },
+            }
+          : {}),
+      })
+    );
+  }
+
+  type Entry = { level: string; message: string; sourceFile?: string; sourceLine?: number };
+  const read = (extra: Record<string, unknown>) =>
+    registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+      ...extra,
+    }) as Promise<{ totalEntries: number; entries?: Entry[] }>;
+
+  it("returns the newest entries inline, filtered by level", async () => {
+    await connectWith(
+      Array.from({ length: 6 }, (_, i) => ({
+        level: i % 2 ? "warning" : "log",
+        message: `entry ${i}`,
+      }))
+    );
+
+    const result = await read({ tail: 2, levels: ["warning"] });
+
+    expect(result.totalEntries).toBe(6);
+    expect(result.entries?.map((e) => e.message)).toEqual(["entry 3", "entry 5"]);
+  });
+
+  it("returns every level when levels is left out", async () => {
+    await connectWith([
+      { level: "log", message: "a" },
+      { level: "error", message: "b" },
+      { level: "warning", message: "c" },
+    ]);
+
+    const result = await read({ tail: 2 });
+
+    expect(result.entries?.map((e) => e.message)).toEqual(["b", "c"]);
+  });
+
+  it("keeps a message with a carriage return and names where it was logged", async () => {
+    await connectWith([
+      { level: "warning", message: "a\r\nb", url: "http://localhost:8081/src/app.js" },
+    ]);
+
+    const result = await read({ tail: 1 });
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({ message: "a\r\nb", sourceFile: "src/app.js", sourceLine: 7 }),
+    ]);
+  });
+
+  it("leaves entries out when tail is not passed", async () => {
+    await connectWith([{ level: "log", message: "a" }]);
+    expect((await read({})).entries).toBeUndefined();
+  });
+
+  it.each([
+    ["an unknown level", { tail: 3, levels: ["warn"] }],
+    ["an empty levels list", { tail: 3, levels: [] }],
+    ["levels without tail", { levels: ["warning"] }],
+    ["a tail above the cap", { tail: TAIL_MAX + 1 }],
+  ])("rejects %s instead of returning no entries", async (_, extra) => {
+    await connectWith([{ level: "warning", message: "a" }]);
+    await expect(read(extra)).rejects.toThrow();
   });
 });

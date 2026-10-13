@@ -1,6 +1,12 @@
 import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
+import {
+  TAIL_MAX,
+  TAIL_MESSAGE_CHARS,
+  type LogStats,
+  type MessageCluster,
+  type TailEntry,
+} from "../../utils/debugger/log-file-writer";
 import { DEBUGGER_TOOL_CAPABILITY } from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
@@ -16,6 +22,8 @@ import {
 interface LogRegistryResponse extends LogStats {
   status: "connected";
   clusters: MessageCluster[];
+  /** The newest `tail` entries (optionally filtered by level), oldest first. */
+  entries?: TailEntry[];
   deviceName: string;
   appName: string;
   logicalDeviceId: string | undefined;
@@ -27,14 +35,53 @@ interface LogRegistryResponse extends LogStats {
   note?: string;
 }
 
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: z
-    .string()
-    .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
-    ),
-});
+const CONSOLE_LEVELS = [
+  "log",
+  "info",
+  "debug",
+  "warning",
+  "error",
+  "assert",
+  "trace",
+  "dir",
+  "dirxml",
+  "table",
+  "clear",
+  "count",
+  "timeEnd",
+  "startGroup",
+  "startGroupCollapsed",
+  "endGroup",
+  "profile",
+  "profileEnd",
+] as const;
+
+const zodSchema = z
+  .object({
+    port: metroPortField,
+    device_id: z
+      .string()
+      .describe(
+        "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+      ),
+    tail: z
+      .number()
+      .int()
+      .min(1)
+      .max(TAIL_MAX)
+      .optional()
+      .describe(
+        `Also return the newest N entries (oldest first, each message cut at ${TAIL_MESSAGE_CHARS} chars, with its source file and line when known), so you can read the logs without opening the file. At most ${TAIL_MAX}.`
+      ),
+    levels: z
+      .array(z.enum(CONSOLE_LEVELS))
+      .min(1)
+      .optional()
+      .describe('Only with tail: keep entries of these levels, e.g. ["warning","error"].'),
+  })
+  .refine((p) => !p.levels || p.tail !== undefined, {
+    message: "levels filters the tail entries, so pass tail too (e.g. tail: 20).",
+  });
 
 export function createDebuggerLogRegistryTool(
   registry: Registry
@@ -51,7 +98,7 @@ export function createDebuggerLogRegistryTool(
     },
     description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet — but check { note }, which is present only when the stats are empty BECAUSE the previous debugger session ended: torn down (e.g. by stop-all-simulator-servers) with its log file deleted, or cut off by the app crashing with its log file kept at the path the note names. Absent that note, empty really does mean the app has logged nothing.
+Use when investigating warnings, errors, or unexpected output — call this first for an overview. Pass tail (and optionally levels) to get the newest entries in the result itself, since the log file may sit outside the directories you can read; read the returned file only when you need more than that. Returns empty stats if no log data has been captured yet — but check { note }, which is present only when the stats are empty BECAUSE the previous debugger session ended: torn down (e.g. by stop-all-simulator-servers) with its log file deleted, or cut off by the app crashing with its log file kept at the path the note names. Absent that note, empty really does mean the app has logged nothing.
 When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } with NO log file — follow the guidance (do not retry in a loop). Read a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died — use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
@@ -67,10 +114,15 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
         const clusters = api.logWriter.getClusters(20);
 
         trackDebuggerOutcome("debugger-log-registry", "connected", params, ctx);
+        const entries =
+          params.tail !== undefined
+            ? api.logWriter.tail({ levels: params.levels, limit: params.tail })
+            : undefined;
         const response: LogRegistryResponse = {
           status: "connected" as const,
           ...stats,
           clusters,
+          ...(entries ? { entries } : {}),
           deviceName: api.deviceName,
           appName: api.appName,
           logicalDeviceId: api.logicalDeviceId,

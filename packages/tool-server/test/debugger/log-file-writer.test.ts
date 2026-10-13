@@ -3,7 +3,12 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
+import {
+  LogFileWriter,
+  TAIL_MAX,
+  TAIL_MESSAGE_CHARS,
+  type RichLogEntry,
+} from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
 scopeTempHome("argent-log-writer-home-");
@@ -159,39 +164,39 @@ describe("LogFileWriter", () => {
     expect(entries[2].id).toBe(2);
   });
 
-  it("readFiltered() filters by level", () => {
-    writer.write(makeEntry(0, { level: "log" }));
-    writer.write(makeEntry(1, { level: "error" }));
-    writer.write(makeEntry(2, { level: "log" }));
-    writer.write(makeEntry(3, { level: "error" }));
-
-    const { entries, total } = writer.readFiltered({ level: "error" });
-    expect(total).toBe(2);
-    expect(entries).toHaveLength(2);
-    expect(entries.every((e) => e.level === "error")).toBe(true);
-  });
-
-  it("readFiltered() limits results to last N", () => {
-    for (let i = 0; i < 10; i++) {
-      writer.write(makeEntry(i));
-    }
-
-    const { entries, total } = writer.readFiltered({ limit: 3 });
-    expect(total).toBe(10);
-    expect(entries).toHaveLength(3);
-    expect(entries[0].id).toBe(7);
-    expect(entries[2].id).toBe(9);
-  });
-
-  it("readFiltered() combines level and limit", () => {
+  it("tail() keeps the newest entries of the given levels, oldest first", () => {
     for (let i = 0; i < 10; i++) {
       writer.write(makeEntry(i, { level: i % 2 === 0 ? "error" : "log" }));
     }
 
-    const { entries, total } = writer.readFiltered({ level: "error", limit: 2 });
-    expect(total).toBe(5);
-    expect(entries).toHaveLength(2);
-    expect(entries.every((e) => e.level === "error")).toBe(true);
+    expect(writer.tail({ levels: ["error"], limit: 2 }).map((e) => e.id)).toEqual([6, 8]);
+    expect(writer.tail({ limit: 3 }).map((e) => e.id)).toEqual([7, 8, 9]);
+  });
+
+  it("tail() still finds an error buried under more than TAIL_MAX logs", () => {
+    writer.write(makeEntry(0, { level: "error" }));
+    for (let i = 1; i <= TAIL_MAX + 5; i++) writer.write(makeEntry(i));
+
+    expect(writer.tail({ levels: ["error"], limit: 5 }).map((e) => e.id)).toEqual([0]);
+    expect(writer.tail({ limit: TAIL_MAX })).toHaveLength(TAIL_MAX);
+  });
+
+  it("tail() keeps the newest entries after the file stops at 50,000", () => {
+    for (let i = 0; i < 50_003; i++) writer.write(makeEntry(i, { message: "m" }));
+
+    expect(writer.getStats().totalEntries).toBe(50_000);
+    expect(writer.tail({ limit: 3 }).map((e) => e.id)).toEqual([50_000, 50_001, 50_002]);
+  });
+
+  it("tail() cuts long messages without splitting a surrogate pair", () => {
+    const pad = "x".repeat(TAIL_MESSAGE_CHARS - 1);
+    writer.write(makeEntry(0, { message: `${pad}\u{1F600}tail` }));
+    writer.write(makeEntry(1, { message: "y".repeat(TAIL_MESSAGE_CHARS + 50) }));
+
+    const [emoji, long] = writer.tail({ limit: 2 }).map((e) => e.message);
+    expect(emoji).toBe(`${pad}…`);
+    expect(emoji.isWellFormed()).toBe(true);
+    expect(long).toBe(`${"y".repeat(TAIL_MESSAGE_CHARS)}…`);
   });
 
   it("close() deletes the file", () => {
