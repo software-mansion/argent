@@ -44,6 +44,8 @@ beforeEach(() => {
   process.env.USERPROFILE = homeDir;
   process.chdir(projectDir);
   _resetConsentCacheForTest();
+  vi.stubEnv("DO_NOT_TRACK", undefined);
+  vi.stubEnv("ARGENT_TELEMETRY", undefined);
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -58,6 +60,7 @@ afterEach(() => {
   if (originalUserProfile === undefined) delete process.env.USERPROFILE;
   else process.env.USERPROFILE = originalUserProfile;
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   _resetConsentCacheForTest();
   fs.rmSync(homeDir, { recursive: true, force: true });
   fs.rmSync(projectDir, { recursive: true, force: true });

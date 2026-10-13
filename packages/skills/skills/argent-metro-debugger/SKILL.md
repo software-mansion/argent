@@ -67,9 +67,9 @@ With two or more devices on one Metro, `debugger-connect` refuses a udid/serial 
 
 ### `includeSkipped` guidance
 
-Set to `true` only when debugging filter behavior, e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
+On `debugger-component-tree` it only appends a short per-name count of what was pruned and names no node; for a missing component use `onScreenOnly: false` or `debugger-inspect-element`. On `debugger-inspect-element` it keeps filtered items (`skipped: true` + `skipReason`); set it only when debugging filter behavior.
 
-> **Warning:** Output can be very large. Always combine with `maxNodes` (component-tree) or `maxItems` (inspect-element) and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without a limit on large apps.
+> **Warning:** On `debugger-inspect-element` output can be very large. Combine it with `maxItems` and raise it incrementally (e.g., start at 50, then grow).
 
 ---
 
