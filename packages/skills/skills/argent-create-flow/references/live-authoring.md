@@ -161,12 +161,12 @@ A wait inside `run-sequence` gets no recorder warning. Inspect the nested result
 The live tool and flow runner use [different trees](flow-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree:
 
 - No warning: The condition holds on both trees.
-- Mismatch: For `text`, first rule out a selector that matches more than one element. Then rule out a changed screen. If the trees really differ, use a runner-tree selector and replay.
+- Mismatch: For `text`, first rule out a selector that matches more than one element. Then rule out a changed screen. If the trees really differ, keep the raw `await-ui-element` step: it replays on the tree it passed on.
 - Unreadable, slow, or cancelled check: The conversion is unknown. Restore the source or re-record before conversion.
 
 A warning does not reject the step. `flow-finish-recording` repeats each warning below its step and reports dropped warnings.
 
-Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports drops, record the waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs` or `bundleId`.
+Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports drops, record the waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs`, `bundleId`, or a cross-tree mismatch.
 
 ### Wrong turns
 
