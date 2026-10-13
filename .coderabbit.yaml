@@ -1,3 +1,11 @@
 reviews:
   profile: assertive
   high_level_summary: false
+  review_status: false
+  auto_review:
+    enabled: false
+chat:
+  auto_reply: false
+issue_enrichment:
+  planning:
+    enabled: false
