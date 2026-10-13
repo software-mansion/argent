@@ -33,7 +33,7 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
     isAppRunning: async (bundleId) => byBundleId.has(bundleId),
     listConnectedBundleIds: () => [...byBundleId.keys()],
     appConnectionState: async () => "connected",
-    activateNetworkInspection: () => {},
+    activateNetworkInspection: () => false,
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
     getAppState: async (bundleId) => {

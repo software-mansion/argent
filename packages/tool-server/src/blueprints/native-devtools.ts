@@ -482,9 +482,9 @@ export interface NativeDevtoolsApi {
   /**
    * Activates NSURLProtocol network interception for a specific app. Idempotent,
    * and sticky: re-enabled automatically when the app reconnects after a
-   * relaunch.
+   * relaunch. Returns true when this call is the one that turned it on.
    */
-  activateNetworkInspection(bundleId: string): void;
+  activateNetworkInspection(bundleId: string): boolean;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
   getAppState(bundleId: string): Promise<NativeAppState>;
@@ -1071,6 +1071,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       },
 
       activateNetworkInspection(bundleId) {
+        const startedNow = !activatedBundleIds.has(bundleId);
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
         if (conn) {
@@ -1081,6 +1082,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             }) + "\n"
           );
         }
+        return startedNow;
       },
 
       getNetworkLog: (bundleId) => [...(connections.get(bundleId)?.networkLog ?? [])],

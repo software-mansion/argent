@@ -75,7 +75,7 @@ function makeNativeApi(options: {
         await reverifyEnv();
         return options.state ?? (options.appRunning ? "stale_process" : "not_running");
       },
-      activateNetworkInspection: () => {},
+      activateNetworkInspection: () => false,
       getNetworkLog: () => [],
       clearNetworkLog: () => {},
       getAppState: async () => {
