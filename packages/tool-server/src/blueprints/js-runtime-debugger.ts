@@ -12,11 +12,13 @@ import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
+import { metroDeviceNamesFor } from "../utils/debugger/metro-device-name";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
   rememberLogicalKeyedDevice,
   forgetLogicalKeyedDevice,
+  isLogicalKeyedDevice,
 } from "../utils/debugger/device-alias";
 import { recordReapedSession } from "../utils/reaped-sessions";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
@@ -218,10 +220,32 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
       throw error;
     });
+    const isLogicalId = metro.targets.some((t) => t.reactNative?.logicalDeviceId === deviceId);
+    const deviceNames = isLogicalId ? undefined : await metroDeviceNamesFor(deviceId);
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
+      deviceNames,
     });
+    const selectedLogicalId = selected.target.reactNative?.logicalDeviceId;
+    // inspector-proxy keeps one debugger per device, so a second session on
+    // this target would evict the one keyed by its logicalDeviceId.
+    if (
+      selectedLogicalId &&
+      selectedLogicalId !== deviceId &&
+      isLogicalKeyedDevice(selectedLogicalId)
+    ) {
+      throw new FailureError(
+        `device_id "${deviceId}" is the app already connected as "${selectedLogicalId}" on ` +
+          `Metro port ${port}. Pass device_id "${selectedLogicalId}" to keep using that session.`,
+        {
+          error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+          failure_stage: "debugger_select_target",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
 
     /**
      * React Native's inspector-proxy keeps one debugger per device and

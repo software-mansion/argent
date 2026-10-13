@@ -51,8 +51,9 @@ export function forgetDeviceAlias(logicalDeviceId: string | undefined): void {
  * nothing to record, the two ids being one string.
  *
  * It happens once two or more devices share one Metro: `selectTarget` refuses to
- * guess which target a udid or serial means and makes the caller re-target with
- * the logicalDeviceId, so that is what the debugger service ends up keyed by.
+ * guess which target a serial (or an ambiguously named simulator) means and
+ * makes the caller re-target with the logicalDeviceId, so that is what the
+ * debugger service ends up keyed by.
  * Nothing joins such an id back to a device, so a teardown scoped to
  * `list-devices` ids cannot reach the session, and the caller's serial still
  * matches that device's other services, so the miss is invisible.

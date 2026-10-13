@@ -1,10 +1,25 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { scopeTempHome } from "../helpers/temp-home";
+
+const SIM_B = "BBBBBBBB-0000-0000-0000-000000000000";
+const SIM_C = "CCCCCCCC-0000-0000-0000-000000000000";
+const namesFor = vi.hoisted(() =>
+  vi.fn(async (deviceId: string) => {
+    const name = (
+      {
+        "CCCCCCCC-0000-0000-0000-000000000000": "iPhone 15",
+        "BBBBBBBB-0000-0000-0000-000000000000": "Pixel 9",
+      } as Record<string, string>
+    )[deviceId];
+    return name ? { name, forms: [name], bootedTwins: 0 } : undefined;
+  })
+);
+vi.mock("../../src/utils/debugger/metro-device-name", () => ({ metroDeviceNamesFor: namesFor }));
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
@@ -28,6 +43,7 @@ let registry: Registry;
 const DEVICES = [
   { logicalDeviceId: "logical-aaa", deviceName: "iPhone 16 Pro Max" },
   { logicalDeviceId: "logical-bbb", deviceName: "Pixel 9" },
+  { logicalDeviceId: "logical-ccc", deviceName: "iPhone 15" },
 ];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
@@ -124,5 +140,21 @@ describe("multi-device debugger routing (mock Metro, two devices)", () => {
     await expect(
       registry.invokeTool("debugger-connect", { port: mockPort, device_id: "not-a-real-device" })
     ).rejects.toThrow(/No debugger target matches device_id "not-a-real-device"/);
+  });
+
+  it("resolves a simulator UDID to its own device by name", async () => {
+    const c = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: SIM_C,
+    })) as Record<string, unknown>;
+    expect(c.logicalDeviceId).toBe("logical-ccc");
+    expect(namesFor).not.toHaveBeenCalledWith("logical-aaa");
+  });
+
+  it("refuses a UDID whose app is already debugged under its logicalDeviceId", async () => {
+    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: "logical-bbb" });
+    await expect(
+      registry.invokeTool("debugger-connect", { port: mockPort, device_id: SIM_B })
+    ).rejects.toThrow(/already connected as "logical-bbb"/);
   });
 });

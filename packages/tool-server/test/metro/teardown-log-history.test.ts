@@ -27,6 +27,11 @@ import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
 import { scopeTempHome } from "../helpers/temp-home";
 
+// A UUID-shaped device_id would otherwise run the host's `xcrun simctl`.
+vi.mock("../../src/utils/debugger/metro-device-name", () => ({
+  metroDeviceNamesFor: async () => undefined,
+}));
+
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
 // developer's real home.

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { selectTarget } from "../../src/utils/debugger/target-selection";
 import type { CDPTarget } from "../../src/utils/debugger/discovery";
+import type { MetroDeviceNames } from "../../src/utils/debugger/metro-device-name";
 
 function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
   return {
@@ -204,5 +205,120 @@ describe("selectTarget", () => {
 
     const result = selectTarget([t1, t2], 8081, { deviceId: "anything" });
     expect(result.target.id).toBe("second");
+  });
+});
+
+describe("selectTarget by simulator UDID (device name hint)", () => {
+  const a = makeTarget({
+    id: "a",
+    description: "React Native Bridgeless [C++ connection]",
+    deviceName: "bench-ARG-A",
+    appId: "com.example.app",
+    reactNative: { logicalDeviceId: "aaa" },
+  });
+  const b = makeTarget({
+    id: "b",
+    description: "React Native Bridgeless [C++ connection]",
+    deviceName: "bench-ARG-B",
+    appId: "com.example.app",
+    reactNative: { logicalDeviceId: "bbb" },
+  });
+  const hint = (name: string, extra: Partial<MetroDeviceNames> = {}): MetroDeviceNames => ({
+    name,
+    forms: [name],
+    bootedTwins: 0,
+    ...extra,
+  });
+  const failureOf = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (e) {
+      return { code: getFailureSignal(e)?.error_code, message: (e as Error).message };
+    }
+    throw new Error("expected selectTarget to throw");
+  };
+
+  it("resolves a UDID to its target on a shared Metro", () => {
+    const result = selectTarget([a, b], 8082, {
+      deviceId: "UDID-B",
+      deviceNames: hint("bench-ARG-B"),
+    });
+    expect(result.target.id).toBe("b");
+  });
+
+  it("refuses the only connected app when it is on another simulator, as no app connected", () => {
+    const f = failureOf(() =>
+      selectTarget([a], 8082, { deviceId: "UDID-B", deviceNames: hint("bench-ARG-B") })
+    );
+    expect(f.code).toBe(FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+    expect(f.message).toContain("bench-ARG-A");
+  });
+
+  it("refuses when another booted simulator has the same name, even if only one is on Metro", () => {
+    const f = failureOf(() =>
+      selectTarget([a, b], 8082, {
+        deviceId: "UDID-B-TWIN",
+        deviceNames: hint("bench-ARG-B", { bootedTwins: 1 }),
+      })
+    );
+    expect(f.code).toBe(FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH);
+    expect(f.message).toMatch(/same name/);
+    expect(f.message).not.toContain("bbb");
+  });
+
+  it("matches the name the way Metro parses it", () => {
+    const plus = makeTarget({ ...a, id: "p", deviceName: "Dev QA" });
+    const result = selectTarget([plus, b], 8082, {
+      deviceId: "UDID-P",
+      deviceNames: hint("Dev+QA", { forms: ["Dev+QA", "Dev QA"] }),
+    });
+    expect(result.target.id).toBe("p");
+  });
+
+  it("keeps the base rules on a legacy Metro that lists no device names", () => {
+    const legacy = makeTarget({
+      id: "legacy",
+      title: "React Native Experimental",
+      description: "",
+      webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=0&page=1",
+    });
+    const result = selectTarget([legacy], 8081, {
+      deviceId: "UDID-A",
+      deviceNames: hint("iPhone 14"),
+    });
+    expect(result.target.id).toBe("legacy");
+  });
+
+  it("lists the apps when two apps on one simulator report its name", () => {
+    const staging = makeTarget({
+      ...b,
+      id: "b2",
+      appId: "com.example.app.staging",
+      reactNative: { logicalDeviceId: "ccc" },
+    });
+    const f = failureOf(() =>
+      selectTarget([b, staging], 8081, { deviceId: "UDID-B", deviceNames: hint("bench-ARG-B") })
+    );
+    expect(f.code).toBe(FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH);
+    expect(f.message).toContain("com.example.app (bbb)");
+    expect(f.message).toContain("com.example.app.staging (ccc)");
+  });
+
+  it("flags legacy devices in the same-name listing", () => {
+    const legacy = (n: number) =>
+      makeTarget({
+        id: `l${n}`,
+        title: "React Native Experimental",
+        description: "",
+        deviceName: "iPhone 16 Pro",
+        webSocketDebuggerUrl: `ws://localhost:8081/inspector/debug?device=${n}&page=1`,
+      });
+    const f = failureOf(() =>
+      selectTarget([legacy(0), legacy(1)], 8081, {
+        deviceId: "UDID-X",
+        deviceNames: hint("iPhone 16 Pro"),
+      })
+    );
+    expect(f.message).toContain("iPhone 16 Pro (legacy inspector — no logicalDeviceId)");
   });
 });
