@@ -114,6 +114,10 @@ export interface AXFillResponse {
   cleared?: boolean;
   /** The focused element is no text input: a web date or time input. Nothing was changed. */
   unsupported?: boolean;
+  /** The text has a line break and the field holds one line. Nothing was changed. */
+  singleLine?: boolean;
+  /** The daemon or the app did not answer in time: the field may have changed. */
+  timedOut?: boolean;
 }
 
 export interface AXServiceApi {
@@ -607,16 +611,20 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           if (code === "unsupported_field") {
             return { focused: true, verified: false, unsupported: true };
           }
-          // The edit ran out of its budget, overlapped one that did, or threw:
-          // the field's state is unknown. A daemon that did not answer at all
-          // is the same verdict.
+          if (code === "single_line") return { focused: true, verified: false, singleLine: true };
+          // The edit ran out of its budget, overlapped one that did, or threw,
+          // or the selection never covered the text (nothing was edited): the
+          // field does not read back. A daemon that did not answer at all is
+          // the same verdict.
+          if (code === "fill_failed" || code === "select_failed") {
+            return { focused: true, verified: false };
+          }
           if (
             code === "fill_timeout" ||
             code === "fill_busy" ||
-            code === "fill_failed" ||
             getFailureSignal(err)?.error_code === FAILURE_CODES.AX_QUERY_TIMEOUT
           ) {
-            return { focused: true, verified: false };
+            return { focused: true, verified: false, timedOut: true };
           }
           throw err;
         }

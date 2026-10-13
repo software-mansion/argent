@@ -32,6 +32,20 @@ export function notVerifiedError(method: FillMethod, stage: string): FailureErro
   );
 }
 
+/** Same code as {@link notVerifiedError}: the device did not answer in time. */
+export function notAnsweredError(stage: string): FailureError {
+  return new FailureError(
+    "The device did not finish the fill in time. The field may have changed: read it before " +
+      "retrying.",
+    {
+      error_code: FAILURE_CODES.FILL_NOT_VERIFIED,
+      failure_stage: stage,
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
 export function unsupportedFieldError(detail: string, stage: string): InvalidToolInputError {
   return new InvalidToolInputError(
     `fill cannot set this field's text: ${detail}. Nothing was changed.`,

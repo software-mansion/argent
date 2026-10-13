@@ -90,11 +90,15 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 After the change, `fill` reads the field again. The result is `{ method, verified, length }`. The result never contains the text of the field.
 
-- `verified` is `true` when the field holds `text`. For a password field, `fill` compares only the length of the text.
+- `verified` is `true` when the field holds `text`. For a password field, `fill` compares only the length of the text. This includes a password input in Safari.
 - `verified` is `null` when `fill` cannot read the field. This occurs on a physical iPhone, and in some cases of the `keys` fallback below.
 - `length` is the number of UTF-16 code units in the field.
 
-When the field does not hold `text` after the change, `fill` fails with `FILL_NOT_VERIFIED`. `fill` does not try again with keys. For example, a single-line field removes a newline, and a number input refuses letters.
+When the field does not hold `text` after the change, `fill` fails with `FILL_NOT_VERIFIED`. `fill` does not try again with keys. For example, a number input refuses letters.
+
+A single-line field cannot hold a newline. When `text` has a newline and the field holds one line, `fill` fails with `FILL_UNSUPPORTED_FIELD` and does not change the field. `fill` can tell a single-line field on iOS (UIKit, SwiftUI, React Native, Safari), on Android (native fields, Chrome and WebView), and in Chromium. A Flutter text field does not report the number of lines. On a Flutter single-line field, `fill` changes the field and then fails with `FILL_NOT_VERIFIED`.
+
+A multi-line web editor (`contenteditable`) on iOS keeps one line break at the end of its text. `fill` ignores that line break, as Chromium does.
 
 `fill` presses keys only in these cases:
 
@@ -110,7 +114,7 @@ Other platform behavior:
 | Error code                       | Cause                                                                                                                                                                                                           |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `FILL_NO_FOCUSED_FIELD`          | No text field has keyboard focus. `fill` changed nothing                                                                                                                                                        |
-| `FILL_NOT_VERIFIED`              | The field does not hold `text` after the change, or the app did not answer in time                                                                                                                              |
+| `FILL_NOT_VERIFIED`              | The field does not hold `text` after the change. Or the device did not answer in time: then the field can have changed                                                                                          |
 | `FILL_UNSUPPORTED_FIELD`         | The field cannot take `text`: a date or time input, a disabled or read-only field, a newline for a single-line field, or a character that keys cannot type for an iOS secure text field. `fill` changed nothing |
 | `KEYBOARD_CHARACTER_UNSUPPORTED` | Only keys can fill the field, and `text` has a character that keys cannot type. `fill` changed nothing                                                                                                          |
 

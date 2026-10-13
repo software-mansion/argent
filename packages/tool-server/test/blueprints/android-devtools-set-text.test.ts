@@ -128,11 +128,53 @@ describe("android-devtools setText", () => {
     expect(await api.setText("x")).toBeNull();
   });
 
-  it("fails on any other helper error", async () => {
+  it.each([
+    [
+      "the RPC timed out",
+      () =>
+        new FailureError("AndroidDevtools RPC setText timed out after 14000ms", {
+          error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT,
+          failure_stage: "android_devtools_rpc_request",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }),
+    ],
+    [
+      "the helper's worker timed out",
+      () =>
+        new FailureError(
+          "com.argent.androiddevtools.SnapshotInstrumentation$HelperTimeoutException: Helper worker timed out after 12000 ms for method: setText",
+          {
+            error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
+            failure_stage: "android_devtools_rpc_response",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          }
+        ),
+    ],
+  ])("answers timedOut when %s", async (_name, error) => {
     answerSetText = async () => {
-      throw new Error("Helper worker timed out after 12000 ms for method: setText");
+      throw error();
     };
     const api = await start();
-    await expect(api.setText("x")).rejects.toThrow(/timed out/);
+    expect(await api.setText("x")).toEqual({ focused: true, verified: false, timedOut: true });
+  });
+
+  it("passes singleLine on", async () => {
+    answerSetText = async () => ({ focused: true, singleLine: true, verified: false });
+    const api = await start();
+    expect(await api.setText("a\nb")).toEqual({
+      focused: true,
+      verified: false,
+      singleLine: true,
+    });
+  });
+
+  it("fails on any other helper error", async () => {
+    answerSetText = async () => {
+      throw new Error("java.lang.IllegalStateException: UiAutomation not connected");
+    };
+    const api = await start();
+    await expect(api.setText("x")).rejects.toThrow(/not connected/);
   });
 });

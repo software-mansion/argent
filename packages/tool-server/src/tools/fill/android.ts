@@ -2,7 +2,13 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import { readAndroidUiTree } from "../ui-tree/android";
 import type { UiTree, UiTreeNode } from "../ui-tree";
-import { noFocusedFieldError, notVerifiedError, untypeableTextError } from "./errors";
+import {
+  noFocusedFieldError,
+  notAnsweredError,
+  notVerifiedError,
+  unsupportedFieldError,
+  untypeableTextError,
+} from "./errors";
 import { clearPairsFor, fillByAndroidKeys, typeableOnAndroid } from "./keys";
 import type { FillResult } from "./types";
 
@@ -30,6 +36,13 @@ export async function fillAndroid(
   const first = helper ? await helper.setText(text) : null;
   if (!helper || first === null) return fillWithKeys(registry, device, text, helper !== null);
   if (!first.focused) throw noFocusedFieldError("fill_android_no_focus");
+  if (first.singleLine) {
+    throw unsupportedFieldError(
+      "a single-line text field cannot hold a newline",
+      "fill_android_single_line"
+    );
+  }
+  if (first.timedOut) throw notAnsweredError("fill_android_timeout");
   if (first.verified) return { method: "helper", verified: true, length: first.length };
   throw notVerifiedError("helper", "fill_android_not_verified");
 }

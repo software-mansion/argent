@@ -4,6 +4,7 @@ import {
   TypedEventEmitter,
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   subprocessFailureMetadata,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -69,6 +70,10 @@ export interface SetTextResult {
   password?: boolean;
   /** Length of the text the node holds, in UTF-16 units. */
   length?: number;
+  /** The text has a line break and the node holds one line. Nothing was changed. */
+  singleLine?: boolean;
+  /** The helper did not answer in time: the field may have changed. */
+  timedOut?: boolean;
 }
 
 export interface AndroidDevtoolsApi {
@@ -512,6 +517,14 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         } catch (err) {
           // A helper older than 3 answers the dispatcher's own rejection.
           if (err instanceof Error && err.message.includes("Unknown method: setText")) return null;
+          // The RPC or the helper's worker ran out of time; the action may
+          // still have landed.
+          if (
+            getFailureSignal(err)?.error_code === FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT ||
+            (err instanceof Error && err.message.includes("Helper worker timed out"))
+          ) {
+            return { focused: true, verified: false, timedOut: true };
+          }
           throw err;
         }
         return {
@@ -520,6 +533,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           ...(typeof result.performed === "boolean" ? { performed: result.performed } : {}),
           ...(typeof result.password === "boolean" ? { password: result.password } : {}),
           ...(typeof result.length === "number" ? { length: result.length } : {}),
+          ...(result.singleLine === true ? { singleLine: true } : {}),
         };
       },
     };

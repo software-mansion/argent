@@ -7,6 +7,7 @@ import {
 } from "../../blueprints/ax-service";
 import {
   noFocusedFieldError,
+  notAnsweredError,
   notVerifiedError,
   unsupportedFieldError,
   untypeableTextError,
@@ -60,6 +61,13 @@ export async function fillIos(
       "fill_ios_unsupported_field"
     );
   }
+  if (first.singleLine) {
+    throw unsupportedFieldError(
+      "a single-line text field cannot hold a newline",
+      "fill_ios_single_line"
+    );
+  }
+  if (first.timedOut) throw notAnsweredError("fill_ios_timeout");
   if (first.verified) return { method: "accessibility", verified: true, length: first.length };
 
   if (first.secure) {

@@ -211,6 +211,18 @@ describe("fill page script", () => {
     }
   );
 
+  it("refuses a newline for an <input>, without touching it, and takes it in a textarea", async () => {
+    const page = makePage();
+    const input = control(page, "INPUT");
+    page.doc.activeElement = input;
+    await expect(runScript(page, "a\nb")).resolves.toMatchObject({ status: "unsupported" });
+    expect(input._value).toBe("old value");
+
+    const area = control(page, "TEXTAREA");
+    page.doc.activeElement = area;
+    await expect(runScript(page, "a\nb")).resolves.toMatchObject({ status: "ok", verified: true });
+  });
+
   it.each([
     ["disabled", { disabled: true }],
     ["read-only", { readOnly: true }],

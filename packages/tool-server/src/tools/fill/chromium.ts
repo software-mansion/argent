@@ -58,6 +58,10 @@ export function buildChromiumFillScript(text: string): string {
     if (!control && el.isContentEditable !== true) return { status: "no_focus" };
     if (control && el.disabled === true) return { status: "unsupported", detail: "it is disabled" };
     if (control && el.readOnly === true) return { status: "unsupported", detail: "it is read-only" };
+    // An <input> holds one line and drops a newline.
+    if (tag === "input" && /[\\r\\n]/.test(text)) {
+      return { status: "unsupported", detail: "a single-line input cannot hold a newline" };
+    }
     if (!control) {
       // designMode or <body contenteditable>: the whole document is the field.
       let host = el;

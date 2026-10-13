@@ -187,6 +187,25 @@ describe("fill: iOS simulator", () => {
     expect(sim.keys).toHaveLength(0);
   });
 
+  it("refuses a newline for a single-line field, with nothing typed", async () => {
+    const ax = axAnswers({ focused: true, verified: false, singleLine: true });
+    const sim = simulatorServer();
+    const err = await failure({ ax, sim }, IOS, "a\nb");
+    expect(getFailureSignal(err)?.error_code).toBe("FILL_UNSUPPORTED_FIELD");
+    expect(err.message).toContain("newline");
+    expect(sim.keys).toHaveLength(0);
+  });
+
+  it("fails with FILL_NOT_VERIFIED, saying the field may have changed, when the daemon timed out", async () => {
+    const ax = axAnswers({ focused: true, verified: false, timedOut: true });
+    const err = await failure({ ax, sim: simulatorServer() }, IOS, "abc");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "FILL_NOT_VERIFIED",
+      error_kind: "timeout",
+    });
+    expect(err.message).toContain("may have changed");
+  });
+
   it("fails with FILL_UNSUPPORTED_FIELD on a date or time input", async () => {
     const ax = axAnswers({ focused: true, verified: false, unsupported: true });
     const sim = simulatorServer();
@@ -413,6 +432,23 @@ describe("fill: Android", () => {
     expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
     expect(adbShell).not.toHaveBeenCalled();
     expect(helper.setText).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a newline for a single-line field", async () => {
+    const helper = helperAnswers({ focused: true, verified: false, singleLine: true });
+    const err = await failure({ helper }, ANDROID, "a\nb");
+    expect(getFailureSignal(err)?.error_code).toBe("FILL_UNSUPPORTED_FIELD");
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("fails with FILL_NOT_VERIFIED, saying the field may have changed, when the helper timed out", async () => {
+    const helper = helperAnswers({ focused: true, verified: false, timedOut: true });
+    const err = await failure({ helper }, ANDROID, "abc");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "FILL_NOT_VERIFIED",
+      error_kind: "timeout",
+    });
+    expect(err.message).toContain("may have changed");
   });
 
   describe("helper without setText", () => {

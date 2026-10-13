@@ -148,22 +148,31 @@ describe("ax-service fill", () => {
     expect(await api.fill("x")).toEqual({ focused: true, verified: false, unsupported: true });
   });
 
-  it.each(["fill_timeout", "fill_busy", "fill_failed"])(
-    "answers not verified for %s, as the field's state is unknown",
-    async (code) => {
-      answers.set("fill", envelopeError(code));
-      const api = await attach();
-      expect(await api.fill("x")).toEqual({ focused: true, verified: false });
-    }
-  );
+  it.each(["fill_failed", "select_failed"])("answers not verified for %s", async (code) => {
+    answers.set("fill", envelopeError(code));
+    const api = await attach();
+    expect(await api.fill("x")).toEqual({ focused: true, verified: false });
+  });
 
-  it("answers not verified when the daemon does not answer in time", async () => {
+  it.each(["fill_timeout", "fill_busy"])("answers timedOut for %s", async (code) => {
+    answers.set("fill", envelopeError(code));
+    const api = await attach();
+    expect(await api.fill("x")).toEqual({ focused: true, verified: false, timedOut: true });
+  });
+
+  it("answers singleLine when the field holds one line", async () => {
+    answers.set("fill", envelopeError("single_line"));
+    const api = await attach();
+    expect(await api.fill("a\nb")).toEqual({ focused: true, verified: false, singleLine: true });
+  });
+
+  it("answers timedOut when the daemon does not answer in time", async () => {
     answers.set("fill", HANG);
     const api = await attach();
     vi.useFakeTimers();
     const fill = api.fill("x");
     await vi.advanceTimersByTimeAsync(6_000);
-    await expect(fill).resolves.toEqual({ focused: true, verified: false });
+    await expect(fill).resolves.toEqual({ focused: true, verified: false, timedOut: true });
   });
 
   it("sends typeable only when the caller cannot type the text, and passes cleared on", async () => {
