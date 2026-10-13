@@ -118,6 +118,8 @@ export interface AXFillResponse {
   singleLine?: boolean;
   /** The daemon or the app did not answer in time: the field may have changed. */
   timedOut?: boolean;
+  /** The selection never covered the text, so nothing was changed. */
+  untouched?: boolean;
 }
 
 export interface AXServiceApi {
@@ -593,6 +595,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           needsBackspace?: boolean;
           secure?: boolean;
           cleared?: boolean;
+          untouched?: boolean;
         };
         try {
           result = (await query("fill", FILL_TIMEOUT_MS, {
@@ -612,13 +615,11 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
             return { focused: true, verified: false, unsupported: true };
           }
           if (code === "single_line") return { focused: true, verified: false, singleLine: true };
-          // The edit ran out of its budget, overlapped one that did, or threw,
-          // or the selection never covered the text (nothing was edited): the
-          // field does not read back. A daemon that did not answer at all is
-          // the same verdict.
-          if (code === "fill_failed" || code === "select_failed") {
-            return { focused: true, verified: false };
-          }
+          // The edit threw, ran out of its budget, or overlapped one that did:
+          // the field's state is unknown. A daemon that did not answer at all
+          // is the same verdict.
+          if (code === "select_failed") return { focused: true, verified: false, untouched: true };
+          if (code === "fill_failed") return { focused: true, verified: false };
           if (
             code === "fill_timeout" ||
             code === "fill_busy" ||
@@ -635,6 +636,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           ...(result.needsBackspace === true ? { needsBackspace: true } : {}),
           ...(result.secure === true ? { secure: true } : {}),
           ...(typeof result.cleared === "boolean" ? { cleared: result.cleared } : {}),
+          ...(result.untouched === true ? { untouched: true } : {}),
         };
       },
 

@@ -32,6 +32,20 @@ export function notVerifiedError(method: FillMethod, stage: string): FailureErro
   );
 }
 
+/** Same code as {@link notVerifiedError}, for a fill that changed nothing. */
+export function notChangedError(stage: string): FailureError {
+  return new FailureError(
+    "fill could not select the text of the focused field, so nothing was changed. Tap the field " +
+      "and retry.",
+    {
+      error_code: FAILURE_CODES.FILL_NOT_VERIFIED,
+      failure_stage: stage,
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    }
+  );
+}
+
 /** Same code as {@link notVerifiedError}: the device did not answer in time. */
 export function notAnsweredError(stage: string): FailureError {
   return new FailureError(

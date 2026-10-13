@@ -8,6 +8,7 @@ import {
 import {
   noFocusedFieldError,
   notAnsweredError,
+  notChangedError,
   notVerifiedError,
   unsupportedFieldError,
   untypeableTextError,
@@ -68,6 +69,7 @@ export async function fillIos(
     );
   }
   if (first.timedOut) throw notAnsweredError("fill_ios_timeout");
+  if (first.untouched) throw notChangedError("fill_ios_select_failed");
   if (first.verified) return { method: "accessibility", verified: true, length: first.length };
 
   if (first.secure) {
@@ -77,6 +79,7 @@ export async function fillIos(
         "fill_ios_secure_untypeable"
       );
     }
+    if (first.untouched) throw notChangedError("fill_ios_secure_select_failed");
     if (!first.cleared) throw notVerifiedError("accessibility", "fill_ios_secure_not_cleared");
     await typeOnSimulator(registry, device, text);
     const check = await ax.fill(text, { check: true });

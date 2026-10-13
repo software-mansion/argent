@@ -148,10 +148,28 @@ describe("ax-service fill", () => {
     expect(await api.fill("x")).toEqual({ focused: true, verified: false, unsupported: true });
   });
 
-  it.each(["fill_failed", "select_failed"])("answers not verified for %s", async (code) => {
-    answers.set("fill", envelopeError(code));
+  it("answers not verified for fill_failed", async () => {
+    answers.set("fill", envelopeError("fill_failed"));
     const api = await attach();
     expect(await api.fill("x")).toEqual({ focused: true, verified: false });
+  });
+
+  it("answers untouched for select_failed", async () => {
+    answers.set("fill", envelopeError("select_failed"));
+    const api = await attach();
+    expect(await api.fill("x")).toEqual({ focused: true, verified: false, untouched: true });
+  });
+
+  it("passes untouched on for a secure field it could not select", async () => {
+    answers.set("fill", { verified: false, secure: true, cleared: false, untouched: true });
+    const api = await attach();
+    expect(await api.fill("x")).toEqual({
+      focused: true,
+      verified: false,
+      secure: true,
+      cleared: false,
+      untouched: true,
+    });
   });
 
   it.each(["fill_timeout", "fill_busy"])("answers timedOut for %s", async (code) => {

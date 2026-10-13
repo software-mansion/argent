@@ -114,7 +114,7 @@ Other platform behavior:
 | Error code                       | Cause                                                                                                                                                                                                           |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `FILL_NO_FOCUSED_FIELD`          | No text field has keyboard focus. `fill` changed nothing                                                                                                                                                        |
-| `FILL_NOT_VERIFIED`              | The field does not hold `text` after the change. Or the device did not answer in time: then the field can have changed                                                                                          |
+| `FILL_NOT_VERIFIED`              | The field does not hold `text` after the change. Or the device did not answer in time: then the field can have changed. Or `fill` could not select the text of the field: then `fill` changed nothing           |
 | `FILL_UNSUPPORTED_FIELD`         | The field cannot take `text`: a date or time input, a disabled or read-only field, a newline for a single-line field, or a character that keys cannot type for an iOS secure text field. `fill` changed nothing |
 | `KEYBOARD_CHARACTER_UNSUPPORTED` | Only keys can fill the field, and `text` has a character that keys cannot type. `fill` changed nothing                                                                                                          |
 

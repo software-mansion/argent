@@ -206,6 +206,22 @@ describe("fill: iOS simulator", () => {
     expect(err.message).toContain("may have changed");
   });
 
+  it("says nothing was changed when the daemon could not select the text", async () => {
+    const ax = axAnswers({ focused: true, verified: false, untouched: true });
+    const sim = simulatorServer();
+    const err = await failure({ ax, sim }, IOS, "abc");
+    expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+    expect(err.message).toContain("nothing was changed");
+    expect(err.message).not.toContain("may");
+    expect(sim.keys).toHaveLength(0);
+  });
+
+  it("keeps 'may hold other text' for a read-back that does not match", async () => {
+    const ax = axAnswers({ focused: true, verified: false, length: 1 });
+    const err = await failure({ ax, sim: simulatorServer() }, IOS, "abc");
+    expect(err.message).toContain("may hold other or partial text");
+  });
+
   it("fails with FILL_UNSUPPORTED_FIELD on a date or time input", async () => {
     const ax = axAnswers({ focused: true, verified: false, unsupported: true });
     const sim = simulatorServer();
@@ -238,6 +254,21 @@ describe("fill: iOS simulator", () => {
       // No delete burst: the daemon cleared it. Only a (4) and b (5).
       expect(sim.downs()).toEqual([4, 5]);
       expect(ax.fill).toHaveBeenLastCalledWith("ab", { check: true });
+    });
+
+    it("says nothing was changed, typing nothing, when the daemon could not select it", async () => {
+      const ax = axAnswers({
+        focused: true,
+        verified: false,
+        secure: true,
+        cleared: false,
+        untouched: true,
+      });
+      const sim = simulatorServer();
+      const err = await failure({ ax, sim }, IOS, "ab");
+      expect(getFailureSignal(err)?.error_code).toBe("FILL_NOT_VERIFIED");
+      expect(err.message).toContain("nothing was changed");
+      expect(sim.keys).toHaveLength(0);
     });
 
     it("fails without typing when the daemon could not clear it", async () => {
