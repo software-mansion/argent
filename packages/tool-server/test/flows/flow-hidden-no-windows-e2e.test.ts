@@ -3,99 +3,97 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
-import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import type { AXServiceApi, AXTreeResponse } from "../../src/blueprints/ax-service";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
-// End-to-end companion to flow-ios-tree-no-windows.test.ts: that file pins the
-// guard at the unit level (queryFullHierarchyTree throws on a no-windows read);
-// this one proves the guard is what stands between an unreadable target and
-// a false green flow. Nothing on the tree path is mocked — the runner goes
-// through the REAL fetchFlowTree → queryFullHierarchyTree against a
-// native-devtools API whose getFullHierarchy returns `{ windows: [] }` (the
-// no-attached-window shape). Without the guard,
-// that payload adapts to an empty tree the poll loop treats as TRUSTED — the
-// element was never seen, so the blind-read guard's everMatched backstop
-// doesn't engage — and a `hidden` assert evaluates true against it: the exact
-// false pass the guard exists to prevent. Revert the guard and this test
-// fails; the unit file and this one gate the fix from both ends.
+// A `hidden` assert must not pass against a tree that could not be read. An
+// unreadable read adapts to an empty tree, the element was never seen, so the
+// poll loop would trust it and find the selector absent: a false green. The
+// runner goes through the REAL fetchFlowTree -> queryIosSimulatorFlowTree; the
+// ax-service is the only seam.
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const APP = "com.example.app";
 let tmpDir: string;
 
-function appState(bundleId: string): NativeAppState {
-  return {
-    bundleId,
-    applicationState: "active",
-    foregroundActiveSceneCount: 1,
-    foregroundInactiveSceneCount: 0,
-    backgroundSceneCount: 0,
-    unattachedSceneCount: 0,
-    isFrontmostCandidate: true,
-  };
-}
+/** The app root and nothing under it: an app that exposes no accessible elements. */
+const EMPTY_TREE: AXTreeResponse = {
+  alertVisible: false,
+  screenFrame: { width: 402, height: 874 },
+  nodes: [{ index: 0, label: "App", bundleId: APP }],
+  truncated: false,
+  foregroundApp: APP,
+  interfaceOrientation: "portrait",
+  treeVersion: 3,
+};
 
-/**
- * Minimal NativeDevtoolsApi: one connected, foreground app whose
- * `queryViewHierarchy` always reports no windows — the read the guard refuses.
- */
-function nativeApi(): NativeDevtoolsApi {
+// The registry's tool surface is inert: the flow has no launch or tool steps.
+function mockRegistry(ax: Pick<AXServiceApi, "degraded" | "tree">): Registry {
   return {
-    listConnectedBundleIds: () => [APP],
-    getAppState: async (id: string) => appState(id),
-    queryViewHierarchy: async () => ({ windows: [] }),
-  } as unknown as NativeDevtoolsApi;
-}
-
-// The native-devtools service resolution is the only seam faked here; the
-// registry's tool surface is inert (the flow has no launch or tool steps).
-function mockRegistry(api: NativeDevtoolsApi): Registry {
-  return {
-    resolveService: async () => api,
+    resolveService: async () => ax,
     invokeTool: async () => ({ ok: true }),
     getTool: () => undefined,
   } as unknown as Registry;
 }
 
-async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]): Promise<void> {
+async function runHiddenAssert(
+  ax: Pick<AXServiceApi, "degraded" | "tree">
+): Promise<FlowRunResult> {
   const dir = path.join(tmpDir, ".argent", "flows");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(yaml), "utf8");
-}
-
-function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
+  await fs.writeFile(
+    path.join(dir, "hidden.yaml"),
+    serializeFlow({
+      executionPrerequisite: "",
+      steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "General" } }],
+    }),
+    "utf8"
+  );
+  const r = await createRunFlowTool(mockRegistry(ax)).execute(
+    {},
+    { name: "hidden", project_root: tmpDir, device: DEVICE }
+  );
   if (!("steps" in r)) throw new Error(`expected a run result, got notice: ${r.notice}`);
   return r;
 }
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-no-windows-"));
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-hidden-unread-"));
 });
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("hidden assert against a no-windows target (end-to-end)", () => {
-  it("fails with the guard's no-windows reason instead of false-passing", async () => {
-    await writeFlow("no-windows-hidden", {
-      executionPrerequisite: "",
-      steps: [{ kind: "assert", condition: "hidden", selector: { identifier: "General" } }],
-    });
+describe("hidden assert against an unreadable tree (end-to-end)", () => {
+  it.each([
+    {
+      name: "an empty tree",
+      ax: { degraded: false, tree: async () => EMPTY_TREE },
+      reason:
+        /accessibility tree of .* is empty: the foreground app \(com\.example\.app\) exposes no accessible elements/,
+    },
+    {
+      name: "an empty tree on a simulator argent did not boot",
+      ax: { degraded: true, tree: async () => EMPTY_TREE },
+      reason: /accessibility tree of .* is empty: argent did not boot this simulator/,
+    },
+    {
+      name: "a read that fails",
+      ax: {
+        degraded: false,
+        tree: async (): Promise<AXTreeResponse> => {
+          throw new Error("socket closed");
+        },
+      },
+      reason: /accessibility tree of .* could not be read: socket closed/,
+    },
+  ])("fails with the tree-source reason on $name", async ({ ax, reason }) => {
+    const result = await runHiddenAssert(ax);
 
-    const result = asRun(
-      await createRunFlowTool(mockRegistry(nativeApi())).execute(
-        {},
-        { name: "no-windows-hidden", project_root: tmpDir, device: DEVICE }
-      )
-    );
-
-    // Every poll's fetch rejects with the guard's message, so the assert never
-    // gets a trusted read and must report the outage, quoting the guard.
     expect(result.ok).toBe(false);
-    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:fail"]);
     expect(result.steps[0].reason).toMatch(/could not read the UI tree/);
-    expect(result.steps[0].reason).toMatch(/returned no windows for com\.example\.app/);
-    expect(result.steps[0].reason).toMatch(/no window attached to read/);
+    expect(result.steps[0].reason).toMatch(reason);
   });
 });

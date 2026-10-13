@@ -18,6 +18,7 @@ const LEGACY_UNSUPPORTED_FIELDS = [
   "keyboardVisible",
   "foregroundApp",
   "alertVisible",
+  "interfaceOrientation",
 ];
 
 // AccessibilityWindowInfo types.

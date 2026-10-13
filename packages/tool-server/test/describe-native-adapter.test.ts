@@ -10,7 +10,9 @@ describe("describe native adapter", () => {
   it("maps native traits to public describe roles", () => {
     expect(mapNativeTraitsToDescribeRole(["header"])).toBe("AXHeading");
     expect(mapNativeTraitsToDescribeRole(["button"])).toBe("AXButton");
-    expect(mapNativeTraitsToDescribeRole(["toggleButton"])).toBe("AXButton");
+    // UIKit gives a switch both traits; XCTest calls it a Switch.
+    expect(mapNativeTraitsToDescribeRole(["toggleButton"])).toBe("AXSwitch");
+    expect(mapNativeTraitsToDescribeRole(["button", "toggleButton"])).toBe("AXSwitch");
     expect(mapNativeTraitsToDescribeRole(["staticText"])).toBe("AXStaticText");
     expect(mapNativeTraitsToDescribeRole(["textEntry"])).toBe("AXTextField");
     expect(mapNativeTraitsToDescribeRole(["searchField", "textEntry"])).toBe("AXTextField");

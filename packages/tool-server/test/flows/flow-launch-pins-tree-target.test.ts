@@ -7,32 +7,40 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 import type { FlowTreeTarget } from "../../src/tools/flows/flow-actions";
 import type { PixelFrame } from "../../src/tools/flows/flow-pixels";
 
-// A launch step must pin every later tree read to the launched app - unpinned
-// iOS reads auto-resolve across every connected process, which one poisoned
-// background system process sinks. A raw `tool:` step demotes that pin to an
-// unpinned hint, or drops it outright when the tool can change the foreground
-// app.
+// A launch step pins every later tree read to the launched app: a pinned read
+// fails when the accessibility tree names another foreground app. A raw
+// `tool:` step demotes that pin to an unpinned hint, or drops it outright when
+// the tool can change the foreground app.
 //
-// The mock sits at the iOS tree SOURCE (queryFullHierarchyTree), not at
-// fetchFlowTree, so the real fetchFlowTree dispatches every read and dropping
-// the target on its ios branch is observable here.
+// The mock sits at the iOS simulator tree SOURCE (queryIosSimulatorFlowTree),
+// not at fetchFlowTree, so the real fetchFlowTree dispatches every read and
+// dropping the target on its ios branch is observable here. The launch gate's
+// own reads (readIosSimulatorUiTree) answer with whatever app the last
+// `restart-app` started.
 
 let treeTargets: Array<FlowTreeTarget | undefined>;
 let treeData: () => DescribeTreeData;
+let foreground: string | undefined;
 vi.mock("../../src/tools/flows/flow-ios-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-ios-tree")>()),
-  queryFullHierarchyTree: vi.fn(
+  queryIosSimulatorFlowTree: vi.fn(
     async (_r: unknown, _d: unknown, target?: FlowTreeTarget): Promise<DescribeTreeData> => {
       // A COPY: the runner hands every read of one pin the same object, so
       // recording the reference would let a later mutation rewrite what the
       // earlier reads saw.
       treeTargets.push(target ? { ...target } : undefined);
-      // Stands in for an answered `Application.getState` probe, which the real
-      // source records on the target itself (see FlowTreeTarget.probeAnswered).
-      if (target?.pinned) target.probeAnswered = true;
       return treeData();
     }
   ),
+  readIosSimulatorUiTree: vi.fn(async () => ({
+    schemaVersion: 1,
+    source: "ax-service",
+    roots: [],
+    truncated: false,
+    foregroundApp: foreground,
+    unsupportedFields: [],
+    degraded: false,
+  })),
 }));
 
 // The idle step's status-bar mask asks the iOS runtime whether this fabricated
@@ -83,31 +91,27 @@ function screen(children: DescribeNode[]): DescribeNode {
 function readyTree(): DescribeTreeData {
   return {
     tree: screen([n({ identifier: "ready", label: "Ready" })]),
-    source: "native-devtools",
+    source: "ax-service",
   };
 }
 
 /**
  * `failLaunchOf` rejects that bundle id's `restart-app` - the tool runLaunch
  * starts the app with, so its rejection is a launch that fails after runLaunch
- * has already cleared the pin.
+ * has already cleared the pin. Any other `restart-app` brings its app to the
+ * foreground, which is what the launch gate waits for.
  */
 function mockRegistry(failLaunchOf?: string): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
-      if (failLaunchOf !== undefined && id === "restart-app" && args.bundleId === failLaunchOf) {
-        throw new Error("simulated relaunch failure");
+      if (id === "restart-app") {
+        if (args.bundleId === failLaunchOf) throw new Error("simulated relaunch failure");
+        foreground = args.bundleId as string;
       }
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-    // The iOS launch step gates on a native-devtools connection; report
-    // connected so the run proceeds past it.
-    resolveService: vi.fn(async () => ({
-      isConnected: () => true,
-      listConnectedBundleIds: () => [APP],
-    })),
   } as unknown as Registry;
 }
 
@@ -139,6 +143,7 @@ async function run(
 beforeEach(async () => {
   treeTargets = [];
   treeData = readyTree;
+  foreground = undefined;
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-pin-"));
 });
 afterEach(async () => {
@@ -189,7 +194,7 @@ describe("launch pins the flow tree target", () => {
     expect(labels().every((l) => l === `pinned:${APP}`)).toBe(true);
   });
 
-  it("a foreground-neutral tool step demotes the pin to a hint - later reads auto-resolve again", async () => {
+  it("a foreground-neutral tool step demotes the pin to a hint", async () => {
     // The tool step's effect on the screen is opaque to the runner, so the pin
     // must not survive it. screenshot cannot change the foreground app though,
     // so the launched app stays behind as an unpinned hint.
@@ -261,6 +266,29 @@ describe("launch pins the flow tree target", () => {
     ).toBe(true);
   });
 
+  it("a launch-app tool step re-sets the target to the app it started, unpinned", async () => {
+    const OTHER = "com.acme.other";
+    await writeFlow("toollaunched", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+        { kind: "tool", name: "launch-app", args: { bundleId: OTHER } },
+        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
+      ],
+    });
+
+    const result = await run("toollaunched", mockRegistry());
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+      "launch:pass",
+      "assert:pass",
+      "tool:pass",
+      "assert:pass",
+    ]);
+    expect(labels()).toEqual([`pinned:${APP}`, `hint:${OTHER}`]);
+  });
+
   it("a later launch re-pins after a tool step demoted the pin", async () => {
     const OTHER = "com.acme.other";
     await writeFlow("repinned", {
@@ -326,46 +354,6 @@ describe("launch pins the flow tree target", () => {
     expect(labels()).toEqual([`pinned:${APP}`, `pinned:${OTHER}`]);
   });
 
-  it("a later launch re-arms the probe ride-out on a fresh, unanswered target", async () => {
-    // A relaunched app cold-starts again, so the second launch must hand out a
-    // FRESH target rather than carry the first one's `probeAnswered` - else the
-    // new app's own cold start is misdiagnosed as a suspension.
-    const OTHER = "com.acme.other";
-    await writeFlow("rearmed", {
-      executionPrerequisite: "",
-      steps: [
-        { kind: "launch", app: APP },
-        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
-        { kind: "launch", app: OTHER },
-        { kind: "assert", condition: "visible", selector: { identifier: "ready" } },
-      ],
-    });
-    // The marker appears only on the second poll of the first assert, so that
-    // step reads twice - read 2 proves the answer recorded on read 1 really
-    // does reach the next read of the same pin.
-    treeData = () =>
-      treeTargets.length <= 1
-        ? {
-            tree: screen([n({ identifier: "loading", label: "Loading" })]),
-            source: "native-devtools",
-          }
-        : readyTree();
-
-    const result = await run("rearmed", mockRegistry());
-
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
-      "launch:pass",
-      "assert:pass",
-      "launch:pass",
-      "assert:pass",
-    ]);
-    expect(treeTargets.map((t) => `${label(t)}:${t?.probeAnswered}`)).toEqual([
-      `pinned:${APP}:false`,
-      `pinned:${APP}:true`,
-      `pinned:${OTHER}:false`,
-    ]);
-  });
-
   it("a failed launch hard-stops the run - nothing reads after it", async () => {
     // runLaunch clears the pin before restart-app, but that clear has no reader
     // today: a failed launch hard-stops the run, so every later step skips
@@ -408,7 +396,7 @@ describe("launch pins the flow tree target", () => {
     expect(labels()).toEqual([`pinned:${APP}`]);
   });
 
-  it("a run with no launch step keeps the auto-resolve fallback (no target)", async () => {
+  it("a run with no launch step reads with no target", async () => {
     await writeFlow("unpinned", {
       executionPrerequisite: "App is running",
       steps: [{ kind: "assert", condition: "visible", selector: { identifier: "ready" } }],
@@ -435,7 +423,7 @@ describe("launch pins the flow tree target", () => {
       treeTargets.length <= 2
         ? {
             tree: screen([n({ identifier: "loading", label: "Loading" })]),
-            source: "native-devtools",
+            source: "ax-service",
           }
         : readyTree();
 
@@ -483,7 +471,7 @@ describe("every read path carries the launch pin", () => {
     // first read.
     treeData = () => ({
       tree: screen([n({ identifier: "field", role: "AXTextField", focused: true })]),
-      source: "native-devtools",
+      source: "ax-service",
     });
 
     const result = await run("typed", mockRegistry());

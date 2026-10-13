@@ -15,6 +15,7 @@ import {
   evaluateCondition,
   firstInReadingOrder,
   frameContains,
+  identifierMatches,
   isVisible,
   assertText,
   nodeText,
@@ -28,6 +29,8 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
+import { readIosSimulatorUiTree } from "./flow-ios-tree";
+import type { UiTreeNode } from "../ui-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -65,8 +68,8 @@ import {
 } from "./flow-utils";
 
 /**
- * The app an iOS tree read should describe, and how far the runner will vouch
- * for it (see `queryFullHierarchyTree` for what each level buys).
+ * The app an iOS simulator tree read expects in the foreground, and whether the
+ * runner vouches for it (see `queryIosSimulatorFlowTree`).
  */
 export interface FlowTreeTarget {
   /**
@@ -76,24 +79,10 @@ export interface FlowTreeTarget {
   bundleId: string;
   /**
    * Whether the runner still vouches that `bundleId` is what is on screen. A
-   * pinned read targets it directly, skipping the auto-resolve fan-out that
-   * probes every connected app. Unpinned, it is only a hint: auto-resolve
-   * decides the target, and `bundleId` breaks the tie solely when that
-   * resolution times out.
+   * pinned read fails when the tree names another foreground app (the app
+   * crashed, or a step opened another one). Unpinned, the id is only a hint.
    */
   pinned: boolean;
-  /**
-   * Whether a pinned read's `Application.getState` probe has ever answered for
-   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
-   * after construction) so every read of the same pin sees it — `deviceEnv`
-   * shallow-spreads the run state, so they all reach the same object.
-   *
-   * It is the only evidence the runner has that the app's main queue was ever
-   * serviced, which tells the two causes of a timed-out probe apart. A later
-   * `launch` builds a fresh target, since a re-pinned app cold-starts again;
-   * an unpinned target neither consults nor arms it.
-   */
-  probeAnswered: boolean;
 }
 
 /** Everything a directive needs to act on the run's device. */
@@ -248,6 +237,7 @@ const TYPE_FOCUS_TIMEOUT_MS = 3000;
 //   the whole timeout on every type step.
 // - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
+  "ax-service",
   "native-devtools",
   "android-devtools",
   "cdp-dom",
@@ -869,8 +859,49 @@ async function scrollToVisible(
 // scroll would widen a loose selector's match scope from the viewport to the
 // whole page, mutate scroll state even when the step fails, and stretch a
 // failure to the scroll search's worst case.
-export function offscreenHint(sel: FlowSelector): string {
+function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
+}
+
+/**
+ * Why a selector step found no element. On an iOS simulator a miss on an `id`
+ * pays one more read of the accessibility tree, hidden nodes included: the flow
+ * tree drops off-screen nodes, so only this read can tell an id that is off
+ * the screen from one that is nowhere right now. That still has two causes
+ * the read cannot tell apart, a transient element that already left and a
+ * flow recorded on the injected view hierarchy, whose ids this tree never
+ * has (an SF Symbol name on an icon inside a button), so the reason names
+ * both. The read only words the reason, never decides a match, and any
+ * failure of it leaves the plain hint.
+ */
+export async function selectorMissReason(env: ActionEnv, sel: FlowSelector): Promise<string> {
+  const { platform, kind } = env.device;
+  const simulator = platform === "ios-remote" || (platform === "ios" && kind !== "device");
+  // Every alternative must be an id: a bare string also tries its text, which
+  // this check does not look for.
+  const ids = selectorAlternatives(sel).map((alt) => alt.identifier);
+  if (!simulator || !ids.every((id): id is string => id !== undefined)) {
+    return offscreenHint(sel);
+  }
+  const read = await settleWithin(
+    readIosSimulatorUiTree(env.registry, env.device),
+    undefined,
+    env.signal
+  );
+  const carriesId = (nodes: UiTreeNode[]): boolean =>
+    nodes.some(
+      (n) => ids.some((id) => identifierMatches(n.identifier, id)) || carriesId(n.children)
+    );
+  if (read.type !== "value" || carriesId(read.value.roots)) return offscreenHint(sel);
+  return (
+    `no visible element matched selector ${describeSelector(sel)}, and no element with this id ` +
+    `is in the accessibility tree right now, on screen or off. Either the element is not there ` +
+    `at this moment (a banner or sheet that already closed, a list row not loaded yet): add an ` +
+    `await or scroll-to step before this one. Or the id never reaches the accessibility tree: a ` +
+    `flow recorded with Argent 0.27.0 or earlier on an iOS simulator can carry an id from the ` +
+    `view hierarchy, such as an SF Symbol name on an icon inside a button; re-record the step, ` +
+    `or target the control \`describe\` shows there.`
+  );
 }
 
 /**
@@ -1055,7 +1086,7 @@ async function resolveTargetPoint(
     const frame = await waitForFrame(env, target.selector);
     if (frame === "aborted") return { fail: ABORTED_OUTCOME };
     if (!frame) {
-      return { fail: { ok: false, reason: offscreenHint(target.selector) } };
+      return { fail: { ok: false, reason: await selectorMissReason(env, target.selector) } };
     }
     return { point: getDescribeTapPoint(frame) };
   }
@@ -1174,7 +1205,7 @@ async function runPinch(
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    if (!resolved) return { ok: false, reason: await selectorMissReason(env, step.selector) };
     frame = resolved;
     center = getDescribeTapPoint(resolved);
   } else {
@@ -1275,7 +1306,7 @@ async function runRotate(
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    if (!resolved) return { ok: false, reason: await selectorMissReason(env, step.selector) };
     frame = resolved;
     center = getDescribeTapPoint(resolved);
   } else {
@@ -1388,7 +1419,9 @@ async function runSwipe(
   const selectors = ends.map((end) => (end && "selector" in end ? end.selector : undefined));
   const frames = await waitForFrames(env, selectors);
   if (frames === "aborted") return ABORTED_OUTCOME;
-  if (!Array.isArray(frames)) return { ok: false, reason: offscreenHint(frames.unresolved) };
+  if (!Array.isArray(frames)) {
+    return { ok: false, reason: await selectorMissReason(env, frames.unresolved) };
+  }
   const [fromFrame, toFrame] = frames;
 
   // A selector end already resolved against a settled tree; with neither end
@@ -1606,7 +1639,7 @@ async function runType(
   const frame = await waitForFrame(env, step.into);
   if (frame === "aborted") return ABORTED_OUTCOME;
   if (!frame) {
-    return { ok: false, reason: offscreenHint(step.into) };
+    return { ok: false, reason: await selectorMissReason(env, step.into) };
   }
   const focusTap = await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
   // Keys are injected at the HID level and go to whatever holds focus, so the

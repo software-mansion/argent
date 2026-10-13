@@ -94,7 +94,8 @@ LIVE so you can verify it works before it gets recorded. Read each step's
 \`message\`: an await-ui-element whose condition never held is still recorded (it
 returns success:false rather than failing), and a check that passes live can
 still fail once polished into an \`await:\`/\`assert:\` directive, which resolves
-against a different tree. flow-add-step warns about both when you record the
+against the flow tree (on an iOS simulator the \`describe\` tree; on Android the
+full view hierarchy). flow-add-step warns about both when you record the
 wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
 — that tool reports its own shape — so for those, read \`toolResult\`. For a self-contained
 e2e flow, record a restart-app of the app under test as the FIRST step (captured
