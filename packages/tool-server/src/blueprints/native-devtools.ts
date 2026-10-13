@@ -90,6 +90,7 @@ export const NON_INJECTABLE_RECOVERY =
 
 // Max consecutive init failures per service instance before it stops retrying.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
+export const MAX_NETWORK_LOG_ENTRIES = 1000;
 
 /**
  * Why an app has no live devtools connection — and so what, if anything,
@@ -644,7 +645,6 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // listen block below, before ensureEnvReady and dispose read it.
     const endpoint: IosEndpoint =
       transport === "tcp" ? { transport: "tcp" } : { transport: "unix", socketPath };
-    const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();
     const pendingRpc = new Map<
       number,
@@ -827,7 +827,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             if (p.method && p.id === undefined) {
               const conn = connections.get(bundleId);
               if (conn) {
-                if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
+                if (conn.networkLog.length >= MAX_NETWORK_LOG_ENTRIES) {
                   conn.networkLog.shift();
                 }
                 conn.networkLog.push({
