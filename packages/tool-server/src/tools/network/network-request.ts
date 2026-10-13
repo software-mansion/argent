@@ -39,8 +39,18 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
   return result;
 }
 
-/** Response body chars kept; the rest is truncated to limit context. */
+/** Body chars kept, of a request or a response; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
+
+/** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
+function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
+  // A body the interceptor cut is always longer than MAX_BODY_SIZE.
+  if (postData == null || postData.length <= MAX_BODY_SIZE) return postData;
+  const originalSize = truncated
+    ? `more than ${postData.length} chars`
+    : `${postData.length} chars`;
+  return `[TRUNCATED — original size: ${originalSize}]\n${postData.slice(0, MAX_BODY_SIZE)}...`;
+}
 
 const zodSchema = z.object({
   port: metroPortField,
@@ -65,6 +75,8 @@ interface RawEntry {
     method: string;
     headers: Record<string, string>;
     postData?: string;
+    /** The interceptor kept only the start of the body. */
+    postDataTruncated?: boolean;
   };
   response?: {
     url: string;
@@ -76,11 +88,11 @@ interface RawEntry {
   resourceType?: string;
   encodedDataLength?: number;
   timestamp?: number;
-  wallTime?: number;
   durationMs?: number;
   errorText?: string;
-  initiator?: { type: string; url?: string; lineNumber?: number };
   responseBody?: string;
+  /** The interceptor kept only the start of the body; encodedDataLength is its full size. */
+  bodyTruncated?: boolean;
 }
 
 interface NetworkRequestDetails {
@@ -118,8 +130,8 @@ export const networkRequestTool: ToolDefinition<
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
-Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
-Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
+Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
+Request and response bodies over 1000 chars are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
@@ -153,7 +165,7 @@ Returns an error message string if the requestId is not found — use view-netwo
           url: rec.url,
           method: rec.method,
           headers: redactHeaders(rec.requestHeaders),
-          postData: rec.postData,
+          postData: truncatePostData(rec.postData),
         };
       }
       if (rec.status != null) {
@@ -208,7 +220,6 @@ Returns an error message string if the requestId is not found — use view-netwo
       durationMs: entry.durationMs,
       encodedDataLength: entry.encodedDataLength,
       errorText: entry.errorText,
-      initiator: entry.initiator,
     };
 
     if (entry.request) {
@@ -216,7 +227,7 @@ Returns an error message string if the requestId is not found — use view-netwo
         url: entry.request.url,
         method: entry.request.method,
         headers: redactHeaders(entry.request.headers),
-        postData: entry.request.postData,
+        postData: truncatePostData(entry.request.postData, entry.request.postDataTruncated),
       };
     }
 
@@ -231,7 +242,12 @@ Returns an error message string if the requestId is not found — use view-netwo
       if (params.includeBody && entry.responseBody != null) {
         const body = entry.responseBody;
         if (body.length > MAX_BODY_SIZE) {
-          resp.body = `[TRUNCATED — original size: ${body.length} chars, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
+          const originalSize = !entry.bodyTruncated
+            ? `${body.length} chars`
+            : entry.encodedDataLength != null
+              ? `${entry.encodedDataLength} bytes`
+              : `more than ${body.length} chars`;
+          resp.body = `[TRUNCATED — original size: ${originalSize}, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
         } else {
           resp.body = body;
         }

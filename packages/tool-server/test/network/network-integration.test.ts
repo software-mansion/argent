@@ -37,11 +37,21 @@ let wsConnectionCount = 0;
  * we return responses matching what the real runtime would produce.
  */
 let interceptorInstalled = false;
+/** Makes the interceptor script throw in the "runtime", so it stays uninstalled. */
+let failInstall = false;
+// The install succeeds, but the app's JS runtime reloads before the log is read.
+let reloadAfterInstall = false;
 const networkLog: Array<{
   id: number;
   requestId: string;
   state: string;
-  request: { url: string; method: string; headers: Record<string, string> };
+  request: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    postData?: string;
+    postDataTruncated?: boolean;
+  };
   response?: {
     url: string;
     status: number;
@@ -54,6 +64,7 @@ const networkLog: Array<{
   timestamp: number;
   durationMs?: number;
   responseBody?: string;
+  bodyTruncated?: boolean;
 }> = [];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
@@ -99,11 +110,28 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
     case "Runtime.evaluate": {
       const expr = params.expression as string;
 
-      // The interceptor script contains "globalThis.fetch =" (monkey-patching),
-      // while the log-read scripts never do.
-      if (expr.includes("globalThis.fetch =")) {
+      // The interceptor script sets its install guard, while the log-read
+      // scripts never mention it.
+      if (expr.includes("__argent_network_v2")) {
         // This is the network interceptor installation script
-        interceptorInstalled = true;
+        if (failInstall) {
+          ws.send(
+            JSON.stringify({
+              id,
+              result: {
+                result: { type: "object" },
+                exceptionDetails: {
+                  exceptionId: 1,
+                  text: "Uncaught",
+                  lineNumber: 0,
+                  columnNumber: 0,
+                },
+              },
+            })
+          );
+          break;
+        }
+        interceptorInstalled = !reloadAfterInstall;
         ws.send(
           JSON.stringify({
             id,
@@ -194,7 +222,23 @@ function handleLogReadScript(ws: WebSocket, id: number, expr: string) {
     return;
   }
 
-  // List read script — extract start and limit from the script
+  // List read script. Like the real one, it finds no log in a runtime without the interceptor.
+  if (!interceptorInstalled) {
+    ws.send(
+      JSON.stringify({
+        id,
+        result: {
+          result: {
+            type: "string",
+            value: JSON.stringify({ entries: [], total: 0, interceptorInstalled: false }),
+          },
+        },
+      })
+    );
+    return;
+  }
+
+  // Extract start and limit from the script
   const startMatch = expr.match(/var start = (\d+)/);
   const limitMatch = expr.match(/var limit = (\d+)/);
   const start = startMatch ? parseInt(startMatch[1], 10) : 0;
@@ -498,6 +542,75 @@ describe("NetworkInspector integration (mock server)", () => {
     }
   });
 
+  it("view-network-logs reports an interceptor that could not be installed", async () => {
+    interceptorInstalled = false;
+    failInstall = true;
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+
+      expect(result).toContain(
+        "Network interceptor could not be installed in the app's JS runtime:"
+      );
+      expect(result).not.toContain("No network traffic captured");
+    } finally {
+      failInstall = false;
+      interceptorInstalled = true;
+    }
+  });
+
+  it("view-network-logs says to call it again when a reload removed the interceptor", async () => {
+    interceptorInstalled = false;
+    reloadAfterInstall = true;
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+
+      expect(result).toContain("Network interceptor not installed");
+      expect(result).toContain("Call view-network-logs again");
+      expect(result).not.toContain("No network traffic captured");
+    } finally {
+      reloadAfterInstall = false;
+      interceptorInstalled = true;
+    }
+  });
+
+  it("view-network-logs marks a request whose response came but whose body did not complete as pending", async () => {
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-dropped",
+      state: "pending",
+      request: { url: "https://api.example.com/dropped", method: "GET", headers: {} },
+      response: {
+        url: "https://api.example.com/dropped",
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "application/json",
+      },
+      resourceType: "Fetch",
+      timestamp: Date.now() / 1000,
+    });
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+
+      expect(result).toContain('{id: rn-net-dropped} "GET /dropped" 200 OK (pending) Fetch');
+      expect(result).toMatch(/\{id: rn-net-1\} "GET \/users" 200 OK Fetch/);
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "rn-net-dropped"),
+        1
+      );
+    }
+  });
+
   it("view-network-logs returns page index out-of-range error", async () => {
     const result = (await registry.invokeTool("view-network-logs", {
       port: mockPort,
@@ -570,6 +683,131 @@ describe("NetworkInspector integration (mock server)", () => {
       if (idx >= 0) networkLog.splice(idx, 1);
     }
   });
+
+  it("view-network-request-details reports the full size of a body the interceptor cut", async () => {
+    const cutEntry = {
+      id: networkLog.length,
+      requestId: "rn-net-cut",
+      state: "finished" as const,
+      request: { url: "https://api.example.com/huge", method: "GET", headers: {} },
+      response: {
+        url: "https://api.example.com/huge",
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "text/plain",
+      },
+      resourceType: "XHR",
+      encodedDataLength: 1_500_000,
+      timestamp: Date.now() / 1000,
+      durationMs: 100,
+      responseBody: "x".repeat(1_048_576),
+      bodyTruncated: true,
+    };
+    networkLog.push(cutEntry);
+
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-cut",
+        includeBody: true,
+      })) as Record<string, unknown>;
+
+      const body = (result.response as Record<string, unknown>).body as string;
+      expect(body).toContain("original size: 1500000 bytes");
+    } finally {
+      const idx = networkLog.findIndex((e) => e.requestId === "rn-net-cut");
+      if (idx >= 0) networkLog.splice(idx, 1);
+    }
+  });
+
+  it("view-network-request-details says a cut body of unknown size is larger than its cap", async () => {
+    const cutEntry = {
+      id: networkLog.length,
+      requestId: "rn-net-cut-json",
+      state: "finished" as const,
+      request: { url: "https://api.example.com/huge.json", method: "GET", headers: {} },
+      response: {
+        url: "https://api.example.com/huge.json",
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "application/json",
+      },
+      resourceType: "XHR",
+      timestamp: Date.now() / 1000,
+      durationMs: 100,
+      responseBody: "x".repeat(1_048_576),
+      bodyTruncated: true,
+    };
+    networkLog.push(cutEntry);
+
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-cut-json",
+        includeBody: true,
+      })) as Record<string, unknown>;
+
+      const body = (result.response as Record<string, unknown>).body as string;
+      expect(body).toContain("original size: more than 1048576 chars");
+    } finally {
+      const idx = networkLog.findIndex((e) => e.requestId === "rn-net-cut-json");
+      if (idx >= 0) networkLog.splice(idx, 1);
+    }
+  });
+
+  it.each([
+    {
+      size: 1500,
+      truncated: false,
+      says: "gives its size",
+      message: "original size: 1500 chars",
+    },
+    {
+      size: 1_048_576,
+      truncated: true,
+      says: "says the interceptor had already cut it at 1 MiB",
+      message: "original size: more than 1048576 chars",
+    },
+  ])(
+    "view-network-request-details shortens a request body of $size chars and $says",
+    async ({ size, truncated, message }) => {
+      const requestId = `rn-net-post-${size}`;
+      networkLog.push({
+        id: networkLog.length,
+        requestId,
+        state: "finished" as const,
+        request: {
+          url: "https://api.example.com/upload",
+          method: "POST",
+          headers: {},
+          postData: "p".repeat(size),
+          ...(truncated ? { postDataTruncated: true } : {}),
+        },
+        resourceType: "XHR",
+        timestamp: Date.now() / 1000,
+        durationMs: 100,
+      });
+
+      try {
+        const result = (await registry.invokeTool("view-network-request-details", {
+          port: mockPort,
+          device_id: "mock-device",
+          requestId,
+        })) as Record<string, unknown>;
+
+        const postData = (result.request as Record<string, unknown>).postData as string;
+        expect(postData).toContain(message);
+        expect(postData.length).toBeLessThan(1200);
+      } finally {
+        const idx = networkLog.findIndex((e) => e.requestId === requestId);
+        if (idx >= 0) networkLog.splice(idx, 1);
+      }
+    }
+  );
 
   it("NetworkInspector cascades teardown when JsRuntimeDebugger is disposed", async () => {
     // Dispose JsRuntimeDebugger — NetworkInspector should also be torn down
