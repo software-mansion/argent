@@ -176,4 +176,42 @@ describe("await-screen-idle tool", () => {
     expect(result.settled).toBe(false);
     expect(result.waitedMs).toBeGreaterThanOrEqual(80);
   });
+
+  it("settles when only a looping animation keeps moving (ambient motion)", async () => {
+    // A coach-mark hand bobbing between two positions forever next to static
+    // content: the full tree never repeats for long, but nothing else moves.
+    const bob = (y: number) =>
+      axResponse([
+        { label: "Settings", frame: FRAME, traits: ["button"] },
+        { label: "hand", frame: { x: 0.4, y, width: 0.18, height: 0.08 }, traits: ["image"] },
+      ]);
+    const looping = Array.from({ length: 60 }, (_, i) => bob(i % 2 ? 0.218 : 0.238));
+    const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService(looping)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 1000, pollIntervalMs: 10, minStableMs: 30 }
+    );
+
+    expect(result.settled).toBe(true);
+    expect(result.ambientMotion).toBe(true);
+    expect(result.waitedMs).toBeLessThan(1000);
+  });
+
+  it("keeps waiting while an element slides without repeating a position", async () => {
+    const slide = Array.from({ length: 200 }, (_, i) =>
+      axResponse([
+        { label: "Settings", frame: FRAME, traits: ["button"] },
+        { label: "sheet", frame: { x: 0, y: 1 - i * 0.004, width: 1, height: 0.5 }, traits: [] },
+      ])
+    );
+    const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService(slide)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 150, pollIntervalMs: 10, minStableMs: 30 }
+    );
+
+    expect(result.settled).toBe(false);
+  });
 });

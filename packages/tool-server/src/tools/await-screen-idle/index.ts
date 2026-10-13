@@ -67,6 +67,12 @@ interface IdleResult {
   settled: boolean;
   waitedMs: number;
   polls: number;
+  /**
+   * Settled although some elements never stopped moving: only looping
+   * animations (a bobbing coach mark, a pulsing badge) were left, which never
+   * go still and so used to run every wait into its timeout.
+   */
+  ambientMotion?: true;
 }
 
 const capability: ToolCapability = {
@@ -91,6 +97,42 @@ function treeSignature(root: DescribeNode): string {
   for (const child of root.children) walk(child);
   return parts.join("\n");
 }
+
+/**
+ * Frame of every node, keyed by an identity that ignores position
+ * (role/label/value, numbered for duplicates), plus the structure those
+ * identities form.
+ */
+function frameSnapshot(root: DescribeNode): { structure: string; frames: Map<string, string> } {
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const frames = new Map<string, string>();
+  const ids: string[] = [];
+  const seen = new Map<string, number>();
+  const walk = (node: DescribeNode): void => {
+    const base = `${node.role}|${node.label ?? ""}|${node.value ?? ""}`;
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    const id = `${base}#${n}`;
+    ids.push(id);
+    const f = node.frame;
+    frames.set(id, `${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}`);
+    for (const child of node.children) walk(child);
+  };
+  for (const child of root.children) walk(child);
+  return { structure: ids.join("\n"), frames };
+}
+
+/** Sign of the x/y movement between two `frameSnapshot` frames, e.g. "+0" or "0-". */
+function motionDirection(prev: string, next: string): string | undefined {
+  const [px, py] = prev.split(",").map(Number);
+  const [nx, ny] = next.split(",").map(Number);
+  const sign = (d: number) => (d > 0 ? "+" : d < 0 ? "-" : "0");
+  const dir = `${sign(nx! - px!)}${sign(ny! - py!)}`;
+  return dir === "00" ? undefined : dir;
+}
+
+/** Looping animations allowed to keep moving on a settled screen. */
+const MAX_AMBIENT_MOVERS = 3;
 
 // The MCP layer times its auto-screenshot with this: capture once the screen is
 // stable instead of after a fixed delay.
@@ -131,7 +173,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it
 has content and that content holds identical for minStableMs (default ${DEFAULT_MIN_STABLE_MS}ms), or timeoutMs (default
 ${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls } — settled=false means the screen never went
-still before the timeout. Use after a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
+still before the timeout. A screen where only up to ${MAX_AMBIENT_MOVERS} looping animations keep moving (a bobbing hint, a
+pulsing badge) counts as settled and adds ambientMotion: true. Use after a launch/navigation to wait for the UI to
+render before screenshotting or tapping.`,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
     longRunning: true,
@@ -159,6 +203,18 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
 
       let stableSignature: string | undefined;
       let stableSince = 0;
+      let ambient = false;
+      // Ambient-motion tracking: the structure must hold still while the only
+      // movement comes from nodes that keep returning to frames they already
+      // showed (a loop). A one-shot transition never revisits a frame, so it
+      // is still waited out.
+      let structure: string | undefined;
+      let structureSince = 0;
+      let lastFrames = new Map<string, string>();
+      const framesSeen = new Map<string, Set<string>>();
+      const looping = new Set<string>();
+      const moved = new Set<string>();
+      const lastDirection = new Map<string, string>();
 
       const poll = await pollDescribeTree<true>({
         fetchTree: () => fetchTree(device, services, isTvOs, androidIsTv),
@@ -180,11 +236,55 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
             stableSince = nowMs;
             if (minStableMs === 0) return { done: true, result: true };
           }
+
+          const snap = frameSnapshot(data.tree);
+          if (snap.structure !== structure) {
+            structure = snap.structure;
+            structureSince = nowMs;
+            framesSeen.clear();
+            looping.clear();
+            moved.clear();
+            lastDirection.clear();
+          } else {
+            for (const [id, frame] of snap.frames) {
+              const prev = lastFrames.get(id);
+              if (prev === frame) continue;
+              moved.add(id);
+              // A loop either comes back to a frame it showed, or reverses
+              // direction (a bob or pulse); a one-shot slide does neither.
+              const dir = prev === undefined ? undefined : motionDirection(prev, frame);
+              const before = lastDirection.get(id);
+              if (framesSeen.get(id)?.has(frame) || (dir && before && dir !== before)) {
+                looping.add(id);
+              }
+              if (dir) lastDirection.set(id, dir);
+            }
+          }
+          for (const [id, frame] of snap.frames) {
+            let set = framesSeen.get(id);
+            if (!set) framesSeen.set(id, (set = new Set()));
+            set.add(frame);
+          }
+          lastFrames = snap.frames;
+          if (
+            moved.size > 0 &&
+            moved.size <= MAX_AMBIENT_MOVERS &&
+            [...moved].every((id) => looping.has(id)) &&
+            nowMs - structureSince >= minStableMs
+          ) {
+            ambient = true;
+            return { done: true, result: true };
+          }
           return { done: false };
         },
       });
 
-      return { settled: poll.result === true, waitedMs: poll.elapsedMs, polls: poll.polls };
+      return {
+        settled: poll.result === true,
+        waitedMs: poll.elapsedMs,
+        polls: poll.polls,
+        ...(ambient ? { ambientMotion: true as const } : {}),
+      };
     },
   };
 }
