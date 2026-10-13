@@ -123,7 +123,8 @@ One call does one action: pass text OR key, never both. To type and then press a
     zodSchema,
     capability,
     alwaysLoad: true,
-    // iOS simulator typing sleeps per key, so long text outlasts the MCP fetch timeout.
+    // Typing time grows with text length on several backends and can outlast the MCP
+    // fetch timeout, whose abort replays the call: the text would be typed twice.
     longRunning: true,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
