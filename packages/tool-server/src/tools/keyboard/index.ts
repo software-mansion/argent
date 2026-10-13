@@ -122,6 +122,7 @@ On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field f
 One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` — { text: "hello" } then { key: "enter" } — which also keeps it to a single round-trip.`,
     zodSchema,
     capability,
+    alwaysLoad: true,
     // iOS simulator typing sleeps per key, so long text outlasts the MCP fetch timeout.
     longRunning: true,
     searchHint:

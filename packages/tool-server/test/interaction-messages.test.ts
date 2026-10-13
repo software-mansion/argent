@@ -7,6 +7,7 @@ import { createRegistry } from "../src/utils/setup-registry";
 import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
+import { formatScreenshotDiffSummary } from "../src/tools/screenshot-diff/screenshot-diff-summary";
 
 const failureSignal: FailureSignal = {
   error_code: FAILURE_CODES.ARGENT_UNCLASSIFIED_FAILURE,
@@ -95,6 +96,45 @@ describe("tool interaction messages", () => {
         failureSignal,
       })
     ).toBe(`Failed to tap at (50%, 25%): ${failureSignal.error_code}`);
+  });
+
+  it("does not claim a comparison for a dimension-mismatch screenshot-diff", () => {
+    const completedMsg =
+      definitionsById(createRegistry()).get("screenshot-diff")!.interaction!.completedMsg!;
+    const params = { udid: "device-1", baselinePath: "/a.png", currentPath: "/b.png" };
+
+    expect(
+      completedMsg({
+        params,
+        result: {
+          summary: formatScreenshotDiffSummary({
+            totalPixels: 288_000,
+            differentPixels: 0,
+            mismatchPercentage: 0,
+            dimensionMismatch: {
+              expected: { width: 360, height: 800 },
+              actual: { width: 800, height: 360 },
+            },
+            regions: [],
+          }),
+        },
+      })
+    ).toBe("Skipped comparison - screenshot dimensions differ");
+
+    expect(
+      completedMsg({
+        params,
+        result: {
+          summary: formatScreenshotDiffSummary({
+            totalPixels: 288_000,
+            differentPixels: 1_440,
+            mismatchPercentage: 0.5,
+            imageSize: { width: 360, height: 800 },
+            regions: [],
+          }),
+        },
+      })
+    ).toBe("Compared screenshots");
   });
 
   it("names the flow from either source in flow-execute messages", () => {

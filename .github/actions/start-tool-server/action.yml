@@ -47,10 +47,10 @@ runs:
         cd packages/tool-server
         # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
         # typecheck job already enforces types). Without it a cold start on a
-        # loaded CI runner can take >60s to bind and flakily times out.
+        # loaded CI runner can take >60s to bind.
         nohup env ARGENT_PORT="$ARGENT_PORT" TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
           > ~/.argent/tool-server.log 2>&1 &
-        for i in $(seq 1 60); do
+        for i in $(seq 1 180); do
           curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${ARGENT_PORT}/tools" | grep -q 200 \
             && { echo "tool-server up t+${i}s"; exit 0; }
           sleep 1

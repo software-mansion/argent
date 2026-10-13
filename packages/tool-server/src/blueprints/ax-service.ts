@@ -88,12 +88,20 @@ export interface AXTreeResponse {
   treeVersion?: number;
 }
 
+export interface AXForegroundAppResponse {
+  alertVisible: boolean;
+  bundleId?: string;
+  name?: string;
+}
+
 export interface AXServiceApi {
   /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
   /** The front app's full hierarchy; while a system alert shows, the system app first and the app under it second. */
   tree(): Promise<AXTreeResponse>;
+  /** Which app is in front, without a tree walk. */
+  foregroundApp(): Promise<AXForegroundAppResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
   /**
@@ -504,6 +512,10 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           foregroundApp: result.foregroundApp,
           treeVersion: result.treeVersion,
         };
+      },
+
+      async foregroundApp(): Promise<AXForegroundAppResponse> {
+        return (await query("foreground_app")) as AXForegroundAppResponse;
       },
 
       async livePanel(): Promise<number | null> {

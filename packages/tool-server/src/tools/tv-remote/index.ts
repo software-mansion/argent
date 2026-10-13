@@ -90,7 +90,6 @@ Single press: { button: "down" }. Repeat the same button: { button: "down", repe
 Multi-step navigation: pass a path as { button: ["up","right","right","select"] } — it runs in one tool call, far cheaper than separate presses.
 Read the screen with \`describe\` before and after to see where focus landed.
 Returns { pressed, count }.`,
-    alwaysLoad: true,
     // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses, sent
     // one round-trip at a time on the Apple/Android path — minutes of wall-clock.
     longRunning: true,

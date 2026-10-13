@@ -96,6 +96,16 @@ export interface UiTree {
   unsupportedFields: string[];
 }
 
+/** The `foreground-app` result: which app is in front, as `UiTree.foregroundApp` reports it. */
+export interface ForegroundApp {
+  /** iOS bundle id or Android package of the app in front; under a system alert, the app it covers. Unset when unknown. */
+  bundleId?: string;
+  /** iOS: the app's display name. */
+  name?: string;
+  /** A system alert or dialog covers the app. Unset when unknown. */
+  alertVisible?: boolean;
+}
+
 export interface CallToolOptions {
   /** Receive progress events while a long-running tool works. */
   onProgress?: (event: unknown) => void;

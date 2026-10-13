@@ -52,10 +52,10 @@ sim-remote --help
 
 ## Authentication
 
-`sim-remote login` reads the API key from the `SIM_ROUTER_API_KEY` environment variable or from the `--api-key` option. Export the variable in your shell profile, in a `.envrc` file or in a secret manager. Do not put the key in a committed script.
+`sim-remote login` reads the API key from the `SIM_REMOTE_API_KEY` environment variable or from the `--api-key` option. Export the variable in your shell profile, in a `.envrc` file or in a secret manager. Do not put the key in a committed script.
 
 ```bash
-export SIM_ROUTER_API_KEY=<your key>
+export SIM_REMOTE_API_KEY=<your key>
 
 sim-remote login
 ```
