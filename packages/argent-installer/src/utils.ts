@@ -142,11 +142,19 @@ const PROJECT_ROOT_MARKERS = [
   "skills-lock.json",
 ];
 
-export function resolveProjectRoot(startDir: string): string {
+// The walk never climbs into the home directory: `~/.claude`, `~/.cursor`,
+// `~/.codex`, … are the editors' global config dirs, not project markers, so
+// matching them would resolve every markerless project under home to home.
+export function resolveProjectRoot(startDir: string, homeDir: string = os.homedir()): string {
   const initialDir = path.resolve(startDir);
+  const home = path.resolve(homeDir);
   let currentDir = initialDir;
 
   while (true) {
+    if (currentDir === home && currentDir !== initialDir) {
+      return initialDir;
+    }
+
     if (PROJECT_ROOT_MARKERS.some((marker) => fs.existsSync(path.join(currentDir, marker)))) {
       return currentDir;
     }
