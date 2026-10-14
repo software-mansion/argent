@@ -2,12 +2,14 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
   clipBoundsToScreen,
+  describeUiAutomatorRoot,
   deriveUiAutomatorRole,
   isNoisyUiAutomatorClass,
   isUiAutomatorLayoutContainer,
   isUiAutomatorScrollable,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
+  type ParsedXmlNode,
 } from "../describe/platforms/android/uiautomator-parser";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
@@ -72,12 +74,6 @@ function normalizeRect(rect: PixelRect, screenW: number, screenH: number): Descr
   };
 }
 
-interface ParsedXmlNode {
-  tag: string;
-  attrs: Record<string, string>;
-  children: ParsedXmlNode[];
-}
-
 // Non-`node` tags are uiautomator noise, not views.
 function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
   return node.children.filter((c) => c.tag === "node");
@@ -91,7 +87,8 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
 function projectAndroidNode(
   node: ParsedXmlNode,
   screenW: number,
-  screenH: number
+  screenH: number,
+  leafOf: Map<ParsedXmlNode, DescribeNode>
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
   // System chrome yields false matches (a system "Back"); SVG implementation
@@ -129,6 +126,7 @@ function projectAndroidNode(
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
       leaf = { role, frame, children: [] };
+      leafOf.set(node, leaf);
       if (label) leaf.label = label;
       if (identifier) leaf.identifier = identifier;
       if (hasValue) leaf.value = rawText;
@@ -174,19 +172,92 @@ export function adaptFullAndroidHierarchyToDescribeResult(
   screenH: number
 ): DescribeNode {
   const children: DescribeNode[] = [];
+  let describeShown: (() => DescribeNode) | undefined;
   if (screenW > 0 && screenH > 0) {
     const root = parseUiAutomatorXml(xml);
     if (root) {
+      const leafOf = new Map<ParsedXmlNode, DescribeNode>();
       for (const c of childNodes(root)) {
-        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
+        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH, leafOf), children);
       }
+      const emitted = new Set(children);
+      const shown = (n: ParsedXmlNode) => {
+        const leaf = leafOf.get(n);
+        return leaf !== undefined && emitted.has(leaf);
+      };
+      describeShown = () =>
+        describeUiAutomatorRoot(
+          { ...root, children: root.children.flatMap((c) => shownOnly(c, shown)) },
+          screenW,
+          screenH
+        );
     }
   }
-  return parseDescribeResult({
+  const tree = parseDescribeResult({
     role: "Screen",
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
+  if (describeShown) {
+    const build = describeShown;
+    // Null once building failed.
+    let built: DescribeNode | null | undefined;
+    describeFallbacks.set(tree, () => {
+      if (built === undefined) {
+        try {
+          built = build();
+        } catch {
+          // Best effort: without the fallback a selector resolves on the flow tree alone.
+          built = null;
+        }
+      }
+      return built ?? undefined;
+    });
+  }
+  return tree;
+}
+
+const describeFallbacks = new WeakMap<DescribeNode, () => DescribeNode | undefined>();
+
+/**
+ * The tree a selector falls back to when it matches no visible element in the
+ * flow tree: `describe`'s trim of the on-screen part of the same dump, built on
+ * first use. A selector copied from `describe` finds the element it showed
+ * there, such as a row labelled with its children's text. The trim reads only
+ * the views the flow tree shows and their ancestors, with no text field's or
+ * password field's content, so nothing scrolled out of view or typed resolves
+ * through it.
+ */
+export function flowDescribeFallback(tree: DescribeNode): DescribeNode | undefined {
+  return describeFallbacks.get(tree)?.();
+}
+
+function isTextField(attrs: Record<string, string>): boolean {
+  const cls = attrs.class ?? "";
+  return cls.endsWith("EditText") || cls.endsWith("AutoCompleteTextView");
+}
+
+function shownOnly(node: ParsedXmlNode, shown: (n: ParsedXmlNode) => boolean): ParsedXmlNode[] {
+  if (node.tag !== "node") return [];
+  const children = node.children.flatMap((c) => shownOnly(c, shown));
+  const own = shown(node);
+  if (!own && children.length === 0) return [];
+  const a = node.attrs;
+  let attrs = a;
+  if (!own) attrs = { ...a, "text": "", "content-desc": "", "resource-id": "" };
+  else if (isTextField(a)) attrs = { ...a, "text": "", "content-desc": "" };
+  // A touchable around a text field or a scroller (an RN keyboard-dismiss
+  // wrapper around a form) is not one tap target: describe would label it with
+  // every text inside it, so it lends no label here.
+  if ((a.clickable === "true" || a["long-clickable"] === "true") && holdsFieldOrScroller(node))
+    attrs = { ...attrs, "clickable": "false", "long-clickable": "false" };
+  return [{ tag: node.tag, attrs, children }];
+}
+
+function holdsFieldOrScroller(node: ParsedXmlNode): boolean {
+  return childNodes(node).some(
+    (c) => isTextField(c.attrs) || isUiAutomatorScrollable(c.attrs) || holdsFieldOrScroller(c)
+  );
 }
 
 /**

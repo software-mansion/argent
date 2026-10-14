@@ -29,6 +29,7 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
+import { flowDescribeFallback } from "./flow-android-tree";
 import { readIosSimulatorUiTree } from "./flow-ios-tree";
 import { NATIVE_DESCRIBE_ROLES } from "../describe/platforms/ios/ios-native-adapter";
 import type { UiTreeNode } from "../ui-tree";
@@ -394,6 +395,18 @@ function selectorAlternatives(sel: FlowSelector): Selector[] {
 }
 
 /**
+ * Android's describe fallback (see `flowDescribeFallback`) answers only a
+ * selector with no relational scope, and only when the flow tree has no visible
+ * match. A scope names real elements: through the fallback, a screen-wide
+ * wrapper that borrowed the scope's text would widen it to every element.
+ */
+function describedFor(tree: DescribeNode, sel: FlowSelector): DescribeNode | undefined {
+  return SELECTOR_RELATIONS.some((r) => sel[r] !== undefined)
+    ? undefined
+    : flowDescribeFallback(tree);
+}
+
+/**
  * Resolve a selector's matches honoring the bare-string `loose` fallback. A pass
  * wins outright only when it has a *visible* match — the same criterion
  * {@link flowSelectorToFrame} falls through on, so `await`/`assert` and
@@ -412,6 +425,13 @@ function flowFindAll(
     if (matches.some(isVisible)) return matches;
     if (fallback.length === 0) fallback = matches;
   }
+  const described = describedFor(tree, sel);
+  if (described) {
+    for (const s of selectorAlternatives(sel)) {
+      const matches = findAll(described, s, orientation);
+      if (matches.some(isVisible)) return matches;
+    }
+  }
   return fallback;
 }
 
@@ -424,6 +444,13 @@ function flowSelectorToFrame(
   for (const s of selectorAlternatives(sel)) {
     const frame = selectorToFrame(tree, s, orientation);
     if (frame) return frame;
+  }
+  const described = describedFor(tree, sel);
+  if (described) {
+    for (const s of selectorAlternatives(sel)) {
+      const frame = selectorToFrame(described, s, orientation);
+      if (frame) return frame;
+    }
   }
   return undefined;
 }

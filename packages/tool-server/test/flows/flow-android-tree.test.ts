@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
+import {
+  adaptFullAndroidHierarchyToDescribeResult,
+  flowDescribeFallback,
+} from "../../src/tools/flows/flow-android-tree";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import {
   assertText,
@@ -465,5 +468,65 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(evaluateCondition("hidden", undefined, below)).toBe(true);
     expect(evaluateCondition("visible", undefined, below)).toBe(false);
     expect(selectorToFrame(tree, { text: "Item 8" })).toBeUndefined();
+  });
+});
+
+// The tree a selector falls back to when the flow tree has no visible match:
+// describe's trim of what the screen shows.
+describe("flowDescribeFallback", () => {
+  it("keeps scrolled-out text and field contents out of describe's labels", () => {
+    // The order card overlaps the list's viewport [1000,1400], but its second
+    // line is scrolled out of it.
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" clickable="true" package="com.acme.app" bounds="[0,200][1080,400]">
+      <node index="0" class="android.widget.TextView" text="Email" package="com.acme.app" bounds="[40,210][300,260]" />
+      <node index="1" class="android.widget.EditText" resource-id="email" text="ada@example.com" package="com.acme.app" bounds="[40,270][1040,390]" />
+    </node>
+    <node index="1" class="androidx.recyclerview.widget.RecyclerView" scrollable="true" package="com.acme.app" bounds="[0,1000][1080,1400]">
+      <node index="0" class="android.view.ViewGroup" clickable="true" package="com.acme.app" bounds="[0,1300][1080,1600]">
+        <node index="0" class="android.widget.TextView" text="Order 42" package="com.acme.app" bounds="[40,1320][600,1380]" />
+        <node index="1" class="android.widget.TextView" text="Shipped yesterday" package="com.acme.app" bounds="[40,1500][600,1560]" />
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    // describe labels the card with its hidden line and the row with the typed address.
+    const described = parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H);
+    expect(findAll(described, { text: "Shipped yesterday" })).toHaveLength(1);
+    expect(findAll(described, { role: "ViewGroup", text: "ada@example.com" })).toHaveLength(1);
+
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const fallback = flowDescribeFallback(tree)!;
+    // The card is labelled with its visible line only.
+    expect(findAll(fallback, { role: "ViewGroup", text: "Order 42" })).toHaveLength(1);
+    expect(findAll(fallback, { text: "Shipped yesterday" })).toEqual([]);
+    // The typed address labels nothing: the field is emptied and its row lends no label.
+    expect(findAll(fallback, { text: "ada@example.com" })).toEqual([]);
+  });
+
+  it("lends no label from a touchable around a text field or a scroller", () => {
+    // React Native's keyboard-dismiss wrappers: one around a form, one around a list.
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" clickable="true" package="com.acme.app" bounds="[0,0][1080,900]">
+      <node index="0" class="android.widget.TextView" text="Name" package="com.acme.app" bounds="[40,100][300,160]" />
+      <node index="1" class="android.widget.EditText" resource-id="name" package="com.acme.app" bounds="[40,180][1040,280]" />
+    </node>
+    <node index="1" class="android.view.ViewGroup" clickable="true" package="com.acme.app" bounds="[0,900][1080,1920]">
+      <node index="0" class="android.widget.ScrollView" package="com.acme.app" bounds="[0,900][1080,1920]">
+        <node index="0" class="android.widget.TextView" text="Alpha" package="com.acme.app" bounds="[40,1000][600,1060]" />
+      </node>
+    </node>
+  </node>
+</hierarchy>`;
+    const described = parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H);
+    expect(findAll(described, { role: "ViewGroup", text: "Name" })).toHaveLength(1);
+    expect(findAll(described, { role: "ViewGroup", text: "Alpha" })).toHaveLength(1);
+
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    expect(findAll(flowDescribeFallback(tree)!, { role: "ViewGroup" })).toEqual([]);
   });
 });
