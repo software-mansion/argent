@@ -4,12 +4,11 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { noFocusedFieldError, notVerifiedError, unsupportedFieldError } from "./errors";
 import type { FillResult } from "./types";
 
-/** What the page script answers. Never text: only a verdict and a length. */
+/** What the page script answers. Never text: only a verdict. */
 interface PageFillAnswer {
   status: "ok" | "no_focus" | "unsupported" | "error";
   detail?: string;
   verified?: boolean;
-  length?: number;
 }
 
 /**
@@ -21,8 +20,8 @@ interface PageFillAnswer {
  * `type=number`) gets the native value setter and an `input` event instead.
  *
  * The comparison happens in the page, after a task boundary so an editor that
- * restores its model on a microtask has done so. Only a boolean and a length
- * come back; the field may be a password.
+ * restores its model on a microtask has done so. Only a boolean comes
+ * back; the field may be a password.
  *
  * Exported for the script test, which runs it against a mock document.
  */
@@ -105,7 +104,7 @@ export function buildChromiumFillScript(text: string): string {
       el.dispatchEvent(new win.Event("change", { bubbles: true }));
       verified = await settle();
     }
-    return { status: "ok", verified: verified, length: read().length };
+    return { status: "ok", verified: verified };
   } catch (e) {
     return { status: "error" };
   }
@@ -128,9 +127,9 @@ export async function fillChromium(
   switch (answer?.status) {
     case "ok":
       if (answer.verified === true) {
-        return { method: "cdp", verified: true, length: answer.length };
+        return { verified: true };
       }
-      throw notVerifiedError("cdp", "fill_chromium_not_verified");
+      throw notVerifiedError("fill_chromium_not_verified");
     case "no_focus":
       throw noFocusedFieldError("fill_chromium_no_focus");
     case "unsupported":

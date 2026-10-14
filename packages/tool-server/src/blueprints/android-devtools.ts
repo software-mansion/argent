@@ -59,7 +59,7 @@ export interface HierarchyResult {
   sdkInt?: number;
 }
 
-/** The `setText` RPC's answer. Never carries text: only whether it matched, and a length. */
+/** The `setText` RPC's answer. Never carries text: only whether it matched. */
 export interface SetTextResult {
   /** False when no editable node that takes ACTION_SET_TEXT holds input focus. */
   focused: boolean;
@@ -68,8 +68,6 @@ export interface SetTextResult {
   /** The node now holds the requested text (a password: as many characters). */
   verified: boolean;
   password?: boolean;
-  /** Length of the text the node holds, in UTF-16 units. */
-  length?: number;
   /** The text has a line break and the node holds one line. Nothing was changed. */
   singleLine?: boolean;
   /** The helper did not answer in time: the field may have changed. */
@@ -83,10 +81,10 @@ export interface AndroidDevtoolsApi {
   ping(): Promise<{ ok: boolean; idleMs: number; protocol: string }>;
   /**
    * Set the input-focused node's text ("" clears it) with ACTION_SET_TEXT,
-   * then read it back; with `check`, only read it back. Null when the
+   * then read it back; with `check`, only read it back. Fails when the
    * installed helper predates the RPC.
    */
-  setText(text: string, options?: { check?: boolean }): Promise<SetTextResult | null>;
+  setText(text: string, options?: { check?: boolean }): Promise<SetTextResult>;
 }
 
 const READY_TIMEOUT_MS = 30_000;
@@ -516,7 +514,14 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           });
         } catch (err) {
           // A helper older than 3 answers the dispatcher's own rejection.
-          if (err instanceof Error && err.message.includes("Unknown method: setText")) return null;
+          if (err instanceof Error && err.message.includes("Unknown method: setText")) {
+            throw new FailureError("The devtools helper predates `setText`; update argent", {
+              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
+              failure_stage: "android_devtools_set_text",
+              failure_area: "tool_server",
+              error_kind: "unknown",
+            });
+          }
           // The RPC or the helper's worker ran out of time; the action may
           // still have landed.
           if (
@@ -532,7 +537,6 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           verified: result.verified === true,
           ...(typeof result.performed === "boolean" ? { performed: result.performed } : {}),
           ...(typeof result.password === "boolean" ? { password: result.password } : {}),
-          ...(typeof result.length === "number" ? { length: result.length } : {}),
           ...(result.singleLine === true ? { singleLine: true } : {}),
         };
       },

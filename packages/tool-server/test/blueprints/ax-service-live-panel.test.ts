@@ -102,30 +102,28 @@ afterEach(async () => {
 
 describe("ax-service fill", () => {
   it("sends the text as params and answers the daemon's verdict, never text", async () => {
-    answers.set("fill", { verified: true, length: 5, fillVersion: 1 });
+    answers.set("fill", { verified: true, fillVersion: 1 });
     const api = await attach();
-    expect(await api.fill("hello")).toEqual({ focused: true, verified: true, length: 5 });
+    expect(await api.fill("hello")).toEqual({ focused: true, verified: true });
     expect(received.at(-1)).toEqual({ command: "fill", params: { text: "hello" } });
   });
 
   it("sends check only when asked", async () => {
-    answers.set("fill", { verified: false, length: 2 });
+    answers.set("fill", { verified: false });
     const api = await attach();
     expect(await api.fill("", { check: true })).toEqual({
       focused: true,
       verified: false,
-      length: 2,
     });
     expect(received.at(-1)).toEqual({ command: "fill", params: { text: "", check: true } });
   });
 
   it("passes on the secure and needsBackspace hints", async () => {
-    answers.set("fill", { verified: false, length: 8, secure: true, needsBackspace: true });
+    answers.set("fill", { verified: false, secure: true, needsBackspace: true });
     const api = await attach();
     expect(await api.fill("x")).toEqual({
       focused: true,
       verified: false,
-      length: 8,
       secure: true,
       needsBackspace: true,
     });
@@ -137,9 +135,9 @@ describe("ax-service fill", () => {
     expect(await api.fill("x")).toEqual({ focused: false, verified: false });
   });
 
-  it("answers null on a daemon that predates the command", async () => {
+  it("fails, saying to update argent, on a daemon that predates the command", async () => {
     const api = await attach();
-    expect(await api.fill("x")).toBeNull();
+    await expect(api.fill("x")).rejects.toThrow(/predates `fill`; update argent/);
   });
 
   it("answers unsupported for a focused element that is no text input", async () => {
@@ -194,14 +192,13 @@ describe("ax-service fill", () => {
   });
 
   it("sends typeable only when the caller cannot type the text, and passes cleared on", async () => {
-    answers.set("fill", { verified: false, secure: true, cleared: true, length: 0 });
+    answers.set("fill", { verified: false, secure: true, cleared: true });
     const api = await attach();
     expect(await api.fill("x", { typeable: false })).toEqual({
       focused: true,
       verified: false,
       secure: true,
       cleared: true,
-      length: 0,
     });
     expect(received.at(-1)).toEqual({ command: "fill", params: { text: "x", typeable: false } });
     await api.fill("x", { typeable: true });

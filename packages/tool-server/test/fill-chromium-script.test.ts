@@ -133,7 +133,6 @@ describe("fill page script", () => {
     await expect(runScript(page, "hello")).resolves.toEqual({
       status: "ok",
       verified: true,
-      length: 5,
     });
     expect(input._value).toBe("hello");
     // execCommand fires the page's events itself; nothing synthetic was sent.
@@ -144,7 +143,7 @@ describe("fill page script", () => {
     const page = makePage();
     const input = control(page, "TEXTAREA");
     page.doc.activeElement = input;
-    await expect(runScript(page, "")).resolves.toEqual({ status: "ok", verified: true, length: 0 });
+    await expect(runScript(page, "")).resolves.toEqual({ status: "ok", verified: true });
     expect(input._value).toBe("");
   });
 
@@ -173,7 +172,6 @@ describe("fill page script", () => {
     await expect(runScript(page, "42")).resolves.toEqual({
       status: "ok",
       verified: true,
-      length: 2,
     });
     expect(input._value).toBe("42");
     expect(page.events).toEqual(["input", "change"]);
@@ -186,7 +184,6 @@ describe("fill page script", () => {
     await expect(runScript(page, "rich")).resolves.toEqual({
       status: "ok",
       verified: true,
-      length: 4,
     });
     expect(div.innerText).toBe("rich");
   });
@@ -268,7 +265,7 @@ describe("fill page script", () => {
     const input = control(page, "INPUT", { type: "password", _value: "previous-secret" });
     page.doc.activeElement = input;
     const answer = await runScript(page, "next-secret");
-    expect(answer).toEqual({ status: "ok", verified: true, length: 11 });
+    expect(answer).toEqual({ status: "ok", verified: true });
     expect(JSON.stringify(answer)).not.toContain("secret");
   });
 });

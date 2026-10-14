@@ -14,7 +14,7 @@ import { fillChromium } from "./chromium";
 import { fillByDeviceKeys } from "./keys";
 import type { FillParams, FillResult } from "./types";
 
-export type { FillMethod, FillResult } from "./types";
+export type { FillResult } from "./types";
 
 const zodSchema = z.object({
   udid: z.string().min(1).describe("Target device id from `list-devices`."),
@@ -67,8 +67,9 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
     iosDevice: {
       requires: ["xcrun"],
       handler: async (_services, params, device) => {
+        // Nothing on a physical iPhone reads a field back.
         await fillByDeviceKeys(registry, device, params.text);
-        return { method: "keys", verified: null };
+        return { verified: false };
       },
     },
     android: {
@@ -95,9 +96,8 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
       failedMsg: ({ failureSignal }) => `Failed to fill the field: ${failureSignal.error_code}`,
     },
     description: `Set the text of the focused text field to exactly \`text\`, replacing what it holds; "" clears it. For SDK callers such as an e2e engine, which taps the field first.
-iOS simulator: AX text operations through the ax-service (a secure field is cleared that way, then typed into with keys). Android: ACTION_SET_TEXT through the devtools helper. Chromium: the page's editing commands. The app sees an ordinary edit. Keys (a delete burst, then typing) are used only where none of these exists: an older ax-service or helper, and a physical iPhone.
-Returns { method: "accessibility" | "helper" | "cdp" | "keys", verified, length? }, never the text. \`verified\` is null when the field could not be read back.
-Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text (no keys are tried after that), FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; nothing is changed). Not supported on TV targets or Vega.`,
+Returns { verified }, never the text: true when the field was read back holding the text, false on a physical iPhone, where nothing can read it back.
+Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text, FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; nothing is changed). Fails if the device's ax-service or devtools helper predates fill; update argent. Not supported on TV targets or Vega.`,
     hideFromMcp: true,
     zodSchema,
     capability,

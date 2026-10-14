@@ -108,19 +108,12 @@ export interface ForegroundApp {
 
 /**
  * The `fill` result. It never carries the field's text or the text that was
- * asked for: either may be a credential.
+ * asked for: either may be a credential. A field that does not read back the
+ * text fails with FILL_NOT_VERIFIED instead.
  */
 export interface FillResult {
-  /**
-   * How the text got into the field: `accessibility` (iOS ax-service), `helper`
-   * (Android devtools helper), `cdp` (Chromium page) or `keys` (a delete-key
-   * burst, then typed keys).
-   */
-  method: "accessibility" | "helper" | "cdp" | "keys";
-  /** The field was read back and holds the text. Null when nothing could read it back. */
-  verified: boolean | null;
-  /** Length of the text the field holds afterwards, in UTF-16 units, when read back. */
-  length?: number;
+  /** The field was read back and holds the text. False on a physical iPhone, where nothing can read it back. */
+  verified: boolean;
 }
 
 export interface CallToolOptions {

@@ -1,6 +1,6 @@
 // The helper's `setText` RPC as the blueprint exposes it: the request it sends,
-// the verdict it passes on, and the null that sends `fill` to its key fallback
-// when the installed helper predates the RPC.
+// the verdict it passes on, and the failure when the installed helper predates
+// the RPC.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -85,7 +85,6 @@ describe("android-devtools setText", () => {
       performed: true,
       verified: true,
       password: false,
-      length: 4,
     });
     const api = await start();
     expect(await api.setText("text")).toEqual({
@@ -93,18 +92,16 @@ describe("android-devtools setText", () => {
       performed: true,
       verified: true,
       password: false,
-      length: 4,
     });
     expect(requests.at(-1)).toEqual({ method: "setText", params: { text: "text" } });
   });
 
   it("sends check only when asked", async () => {
-    answerSetText = async () => ({ focused: true, verified: false, length: 1 });
+    answerSetText = async () => ({ focused: true, verified: false });
     const api = await start();
     expect(await api.setText("", { check: true })).toEqual({
       focused: true,
       verified: false,
-      length: 1,
     });
     expect(requests.at(-1)).toEqual({ method: "setText", params: { text: "", check: true } });
   });
@@ -115,7 +112,7 @@ describe("android-devtools setText", () => {
     expect(await api.setText("x")).toEqual({ focused: false, verified: false });
   });
 
-  it("answers null on a helper that predates the RPC", async () => {
+  it("fails, saying to update argent, on a helper that predates the RPC", async () => {
     answerSetText = async () => {
       throw new FailureError("java.lang.IllegalArgumentException: Unknown method: setText", {
         error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
@@ -125,7 +122,7 @@ describe("android-devtools setText", () => {
       });
     };
     const api = await start();
-    expect(await api.setText("x")).toBeNull();
+    await expect(api.setText("x")).rejects.toThrow(/predates `setText`; update argent/);
   });
 
   it.each([

@@ -95,14 +95,12 @@ export interface AXForegroundAppResponse {
   name?: string;
 }
 
-/** The `fill` command's answer. Never carries text: only whether it matched, and a length. */
+/** The `fill` command's answer. Never carries text: only whether it matched. */
 export interface AXFillResponse {
   /** False when nothing holds keyboard focus. */
   focused: boolean;
   /** The focused input now holds the requested text (a secure field: as many bullets). */
   verified: boolean;
-  /** Length of the text the input holds, in UTF-16 units. */
-  length?: number;
   /** A clear the field ignored with its text still selected; one backspace removes it. */
   needsBackspace?: boolean;
   /**
@@ -134,13 +132,10 @@ export interface AXServiceApi {
   ping(): Promise<boolean>;
   /**
    * Set the focused input's text ("" clears it) through the AX text
-   * operations, then read it back; with `check`, only read it back. Null when
+   * operations, then read it back; with `check`, only read it back. Fails when
    * the daemon predates the command.
    */
-  fill(
-    text: string,
-    options?: { check?: boolean; typeable?: boolean }
-  ): Promise<AXFillResponse | null>;
+  fill(text: string, options?: { check?: boolean; typeable?: boolean }): Promise<AXFillResponse>;
   /**
    * The display id of the panel the guest renders to (1 the cover panel, 3
    * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
@@ -588,10 +583,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       async fill(
         text: string,
         options: { check?: boolean; typeable?: boolean } = {}
-      ): Promise<AXFillResponse | null> {
+      ): Promise<AXFillResponse> {
         let result: {
           verified?: boolean;
-          length?: number;
           needsBackspace?: boolean;
           secure?: boolean;
           cleared?: boolean;
@@ -606,7 +600,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         } catch (err) {
           // Envelope-level errors carry only the daemon's code, never text.
           const code = err instanceof Error ? err.message : "";
-          if (code === "unknown_command") return null;
+          if (code === "unknown_command") {
+            throw new FailureError("ax-service predates `fill`; update argent", {
+              error_code: FAILURE_CODES.AX_QUERY_FAILED,
+              failure_stage: "ax_service_fill",
+              failure_area: "tool_server",
+              error_kind: "unknown",
+            });
+          }
           // A focused element that takes no text is no field to fill either.
           if (code === "no_focused_field" || code === "not_editable") {
             return { focused: false, verified: false };
@@ -632,7 +633,6 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         return {
           focused: true,
           verified: result.verified === true,
-          ...(typeof result.length === "number" ? { length: result.length } : {}),
           ...(result.needsBackspace === true ? { needsBackspace: true } : {}),
           ...(result.secure === true ? { secure: true } : {}),
           ...(typeof result.cleared === "boolean" ? { cleared: result.cleared } : {}),
