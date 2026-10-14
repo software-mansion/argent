@@ -172,6 +172,10 @@ Security:
   an https:// tunnel/proxy when crossing untrusted networks.
 
 Notes:
+  - With no terminal on stdin, a run that would have to ask for the target or a
+    confirmation refuses with exit 2 instead of stopping at a prompt nobody can
+    answer. A failed pre-flight there fails outright (exit 1) rather than
+    offering its retry menu; --no-verify skips it.
   - If ARGENT_TOOLS_URL is also set in your environment, it overrides the link.
   - To stop using the remote target, run \`argent unlink\`.
   - \`argent server start/stop/status\` manage the local tool-server lifecycle
@@ -189,7 +193,8 @@ Remove the persisted remote tool-server link (~/.argent/link.json) and return
 to default local auto-spawn behaviour.
 
 Flags:
-  --yes, -y     Skip the confirmation prompt.
+  --yes, -y     Skip the confirmation prompt. Required with no terminal on stdin
+                when a link is set.
   --help, -h    Show this help.
 
 Examples:
@@ -205,6 +210,19 @@ Notes:
   - Restart your editor afterwards — a running \`argent mcp\` process won't
     revert to local auto-spawn until it's relaunched.
 `);
+}
+
+// A clack prompt on exhausted stdin never settles, and the command exits 0 having done nothing.
+function canPromptUser(): boolean {
+  return process.stdin.isTTY === true;
+}
+
+function refuseWithoutTerminal(command: string, remedy: string): never {
+  console.error(
+    `Error: ${command} has a question to ask and there is no terminal on stdin to answer it.\n` +
+      `  ${remedy}\n`
+  );
+  process.exit(2);
 }
 
 async function promptHost(existing: LinkConfig | null, initial?: string): Promise<string> {
@@ -344,6 +362,14 @@ export async function link(argv: string[]): Promise<void> {
     process.exit(2);
   }
 
+  // A missing --host is asked for; a missing --port too, unless --yes takes 3001.
+  if ((flags.host === null || (flags.port === null && !flags.yes)) && !canPromptUser()) {
+    refuseWithoutTerminal(
+      "argent link",
+      "Re-run with --host <host> --port <port> to name the target, or add --yes to take port 3001."
+    );
+  }
+
   const existing = await readLinkConfig();
 
   let host: string;
@@ -383,6 +409,12 @@ export async function link(argv: string[]): Promise<void> {
       p.outro("No changes.");
       return;
     }
+    if (!canPromptUser()) {
+      refuseWithoutTerminal(
+        "argent link",
+        "Re-run with --yes to replace the existing link without being asked."
+      );
+    }
     const overwrite = await p.confirm({
       message: sameUrl
         ? `Replace the token for ${pc.cyan(url)}?`
@@ -412,8 +444,8 @@ export async function link(argv: string[]): Promise<void> {
       if (spinner) spinner.stop(pc.red("Verification failed."));
       const detail = result.error ? ` (${result.error})` : "";
 
-      if (flags.yes) {
-        // Non-interactive: can't prompt, so fail fast.
+      if (flags.yes || !canPromptUser()) {
+        // Nobody to offer the retry menu to, so fail fast on the real problem.
         console.error(
           `Error: pre-flight GET ${url}/tools failed${detail}. ` +
             `Make sure the remote tool-server is running, or pass --no-verify to skip.`
@@ -499,6 +531,12 @@ export async function unlink(argv: string[]): Promise<void> {
   }
 
   if (!flags.yes) {
+    if (!canPromptUser()) {
+      refuseWithoutTerminal(
+        "argent unlink",
+        "Re-run with --yes to remove the link without being asked."
+      );
+    }
     const confirmed = await p.confirm({
       message: `Remove link to ${pc.cyan(existing.url)}?`,
       initialValue: true,

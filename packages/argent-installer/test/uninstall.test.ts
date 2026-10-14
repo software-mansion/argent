@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
+import { confirm, log } from "@clack/prompts";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -63,6 +64,11 @@ vi.mock("@clack/prompts", () => ({
   note: vi.fn(),
 }));
 
+// Off a terminal Node leaves isTTY undefined, which its boolean type forbids.
+function setIsTty(value: boolean | undefined): void {
+  (process.stdin as { isTTY?: boolean }).isTTY = value;
+}
+
 let tmpDir: string;
 let originalCwd: string;
 let savedAgent: string | undefined;
@@ -92,6 +98,51 @@ afterEach(() => {
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
   else process.env.npm_config_user_agent = savedAgent;
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe("uninstall — nobody to confirm with", () => {
+  it("refuses before removing anything when stdin is not a terminal", async () => {
+    process.chdir(tmpDir);
+    // The refusal reports install_mode, so give the project a mode that is not
+    // the declared default: it is only right if the mode is resolved above the
+    // confirmation block the refusal replaces.
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent", writtenBy: "1.0.0" })
+    );
+    const savedIsTty = process.stdin.isTTY;
+    setIsTty(undefined);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+
+    try {
+      await expect(uninstall([])).rejects.toThrow("process.exit(2)");
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
+        "npm",
+        expect.arrayContaining(["uninstall", "-g"]),
+        expect.anything()
+      );
+      const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+      // --yes is not "the defaults" here: it removes a global install the
+      // interactive default keeps, so the remedy has to say so.
+      expect(errors.some((m) => m.includes("remove without confirming"))).toBe(true);
+      expect(telemetryMock.track).toHaveBeenCalledWith(
+        "installation:cli_uninstall_complete",
+        expect.objectContaining({
+          has_uninstalled_package: false,
+          error_code: "UNINSTALL_NEEDS_TERMINAL",
+          install_mode: "local",
+        })
+      );
+    } finally {
+      exitSpy.mockRestore();
+      setIsTty(savedIsTty);
+    }
+  });
 });
 
 describe("uninstall — telemetry consent preservation", () => {

@@ -3,6 +3,7 @@ import pc from "picocolors";
 import {
   init as telemetryInit,
   track,
+  hasShownFirstRunNotice,
   warmTelemetryIdentitySync,
   writeConsentFlag,
 } from "@argent/telemetry";
@@ -25,9 +26,11 @@ import { PACKAGE_NAME } from "./constants.js";
 import { writeCliRecord } from "./cli-record.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
 import { parseInitArgs, InitCancelled } from "./init-args.js";
+import { canPromptUser, noTerminalMessage } from "./terminal.js";
 import {
   InitTelemetry,
   INSTALL_MODE_FLAG_CONFLICT,
+  INSTALL_NEEDS_TERMINAL,
   INSTALL_UNCLASSIFIED_FAILED,
 } from "./init-telemetry.js";
 import { promptInstallMode } from "./init-mode-prompt.js";
@@ -56,6 +59,29 @@ export async function init(args: string[]): Promise<void> {
     let version = getInstalledVersion() ?? "unknown";
     p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
+    const trackStart = (): void => {
+      // Before the first event, so cli_init_start carries the same distinct_id
+      // as every later one instead of a fallback the background upgrade only
+      // migrates to mid-run. Sync by design: the async variant awaits an
+      // unref'd resolver that never settles in a short-lived CLI.
+      warmTelemetryIdentitySync();
+      track("installation:cli_init_start", {
+        package_manager: detectPackageManager(),
+        is_non_interactive: parsed.nonInteractive,
+      });
+    };
+
+    // Without --yes every path below has a prompt in it. Consent is one of them
+    // on a first run, so the refusal is tracked only once consent is settled.
+    if (!parsed.nonInteractive && !canPromptUser()) {
+      p.log.error(noTerminalMessage("argent init", "to take the defaults without being asked."));
+      if (!parsed.noTelemetry && hasShownFirstRunNotice()) {
+        trackStart();
+        await tel.finalize(INSTALL_NEEDS_TERMINAL);
+      }
+      process.exit(2);
+    }
+
     // Before the first track(), so the choice governs whether this session's
     // events are collected at all.
     const consent = await resolveTelemetryConsent({
@@ -68,16 +94,7 @@ export async function init(args: string[]): Promise<void> {
       process.exit(0);
     }
 
-    // Resolve the host fingerprint before the first event, so cli_init_start
-    // carries the same distinct_id as every later event instead of a fallback the
-    // background upgrade only migrates to mid-run. Sync by design: the async
-    // variant awaits an unref'd resolver that never settles in a short-lived CLI.
-    warmTelemetryIdentitySync();
-
-    track("installation:cli_init_start", {
-      package_manager: detectPackageManager(),
-      is_non_interactive: parsed.nonInteractive,
-    });
+    trackStart();
 
     // Seeds the non-interactive default and the prompt highlight, so re-running
     // init in a local-mode repo doesn't silently revert it to global. Absent a

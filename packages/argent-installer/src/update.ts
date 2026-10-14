@@ -48,6 +48,7 @@ import { writeCliRecord } from "./cli-record.js";
 import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
 import { resolveTelemetryConsent } from "./first-run-notice.js";
+import { canPromptUser, noTerminalMessage } from "./terminal.js";
 
 function getRequestedVersion(args: string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
@@ -121,6 +122,13 @@ const UPDATE_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
 const UPDATE_GLOBAL_PREFIX_UNWRITABLE: InstallerFailureSignal = {
   error_code: FAILURE_CODES.UPDATE_GLOBAL_PREFIX_UNWRITABLE,
   failure_stage: "installer_update_global_prefix_preflight",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
+const UPDATE_NEEDS_TERMINAL: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_NEEDS_TERMINAL,
+  failure_stage: "installer_update_prompt",
   failure_area: "installer",
   error_kind: "validation",
 };
@@ -414,6 +422,14 @@ export async function update(args: string[]): Promise<void> {
       const cmdStr = formatShellCommand(cmd);
 
       if (!nonInteractive) {
+        if (!canPromptUser()) {
+          p.log.error(
+            noTerminalMessage("argent update", "to take the defaults without being asked.")
+          );
+          await trackPackageAction("update_failed", updateStartTime, false, UPDATE_NEEDS_TERMINAL);
+          return { failed: UPDATE_NEEDS_TERMINAL };
+        }
+
         p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
         const proceed = await p.confirm({
@@ -633,6 +649,16 @@ export async function update(args: string[]): Promise<void> {
 
     let targets: InstallMode[];
     if (decision.kind === "prompt") {
+      if (!canPromptUser()) {
+        p.log.error(
+          noTerminalMessage("argent update", "to take the defaults without being asked.")
+        );
+        await trackPackageAction("update_failed", updateStartTime, false, UPDATE_NEEDS_TERMINAL);
+        await failUpdateTelemetry(UPDATE_NEEDS_TERMINAL);
+        p.outro(pc.red("Update failed."));
+        process.exit(2);
+      }
+
       const picked = await promptInstallTargets("update");
       if (picked === "cancel") {
         await completeUpdateTelemetry();
@@ -688,13 +714,14 @@ export async function update(args: string[]): Promise<void> {
       process.exit(0);
     }
 
-    // Nothing updated and a target hard-failed: failure telemetry, exit 1, no
-    // refresh. A partial run with an "updated" target falls through — it still
-    // needs its refresh, and the failure resurfaces in the exit code below.
+    // Nothing updated and a target hard-failed: failure telemetry, exit 1 (2
+    // for a no-terminal refusal), no refresh. A partial run with an "updated"
+    // target falls through — it still needs its refresh, and the failure
+    // resurfaces in the exit code below.
     if (firstFailure && !outcomes.includes("updated")) {
       await failUpdateTelemetry(firstFailure);
       p.outro(pc.red("Update failed."));
-      process.exit(1);
+      process.exit(firstFailure === UPDATE_NEEDS_TERMINAL ? 2 : 1);
     }
 
     // The refresh is keyed on the PROJECT's mode (installMode), not the install
@@ -820,23 +847,24 @@ export async function update(args: string[]): Promise<void> {
         scope: localAdapters.length > 0 ? "local" : "global",
         effectiveRoot: projectRoot,
         // Same one-shot confirmation init uses for cross-project removals.
-        // --yes passes no confirmer (the sweep goes report-only) — the
-        // agent-triggered `update --yes` must never delete cross-project state
-        // on a fallible PATH probe.
-        confirmCrossProjectRemovals: nonInteractive
-          ? undefined
-          : async (items) => {
-              p.log.warn(
-                `Dead argent entries from a previous global install were found in\n` +
-                  `  global (cross-project) config files:\n` +
-                  items.map((item) => `    ${pc.cyan(item)}`).join("\n")
-              );
-              const choice = await p.confirm({
-                message: "Remove these dead global entries? - recommended",
-                initialValue: true,
-              });
-              return !p.isCancel(choice) && choice === true;
-            },
+        // --yes or no terminal passes no confirmer (the sweep goes report-only):
+        // an unattended run must never delete cross-project state on a
+        // fallible PATH probe.
+        confirmCrossProjectRemovals:
+          nonInteractive || !canPromptUser()
+            ? undefined
+            : async (items) => {
+                p.log.warn(
+                  `Dead argent entries from a previous global install were found in\n` +
+                    `  global (cross-project) config files:\n` +
+                    items.map((item) => `    ${pc.cyan(item)}`).join("\n")
+                );
+                const choice = await p.confirm({
+                  message: "Remove these dead global entries? - recommended",
+                  initialValue: true,
+                });
+                return !p.isCancel(choice) && choice === true;
+              },
       });
       if (staleCleanup.lines.length > 0) {
         p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");

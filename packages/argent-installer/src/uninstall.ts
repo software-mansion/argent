@@ -33,6 +33,7 @@ import {
 import { execShellCommandSync } from "./shell.js";
 import { removeCliRecordFor } from "./cli-record.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
+import { canPromptUser, noTerminalMessage } from "./terminal.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
@@ -51,6 +52,13 @@ const UNINSTALL_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
   failure_stage: "installer_uninstall_package_action",
   failure_area: "installer",
   error_kind: "subprocess",
+};
+
+const UNINSTALL_NEEDS_TERMINAL: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_NEEDS_TERMINAL,
+  failure_stage: "installer_uninstall_prompt",
+  failure_area: "installer",
+  error_kind: "validation",
 };
 
 // Terminal event for an otherwise unclassified throw, so the buffered
@@ -366,7 +374,16 @@ export async function uninstall(args: string[]): Promise<void> {
   try {
     p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
+    const projectRoot = resolveProjectRoot(process.cwd());
+    installMode = resolveInstallMode(projectRoot);
+
     if (!nonInteractive) {
+      if (!canPromptUser()) {
+        p.log.error(noTerminalMessage("argent uninstall", "to remove without confirming."));
+        await finalizeUninstallTelemetry(false, false, UNINSTALL_NEEDS_TERMINAL);
+        process.exit(2);
+      }
+
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const proceed = await p.confirm({
@@ -380,9 +397,6 @@ export async function uninstall(args: string[]): Promise<void> {
         process.exit(0);
       }
     }
-
-    const projectRoot = resolveProjectRoot(process.cwd());
-    installMode = resolveInstallMode(projectRoot);
 
     // Decided before anything is mutated, so an invalid flag or a cancelled
     // coexistence prompt aborts cleanly.

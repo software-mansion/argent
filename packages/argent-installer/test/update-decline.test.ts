@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { stripVTControlCharacters } from "node:util";
 import { update } from "../src/update.js";
+import { cleanupStaleMcpConfigs } from "../src/init-stale-config.js";
 
 // Declining the update prompt must cancel + exit 0 without the config refresh
 // (entry rewrites, allowlists, stale-config sweep, rules/agents, skills)
@@ -61,6 +62,11 @@ vi.mock("../src/first-run-notice.js", () => ({
 vi.mock("../src/telemetry-finalize.js", () => ({
   finalizeTelemetry: vi.fn(async (capture: () => void) => capture()),
 }));
+// The real sweep, spied on for the confirmer update hands it.
+vi.mock("../src/init-stale-config.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/init-stale-config.js")>();
+  return { ...original, cleanupStaleMcpConfigs: vi.fn(original.cleanupStaleMcpConfigs) };
+});
 vi.mock("../src/update-target.js", () => ({
   resolveInstallableUpdateTarget: vi.fn(async () => ({
     latestVersion: "99.0.0",
@@ -81,6 +87,11 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   };
 });
 
+// Off a terminal Node leaves isTTY undefined, which its boolean type forbids.
+function setIsTty(value: boolean | undefined): void {
+  (process.stdin as { isTTY?: boolean }).isTTY = value;
+}
+
 class ExitSentinel extends Error {
   constructor(public readonly code: number | undefined) {
     super(`process.exit(${code})`);
@@ -94,6 +105,7 @@ let savedHome: string | undefined;
 let savedUserProfile: string | undefined;
 let savedAgent: string | undefined;
 let exitSpy: ReturnType<typeof vi.spyOn>;
+let savedIsTty: boolean | undefined;
 
 beforeEach(() => {
   // detectPackageManager() reads npm_config_user_agent, so the install/update
@@ -102,6 +114,9 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
+  // The prompts these tests answer only exist for a user who can answer them.
+  savedIsTty = process.stdin.isTTY;
+  setIsTty(true);
   // clearAllMocks keeps the per-test execFileSync implementations.
   childProcessMock.execFileSync.mockReset();
   topologyState.globalInstalled = true;
@@ -129,6 +144,7 @@ beforeEach(() => {
 
 afterEach(() => {
   exitSpy.mockRestore();
+  setIsTty(savedIsTty);
   process.chdir(originalCwd);
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
   else process.env.npm_config_user_agent = savedAgent;
@@ -165,6 +181,74 @@ describe("update — interactive decline", () => {
     // The config refresh never ran: the file the refresh would rewrite is
     // byte-identical.
     expect(fs.readFileSync(mcpJson, "utf8")).toBe(before);
+  });
+
+  it("refuses an update it cannot ask about, leaving the install alone", async () => {
+    setIsTty(undefined);
+
+    await expect(update([])).rejects.toThrow(ExitSentinel);
+
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(promptsMock.confirm).not.toHaveBeenCalled();
+    expect(npmInstallCalls()).toHaveLength(0);
+    const errors = promptsMock.log.error.mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("--yes"))).toBe(true);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:package_action",
+      expect.objectContaining({ action: "update_failed", error_code: "UPDATE_NEEDS_TERMINAL" })
+    );
+  });
+
+  // Asked before any target runs, so it emits both events, like the
+  // invalid-version refusal there.
+  it("refuses the coexisting-install choice when there is no terminal", async () => {
+    setIsTty(undefined);
+    fs.mkdirSync(path.join(projDir, "node_modules", "@swmansion", "argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projDir, "node_modules", "@swmansion", "argent", "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    fs.mkdirSync(path.join(projDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent", writtenBy: "1.0.0" })
+    );
+
+    await expect(update([])).rejects.toThrow(ExitSentinel);
+
+    expect(exitSpy).toHaveBeenCalledWith(2);
+    expect(promptsMock.confirm).not.toHaveBeenCalled();
+    expect(npmInstallCalls()).toHaveLength(0);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:package_action",
+      expect.objectContaining({ action: "update_failed", error_code: "UPDATE_NEEDS_TERMINAL" })
+    );
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_update_fail",
+      expect.objectContaining({ error_code: "UPDATE_NEEDS_TERMINAL" })
+    );
+  });
+
+  // Nothing to install, so a terminal-less run reaches the sweep.
+  it("hands the sweep no confirmer when there is no terminal", async () => {
+    topologyState.globalVersion = "99.0.0";
+    setIsTty(undefined);
+
+    await update([]);
+
+    expect(vi.mocked(cleanupStaleMcpConfigs)).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmCrossProjectRemovals: undefined })
+    );
+  });
+
+  it("keeps the sweep's confirmation for a run that can ask", async () => {
+    topologyState.globalVersion = "99.0.0";
+
+    await update([]);
+
+    expect(vi.mocked(cleanupStaleMcpConfigs)).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmCrossProjectRemovals: expect.any(Function) })
+    );
   });
 
   it("accepting the prompt still proceeds to the install", async () => {
