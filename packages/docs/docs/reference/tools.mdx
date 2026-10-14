@@ -33,8 +33,6 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 `launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
 
-`terminate-app` is hidden from MCP; call it with the [Argent SDK](./node-client.mdx). It works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
-
 Argent drives a foldable iOS simulator, for example the iPhone Duo. `list-devices` marks it with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
 - Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. The panel that shows the UI is the active panel.
@@ -59,8 +57,6 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
-`ui-tree` and `foreground-app` are hidden from MCP; call them with the [Argent SDK](./node-client.mdx), which exports their `UiTree` and `ForegroundApp` result types. Fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.
-
 ## Interacting
 
 | Tool                     | Description                                                     |
@@ -78,47 +74,6 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `run-sequence`           | Execute several interaction steps in a single call              |
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
-
-`fill` is hidden from MCP. Call it with the [Argent SDK](./node-client.mdx), which exports its `FillResult` result type. Tap the text field first. `fill` then replaces the text of the focused field with `text`. An empty `text` clears the field. `text` accepts `{{secret:<NAME>}}` placeholders, like `keyboard`. The app gets the change as a usual edit, and its change events fire.
-
-| Platform                   | Method          | How `fill` sets the text                                              |
-| -------------------------- | --------------- | --------------------------------------------------------------------- |
-| iOS simulator              | `accessibility` | The ax-service selects all text, then inserts or deletes text         |
-| Android emulator or device | `helper`        | The devtools helper sends `ACTION_SET_TEXT` to the focused node       |
-| Chromium                   | `cdp`           | The page selects all text, then runs its own insert or delete command |
-| Physical iPhone            | `keys`          | The runner presses Delete 100 times, then types the text              |
-
-After the change, `fill` reads the field again. The result is `{ method, verified, length }`. The result never contains the text of the field.
-
-- `verified` is `true` when the field holds `text`. For a password field, `fill` compares only the length of the text. This includes a password input in Safari.
-- `verified` is `null` when `fill` cannot read the field. This occurs on a physical iPhone, and in some cases of the `keys` fallback below.
-- `length` is the number of UTF-16 code units in the field.
-
-When the field does not hold `text` after the change, `fill` fails with `FILL_NOT_VERIFIED`. `fill` does not try again with keys. For example, a number input refuses letters.
-
-A single-line field cannot hold a newline. When `text` has a newline and the field holds one line, `fill` fails with `FILL_UNSUPPORTED_FIELD` and does not change the field. `fill` can tell a single-line field on iOS (UIKit, SwiftUI, React Native, Safari), on Android (native fields, Chrome and WebView), and in Chromium. A Flutter text field does not report the number of lines. On a Flutter single-line field, `fill` changes the field and then fails with `FILL_NOT_VERIFIED`.
-
-A multi-line web editor (`contenteditable`) on iOS keeps one line break at the end of its text. `fill` ignores that line break, as Chromium does.
-
-`fill` presses keys only in these cases:
-
-- A secure text field in an iOS app accepts only typed text. The ax-service clears the field, then `fill` types `text` with keys. Keys can type only the characters of a hardware keyboard, on one line.
-- An ax-service or a devtools helper from argent 0.28.0 or earlier does not have the `fill` command. `fill` then deletes the text with keys and types `text`. Keys can type only the characters of a hardware keyboard on iOS, and only printable ASCII on Android. When the old component can read the screen, `fill` finds the focused field first and reads the text again after typing. Argent installs the new devtools helper on the next use, so on Android this case is temporary.
-
-Other platform behavior:
-
-- On Android, the first text field of a screen often has focus before a tap. `fill` without a tap then writes into that field.
-- On Android, `fill` with an empty `text` on an empty field can send one change event to the app.
-- On iOS, Safari shows a picker for a date or time input. `fill` fails there with `FILL_NO_FOCUSED_FIELD` or `FILL_UNSUPPORTED_FIELD`.
-
-| Error code                       | Cause                                                                                                                                                                                                           |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FILL_NO_FOCUSED_FIELD`          | No text field has keyboard focus. `fill` changed nothing                                                                                                                                                        |
-| `FILL_NOT_VERIFIED`              | The field does not hold `text` after the change. Or the device did not answer in time: then the field can have changed. Or `fill` could not select the text of the field: then `fill` changed nothing           |
-| `FILL_UNSUPPORTED_FIELD`         | The field cannot take `text`: a date or time input, a disabled or read-only field, a newline for a single-line field, or a character that keys cannot type for an iOS secure text field. `fill` changed nothing |
-| `KEYBOARD_CHARACTER_UNSUPPORTED` | Only keys can fill the field, and `text` has a character that keys cannot type. `fill` changed nothing                                                                                                          |
-
-`fill` does not support Apple TV, Android TV and Vega.
 
 ## JavaScript runtime debugging
 
@@ -203,3 +158,11 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 | `gather-workspace-data` | Fetch a structured snapshot of the app project's workspace |
 | `update-argent`         | Apply a pending Argent update                              |
 | `dismiss-update`        | Silence update reminders for a number of hours             |
+
+## Footnotes
+
+`terminate-app`, `ui-tree`, `foreground-app` and `fill` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
+
+`terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
+
+In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.
