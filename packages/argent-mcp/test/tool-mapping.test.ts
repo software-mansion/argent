@@ -60,6 +60,14 @@ describe("toMcpTool — MCP _meta forwarding", () => {
     });
   });
 
+  it("keeps a param whose `not` is a real constraint", () => {
+    const schema = { properties: { foo: { type: "string", not: { const: "" } } } };
+    expect(toMcpTool({ ...base, inputSchema: schema }).inputSchema).toEqual({
+      type: "object",
+      ...schema,
+    });
+  });
+
   it("always forces inputSchema.type to 'object' and preserves other keys", () => {
     const result = toMcpTool(base);
     expect(result.inputSchema).toEqual({

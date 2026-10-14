@@ -15,7 +15,9 @@ type McpTool = {
 function withoutRetiredParams(schema: Record<string, unknown>): Record<string, unknown> {
   const properties = schema.properties as Record<string, { not?: object }> | undefined;
   if (!properties) return schema;
-  const live = Object.entries(properties).filter(([, prop]) => !prop.not);
+  const live = Object.entries(properties).filter(
+    ([, prop]) => !prop.not || Object.keys(prop.not).length > 0
+  );
   if (live.length === Object.keys(properties).length) return schema;
   return { ...schema, properties: Object.fromEntries(live) };
 }
