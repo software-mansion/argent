@@ -140,6 +140,11 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
   });
 
+  it("lists the archive formats POST /upload accepts", async () => {
+    const res = await request(handle.app).get("/tools").expect(200);
+    expect(res.body.uploadFormats).toEqual(["zstd", "gzip"]);
+  });
+
   it("lists a hideFromMcp tool with the flag set, and still runs it", async () => {
     const res = await request(handle.app).get("/tools").expect(200);
     const byName = new Map<string, Record<string, unknown>>(

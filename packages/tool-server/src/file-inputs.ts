@@ -32,7 +32,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import bytesUtil from "bytes";
-import { safeExtractTarGz } from "@argent/archive";
+import { safeExtractArchive } from "@argent/archive";
 import {
   isFileInputWire,
   type FileInputMember,
@@ -207,7 +207,7 @@ async function extractTarUpload(
       join(tmpdir(), `argent-tar-upload-${entry.sha256.slice(0, 16)}-`)
     );
     tempDirs.push(extractDir);
-    const uploaded = await safeExtractTarGz(entry.tarPath, extractDir, basename(wire.path));
+    const uploaded = await safeExtractArchive(entry.tarPath, extractDir, basename(wire.path));
     return { value: uploaded, meta: { ...meta, viaUpload: true } };
   } catch (err) {
     if (err instanceof FileInputError) throw err;

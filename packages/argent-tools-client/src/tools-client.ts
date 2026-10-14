@@ -318,7 +318,9 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return { url, token };
   }
 
-  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+  async function fetchToolList(opts?: {
+    signal?: AbortSignal;
+  }): Promise<{ tools: ToolMeta[]; uploadFormats?: string[] }> {
     opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
     const res = await doFetch(
@@ -327,8 +329,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       { longRunning: false, carriesUpload: false }
     );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
-    const json = (await res.json()) as { tools: ToolMeta[] };
-    return json.tools;
+    return (await res.json()) as { tools: ToolMeta[]; uploadFormats?: string[] };
+  }
+
+  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+    return (await fetchToolList(opts)).tools;
   }
 
   async function fetchTool(
@@ -351,7 +356,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
     let finalArgs = args;
-    const tools = await fetchTools({ signal: opts?.signal });
+    const { tools, uploadFormats } = await fetchToolList({ signal: opts?.signal });
     const meta = tools.find((t) => t.name === name) ?? null;
     // Where a baseline the result returns may be written (see file-inputs.ts).
     const baselineDirs: string[] = [];
@@ -359,7 +364,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       if (remote) assertRequiredPresent(meta, args);
       finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
         includeContent: remote,
-        uploadEndpoint: remote ? { url, token } : undefined,
+        uploadEndpoint: remote ? { url, token, formats: uploadFormats } : undefined,
         log: diagnose,
         baselineDirs,
         collectMembers: collectFlowMembers,
