@@ -12,10 +12,11 @@ import { promises as fs } from "fs";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 import { recordReapedSession } from "../utils/reaped-sessions";
+import type { DebugCapture } from "../tools/screen-recording/debug-capture";
 
 // Session for the `screen-recording-*` tools, one shape for both platforms:
-// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
-// child that writes the mp4 host-side, so there is nothing device-side to clean
+// frames come from simulator-server's MJPEG stream and ffmpeg writes the mp4
+// host-side, so there is nothing device-side to clean
 // up. Mirrors the native-profiler session.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
@@ -98,6 +99,7 @@ export interface ScreenRecordingSessionApi {
   lastFrameStreamError: Error | null;
   /** Interval pacing frames onto the fixed output frame rate. */
   pumpTimer: NodeJS.Timeout | null;
+  debugCapture: DebugCapture | null;
   /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
   trimStatic: boolean;
   /** Frames the pump has fed the encoder; the output video's length in frames. */
@@ -117,7 +119,7 @@ export interface ScreenRecordingSessionApi {
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
-  lastExitInfo: { code: number | null; signal: string | null } | null;
+  lastExitInfo: { code: number | null; signal: string | null; stderr?: string } | null;
 }
 
 // Dispose abandons an in-flight recording — process shutdown, or a
@@ -137,6 +139,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.captureProcess = null;
   state.pendingChild = null;
   state.frameStream = null;
+  state.debugCapture = null;
   state.lastFrameStreamError = null;
   if (state.panelPollTimer) {
     clearInterval(state.panelPollTimer);
@@ -208,6 +211,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       panelSwitches: 0,
       panelReadFailures: 0,
       pumpTimer: null,
+      debugCapture: null,
       trimStatic: true,
       framesWritten: 0,
       trimmedAnyFrames: false,
@@ -250,15 +254,13 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           clearInterval(state.panelPollTimer);
           state.panelPollTimer = null;
         }
+        await state.debugCapture?.finish();
         state.frameStream?.close();
 
         // The overlay is sim-server global state that must not outlive the
         // capture.
-        if (state.pointerDisable) {
-          const disable = state.pointerDisable;
-          state.pointerDisable = null;
-          await disable().catch(() => {});
-        }
+        await state.pointerDisable?.();
+        state.pointerDisable = null;
 
         // A start still mid-readiness has a live child `captureProcess`
         // (success-only) can't see — reap it here or it records forever.
@@ -275,7 +277,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           if (child) {
             // Closing stdin is ffmpeg's normal finalize path, so the abandoned
             // file still has a chance to be playable.
-            if (child.stdin?.writable) child.stdin.end();
+            if (!state.debugCapture && child.stdin?.writable) child.stdin.end();
             if (!(await waitForChildExit(child, DISPOSE_FINALIZE_GRACE_MS))) {
               try {
                 child.kill("SIGKILL");
@@ -292,6 +294,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
             await fs.rm(state.logoFile, { force: true }).catch(() => {});
             state.logoFile = null;
           }
+          await state.debugCapture?.cleanup().catch(() => {});
           clearLiveState(state);
           // The reminder must not outlive the capture it points at.
           clearActiveScreenRecording(state.deviceId);

@@ -18,6 +18,7 @@ export interface MjpegStream {
   readonly error: Error | null;
   /** Resolves with the first frame; rejects on timeout or a stream drop. */
   waitForFirstFrame(timeoutMs: number): Promise<Buffer>;
+  subscribe(listener: (frame: Buffer, receivedAtMs: number) => void): () => void;
   close(): void;
 }
 
@@ -79,7 +80,9 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         latest: null as Buffer | null,
         frameCount: 0,
         error: null as Error | null,
+        receivedAtMs: 0,
       };
+      const listeners = new Set<(frame: Buffer, receivedAtMs: number) => void>();
       let firstFrameResolve: ((frame: Buffer) => void) | null = null;
       let firstFrameReject: ((err: Error) => void) | null = null;
 
@@ -100,7 +103,9 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
             // alive for as long as the frame is held.
             const frame = Buffer.from(buffer.subarray(frameStart, frameEnd));
             state.latest = frame;
+            state.receivedAtMs = performance.now();
             state.frameCount++;
+            for (const listener of listeners) listener(frame, state.receivedAtMs);
             if (firstFrameResolve) {
               firstFrameResolve(frame);
               firstFrameResolve = null;
@@ -146,6 +151,11 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         get error() {
           return state.error;
         },
+        subscribe(listener) {
+          listeners.add(listener);
+          if (state.latest) listener(state.latest, state.receivedAtMs);
+          return () => listeners.delete(listener);
+        },
         waitForFirstFrame(timeoutMs: number) {
           if (state.latest) return Promise.resolve(state.latest);
           // Already dropped, so no frame can arrive — do not wait out the timeout.
@@ -185,6 +195,7 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
           });
         },
         close() {
+          listeners.clear();
           // Drop the waiter hooks first so our own teardown's 'aborted'/'error'
           // does not reject a caller that has already moved on.
           firstFrameResolve = null;

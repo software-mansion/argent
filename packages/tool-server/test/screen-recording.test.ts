@@ -122,6 +122,7 @@ interface FakeStream {
   error: Error | null;
   waitForFirstFrame: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  subscribe: ReturnType<typeof vi.fn>;
 }
 
 function fakeStream(overrides: Partial<FakeStream> = {}): FakeStream {
@@ -132,6 +133,10 @@ function fakeStream(overrides: Partial<FakeStream> = {}): FakeStream {
     error: null,
     waitForFirstFrame: vi.fn(async () => frame),
     close: vi.fn(),
+    subscribe: vi.fn((listener: (frame: Buffer, receivedAtMs: number) => void) => {
+      listener(frame, performance.now());
+      return vi.fn();
+    }),
     ...overrides,
   };
   mockOpenStream.mockResolvedValueOnce(stream as never);
@@ -144,11 +149,16 @@ function fakeChild(): FakeChild {
   return child;
 }
 
-/** A PointerControl whose enable/disable calls are observable. */
-function fakePointer(enableResult = true) {
+/** A PointerControl whose enable/restore calls are observable. */
+function fakePointer(enableResult = true, restored = Promise.resolve()) {
   const enable = vi.fn(async () => enableResult);
-  const disable = vi.fn(async () => {});
-  return { enable, disable } satisfies PointerControl;
+  const restore = vi.fn(() => restored);
+  let disabling: Promise<void> | null = null;
+  return {
+    enable,
+    disable: () => (disabling ??= restore()),
+    restore,
+  } satisfies PointerControl & { restore: typeof restore };
 }
 
 async function makeSession(device: DeviceInfo): Promise<ScreenRecordingSessionApi> {
@@ -170,6 +180,7 @@ async function startAndSettle(
     watermark?: boolean;
     trimStatic?: boolean;
     pointer?: PointerControl;
+    mode?: "light" | "debug";
   } = {}
 ): Promise<Awaited<ReturnType<typeof startCapture>>> {
   const promise = startCapture(api, {
@@ -180,11 +191,15 @@ async function startAndSettle(
     // wall-clock path; trim-specific tests opt in explicitly.
     trimStatic: params.trimStatic ?? false,
     pointer: params.pointer,
+    mode: params.mode,
   });
   // Mark it handled: a start that rejects while the timers below are being
   // advanced would otherwise surface as an unhandled rejection, even though
   // the caller awaits the same promise for its error.
   promise.catch(() => {});
+  if (params.mode === "debug") {
+    await vi.waitFor(() => expect(api.pendingChild).not.toBeNull());
+  }
   await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
   return promise;
 }
@@ -967,7 +982,7 @@ describe("touch visualizer", () => {
 
     await startAndSettle(api, { pointer });
     expect(pointer.enable).toHaveBeenCalledTimes(1);
-    expect(pointer.disable).not.toHaveBeenCalled();
+    expect(pointer.restore).not.toHaveBeenCalled();
     expect(api.pointerFailed).toBe(false);
     expect(api.pointerDisable).toBe(pointer.disable);
 
@@ -975,7 +990,7 @@ describe("touch visualizer", () => {
     const outputFile = api.outputFile!;
     const result = await stopCapture(api);
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.pointerDisable).toBeNull();
     expect(result.warning).toBeUndefined();
     await fs.rm(outputFile, { force: true });
@@ -991,7 +1006,7 @@ describe("touch visualizer", () => {
     await startAndSettle(api, { timeLimitSeconds: 5, pointer });
     await vi.advanceTimersByTimeAsync(5_000); // cap fires
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.recordingTimedOut).toBe(true);
   });
 
@@ -1004,7 +1019,7 @@ describe("touch visualizer", () => {
 
     child.exit(1); // crash mid-capture
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.recordingExitedUnexpectedly).toBe(true);
   });
 
@@ -1062,7 +1077,7 @@ describe("touch visualizer", () => {
 
     await instance.dispose();
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.pointerDisable).toBeNull();
   });
 
@@ -1081,7 +1096,7 @@ describe("touch visualizer", () => {
     const result = await stopCapture(api);
 
     // Even a failed enable is still restored to off, best-effort.
-    expect(pointer.disable).toHaveBeenCalled();
+    expect(pointer.restore).toHaveBeenCalled();
     expect(result.warning).toContain("touch visualizer could not be enabled");
     expect(api.pointerFailed).toBe(false); // reset for the next recording
     await fs.rm(outputFile, { force: true });
@@ -1231,6 +1246,28 @@ describe("touch visualizer wire protocol", () => {
     await control.disable(); // idle path, nothing to await first
 
     expect(ops).toEqual([{ trail: 8 }, { show: true }, { show: false }]);
+  });
+
+  it("shares pending and completed teardown without sending duplicate pointer requests", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
+      await pending;
+      return new Response(JSON.stringify({ status: "ok" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const control = makePointerControl(fakeApi);
+    const first = control.disable();
+    const second = control.disable();
+    expect(second).toBe(first);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    release();
+    await Promise.all([first, second]);
+    await control.disable();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("enable() reflects the show result even when the trail request fails", async () => {
@@ -1513,4 +1550,217 @@ describe("readJpegDimensions", () => {
     ]);
     expect(readJpegDimensions(withFill)).toEqual({ width: 640, height: 480 });
   });
+});
+
+describe("debug recording lifecycle", () => {
+  it("finalizes after the cap and restores optional markers before retrieval", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer();
+    await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2, pointer });
+    expect(pointer.enable).toHaveBeenCalledOnce();
+    expect(api.pumpTimer).toBeNull();
+    const outputFile = api.outputFile!;
+    await fs.writeFile(outputFile, Buffer.alloc(64, 1));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(api.recordingActive).toBe(false);
+    expect(api.pendingRetrieval).toBe(true);
+    expect(stream.close).toHaveBeenCalledOnce();
+    expect(pointer.restore).toHaveBeenCalledOnce();
+    const result = await stopCapture(api);
+    expect(result.encodingComplete).toBe(true);
+    expect(result.trimmedMs).toBeUndefined();
+    expect(api.debugCapture).toBeNull();
+    expect(pointer.restore).toHaveBeenCalledOnce();
+  });
+
+  it("disposes a debug subscription and closes the encoder", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const stream = fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(instance.api, { mode: "debug" });
+    const debug = instance.api.debugCapture!;
+    await instance.dispose();
+    expect(debug.frameTimesUs).toHaveLength(2);
+    expect(stream.close).toHaveBeenCalledOnce();
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+    expect(instance.api.debugCapture).toBeNull();
+  });
+});
+
+describe("debug finalization safeguards", () => {
+  it("lets a high-rate capture encode slower than real time", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    const child = fakeChild();
+    await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2 });
+    const emit = stream.subscribe.mock.calls[0][0] as (frame: Buffer, receivedAtMs: number) => void;
+    for (let i = 1; i < 120; i++) emit(fakeJpeg(), performance.now() + (i * 1_000) / 120);
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const stopping = stopCapture(api);
+    await api.debugCapture!.finish();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(api.stopPending).toBe(true);
+    child.exit(0);
+    expect((await stopping).encodingComplete).toBe(true);
+  });
+
+  it.each(["stop", "dispose"])(
+    "waits for an automatic pointer teardown before %s completes",
+    async (operation) => {
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      const api = instance.api;
+      fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd();
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pointer = fakePointer(true, pending);
+      await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2, pointer });
+      await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pointer.restore).toHaveBeenCalledOnce();
+      let completed = false;
+      const ending = (operation === "stop" ? stopCapture(api) : instance.dispose()).then(() => {
+        completed = true;
+      });
+      await api.debugCapture!.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).toBe(false);
+      expect(api.pointerDisable).not.toBeNull();
+      await expect(
+        startCapture(api, {
+          streamUrl: STREAM_URL,
+          timeLimitSeconds: 180,
+          watermark: false,
+          trimStatic: false,
+        })
+      ).rejects.toThrow();
+      release();
+      await ending;
+      expect(completed).toBe(true);
+      expect(api.pointerDisable).toBeNull();
+      expect(pointer.restore).toHaveBeenCalledOnce();
+      if (operation === "stop") {
+        fakeStream();
+        const next = fakeChild();
+        next.exitOnStdinEnd();
+        const nextPointer = fakePointer();
+        await startAndSettle(api, { mode: "debug", pointer: nextPointer });
+        expect(nextPointer.enable).toHaveBeenCalledOnce();
+        expect(nextPointer.restore).not.toHaveBeenCalled();
+        await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+        await stopCapture(api);
+      }
+    }
+  );
+
+  it.each([false, true])(
+    "reports a partial video when encoding fails (cap: %s)",
+    async (capped) => {
+      const api = await makeSession(iosDevice);
+      fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd(1);
+      await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2 });
+      child.stderr.emit("data", Buffer.from("encoder failed"));
+      await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+      if (capped) {
+        await vi.advanceTimersByTimeAsync(2_000);
+        await api.debugCapture!.finish();
+      }
+      const result = await stopCapture(api);
+      expect(result.encodingComplete).toBe(false);
+      expect(result.durationMs).toBeNull();
+      expect(result.warning).toContain("encoder failed");
+      expect(result.warning).toContain("may omit captured frames");
+    }
+  );
+
+  it("keeps the stop guard until deferred JPEG cleanup finishes", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const debug = api.debugCapture!;
+    const cleanup = debug.cleanup;
+    debug.cleanup = vi.fn(async () => {
+      await pending;
+      await cleanup();
+    });
+    const stopping = stopCapture(api);
+    await vi.waitFor(() => expect(debug.cleanup).toHaveBeenCalledOnce());
+    expect(api.stopPending).toBe(true);
+    await expect(
+      startCapture(api, {
+        streamUrl: STREAM_URL,
+        timeLimitSeconds: 180,
+        watermark: false,
+        trimStatic: false,
+      })
+    ).rejects.toThrow("still finalizing");
+    release();
+    await stopping;
+    expect(api.stopPending).toBe(false);
+    expect(api.debugCapture).toBeNull();
+    fakeStream();
+    const next = fakeChild();
+    next.exitOnStdinEnd();
+    await startAndSettle(api, { mode: "debug" });
+    expect(api.recordingActive).toBe(true);
+    expect(api.debugCapture).not.toBeNull();
+    expect(api.wallClockStartMs).not.toBeNull();
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    await stopCapture(api);
+  });
+
+  it.each(["overflow", "disk failure"])(
+    "restores markers when debug capture ends after %s",
+    async (cause) => {
+      const api = await makeSession(iosDevice);
+      const stream = fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd();
+      const pointer = fakePointer();
+      await startAndSettle(api, { mode: "debug", pointer });
+      const emit = stream.subscribe.mock.calls[0][0] as (
+        frame: Buffer,
+        receivedAtMs: number
+      ) => void;
+      const write =
+        cause === "disk failure"
+          ? vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("disk full"))
+          : null;
+      try {
+        emit(cause === "overflow" ? Buffer.alloc(33 * 1024 * 1024) : fakeJpeg(), performance.now());
+        await api.debugCapture!.finish();
+        expect(api.recordingActive).toBe(false);
+        expect(api.debugCapture!.warning).toBeTruthy();
+        expect(pointer.restore).toHaveBeenCalledOnce();
+        expect(stream.close).toHaveBeenCalledOnce();
+      } finally {
+        write?.mockRestore();
+      }
+      await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+      const result = await stopCapture(api);
+      expect(result.warning).toContain(cause === "overflow" ? "could not keep up" : "disk full");
+      expect(pointer.restore).toHaveBeenCalledOnce();
+    }
+  );
 });
