@@ -13,56 +13,6 @@ export interface DecodedRgbaImage {
   data: Buffer;
 }
 
-// Relative tolerance: uniform scalings of one framebuffer (0.3x save vs 1.0x
-// capture) match in theory but pick up rounding error from integer dimensions.
-const ASPECT_RATIO_TOLERANCE = 0.01;
-
-/**
- * Downscale the larger image to the smaller one's dimensions when both share an
- * aspect ratio within {@link ASPECT_RATIO_TOLERANCE}; never upscales.
- *
- * @returns `null` when the aspect ratios genuinely differ — a hard dimension
- * mismatch for callers.
- */
-export function normalizeToCommonSize(
-  baseline: DecodedRgbaImage,
-  current: DecodedRgbaImage
-): { baseline: DecodedRgbaImage; current: DecodedRgbaImage } | null {
-  if (baseline.width === current.width && baseline.height === current.height) {
-    return { baseline, current };
-  }
-
-  if (!aspectRatiosMatch(baseline, current)) {
-    return null;
-  }
-
-  const baselineArea = baseline.width * baseline.height;
-  const currentArea = current.width * current.height;
-
-  if (baselineArea <= currentArea) {
-    return {
-      baseline,
-      current: resizeDecodedPng(current, baseline.width, baseline.height),
-    };
-  }
-
-  return {
-    baseline: resizeDecodedPng(baseline, current.width, current.height),
-    current,
-  };
-}
-
-function aspectRatiosMatch(a: DecodedRgbaImage, b: DecodedRgbaImage): boolean {
-  if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) {
-    return false;
-  }
-  const aspectA = a.width / a.height;
-  const aspectB = b.width / b.height;
-  const largest = Math.max(aspectA, aspectB);
-  if (largest === 0) return false;
-  return Math.abs(aspectA - aspectB) / largest <= ASPECT_RATIO_TOLERANCE;
-}
-
 /**
  * Lanczos3-resample to the target dimensions. Always returns a fresh `Buffer`,
  * never a view onto `src.data`.

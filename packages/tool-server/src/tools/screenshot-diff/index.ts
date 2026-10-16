@@ -113,10 +113,11 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
 Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the capture backend can be resolved.
+Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model (and foldable posture). Any size difference is reported as a dimension mismatch and nothing is compared.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
-Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
-Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
+Physical iPhones: live captures are device-wide and need no registered app.
+Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the diff image at input size and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
 Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
   searchHint:
@@ -406,39 +407,20 @@ async function captureLiveInput(params: {
   signal?: AbortSignal;
   captureScreenshot: CaptureScreenshot;
 }): Promise<{ path: string; warning?: string }> {
-  // Full-res gives the best diff fidelity, but some Android emulators reject a
-  // full-res frame ("wrong data size" framebuffer mismatch), which broke the whole
-  // baselinePath + captureCurrent flow there. The server's default scale captures
-  // reliably, and diffPngFiles' same-aspect normalization keeps a scaled capture
-  // comparable to a baseline saved at any scale.
-  // On a foldable the panel is resolved now, whoever moved the hinge, and
-  // handed to both attempts, so the retry is of the same panel.
+  // On a foldable the panel is resolved now, whoever moved the hinge.
   const panel = await resolveCapturePanel(params.api);
   const captureScreenshot: CaptureScreenshot = panel
     ? (a, r, s, sc) => params.captureScreenshot(a, r, s, sc, panel.screen)
     : params.captureScreenshot;
-  let capture: Awaited<ReturnType<CaptureScreenshot>>;
-  try {
-    capture = await captureScreenshotUpright(
-      params.api,
-      params.device,
-      params.rotation,
-      params.signal,
-      1.0,
-      captureScreenshot,
-      params.peekFor?.(params.device)
-    );
-  } catch {
-    capture = await captureScreenshotUpright(
-      params.api,
-      params.device,
-      params.rotation,
-      params.signal,
-      undefined,
-      captureScreenshot,
-      params.peekFor?.(params.device)
-    );
-  }
+  const capture = await captureScreenshotUpright(
+    params.api,
+    params.device,
+    params.rotation,
+    params.signal,
+    1.0,
+    captureScreenshot,
+    params.peekFor?.(params.device)
+  );
   const suffix = crypto.randomBytes(4).toString("hex");
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
   await fs.mkdir(params.outputDir, { recursive: true });
