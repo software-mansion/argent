@@ -218,6 +218,85 @@ describe("run-sequence", () => {
     expect(result.completed).toBe(2);
   });
 
+  it("stops the sequence when a keyboard step reports the typed text did not land", async () => {
+    const registry = mockRegistry((id: string) => {
+      if (id === "keyboard") {
+        return {
+          typed: "abcdefghijkl",
+          keys: 12,
+          verified: false,
+          note: "12 characters were typed and the field holds 0 in total.",
+        };
+      }
+      return { tapped: true };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
+          { tool: "keyboard", args: { text: "abcdefghijkl" } },
+          { tool: "keyboard", args: { key: "enter" } },
+        ],
+      }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
+    const last = result.steps[1] as { tool: string; error?: string };
+    expect(last.tool).toBe("keyboard");
+    expect(last.error).toBe(
+      "typed text did not land: 12 characters were typed and the field holds 0 in total."
+    );
+    expect(result.completed).toBe(1);
+  });
+
+  it("continues past a keyboard step whose verification is absent or true", async () => {
+    const registry = mockRegistry((id: string, args: unknown) => {
+      if (id !== "keyboard") return { tapped: true };
+      const { text } = args as { text?: string };
+      if (text === "verified") return { typed: text, keys: 8, verified: true };
+      return { typed: text ?? "enter", keys: 2 };
+    });
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "keyboard", args: { text: "hi" } },
+          { tool: "keyboard", args: { text: "verified" } },
+          { tool: "keyboard", args: { key: "enter" } },
+        ],
+      }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(3);
+    expect(result.completed).toBe(3);
+    const verdicts = result.steps.map(
+      (s) => (s as { result?: { verified?: boolean } }).result?.verified
+    );
+    expect(verdicts).toEqual([undefined, true, undefined]);
+  });
+
+  it("does not stop on another tool's verified: false", async () => {
+    const registry = mockRegistry(() => ({ verified: false }));
+    const result = await createRunSequenceTool(registry).execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.6 } },
+        ],
+      }
+    );
+    expect(result.completed).toBe(2);
+  });
+
   it("forwards the request abort signal into each sub-tool invocation", async () => {
     const registry = mockRegistry(() => ({ tapped: true }));
     const tool = createRunSequenceTool(registry);

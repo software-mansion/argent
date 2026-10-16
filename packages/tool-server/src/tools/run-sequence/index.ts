@@ -6,6 +6,7 @@ import { assertSupported, UnsupportedOperationError } from "../../utils/capabili
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
 // sequence to the single capture the MCP layer appends after the last step.
@@ -158,7 +159,7 @@ Example: tap, wait for the next screen's element, then tap it:
 If the await-ui-element condition is not met before its timeout, the sequence stops there and the
 following steps do NOT run, so the tap above only fires once "Continue" is actually on screen.
 
-Stops on the first error (or unmet await-ui-element condition) and returns partial results.`,
+Stops on the first error (or unmet await-ui-element condition, or a keyboard step returning verified: false) and returns partial results.`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
@@ -216,6 +217,13 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
             results.push({
               tool: step.tool,
               error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
+            });
+            break;
+          }
+          if (isUnlandedKeyboardTextResult(step.tool, result)) {
+            results.push({
+              tool: step.tool,
+              error: `typed text did not land${result.note ? `: ${result.note}` : ""}`,
             });
             break;
           }

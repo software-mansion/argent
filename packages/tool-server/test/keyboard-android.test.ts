@@ -48,6 +48,7 @@ import {
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { makeAndroidImpl } from "../src/tools/keyboard/platforms/android";
+import { __resetHelperAvailabilityForTests } from "../src/tools/keyboard/platforms/android-verify";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { DependencyMissingError } from "../src/utils/check-deps";
 import type { KeyboardParams } from "../src/tools/keyboard/types";
@@ -155,7 +156,7 @@ describe("android-input — injection", () => {
     // `toUpperCase()` is the only direction that was red.
     //
     // `typed` echoes `params.text` rather than reading the device
-    // (platforms/android.ts:46), so a case regression answers
+    // (`typeAndroidPhone`'s return), so a case regression answers
     // `{ typed: "Passw0rd!", keys: 9 }` while the field holds `passw0rd!` —
     // success to every consumer, android-only, and exactly where case-sensitive
     // login fields and `{{secret:…}}` injection land.
@@ -335,7 +336,7 @@ describe("android-input — rejects text `adb input text` can't type", () => {
 
 // Exercises `makeAndroidImpl().handler` end-to-end (the piece the low-level
 // helper tests above never invoke): the isAndroidTv phone-vs-TV branch, the
-// `keys` count, and the `{ typed, keys }` result shape.
+// `keys` count, and the result shape.
 describe("android keyboard impl — routing, keys count, result shape", () => {
   const impl = makeAndroidImpl(new Registry());
   const phone = { id: SERIAL, platform: "android", kind: "handset" } as unknown as DeviceInfo;
@@ -354,12 +355,17 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     typeTv.mockClear();
     isAndroidTv.mockReset();
     isAndroidTv.mockResolvedValue(false);
+    __resetHelperAvailabilityForTests();
   });
 
   it("routes a non-TV android target to the adb phone path (not typeTv)", async () => {
     const res = await impl.handler({}, { udid: SERIAL, text: "hi there" } as KeyboardParams, phone);
     // `keys` = 8 codepoints; `typed` echoes the text; text goes over `input text`.
-    expect(res).toEqual({ typed: "hi there", keys: 8 });
+    expect(res).toEqual({
+      typed: "hi there",
+      keys: 8,
+      note: "The text was typed but not verified: the android-devtools helper is unavailable.",
+    });
     expect(typeTv).not.toHaveBeenCalled();
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input text 'hi there'", expect.anything());
   });
@@ -403,7 +409,11 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       "input text '100%'",
       "input text 'safe'",
     ]);
-    expect(res).toEqual({ typed: "100%safe", keys: 8 });
+    expect(res).toEqual({
+      typed: "100%safe",
+      keys: 8,
+      note: "The text was typed but not verified: the android-devtools helper is unavailable.",
+    });
   });
 
   it("presses the key it was asked for, not a hardcoded Enter", async () => {
@@ -430,6 +440,16 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
       impl.handler({}, { udid: SERIAL, text: "café" } as KeyboardParams, phone)
     ).rejects.toBeInstanceOf(InvalidToolInputError);
     expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("rejects un-typeable text without resolving the read-back helper", async () => {
+    // Resolving the helper can `adb install` it, a device side effect.
+    const resolveService = vi.fn(async () => ({ getHierarchy: vi.fn() }));
+    const spied = makeAndroidImpl({ resolveService } as unknown as Registry);
+    await expect(
+      spied.handler({}, { udid: SERIAL, text: "café" } as KeyboardParams, phone)
+    ).rejects.toBeInstanceOf(InvalidToolInputError);
+    expect(resolveService).not.toHaveBeenCalled();
   });
 
   it("surfaces an adb transport failure as a throw (no silent success — the #449 fix)", async () => {
@@ -480,6 +500,7 @@ describe("keyboard tool — android adb preflight (via dispatchByPlatform)", () 
     await expect(tool.execute({}, { udid: SERIAL, text: "hi" })).resolves.toEqual({
       typed: "hi",
       keys: 2,
+      note: "The text was typed but not verified: the android-devtools helper is unavailable.",
     });
     expect(ensureDeps).toHaveBeenCalledWith(["adb"]);
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input text 'hi'", expect.anything());

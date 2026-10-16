@@ -75,6 +75,29 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
 
+### Typed text on Android
+
+On an Android phone or tablet, `keyboard` reads the focused field before and after it types. Android sends the text as one burst of key events. A field that redraws on each keystroke can drop part of that burst, and `adb` still reports success.
+
+The result carries `verified`:
+
+| Value   | Meaning                                                             |
+| ------- | ------------------------------------------------------------------- |
+| `true`  | The field holds the text                                            |
+| `false` | The field does not hold the text. `note` gives the character counts |
+| absent  | Argent could not tell. On Android, `note` gives the reason          |
+
+`verified` is absent on every other platform and on Android TV. On an Android phone or tablet, `verified` is absent in these cases:
+
+- The android-devtools helper is not available.
+- No text field has focus, or more than one window has a focused text field.
+- The field is a password field.
+- Argent cannot read the field back.
+- Focus moves to a different field.
+- The contents of the field fit both a full and a partial landing. A field that formats a phone number is an example.
+
+A `false` value stops a `run-sequence` at that step. It also fails a flow `type` step, a flow `tool: keyboard` step and a flow `tool: run-sequence` step that holds one. Argent does not press Enter after a failed `type` step. `flow-add-step` records such a `keyboard` step with a warning, and `flow-finish-recording` repeats it.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

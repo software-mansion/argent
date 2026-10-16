@@ -36,6 +36,7 @@ import {
   unmetUiWaitCause,
   type UnmetUiWaitCause,
 } from "../await-ui-element";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import {
   UPLOAD_STAGE_BY_KIND,
@@ -398,6 +399,10 @@ const CANCELLED_WAIT_WARNING =
   "— `await-ui-element` reports a cancelled wait as success:false, and the step was written to " +
   "the flow anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
+
+const UNLANDED_TEXT_WARNING =
+  "recorded, but the text did not land in the field (`toolResult.note` says how). At replay " +
+  "this step FAILS and stops the run, so re-record it once the text lands";
 
 function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
   if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
@@ -1460,17 +1465,19 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       //
       // The two are filed under different kinds because only the probe's answer
       // is about converting the step, and the finish counts them separately.
-      let waitWarning: { warning: string; kind: "conversion" | "wait" } | undefined;
+      let stepWarning: { warning: string; kind: "conversion" | "wait" | "text" } | undefined;
       if (params.command === AWAIT_UI_ELEMENT_TOOL_ID) {
         if (isUnmetUiWaitResult(params.command, toolResult)) {
-          waitWarning = {
+          stepWarning = {
             warning: unmetWaitWarningFor(unmetUiWaitCause(toolResult)),
             kind: "wait",
           };
         } else {
           const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
-          if (probed) waitWarning = { warning: probed, kind: "conversion" };
+          if (probed) stepWarning = { warning: probed, kind: "conversion" };
         }
+      } else if (isUnlandedKeyboardTextResult(params.command, toolResult)) {
+        stepWarning = { warning: UNLANDED_TEXT_WARNING, kind: "text" };
       }
 
       // Running a fragment via flow-execute mid-recording is recorded as a
@@ -1544,7 +1551,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
       } else {
-        warning = waitWarning?.warning ?? runTarget?.warning;
+        warning = stepWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the
         // recorded form drops it so the flow stays portable — the runner injects
         // whatever device it resolves at replay.
@@ -1591,13 +1598,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // the verdict to whatever inherits that number (see
       // {@link RecordedStepWarning}).
       //
-      // Only this warning is carried. The finish summary already shows the
-      // other two by rendering what was written: kept coordinates read as
-      // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
-      // A step that breaks on conversion renders like one that does not.
-      if (waitWarning) {
+      // The tap and flow-execute warnings are not carried: the finish summary
+      // shows them by rendering what was written (`N. tap: (x, y)`,
+      // `N. tool: flow-execute`).
+      if (stepWarning) {
         (session.stepWarnings ??= new Map()).set(stepCount, {
-          ...waitWarning,
+          ...stepWarning,
           step: stepAnchor(step),
         });
       }

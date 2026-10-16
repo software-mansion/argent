@@ -25,6 +25,7 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
@@ -1620,7 +1621,11 @@ async function runType(
   // its own), so a cancelled run can never type into whatever the app has
   // focused after the caller gave up.
   if (env.signal?.aborted) return ABORTED_OUTCOME;
-  await invokeOnDevice(env, "keyboard", { text: step.text });
+  const typed = await invokeOnDevice(env, "keyboard", { text: step.text });
+  // Fails before the Enter, which would submit the wrong value.
+  if (isUnlandedKeyboardTextResult("keyboard", typed)) {
+    return { ok: false, reason: `typed text did not land${typed.note ? `: ${typed.note}` : ""}` };
+  }
   if (step.submit !== false) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     // Enter goes in its own keyboard call because the tool rejects a combined
