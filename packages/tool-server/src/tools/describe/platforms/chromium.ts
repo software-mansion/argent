@@ -61,7 +61,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getChildNodes = protoGetter(Node.prototype, "childNodes");
   const getNodeType = protoGetter(Node.prototype, "nodeType");
   const getNodeValue = protoGetter(Node.prototype, "nodeValue");
-  const getTextContent = protoGetter(Node.prototype, "textContent");
   const getTagName = protoGetter(Element.prototype, "tagName");
   const getChildrenEls = protoGetter(Element.prototype, "children");
   const getShadowRoot = protoGetter(Element.prototype, "shadowRoot");
@@ -98,10 +97,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const parts = [];
       for (const id of ids) {
         const ref = document.getElementById(id);
-        // getTextContent via the prototype: an aria-labelledby target can be a <form>
-        // with a control named "textContent", which would shadow the inherited getter
-        // to a control element and crash (.trim() on a non-string).
-        if (ref) parts.push((getTextContent.call(ref) || "").trim());
+        if (ref) parts.push(labelText(ref).trim());
       }
       if (parts.length) return parts.join(" ").slice(0, 200);
     }
@@ -121,6 +117,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return null;
   }
 
+  // A <br> separates the words around it unless it is display:none (what a
+  // display:contents <br> computes to), which leaves them joined on screen.
+  // The nodeType check comes first: the tagName getter throws on a Comment.
+  function isRenderedBr(node) {
+    return (
+      getNodeType.call(node) === 1 &&
+      getTagName.call(node).toLowerCase() === "br" &&
+      window.getComputedStyle(node).display !== "none"
+    );
+  }
+
   function ownText(el) {
     let s = "";
     for (const child of getChildNodes.call(el)) {
@@ -130,8 +137,30 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       // (=== 3 already made a clobbered nodeType safe; this removes the lone
       // directly-read member so no read's safety rests on the comparison semantics.)
       if (getNodeType.call(child) === 3) s += getNodeValue.call(child);
+      else if (isRenderedBr(child)) s += " ";
     }
     return s.replace(/\\s+/g, " ").trim();
+  }
+
+  // An aria-labelledby target's textContent (text and CDATA), reading a rendered <br>
+  // as a space like ownText. Iterative: the target's depth has no MAX_DEPTH bound, so
+  // recursion could overflow the stack.
+  function labelText(root) {
+    let s = "";
+    const stack = [];
+    const pushChildren = (node) => {
+      const kids = getChildNodes.call(node);
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    };
+    pushChildren(root);
+    while (stack.length) {
+      const node = stack.pop();
+      const type = getNodeType.call(node);
+      if (type === 3 || type === 4) s += getNodeValue.call(node);
+      else if (isRenderedBr(node)) s += " ";
+      else if (type === 1) pushChildren(node);
+    }
+    return s;
   }
 
   function isInteractive(el) {
