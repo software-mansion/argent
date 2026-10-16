@@ -154,6 +154,24 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(out).toContain(`Wrote: ${outPath}`);
   });
 
+  it("writes a tool's own `out` from --args, and --out outranks it", async () => {
+    state.screenshotData = { image: await localScreenshotHandle() };
+    const own = join(outDir, "nested", "own.png");
+
+    await run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: ` ${own} ` })], opts);
+    expect(fs.readFileSync(own)).toEqual(PNG);
+    expect(logs.join("\n")).toContain(`Wrote: ${own}`);
+
+    const flag = join(outDir, "flag.png");
+    const ignored = join(outDir, "ignored.png");
+    await run(
+      ["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: ignored }), "--out", flag],
+      opts
+    );
+    expect(fs.readFileSync(flag)).toEqual(PNG);
+    expect(fs.existsSync(ignored)).toBe(false);
+  });
+
   it("remote: downloads via /artifacts, writes --out from downloaded bytes", async () => {
     state.screenshotData = {
       image: {

@@ -72,6 +72,15 @@ const zodSchema = z.object({
     .describe(
       "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones."
     ),
+  // Written by argent-mcp and argent-cli, not by this tool.
+  out: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      "Over MCP or `argent run`, also save the PNG at this absolute path on your machine, creating missing directories and replacing an existing file. Ignored in a flow step."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;

@@ -85,7 +85,7 @@ function printToolHelp(meta: ToolMeta): void {
   console.log(`argent run ${meta.name} [flags]`);
   if (description) console.log(`\n${description}\n`);
   console.log("Flags:");
-  console.log(formatSchemaUsage(schema));
+  console.log(formatSchemaUsage(withoutGlobalFlags(schema)));
   console.log("\nGlobal flags:");
   if (!hasOwnArgsField) {
     console.log("  --args <json>          Pass the entire payload as JSON (overrides flags)");
@@ -95,6 +95,12 @@ function printToolHelp(meta: ToolMeta): void {
   console.log("  --json                 Print the raw JSON result");
   console.log("  --out <path>           For image results, save to <path> instead of fetching URL");
   console.log("  --help, -h             Show this help");
+}
+
+function withoutGlobalFlags(schema: JsonSchema | undefined): JsonSchema | undefined {
+  if (!schema?.properties) return schema;
+  const { out: _out, ...properties } = schema.properties;
+  return { ...schema, properties };
 }
 
 async function fetchImageToFile(
@@ -370,13 +376,14 @@ Examples:
 
   // Prefer the bytes the materializer already resolved; fall back to fetching the
   // legacy `{ url }` for older tool-servers that don't emit artifact handles.
-  if (outPath && meta.outputHint === "image") {
+  const imageOut = outPath ?? (typeof payload.out === "string" ? payload.out.trim() : null);
+  if (imageOut && meta.outputHint === "image") {
     try {
       if (images.length > 0) {
-        fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-        fs.writeFileSync(outPath, images[0]!.data);
+        fs.mkdirSync(path.dirname(path.resolve(imageOut)), { recursive: true });
+        fs.writeFileSync(imageOut, images[0]!.data);
       } else if (result && typeof result === "object") {
-        await fetchImageToFile(result as { url?: string; path?: string }, outPath);
+        await fetchImageToFile(result as { url?: string; path?: string }, imageOut);
       }
     } catch (err) {
       console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
@@ -393,7 +400,7 @@ Examples:
   if (note) console.error(note);
   console.log(renderResult(result, meta.outputHint, images, json));
 
-  if (outPath && meta.outputHint === "image" && !json) {
-    console.log(`Wrote: ${outPath}`);
+  if (imageOut && meta.outputHint === "image" && !json) {
+    console.log(`Wrote: ${imageOut}`);
   }
 }

@@ -1,6 +1,7 @@
 /** Convert raw tool results into MCP content blocks (text / image). */
 
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -67,7 +68,10 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
-        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
+        const saved: ContentBlock = {
+          type: "text",
+          text: await savedText(images[0]!.localPath, images[0]!.data, args),
+        };
         if (suppressImage) return [saved];
         const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
         blocks.push(saved);
@@ -88,6 +92,21 @@ export async function toMcpContent(
   }
 
   return [{ type: "text" as const, text: stringifyForText(result) }];
+}
+
+async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
+  const out = isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
+  if (!out) return `Saved: ${scratchPath}`;
+  const target = resolve(out);
+  try {
+    await mkdir(dirname(target), { recursive: true });
+    // Not `target`: resolve() drops a trailing separator, so "shots/" would become a file.
+    await writeFile(out, data);
+    return `Saved: ${target}`;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return `Saved: ${scratchPath}\nCould not save to ${target}: ${reason}`;
+  }
 }
 
 /**
@@ -327,7 +346,11 @@ export async function flowRunToMcpContent(
     }
 
     if (step.result !== undefined) {
-      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
+      // Step args come from the flow file, whose `out` must not write on this machine.
+      const renderArgs = isRecord(step.args)
+        ? { includeImageInContext: step.args.includeImageInContext }
+        : undefined;
+      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, renderArgs)));
     }
 
     // Snapshot steps carry artifacts instead of a result.

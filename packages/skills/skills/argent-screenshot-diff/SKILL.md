@@ -23,10 +23,15 @@ Use `screenshot-diff` when pixel comparison can answer the verification question
 
 ## 3. Capture Rules
 
-Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block so the full-size PNG is not loaded into context:
+Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block so the full-size PNG is not loaded into context, and save the file with `out` at an absolute path unique to this run, so another session cannot overwrite it:
 
 ```json
-{ "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
+{
+  "udid": "<UDID>",
+  "scale": 1.0,
+  "includeImageInContext": false,
+  "out": "/tmp/<run-id>-baseline.png"
+}
 ```
 
 Capture the stable baseline before the relevant interaction or before editing whenever feasible. Compare it to the post-change or post-interaction screen after the app reloads, rebuilds, or reaches the state under test.
@@ -43,14 +48,14 @@ Provide `udid` and exactly one input for the baseline side and exactly one input
 ## 5. Deterministic Flow
 
 1. Navigate to the known-good state.
-2. Capture a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`; keep the returned `path`.
+2. Capture a baseline PNG with `screenshot` using `scale: 1.0`, `includeImageInContext: false` and a run-unique absolute `out` path.
 3. Perform the interaction, apply the code change and navigate to the state under test.
 4. Call `screenshot-diff` with the saved `baselinePath`, `captureCurrent: true`, `udid`, and `outputDir`.
 5. Inspect the summary and artifact paths, then combine the diff with normal visual inspection and any structural/runtime evidence needed for the assertion.
 
 ```json
 {
-  "baselinePath": "/tmp/baseline.png",
+  "baselinePath": "/tmp/<run-id>-baseline.png",
   "captureCurrent": true,
   "udid": "<UDID>",
   "outputDir": "/tmp/argent-diff"
@@ -61,8 +66,8 @@ If both images are already saved, use file paths for both sides:
 
 ```json
 {
-  "baselinePath": "/tmp/baseline.png",
-  "currentPath": "/tmp/current.png",
+  "baselinePath": "/tmp/<run-id>-baseline.png",
+  "currentPath": "/tmp/<run-id>-current.png",
   "udid": "<UDID>",
   "outputDir": "/tmp/argent-diff"
 }
