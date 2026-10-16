@@ -1434,8 +1434,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(await onDisk("compose-path")).steps).toEqual([
       { kind: "run", flow: "login.yaml" },
     ]);
-    // The live sub-invoke gets no file-input boundary, so it must run the
-    // sibling by name…
+    // The live sub-invoke runs the sibling by name, as the recorded run: does…
     const nested = (registry.invokeTool as any).mock.calls[0][1];
     expect(nested).toEqual({ name: "login", project_root: tmpDir });
     // …which a real tool-server resolves to that same file.
@@ -1444,6 +1443,35 @@ describe("flow-add-step", () => {
       flowName: "login",
       viaUpload: false,
     });
+  });
+
+  it("runs and records a tool step that names a flow_path, without a link", async () => {
+    const registry = new Registry();
+    registry.registerTool(flowReadPrerequisiteTool as never);
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "prereq-path", project_root: tmpDir });
+    const target = path.join(tmpDir, "elsewhere.yaml");
+    await fs.writeFile(target, "executionPrerequisite: Signed in\nsteps:\n  - echo: hi\n", "utf8");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "prereq-path",
+        project_root: tmpDir,
+        command: "flow-read-prerequisite",
+        args: JSON.stringify({ flow_path: target, project_root: tmpDir }),
+      }
+    );
+
+    expect(result.toolResult).toEqual({ flow: "elsewhere", executionPrerequisite: "Signed in" });
+    expect(parseFlow(await onDisk("prereq-path")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "flow-read-prerequisite",
+        args: { flow_path: target, project_root: tmpDir },
+      },
+    ]);
   });
 
   it("names the flow_path the author wrote when the rewritten call is rejected", async () => {
