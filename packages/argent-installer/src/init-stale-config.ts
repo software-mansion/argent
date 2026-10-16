@@ -1,7 +1,13 @@
+import * as fs from "node:fs";
 import pc from "picocolors";
 import { MCP_BINARY_NAME } from "./constants.js";
 import { isGloballyInstalled } from "./utils.js";
-import { hasCustomizingEnv, type McpConfigAdapter, type McpServerEntry } from "./mcp-configs.js";
+import {
+  hasCustomizingEnv,
+  isGlobalNodeEntry,
+  type McpConfigAdapter,
+  type McpServerEntry,
+} from "./mcp-configs.js";
 
 interface StaleConfigCleanupResult {
   /** One line per removed entry or warning. */
@@ -63,11 +69,14 @@ export async function cleanupStaleMcpConfigs(args: {
   // exactly what an nvm user adds) — so it is dead in every environment that
   // resolves PATH like this shell. Legacy argent-authored env doesn't count
   // (see hasCustomizingEnv).
+  // A global-node entry names its files outright: dead once either is gone
+  // (an nvm prune, an uninstalled global), no PATH probe involved.
   const isProvablyDead = (entry: McpServerEntry | null): boolean =>
     entry !== null &&
-    entry.command === MCP_BINARY_NAME &&
-    !globalArgentOnPath &&
-    !hasCustomizingEnv(entry);
+    !hasCustomizingEnv(entry) &&
+    (isGlobalNodeEntry(entry)
+      ? !fs.existsSync(entry.command) || !fs.existsSync(entry.args[0]!)
+      : entry.command === MCP_BINARY_NAME && !globalArgentOnPath);
 
   const removed = (adapterName: string, location: string, what: string): void => {
     removedCount += 1;
@@ -141,9 +150,14 @@ export async function cleanupStaleMcpConfigs(args: {
         pending.push({
           adapterName: adapter.name,
           location: globalPath,
-          what: `a dead global entry (runs \`${MCP_BINARY_NAME}\`, which is no longer on PATH)`,
+          what: isGlobalNodeEntry(entry)
+            ? `a dead global entry (runs \`${entry.args[0]}\`, which no longer exists)`
+            : `a dead global entry (runs \`${MCP_BINARY_NAME}\`, which is no longer on PATH)`,
           exec: () => adapter.remove(globalPath),
         });
+      } else if (isGlobalNodeEntry(entry) && !hasCustomizingEnv(entry)) {
+        // A live global-node entry: a working global install the user kept,
+        // same as a bare `argent` on PATH below — stay quiet.
       } else if (entry.command !== MCP_BINARY_NAME) {
         // May be a hand-tuned dev setup rather than a leftover — warn, never
         // remove.

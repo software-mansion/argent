@@ -11,6 +11,7 @@ import {
   getMcpEntryForScope,
   isArgentManagedEntry,
   resolveLocalCommandMode,
+  resolveGlobalCommandMode,
   copyRulesAndAgents,
   type McpConfigAdapter,
   type McpServerEntry,
@@ -682,8 +683,10 @@ export async function update(args: string[]): Promise<void> {
       // once the install materializes. (init still writes the fallback from
       // scratch, with its own warning.)
       const skipEntryRewrite = localCmdMode?.kind === "local-npx";
+      // Resolved after the update, so global entries point at the fresh install.
+      const globalCmdMode = installMode === "global" ? resolveGlobalCommandMode() : undefined;
       const entryFor = (scope: "local" | "global"): McpServerEntry =>
-        getMcpEntryForScope(installMode, scope, localCmdMode);
+        getMcpEntryForScope(installMode, scope, localCmdMode, globalCmdMode);
 
       // Only scopes that already contain an argent entry: a present editor dir
       // (`.gemini`, `.cursor`, ...) is not consent — issue #195.

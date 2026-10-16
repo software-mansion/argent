@@ -63,7 +63,10 @@ export function isGloballyInstalled(): boolean {
  * version and to scope tool-server teardown to THIS install.
  */
 export function getGloballyInstalledPackageRoot(): string | null {
-  const binaryPath = getGlobalBinaryPath();
+  return packageRootOfBinary(getGlobalBinaryPath());
+}
+
+function packageRootOfBinary(binaryPath: string | null): string | null {
   if (!binaryPath) return null;
   try {
     const realPath = fs.realpathSync(binaryPath);
@@ -79,6 +82,29 @@ export function getGloballyInstalledPackageRoot(): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Absolute paths that launch the global install without PATH: its CLI
+ * entrypoint (`<root>/dist/cli.js`) and the `node` beside its bin link, when
+ * there is one. That `node` is the prefix's stable name (nvm's binary, or
+ * Homebrew's symlink, which survives `brew upgrade` where the Cellar path a
+ * resolved execPath names does not). Null when there is no global install or
+ * its layout can't be resolved.
+ */
+export function getGloballyInstalledLaunchPaths(): { cli: string; node: string | null } | null {
+  const binaryPath = getGlobalBinaryPath();
+  const packageRoot = packageRootOfBinary(binaryPath);
+  if (!binaryPath || !packageRoot) return null;
+  const binSub = argentBinSubpath(packageRoot);
+  if (!binSub) return null;
+  const cli = path.join(packageRoot, binSub);
+  if (!fs.existsSync(cli)) return null;
+  const node = path.join(
+    path.dirname(binaryPath),
+    process.platform === "win32" ? "node.exe" : "node"
+  );
+  return { cli, node: fs.existsSync(node) ? node : null };
 }
 
 /**

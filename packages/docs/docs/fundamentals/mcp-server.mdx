@@ -28,6 +28,10 @@ npx @swmansion/argent@latest init
 
 The wizard detects your editor and writes the MCP server entry to the editor config. See [Installation](/docs/fundamentals/installation) for the prerequisites and the team setup.
 
+In a global config file, the wizard writes absolute paths to `node` and to the Argent CLI. Some editors start the MCP server without your shell `PATH`, for example an editor that you open from the Dock. With absolute paths, these editors find Argent when a Node version manager such as nvm installed it. Project config files keep the `argent` command, because your team shares them.
+
+The editor config keeps working when you switch to a different Node version. If you remove the Node version that installed Argent, run `npx @swmansion/argent@latest init`. The command writes the new paths to the editor config.
+
 ## Add the MCP server by hand
 
 Install the package and add the server to the MCP config of your editor:
@@ -46,6 +50,8 @@ npm install -g @swmansion/argent
   }
 }
 ```
+
+If the editor shows `Executable not found in $PATH: argent`, the editor does not use your shell `PATH`. Run the wizard to write absolute paths.
 
 The key of the top-level object depends on the editor. Claude Code, Cursor and Windsurf use `mcpServers`. VS Code uses `servers`. See [Supported editors](/docs/reference/editors) for the config file of each editor.
 

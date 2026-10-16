@@ -3,6 +3,8 @@ import pc from "picocolors";
 import {
   getMcpEntryForScope,
   isArgentManagedEntry,
+  isGlobalNodeEntry,
+  resolveGlobalCommandMode,
   resolveLocalCommandMode,
   type McpConfigAdapter,
   type McpCommandMode,
@@ -65,8 +67,9 @@ export function writeMcpConfigs(args: {
     }
   }
 
+  const globalCmdMode = installMode === "global" ? resolveGlobalCommandMode() : undefined;
   const entryFor = (configScope: "local" | "global"): McpServerEntry =>
-    getMcpEntryForScope(installMode, configScope, localCmdMode);
+    getMcpEntryForScope(installMode, configScope, localCmdMode, globalCmdMode);
 
   const stillLocalMode = (root: string): boolean =>
     readInstallRecord(root)?.mode === "local" || isDeclaredLocally(root);
@@ -88,7 +91,10 @@ export function writeMcpConfigs(args: {
       return false;
     }
     return (
-      existing !== null && existing.command !== MCP_BINARY_NAME && isArgentManagedEntry(existing)
+      existing !== null &&
+      existing.command !== MCP_BINARY_NAME &&
+      !isGlobalNodeEntry(existing) &&
+      isArgentManagedEntry(existing)
     );
   };
 

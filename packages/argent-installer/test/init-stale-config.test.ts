@@ -531,6 +531,60 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(fs.existsSync(windsurfGlobal)).toBe(false);
   });
 
+  it("judges a global-node entry dead by its files, not by PATH", async () => {
+    // #1287 entries name node and cli.js outright; argent being on this
+    // shell's PATH says nothing about them either way.
+    globallyInstalled = true;
+    const nodeBin = path.join(tmpDir, "node", "bin", "node");
+    const cli = path.join(
+      tmpDir,
+      "node",
+      "lib",
+      "node_modules",
+      "@swmansion",
+      "argent",
+      "dist",
+      "cli.js"
+    );
+    fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
+    fs.writeFileSync(nodeBin, "");
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    const windsurfGlobal = path.join(home, ".codeium", "windsurf", "mcp_config.json");
+    writeJsonFile(cursorGlobal, {
+      mcpServers: { argent: { command: nodeBin, args: [cli, "mcp"] } },
+    });
+    writeJsonFile(windsurfGlobal, {
+      mcpServers: { argent: { command: nodeBin, args: [cli, "mcp"] } },
+    });
+    // The cli.js exists for the first sweep and is removed before the second.
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(cli, "");
+
+    const live = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+    // A live global install the user kept: quiet, untouched.
+    expect(live).toEqual({ lines: [], removedCount: 0, warnedCount: 0 });
+    expect(fs.existsSync(cursorGlobal)).toBe(true);
+
+    fs.rmSync(cli);
+    const dead = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [windsurf],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+    expect(dead.removedCount).toBe(1);
+    expect(fs.existsSync(windsurfGlobal)).toBe(false);
+  });
+
   it("does not sweep global entries on a global-mode install", async () => {
     globallyInstalled = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");

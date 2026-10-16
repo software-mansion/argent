@@ -34,6 +34,7 @@ export {
   isGloballyInstalled,
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
+  getGloballyInstalledLaunchPaths,
   isDeclaredLocally,
   isLocallyInstalled,
   getLocallyInstalledVersion,
