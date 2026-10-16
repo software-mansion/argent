@@ -198,6 +198,7 @@ describe("screenshotDiffToMcpContent", () => {
         mimeType: "image/png",
       },
       { type: "text", text: summary },
+      { type: "text", text: `diffPath: ${path.join(dir, "full.diff.png")}` },
     ]);
   });
 
@@ -245,6 +246,25 @@ describe("toMcpContent with artifact ctx", () => {
   afterEach(async () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("renders a screenshot-diff's diffPath handle as its downloaded local path", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const content = await screenshotDiffToMcpContent(
+      {
+        summary: "Screenshot diff summary",
+        diffPath: artifactHandle("d1", "current-diff.png", "image/png"),
+        contextDiffPath: artifactHandle("c1", "current-context-diff.png", "image/png"),
+      },
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) }
+    );
+
+    const last = content[content.length - 1] as { type: "text"; text: string };
+    const localPath = last.text.replace(/^diffPath: /, "");
+    expect(last.text).toMatch(/^diffPath: /);
+    expect(localPath.startsWith(root)).toBe(true);
+    expect(path.basename(localPath)).toBe("current-diff.png");
+    expect([...(await fs.readFile(localPath))]).toEqual(pngBytes);
   });
 
   it("materializes an image artifact and renders image + local Saved path", async () => {
