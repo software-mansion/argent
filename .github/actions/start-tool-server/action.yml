@@ -9,7 +9,7 @@ inputs:
   node-version:
     description: Node.js version to set up.
     required: false
-    default: "20"
+    default: "22"
   port:
     description: Port the tool-server binds to (ARGENT_PORT) and the readiness poll hits.
     required: false

@@ -117,7 +117,7 @@ beforeAll(async () => {
     outdir: distDir,
     format: "esm",
     platform: "node",
-    target: "node20",
+    target: "node22",
     bundle: false,
     logLevel: "silent",
   });
