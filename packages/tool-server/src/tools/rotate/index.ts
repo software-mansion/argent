@@ -3,6 +3,8 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
+import { isAndroidTv } from "../../utils/adb";
+import { UnsupportedOperationError } from "../../utils/capability";
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -41,6 +43,9 @@ Returns { orientation }. Fails if the target device is not booted.`,
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;
+    const device = resolveDevice(params.udid);
+    if (device.platform === "android" && (await isAndroidTv(device.id)))
+      throw new UnsupportedOperationError("rotate", device, "Android TV has a fixed orientation");
     await sendCommand(api, { cmd: "rotate", direction: params.orientation });
     return { orientation: params.orientation };
   },
