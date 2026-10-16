@@ -66,6 +66,15 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     }
   }
 
+  // Rows sampled at the same instant as an earlier row (another thread) reference
+  // its sample-time. Skipping them would also skip the backtraces they define.
+  const sampleTimeRegistry = new Map<string, number>();
+  const sampleTimeDefRe = /<sample-time\s+id="(\d+)"[^>]*>(\d+)<\/sample-time>/g;
+  let sm;
+  while ((sm = sampleTimeDefRe.exec(xml)) !== null) {
+    sampleTimeRegistry.set(sm[1], parseInt(sm[2], 10));
+  }
+
   const rows = extractRows(xml);
 
   for (const row of rows) {
@@ -75,8 +84,7 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     if (sampleTimeMatch) {
       timestampNs = parseInt(sampleTimeMatch[1], 10);
     } else if (sampleTimeRef) {
-      // No sample-time ref registry; the second pass skips these rows too.
-      continue;
+      timestampNs = sampleTimeRegistry.get(sampleTimeRef[1]) ?? 0;
     }
 
     const threadMatch = row.match(/<thread[^>]*\sfmt="([^"]*)"[^>]*>/);
@@ -125,10 +133,6 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
   for (const row of rows) {
     if (sampleIdx >= samples.length) break;
 
-    // Skip rows that were skipped in the first pass
-    const sampleTimeRef = row.match(/<sample-time\s+ref="(\d+)"\s*\/>/);
-    if (sampleTimeRef) continue;
-
     const sample = samples[sampleIdx]!;
 
     if (sample.threadFmt.startsWith("Thread ref:")) {
@@ -164,20 +168,21 @@ function resolveBacktrace(
   backtraceRegistry: Map<string, StackFrame[]>,
   binaryRegistry: Map<string, { name: string; path: string }>
 ): StackFrame[] {
-  const btRefMatch = rowXml.match(/<backtrace\s+ref="(\d+)"\s*\/>/);
+  // Argent.tracetemplate exports `<backtrace>`; the App Launch template exports `<tagged-backtrace>`.
+  const btRefMatch = rowXml.match(/<(?:tagged-)?backtrace\s+ref="(\d+)"\s*\/>/);
   if (btRefMatch) {
     return backtraceRegistry.get(btRefMatch[1]) ?? [];
   }
 
-  const btMatch = rowXml.match(/<backtrace\s+id="(\d+)">(.*?)<\/backtrace>/s);
+  const btMatch = rowXml.match(/<((?:tagged-)?backtrace)\s+id="(\d+)">(.*?)<\/\1>/s);
   if (!btMatch) {
-    const btNoId = rowXml.match(/<backtrace>(.*?)<\/backtrace>/s);
+    const btNoId = rowXml.match(/<((?:tagged-)?backtrace)>(.*?)<\/\1>/s);
     if (!btNoId) return [];
-    return resolveFrames(btNoId[1], frameRegistry, binaryRegistry);
+    return resolveFrames(btNoId[2], frameRegistry, binaryRegistry);
   }
 
-  const btId = btMatch[1];
-  const frames = resolveFrames(btMatch[2], frameRegistry, binaryRegistry);
+  const btId = btMatch[2];
+  const frames = resolveFrames(btMatch[3], frameRegistry, binaryRegistry);
   backtraceRegistry.set(btId, frames);
   return frames;
 }

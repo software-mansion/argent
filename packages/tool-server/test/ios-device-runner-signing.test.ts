@@ -96,6 +96,24 @@ describe("resolveSigningHint", () => {
     ).toContain("Xcode > Settings > Accounts");
   });
 
+  it("ignores the Provisioning Profile lines every signed build log prints", () => {
+    expect(
+      resolveSigningHint(
+        '    Provisioning Profile: "iOS Team Provisioning Profile: com.argent.runner"\n' +
+          "CodeSign /path/ArgentRunner.app\nCommand failed for another reason"
+      )
+    ).toBeNull();
+  });
+
+  it("maps a real provisioning error line to the sign-in hint", () => {
+    expect(
+      resolveSigningHint('error: Provisioning profile "X" doesn\'t include signing certificate')
+    ).toContain("Xcode > Settings > Accounts");
+    expect(resolveSigningHint("error: App requires a provisioning profile.")).toContain(
+      "Xcode > Settings > Accounts"
+    );
+  });
+
   it("maps errSecInternalComponent to the exact partition-list fix, case-insensitively", () => {
     const hint = resolveSigningHint(
       "/usr/bin/codesign --force --sign 4E815... ArgentRunner.app\n" +

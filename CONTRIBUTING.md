@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
 - **macOS** with Xcode installed (required for `xcrun simctl` and iOS simulator support)
 - **Node.js 20.19+** (the lint toolchain's floor; the published package needs 20.12+)
-- The `simulator-server` and `ax-service` binaries in `packages/native-devtools-ios/bin/` (arm64 macOS, installed separately via `npx @swmansion/argent install`)
+- The `simulator-server` and `ax-service` binaries in `packages/native-devtools-ios/bin/` (downloaded separately as described below)
 
 ---
 
@@ -38,13 +38,29 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    npm install
    ```
 
+   If you don't have access to the private native source, download the pre-built
+   iOS dylibs and other native binaries from the public release repository. This
+   requires the `gh` CLI, but no GitHub authentication:
+
+   ```bash
+   npm run download:native-binaries
+   ```
+
+   To use simulator gestures and screenshots, also download `simulator-server`:
+
+   ```bash
+   npm run download:simulator-server
+   ```
+
+   This second download requires an authenticated `gh` CLI.
+
 3. **Start the dev environment:**
 
    ```bash
    npm run dev
    ```
 
-   This builds the native devtools dylibs (if the private submodule is available, otherwise uses pre-built binaries), compiles the MCP TypeScript, patches `~/.claude.json` to point at the local MCP, and starts the tool-server from source via `ts-node`. Press `Ctrl+C` to stop — the script automatically restores your global Argent configuration.
+   This builds the native devtools dylibs (if the private submodule is available, otherwise uses pre-built binaries), builds the workspace TypeScript, patches `~/.claude.json` to point at the local MCP, and starts the tool-server from source via `ts-node`. Press `Ctrl+C` to stop — the script automatically restores your global Argent configuration.
 
    To use a different port:
 
@@ -52,7 +68,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    PORT=4000 npm run dev
    ```
 
-   > **Note:** `packages/argent-private` is a private git submodule that holds the ObjC source for the native devtools dylibs. If you don't have SSH access to it, `npm run dev` will use the pre-built dylibs committed to the repository — everything else works normally.
+   > **Note:** `packages/argent-private` is a private git submodule that holds the ObjC source for the native devtools dylibs. If you don't have SSH access to it, download the pre-built binaries as shown above; `npm run dev` will use them.
 
 That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.
 
