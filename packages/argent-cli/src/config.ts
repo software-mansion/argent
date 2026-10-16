@@ -55,7 +55,11 @@ Show every recognized configuration value, its effective (merged) value, and
 the raw value stored at each scope.`);
     return;
   }
-  const json = argv.includes("--json");
+  const { positionals, json } = parseArgs(argv);
+  if (positionals.length > 0) {
+    console.error(`Error: unexpected extra argument "${positionals[0]}".`);
+    process.exit(2);
+  }
   const entries = listConfig();
 
   if (json) {

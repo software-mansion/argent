@@ -131,12 +131,28 @@ describe("argent secrets", () => {
     expect(JSON.stringify(parsed)).not.toContain("hunter2");
   });
 
+  it("accepts `list` after a leading --json", async () => {
+    await secrets(["--json", "list"]);
+    expect(JSON.parse(output())).toHaveProperty("secrets", []);
+  });
+
   it("documents where to add a secret in --help", async () => {
     await secrets(["--help"]);
     const out = output();
     expect(out).toContain("~/.argent/secrets.env");
     expect(out).toContain("ARGENT_SECRET_");
     expect(out).toContain("gitignore this file");
+  });
+
+  it.each([
+    [["list", "--jsno"], "Unknown flag: --jsno"],
+    [["--json", "--jsno"], "Unknown flag: --jsno"],
+    [["list", "extra"], 'Unexpected argument "extra"'],
+  ])("rejects %j with exit 2 instead of listing", async (argv, message) => {
+    await expect(secrets(argv)).rejects.toThrow(ExitError);
+    expect(process.exit).toHaveBeenCalledWith(2);
+    expect(errSpy.mock.calls.join(" ")).toContain(message);
+    expect(logSpy).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown subcommand", async () => {

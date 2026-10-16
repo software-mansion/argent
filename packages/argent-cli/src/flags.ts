@@ -143,6 +143,8 @@ export function disable(argv: string[], registry: readonly FlagDefinition[] = FL
   runToggle(argv, "disable", registry);
 }
 
+const FLAGS_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
+
 // `argent flags` — every registry flag with its description and effective state
 // (project overrides global).
 export function flags(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
@@ -160,7 +162,18 @@ Options:
     return;
   }
 
-  const json = argv.includes("--json");
+  let json: boolean;
+  try {
+    const { positionals, options } = parseCommandArgs(argv, FLAGS_OPTIONS);
+    if (positionals.length > 0) {
+      throw new UsageError(`Unexpected extra argument: "${positionals[0]}"`);
+    }
+    json = options.json === true;
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}`);
+    process.exit(2);
+  }
   const projectFlags = readFlags("project");
   const globalFlags = readFlags("global");
 
