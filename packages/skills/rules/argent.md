@@ -114,7 +114,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 PHYSICAL iPHONE (USB)
 Skills: `argent-ios-device-setup` (cable, trust, signing), then `argent-ios-device-interact` (the app-scoped interaction contract)
-When: The user names a physical iPhone, a real device, or hardware, or the target `list-devices` iOS entry has kind `"device"`. Never for a simulator, and never because a cabled phone is listed first. On hardware every interaction starts with `launch-app`; `paste`, `settings-permissions`, two-finger gestures, `rotate`, `shake`, screen recording, `debugger-*`, `react-profiler-*`, `native-profiler-*` and `native-*` do not exist there.
+When: The user names a physical iPhone, a real device, or hardware, or the target `list-devices` iOS entry has kind `"device"`. Never for a simulator, and never because a cabled phone is listed first. On hardware every interaction starts with `launch-app`; `paste`, `settings-permissions`, `set-appearance`, two-finger gestures, `rotate`, `shake`, screen recording, `debugger-*`, `react-profiler-*`, `native-profiler-*` and `native-*` do not exist there.
 Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING

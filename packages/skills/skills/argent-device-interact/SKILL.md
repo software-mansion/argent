@@ -69,6 +69,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Rotate device     | `rotate`            | Orientation changes                                               |
 | Fold device       | `fold`              | Foldable iOS simulator: closed / half-open / open, or an angle    |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
+| Dark mode         | `set-appearance`    | Light or dark system appearance (iOS sim, Android)                |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
 | Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
 
