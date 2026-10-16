@@ -1796,6 +1796,8 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     return fail(err instanceof Error ? err.message : String(err), 2, err);
   }
 
+  const unwritten = unwrittenBaselines(report);
+  if (unwritten.length) report.ok = false;
   if (args.jsonStream) {
     writeJsonStreamRecord({ event: "result", data: report });
   } else if (args.json) {
@@ -1811,10 +1813,9 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     console.log(renderReport(report));
   }
 
-  const unwritten = unwrittenBaselines(report);
   if (!args.json && !args.jsonStream) {
     for (const line of unwritten)
       console.log(`  ${STATUS_GLYPH.error} baseline not written: ${line}`);
   }
-  return exitAfterFlush(report.ok && unwritten.length === 0 ? 0 : 1);
+  return exitAfterFlush(report.ok ? 0 : 1);
 }
