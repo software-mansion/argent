@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -66,6 +66,19 @@ const LISTING = {
   ],
 };
 
+const FULL_DESCRIBE = [
+  "Source: ax-service",
+  "Mode: flat",
+  "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.",
+  "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.",
+  "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.",
+  "",
+  "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)",
+  "",
+  '  AXButton "General"  (0.040, 0.300, 0.920, 0.050)',
+  "",
+].join("\n");
+
 /** A stub tool-server. With `token`, a request without that bearer token gets 401. */
 async function startStub(token?: string): Promise<Stub> {
   const requests: Recorded[] = [];
@@ -91,6 +104,18 @@ async function startStub(token?: string): Promise<Stub> {
       if (req.method === "POST" && reqUrl === "/tools/reject") return json(422, { error: "nope" });
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return json(200, { data: { tapped: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
+        return json(200, { data: { idle: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/screenshot") {
+        return json(422, { error: "no screen" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, { data: { description: FULL_DESCRIBE } });
       }
       json(404, { error: "not found" });
     });
@@ -212,6 +237,34 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toBe("nope");
     expect(requests.filter((r) => r.url === "/tools/reject")).toHaveLength(1);
+  });
+
+  it("attaches the compacted element tree after an action and logs its size", async () => {
+    const result = await client.callTool({
+      name: "gesture-tap",
+      arguments: { udid: "u", x: 0.5, y: 0.3 },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text?: string }>;
+    const tree = [
+      "--- Elements after action (describe) ---",
+      "(frames: normalized x, y, width, height; tap the centre)",
+      "",
+      "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)",
+      "",
+      '  AXButton "General"  (0.040, 0.300, 0.920, 0.050)',
+      "",
+    ].join("\n");
+    expect(content.at(-1)).toEqual({ type: "text", text: tree });
+    const logged = readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { event: string; chars?: number })
+      .filter((e) => e.event === "auto_describe");
+    expect(logged.at(-1)?.chars).toBe(
+      tree.length - "--- Elements after action (describe) ---\n".length
+    );
   });
 
   it("puts the tool-server's note before the result", async () => {

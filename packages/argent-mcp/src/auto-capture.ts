@@ -94,6 +94,34 @@ export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 
+/**
+ * describe's preamble on touch screens: five lines that restate the
+ * coordinate contract. An agent sees the tree after nearly every action, and
+ * these lines are about a tenth of a typical one; the explicit `describe`
+ * call, its tool description and the argent rule carry them in full, so the
+ * appended tree gets a one-line legend instead.
+ */
+const DESCRIBE_PREAMBLE = [
+  /^Source: \S+$/,
+  /^Mode: (flat|nested)$/,
+  /^Coordinates are normalized \[0,1\] fractions of the screen /,
+  /^Pass them straight to gesture-tap \/ gesture-swipe \/ gesture-pinch, which expect this same space\.$/,
+  /^To tap an element, use its centre: /,
+];
+
+const COMPACT_LEGEND = "(frames: normalized x, y, width, height; tap the centre)";
+
+/**
+ * Swap the full preamble for the legend. Anything else (hints, the Vega
+ * D-pad note, physical iOS's no-pinch note) is returned unchanged.
+ */
+export function compactAutoDescribe(description: string): string {
+  const lines = description.split("\n");
+  const matches = DESCRIBE_PREAMBLE.every((re, i) => re.test(lines[i] ?? ""));
+  if (!matches) return description;
+  return [COMPACT_LEGEND, ...lines.slice(DESCRIBE_PREAMBLE.length)].join("\n");
+}
+
 export function shouldAutoDescribe(toolName: string): boolean {
   return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
 }

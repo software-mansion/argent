@@ -35,6 +35,7 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  compactAutoDescribe,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -288,10 +289,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           try {
             const d = await callTool("describe", { udid });
             const desc = (d.result as { description?: unknown } | null)?.description;
-            if (typeof desc === "string" && desc.length > 0) {
+            const tree = typeof desc === "string" ? compactAutoDescribe(desc) : "";
+            if (tree.length > 0) {
               content = [
                 ...content,
-                { type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` },
+                { type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${tree}` },
               ];
             }
             await spyLog({
@@ -299,7 +301,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
               event: "auto_describe",
               name: params.name,
               durationMs: Date.now() - t1,
-              chars: typeof desc === "string" ? desc.length : 0,
+              chars: tree.length,
             });
           } catch (e) {
             await spyLog({

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -6,6 +6,8 @@ import { setFlag } from "@argent/configuration-core";
 import {
   AUTO_SCREENSHOT_TOOLS,
   AUTO_SCREENSHOT_DELAY_MS_BY_TOOL,
+  AUTO_DESCRIBE_HEADER,
+  compactAutoDescribe,
   autoScreenshotEnabled,
   AUTO_DESCRIBE_TOOLS,
   autoDescribeEnabled,
@@ -332,5 +334,107 @@ describe("containsSecretPlaceholder", () => {
       })
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
+});
+
+describe("compactAutoDescribe", () => {
+  const full = [
+    "Source: ax-service",
+    "Mode: flat",
+    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.",
+    "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.",
+    "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.",
+    "",
+    "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)",
+    "",
+    '  AXButton "Continue"  (0.055, 0.860, 0.891, 0.088)',
+  ].join("\n");
+
+  it("replaces the coordinate preamble with a one-line legend and keeps the tree", () => {
+    expect(compactAutoDescribe(full)).toBe(
+      [
+        "(frames: normalized x, y, width, height; tap the centre)",
+        "",
+        "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)",
+        "",
+        '  AXButton "Continue"  (0.055, 0.860, 0.891, 0.088)',
+      ].join("\n")
+    );
+  });
+
+  it("leaves the Vega and physical iOS preambles untouched", () => {
+    const vega = full.replace(
+      /^Pass them straight.*\n^To tap.*$/m,
+      "Vega is remote-driven, not touch — there is no tap."
+    );
+    expect(compactAutoDescribe(vega)).toBe(vega);
+    const device = full.replace(
+      "gesture-swipe / gesture-pinch, which expect this same space.",
+      "gesture-swipe, which expect this same space. No two-finger gestures on physical iOS."
+    );
+    expect(compactAutoDescribe(device)).toBe(device);
+  });
+
+  it("leaves output without that preamble untouched (hints, TV text)", () => {
+    const hint = "Hint: the tree is empty\n\nROOT  AXGroup (0, 0, 1, 1)";
+    expect(compactAutoDescribe(hint)).toBe(hint);
+  });
+});
+
+// Real formatDescribeTree output, so a reworded header fails here instead of
+// silently disabling compaction. Imported by URL: the file is outside rootDir.
+describe("compactAutoDescribe on formatDescribeTree output", () => {
+  type FormatDescribeTree = (root: unknown, opts: { source: string }) => string;
+  const FORMAT_TREE = new URL(
+    "../../tool-server/src/tools/describe/format-tree.ts",
+    import.meta.url
+  ).href;
+  let formatDescribeTree: FormatDescribeTree;
+
+  beforeAll(async () => {
+    ({ formatDescribeTree } = (await import(FORMAT_TREE)) as {
+      formatDescribeTree: FormatDescribeTree;
+    });
+  });
+
+  const root = {
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      {
+        role: "AXButton",
+        label: "Continue",
+        frame: { x: 0.055, y: 0.86, width: 0.891, height: 0.088 },
+        children: [],
+      },
+    ],
+  };
+
+  it.each(["ax-service", "native-devtools", "uiautomator", "android-devtools", "cdp-dom"])(
+    "compacts %s to the legend followed by the unchanged tree",
+    (source) => {
+      const full = formatDescribeTree(root, { source });
+      const tree = full.slice(full.indexOf("\n\nROOT  ") + 1);
+      expect(tree.startsWith("\nROOT  AXGroup")).toBe(true);
+      expect(tree).toContain("Continue");
+      expect(compactAutoDescribe(full)).toBe(
+        `(frames: normalized x, y, width, height; tap the centre)\n${tree}`
+      );
+    }
+  );
+
+  it.each(["vega-automation", "xcuitest-runner"])("leaves %s unchanged", (source) => {
+    const full = formatDescribeTree(root, { source });
+    expect(compactAutoDescribe(full)).toBe(full);
+  });
+
+  it("matches what the argent rule tells agents the attached tree looks like", () => {
+    const rule = fs.readFileSync(new URL("../../skills/rules/argent.md", import.meta.url), "utf8");
+    const legend = compactAutoDescribe(formatDescribeTree(root, { source: "ax-service" })).split(
+      "\n"
+    )[0]!;
+    expect(rule).toContain(`\`${AUTO_DESCRIBE_HEADER}\``);
+    expect(rule).toContain(`\`${legend}\``);
+    expect(rule).not.toContain("the same format `describe` prints");
   });
 });
