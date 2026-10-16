@@ -19,6 +19,10 @@ const h = vi.hoisted(() => {
   const execFileCalls: Array<{ cmd: string; args: string[] }> = [];
   const killedProcs: Array<{ tag: string; signal: string | undefined }> = [];
   const unlinked: string[] = [];
+  // The in-sim readers `simctl spawn` starts. Killing the spawn process does not
+  // kill its reader; only `pkill` does. A reader that idles out unlinks its
+  // socket path, as the real one does on `--timeout`.
+  const readers: Array<{ sock: string; alive: boolean }> = [];
   // When set, the host HID daemon spawn fails to ever bind its socket and exits,
   // so the factory's waitForSocket(hidSock) rejects and the error/cleanup path
   // runs. Lets a test exercise the half-up-daemon teardown without a 15s wait.
@@ -39,7 +43,7 @@ const h = vi.hoisted(() => {
     return i >= 0 ? args[i + 1] : undefined;
   }
 
-  return { liveSockets, execFileCalls, killedProcs, unlinked, socketArg, state };
+  return { liveSockets, execFileCalls, killedProcs, unlinked, readers, socketArg, state };
 });
 
 class FakeProc extends EventEmitter {
@@ -59,8 +63,25 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    execFile: (cmd: string, args: string[]) => {
+    execFile: (cmd: string, args: string[], cb?: (err: Error | null) => void) => {
       h.execFileCalls.push({ cmd, args });
+      if (cmd === "pkill") {
+        // Lands after the call returns, like the real pkill, so a caller that
+        // doesn't await it would kill the reader it spawns next on that path.
+        const pattern = new RegExp(args[args.length - 1]!);
+        setImmediate(() => {
+          for (const r of h.readers) {
+            if (
+              r.alive &&
+              pattern.test(`/fake/tvos-ax-service --socket ${r.sock} --timeout 3600`)
+            ) {
+              r.alive = false;
+            }
+          }
+          cb?.(null);
+        });
+        return new FakeProc();
+      }
       const proc = new FakeProc();
       // The HID daemon runs its own host binary; the ax daemon runs via `xcrun
       // simctl spawn`. Tag by cmd so kill-signal assertions can tell them apart.
@@ -82,6 +103,7 @@ vi.mock("node:child_process", async () => {
       // respawn but the new daemon has not yet rebound it.
       const sock = h.socketArg(args);
       if (sock) setTimeout(() => h.liveSockets.add(sock), 0);
+      if (sock && !isHid) h.readers.push({ sock, alive: true });
       return proc;
     },
   };
@@ -177,6 +199,7 @@ beforeEach(() => {
   h.execFileCalls.length = 0;
   h.killedProcs.length = 0;
   h.unlinked.length = 0;
+  h.readers.length = 0;
   h.state.failHidSpawn = false;
   h.state.hidSpawnError = false;
   h.state.axConnectHook = null;
@@ -257,6 +280,49 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     await instance.dispose();
   });
 
+  it("reaps the replaced in-sim reader on recycle, so its idle exit can't unlink the new socket", async () => {
+    const instance = await buildService();
+    await instance.api.recycleAx();
+
+    // A replaced reader still alive idles out and unlinks the shared path.
+    for (const r of h.readers.slice(0, -1)) {
+      if (r.alive) h.liveSockets.delete(r.sock);
+    }
+
+    const res = await instance.api.describe();
+    expect(res.bundleId).toBe("com.example.tvapp");
+    expect(h.readers.filter((r) => r.alive)).toEqual([h.readers[h.readers.length - 1]]);
+    // SIGKILL: on SIGTERM the reader runs its own unlink of the path.
+    const pkills = h.execFileCalls.filter((c) => c.cmd === "pkill");
+    expect(pkills.length).toBeGreaterThan(0);
+    expect(pkills.every((c) => c.args[0] === "-KILL")).toBe(true);
+    await instance.dispose();
+    expect(h.readers.filter((r) => r.alive)).toHaveLength(0);
+  });
+
+  it("leaves another tool-server's daemons for the same Apple TV alive and reachable", async () => {
+    const realPid = process.pid;
+    const setPid = (value: number) => Object.defineProperty(process, "pid", { value });
+    try {
+      setPid(1001);
+      const a = await buildService();
+      setPid(1002);
+      const b = await buildService();
+
+      await a.api.recycleAx();
+      await a.dispose();
+
+      expect(h.readers.filter((r) => r.alive).map((r) => r.sock)).toEqual([
+        "/tmp/argent-tv-ax-DDDDDDDD-1002.sock",
+      ]);
+      expect((await b.api.describe()).bundleId).toBe("com.example.tvapp");
+      await expect(b.api.navigate("down")).resolves.toBeUndefined();
+      await b.dispose();
+    } finally {
+      setPid(realPid);
+    }
+  });
+
   it("dispose() kills both daemons and removes their sockets", async () => {
     const instance = await buildService();
     await instance.dispose();
@@ -264,9 +330,8 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     expect(h.killedProcs.length).toBeGreaterThanOrEqual(2);
     expect(h.unlinked.some((p) => p.includes("ax"))).toBe(true);
     expect(h.unlinked.some((p) => p.includes("hid"))).toBe(true);
-    // The in-sim ax daemon (simctl spawn) must be SIGKILLed — SIGTERM doesn't
-    // propagate through `simctl spawn` and would orphan it; the host hid daemon
-    // takes SIGTERM.
+    // `simctl spawn` is SIGKILLed: a forwarded SIGTERM would make the reader
+    // unlink the socket path. The host hid daemon takes SIGTERM.
     expect(h.killedProcs.find((p) => p.tag === "ax")?.signal).toBe("SIGKILL");
     expect(h.killedProcs.find((p) => p.tag === "hid")?.signal).toBe("SIGTERM");
   });
@@ -274,9 +339,8 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
   it("SIGKILLs the in-sim ax daemon and clears sockets when the factory fails mid-startup", async () => {
     // The hid daemon never binds its socket, so waitForSocket(hidSock) rejects
     // and the factory throws. The ax daemon may already be up — its in-sim
-    // process must be SIGKILLed (not SIGTERMed, which `simctl spawn` swallows,
-    // orphaning it) and any bound socket unlinked so the next attempt can't see
-    // a stale false-ready file.
+    // reader must be reaped and any bound socket unlinked so the next attempt
+    // can't see a stale false-ready file.
     h.state.failHidSpawn = true;
     await expect(buildService()).rejects.toThrow();
 
@@ -284,6 +348,7 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     const hid = h.killedProcs.find((p) => p.tag === "hid");
     expect(ax?.signal).toBe("SIGKILL");
     expect(hid?.signal).toBe("SIGTERM");
+    expect(h.readers.filter((r) => r.alive)).toHaveLength(0);
     // No socket survives the failed factory.
     expect([...h.liveSockets]).toHaveLength(0);
     expect(h.unlinked.some((p) => p.includes("ax"))).toBe(true);
@@ -319,6 +384,7 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     expect(h.killedProcs.length).toBe(axSpawnCount() + 1);
     // And the ax socket is gone, not left re-bound by a surviving daemon.
     expect([...h.liveSockets].some((p) => p.includes("ax"))).toBe(false);
+    expect(h.readers.filter((r) => r.alive)).toHaveLength(0);
   });
 });
 
