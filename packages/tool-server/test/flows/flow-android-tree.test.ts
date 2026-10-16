@@ -466,4 +466,99 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(evaluateCondition("visible", undefined, below)).toBe(false);
     expect(selectorToFrame(tree, { text: "Item 8" })).toBeUndefined();
   });
+
+  // Selectors are written from `describe`, so a `{ role, text }` it shows must
+  // resolve against the flow tree too.
+  describe("labels the views describe labels", () => {
+    const screen = (body: string) => `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    ${body}
+  </node>
+</hierarchy>`;
+
+    it("a clickable view borrows its descendants' text", () => {
+      // An RN `Pressable accessibilityRole="button"` with a `<Text>` child.
+      const xml =
+        screen(`<node index="0" class="android.view.ViewGroup" resource-id="login-row" package="com.acme.app" bounds="[0,400][1080,700]">
+      <node index="0" class="android.widget.Button" clickable="true" package="com.acme.app" bounds="[40,500][1040,640]">
+        <node index="0" class="android.widget.TextView" text="Log in" package="com.acme.app" bounds="[440,540][640,600]" />
+      </node>
+    </node>`);
+      const selector = { role: "Button", text: "Log in" };
+      expect(findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), selector)).toHaveLength(1);
+
+      const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+      expect(findAll(tree, selector)).toHaveLength(1);
+      // The borrowed label is the leaf's only: the text still hoists once.
+      expect(findAll(tree, { identifier: "login-row" })[0]!.subtreeText).toBe("Log in");
+    });
+
+    it("hoists a borrowed multi-part label's text once", () => {
+      const xml =
+        screen(`<node index="0" class="android.view.ViewGroup" resource-id="card" package="com.acme.app" bounds="[0,400][1080,700]">
+      <node index="0" class="android.widget.Button" clickable="true" package="com.acme.app" bounds="[40,500][1040,640]">
+        <node index="0" class="android.widget.TextView" text="Wi-Fi" package="com.acme.app" bounds="[60,510][400,560]" />
+        <node index="1" class="android.widget.TextView" text="Connected" package="com.acme.app" bounds="[60,570][400,620]" />
+      </node>
+    </node>`);
+      const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+      const [button] = findAll(tree, { role: "Button" });
+      expect(button!.label).toBe("Wi-Fi / Connected");
+      expect(assertText(button!)).toBe("Wi-Fi Connected");
+      const card = findAll(tree, { identifier: "card" });
+      expect(evaluateCondition("text", "Wi-Fi Connected", card, "equals")).toBe(true);
+    });
+
+    it("keeps an anonymous clickable layout view, labelled with its text", () => {
+      // An RN `Pressable` with no role, label or testID: a bare clickable ViewGroup.
+      const xml =
+        screen(`<node index="0" class="android.view.ViewGroup" clickable="true" package="com.acme.app" bounds="[40,500][1040,640]">
+      <node index="0" class="android.widget.TextView" text="Log in" package="com.acme.app" bounds="[440,540][640,600]" />
+    </node>`);
+      const [described] = findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), {
+        text: "Log in",
+      });
+      const selector = { role: described!.role, text: "Log in" };
+
+      const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+      const matches = findAll(tree, selector);
+      expect(matches.map((n) => n.clickable)).toContain(true);
+    });
+
+    it("a view that is not clickable borrows nothing", () => {
+      const xml =
+        screen(`<node index="0" class="android.widget.Button" package="com.acme.app" bounds="[40,500][1040,640]">
+      <node index="0" class="android.widget.TextView" text="Log in" package="com.acme.app" bounds="[440,540][640,600]" />
+    </node>`);
+      const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+      expect(findAll(tree, { role: "Button" })[0]!.label).toBeUndefined();
+    });
+
+    it("a same-bounds clickable view takes its wrapper's label and id", () => {
+      // An RN `Pressable accessibilityLabel testID` around a bare native view.
+      const xml =
+        screen(`<node index="0" class="android.view.ViewGroup" resource-id="continue" content-desc="Continue" clickable="true" focusable="true" package="com.acme.app" bounds="[40,500][1040,640]">
+      <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[40,500][1040,640]">
+        <node index="0" class="android.widget.Button" clickable="true" package="com.acme.app" bounds="[40,500][1040,640]" />
+      </node>
+    </node>`);
+      const selector = { role: "Button", text: "Continue", identifier: "continue" };
+      expect(findAll(parseUiAutomatorDump(xml, SCREEN_W, SCREEN_H), selector)).toHaveLength(1);
+
+      const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+      expect(findAll(tree, selector)).toHaveLength(1);
+      // The wrapper stays, still resolvable by its own id.
+      expect(findAll(tree, { role: "ViewGroup", identifier: "continue" })).toHaveLength(1);
+    });
+
+    it("a clickable view of different bounds keeps its own label", () => {
+      const xml =
+        screen(`<node index="0" class="android.view.ViewGroup" content-desc="Settings" clickable="true" package="com.acme.app" bounds="[0,400][1080,700]">
+      <node index="0" class="android.widget.Button" clickable="true" package="com.acme.app" bounds="[40,500][300,640]" />
+    </node>`);
+      const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+      expect(findAll(tree, { role: "Button" })[0]!.label).toBeUndefined();
+    });
+  });
 });
