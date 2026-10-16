@@ -15,6 +15,7 @@ import {
   writeToolsServerState,
   writeToolsServerStateSync,
   clearToolsServerState,
+  stateFileForBundle,
   formatToolsServerUrl,
   formatLinkUrl,
   generateAuthToken,
@@ -438,9 +439,7 @@ async function runForeground(
       process.removeListener("SIGINT", onInt);
       process.removeListener("SIGTERM", onTerm);
       if (stateWritten) {
-        clearToolsServerState(paths.bundlePath).catch(() => {
-          /* non-fatal */
-        });
+        fs.rmSync(stateFileForBundle(paths.bundlePath), { force: true });
       }
     };
     // Spawn-level failures (ENOENT, EACCES) emit `error` instead of `exit`; report
