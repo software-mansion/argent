@@ -55,7 +55,7 @@ const zodSchema = z
       .max(10_000)
       .optional()
       .describe(
-        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
+        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}); 0 settles on the first non-empty read, confirming content, not stillness.`
       ),
   })
   .strict();
@@ -63,7 +63,7 @@ const zodSchema = z
 type Params = z.infer<typeof zodSchema>;
 
 interface IdleResult {
-  /** Screen rendered content and went still before the timeout. */
+  /** Screen rendered content and held it for minStableMs (0: content alone) before the timeout. */
   settled: boolean;
   waitedMs: number;
   polls: number;
