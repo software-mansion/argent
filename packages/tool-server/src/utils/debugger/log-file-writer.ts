@@ -53,6 +53,8 @@ const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
+// CDP console types that lowercasing the uppercase LEVEL column cannot restore
+const CAMEL_LEVELS = ["startGroup", "startGroupCollapsed", "endGroup", "profileEnd", "timeEnd"];
 
 const liveLogFiles = new Set<string>();
 
@@ -270,7 +272,7 @@ function parseFlatLine(line: string): RichLogEntry | null {
   const match = LINE_RE.exec(line);
   if (!match) return null;
   const [, idStr, timestamp, levelRaw, , message] = match;
-  const level = levelRaw.toLowerCase().trim();
+  const level = CAMEL_LEVELS.find((l) => l.toUpperCase() === levelRaw) ?? levelRaw.toLowerCase();
   return {
     marker: `[L:${idStr}]`,
     id: parseInt(idStr, 10),
