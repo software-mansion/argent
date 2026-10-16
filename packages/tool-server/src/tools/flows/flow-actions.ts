@@ -25,7 +25,7 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { isIosPhysicalDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree } from "./flow-tree";
 import {
@@ -1411,7 +1411,7 @@ async function runSwipe(
   // on a landscape UI the two differ by a rotation (flow-orientation.ts). The
   // settle above is the read that said which.
   const orientation = env.lastRead?.uiOrientation;
-  if (settle.warning !== undefined && step.direction) {
+  if (settle.warning !== undefined && step.direction && isIosSimulator(env.device)) {
     // No tree this time: the turn comes from an older read, or from none.
     settle = { ...settle, warning: `${settle.warning} ${unreadOrientationNote(orientation)}` };
   }

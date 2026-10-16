@@ -150,10 +150,10 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
       failedMsg: ({ failureSignal }) => `Failed to read screen: ${failureSignal.error_code}`,
     },
     description: `Get the accessibility / DOM element tree for the current screen.
-On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
+On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible, including
 system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
 covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
-On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
+On Chromium, walks the renderer's DOM via Chrome DevTools Protocol: every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
 \`[focused]\`/\`[selected]\` so you can see where the D-pad cursor is, then move it with the \`tv-remote\` tool
@@ -164,9 +164,9 @@ When a system dialog is visible, describe returns the dialog's interactive eleme
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
 On a physical iOS device, launch-app \`com.apple.springboard\` first to read system dialogs.
 
-Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
+Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree, one
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
-are normalized [0,1] fractions of the screen / window width/height (not pixels) — the same space as
+are normalized [0,1] fractions of the screen / window width/height (not pixels), the same space as
 gesture-tap / gesture-swipe / gesture-pinch.
 
 To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
@@ -179,7 +179,7 @@ For app-scoped inspection with full UIKit properties (accessibilityIdentifier, v
 use native-describe-screen with an explicit bundleId instead (iOS simulator only).
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.
 
-On a TV target (Apple TV / Android TV — a \`list-devices\` entry with runtimeKind 'tv') this returns
+On a TV target (Apple TV / Android TV: a \`list-devices\` entry with runtimeKind 'tv') this returns
 the focus-driven view instead: the currently FOCUSED element and the list of FOCUSABLE elements,
 since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\` (up/down/left/right/select/
 back/menu/home), then call describe again to confirm where focus landed.`,

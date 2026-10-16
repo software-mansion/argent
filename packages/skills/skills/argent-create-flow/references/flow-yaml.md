@@ -40,7 +40,7 @@ steps: []
 
 Flows never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
-The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly — an auto-detected device would retarget the teardown at a device the flow never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup flow there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup flow whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
+The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly: an auto-detected device would retarget the teardown at a device the flow never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup flow there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup flow whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
 
 ## Selectors
 
@@ -118,7 +118,7 @@ Directives stop the flow on failure and skip later steps. The available directiv
 - Unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
 - A fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
-Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
+Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
@@ -131,7 +131,7 @@ In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `
 
 ### `swipe`
 
-`swipe` is one semantic finger flick where the gesture itself is the action — dismiss a card, page a carousel, open a drawer, pull-to-refresh: `- swipe: left`, `- swipe: { from: Card, direction: left }`, `- swipe: { by: { y: -0.4 } }`.
+`swipe` is one semantic finger flick where the gesture itself is the action: dismiss a card, page a carousel, open a drawer, pull-to-refresh: `- swipe: left`, `- swipe: { from: Card, direction: left }`, `- swipe: { by: { y: -0.4 } }`.
 
 **Never use `swipe` to scroll.** Whenever the goal is "bring X on screen so the next step can act on it", write `scroll-to: <X>` instead: it is goal-seeking (stops exactly when the target appears), momentum-free, and a no-op if the target is already visible.
 
@@ -158,7 +158,7 @@ On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`,
 
 `type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
-A **selector-less gesture** — a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:` — resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict — which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
+A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict, which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
 
 ## Verification conditions
 
@@ -205,14 +205,14 @@ The identity selector must exist only on the destination. A dropped tap can leav
 
 It **never fails a run.** Every outcome short of a clean settle passes with a warning, because readiness is not an acceptance criterion. Read that warning rather than stepping over it:
 
-- **the screen never held still** — it spent the timeout and was still moving on the last interval. A video, shimmer, carousel, or live text stays healthy while moving, and a load that never finished looks identical.
-- **a small part of it was still changing** — a spinner, caret, or progress dot moved through the hold. Too small to count as the screen moving, so the settle completed anyway.
-- **the screen was still for the last Nms** — the wait ran out mid-hold, so no settle was confirmed. It names the term that was short: a second agreeing interval, or the rest of `stableFor`. Raise this step's `timeout:`, because the wait was too short rather than the screen too busy.
-- **the tree stayed empty** — the screen rendered no accessible content: a canvas or video surface, or a screen that never arrived.
-- **settled on the UI tree alone** — no screenshot pair could be read, so presentation-layer animation was never waited out.
-- **too few reads** — a settle needs three reads across two intervals and this step got fewer, so it ended with no evidence either way.
+- **the screen never held still**: it spent the timeout and was still moving on the last interval. A video, shimmer, carousel, or live text stays healthy while moving, and a load that never finished looks identical.
+- **a small part of it was still changing**: a spinner, caret, or progress dot moved through the hold. Too small to count as the screen moving, so the settle completed anyway.
+- **the screen was still for the last Nms**: the wait ran out mid-hold, so no settle was confirmed. It names the term that was short: a second agreeing interval, or the rest of `stableFor`. Raise this step's `timeout:`, because the wait was too short rather than the screen too busy.
+- **the tree stayed empty**: the screen rendered no accessible content: a canvas or video surface, or a screen that never arrived.
+- **settled on the UI tree alone**: no screenshot pair could be read, so presentation-layer animation was never waited out.
+- **too few reads**: a settle needs three reads across two intervals and this step got fewer, so it ended with no evidence either way.
 
-Only a tree source this step could not read stops the run, as an errored step — one still failing when the wait ends, one that wedges after answering, one that answers with an empty tree it flags as degraded (an unattached Vega toolkit, an AX service asking to be relaunched), or one that never answers (raise `timeout` before suspecting the app). The run is then not ok and every later step is skipped. A single failed read is not that: the hold restarts from the next good read. The same outage stops no [selector-less gesture](#directives), which needs no frame and passes with its own warning instead.
+Only a tree source this step could not read stops the run, as an errored step: one still failing when the wait ends, one that wedges after answering, one that answers with an empty tree it flags as degraded (an unattached Vega toolkit, an AX service asking to be relaunched), or one that never answers (raise `timeout` before suspecting the app). The run is then not ok and every later step is skipped. A single failed read is not that: the hold restarts from the next good read. The same outage stops no [selector-less gesture](#directives), which needs no frame and passes with its own warning instead.
 
 `idle` proves readiness only and never identifies the screen, so it cannot serve as acceptance evidence or replace the identity gate. Gate the next action on a stable element. Add `idle` during polish after each screen change, not after every step.
 
@@ -232,8 +232,10 @@ The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ 
 
 A `run:` target is a YAML path resolved against the directory of the flow file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
 
+`run:` steps and `tool: flow-execute` steps make one chain of flows. A step that closes a cycle in that chain, such as a flow that runs itself through `tool: flow-execute`, fails with a reason that contains `cyclic flow reference:`. A step that makes the chain longer than 20 flows fails with a reason that contains `max run depth exceeded`.
+
 - iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
-- Chromium boots one instance per launch **step**, not one per run. The leading launch — the flow's own, or the one its leading `run:` chain reaches — boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
+- Chromium boots one instance per launch **step**, not one per run. The leading launch (the flow's own, or the one its leading `run:` chain reaches) boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
 
 ## Local scripts
@@ -250,7 +252,7 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 - **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
-If `flow-add-script` cannot access the file, finish the recording. Add the step to YAML, then replay it locally.
+Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `flow-add-script` refuses the call, and a replay rejects a flow with a `script:` step. Record and replay a flow with a script without a link.
 
 If a script fails, check its changes before you retry.
 
@@ -262,7 +264,7 @@ A screenshot is human evidence. A `snapshot:` is executable visual verification.
 
 Do not use a snapshot as the only proof of navigation, persistence, data, accessibility state, logs, or network behavior. Avoid unstable timestamps, live data, ads, animation, and device drift. First establish deterministic state, identity, and readiness.
 
-Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
+Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A flow that a `tool: flow-execute` step runs keeps its own baselines, and `--update-baselines` updates them too unless the step sets `updateBaselines` itself. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
 Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<flow>/` for CI artifact upload.
 

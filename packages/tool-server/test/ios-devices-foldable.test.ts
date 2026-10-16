@@ -152,6 +152,19 @@ describe("foldable simulators", () => {
     expect(await isFoldableSimulator("00000000-0000-0000-0000-000000000000")).toBe(false);
   });
 
+  it("answers no for an id that is not a local iOS simulator's without listing", async () => {
+    for (const id of [
+      "emulator-5554",
+      "R58M123ABC",
+      "00008110-001C64D10A13801E",
+      `remote:${DUO}`,
+      "chromium-cdp-9222",
+    ]) {
+      expect(await isFoldableSimulator(id)).toBe(false);
+    }
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
   it("degrades to not foldable when the profile cannot be read", async () => {
     execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
       if (cmd === "plutil") return new Error("plutil: cannot read");

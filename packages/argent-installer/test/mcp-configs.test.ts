@@ -1261,6 +1261,7 @@ describe("opencode adapter", () => {
   });
 
   it("globalPath returns ~/.config/opencode/opencode.json", () => {
+    homedirOverride = path.join(tmpDir, "home");
     expect(adapter.globalPath()).toBe(
       path.join(os.homedir(), ".config", "opencode", "opencode.json")
     );

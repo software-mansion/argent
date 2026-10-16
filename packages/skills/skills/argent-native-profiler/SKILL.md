@@ -5,11 +5,11 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 
 ## 1. Tools
 
-- `native-profiler-start` — start profiling on a booted device. iOS: xctrace recording for CPU, hangs, and leaks.
-- `native-profiler-stop` — stop the profiler and export trace data to timestamped XML files.
-- `native-profiler-analyze` — parse exported trace data and return a structured bottleneck payload.
-- `profiler-stack-query` — drill into parsed data: hang stacks, function callers, thread breakdown, leak details.
-- `profiler-load` — list and reload previous trace sessions from disk for re-investigation.
+- `native-profiler-start`: start profiling on a booted device. iOS: xctrace recording for CPU, hangs, and leaks.
+- `native-profiler-stop`: stop the profiler and export trace data to timestamped XML files.
+- `native-profiler-analyze`: parse exported trace data and return a structured bottleneck payload.
+- `profiler-stack-query`: drill into parsed data: hang stacks, function callers, thread breakdown, leak details.
+- `profiler-load`: list and reload previous trace sessions from disk for re-investigation.
 - Physical iPhone: not supported; use a simulator.
 
 ---
@@ -28,7 +28,7 @@ After `native-profiler-analyze` surfaces findings, use `profiler-stack-query` to
 - **Hang detected** → `profiler-stack-query` mode=`hang_stacks` for full native call chains → mode=`function_callers` for the suspected function → read native source.
 - **CPU hotspot** → `profiler-stack-query` mode=`thread_breakdown` for per-thread distribution → mode=`function_callers` for the dominant function.
 - **Memory leak** → `profiler-stack-query` mode=`leak_stacks` filtered by `object_type` for responsible frames and libraries.
-  - iOS: if leaks come back unattributed (responsible frame `<Call stack limit reached>`), re-run `native-profiler-start` with `malloc_stack_logging: true`. This cold-launches the app with Malloc Stack Logging so leaks carry a real allocation backtrace (responsible frame + library). It restarts the app and adds overhead, so use it only when you need leak attribution — not for CPU/hang passes.
+  - iOS: if leaks come back unattributed (responsible frame `<Call stack limit reached>`), re-run `native-profiler-start` with `malloc_stack_logging: true`. This cold-launches the app with Malloc Stack Logging so leaks carry a real allocation backtrace (responsible frame + library). It restarts the app and adds overhead, so use it only when you need leak attribution, not for CPU/hang passes.
 
 After presenting findings, ask the user whether to investigate further, implement fixes, or stop. After applying fixes, always re-profile the same scenario and compare with `profiler-load`. Report honestly whether the target metric improved, regressed, or stayed flat. If the fix showed no net benefit or introduced regressions elsewhere, say so and reconsider.
 
@@ -40,12 +40,12 @@ After presenting findings, ask the user whether to investigate further, implemen
 
 ## 4. Workflow
 
-**Complete all steps in order — do not break mid-flow.**
+**Complete all steps in order; do not break mid-flow.**
 
 ### Step 0: Ensure the target app is running
 
 The `native-profiler-start` tool **auto-detects** the running app on the device.
-You do not need to derive `app_process` manually — just make sure the app is launched.
+You do not need to derive `app_process` manually; just make sure the app is launched.
 
 1. If the app is already running on the device, skip to Step 1 (do not pass `app_process`).
 2. If the app is not running, use `launch-app` with the correct bundle ID first.
@@ -60,7 +60,7 @@ Let the user interact with the app or drive interaction via simulator tools (see
 
 ### Step 2: Stop and export
 
-Call `native-profiler-stop` with `device_id`. iOS sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML — check `exportDiagnostics` for any export warnings. Android sends SIGTERM to the on-device perfetto daemon, polls `/proc/<pid>` until it exits, then `adb pull`s the `.pftrace` to the host.
+Call `native-profiler-stop` with `device_id`. iOS sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML; check `exportDiagnostics` for any export warnings. Android sends SIGTERM to the on-device perfetto daemon, polls `/proc/<pid>` until it exits, then `adb pull`s the `.pftrace` to the host.
 
 ### Step 3: Analyze
 
@@ -68,7 +68,7 @@ Call `native-profiler-analyze` with `device_id`. Returns a markdown report with 
 
 ### Step 4: Present findings and ask about next steps
 
-Present a concise summary of the key findings. Then follow the "After analysis" guideline — ask whether to investigate further with query tools, implement fixes, or stop.
+Present a concise summary of the key findings. Then follow the "After analysis" guideline: ask whether to investigate further with query tools, implement fixes, or stop.
 
 ### Step 5: Drill-down investigation
 
@@ -89,13 +89,13 @@ To revisit a previous trace:
 Bottlenecks are categorized by severity:
 
 - **RED**: CPU functions taking >15% of total time, all UI hangs, and **attributed** memory leaks (those with a resolved responsible frame). These require immediate attention.
-- **YELLOW**: CPU functions taking 3-15% of total time, and **unattributed** memory leaks (`<Call stack limit reached>`, no library — see the memory-leaks caveat below). Worth investigating but may be acceptable.
+- **YELLOW**: CPU functions taking 3-15% of total time, and **unattributed** memory leaks (`<Call stack limit reached>`, no library; see the memory-leaks caveat below). Worth investigating but may be acceptable.
 
 Each bottleneck type indicates a different class of problem:
 
 - **CPU hotspots**: Native functions consuming excessive CPU time. Look for tight loops, expensive computations, or redundant work.
 - **UI hangs**: Main thread blocked long enough to cause visible jank or unresponsiveness. Often caused by synchronous I/O, heavy layout passes, or lock contention.
-- **Memory leaks**: Objects allocated but never freed. Common causes include retain cycles, unclosed resources, or forgotten observers. Argent records via `xctrace --attach`, which has no malloc-stack history, so on the simulator most leaks come back **unattributed** (`<Call stack limit reached>`, no library) and are dominated by benign system allocations — these are reported as a low-confidence YELLOW summary, not confirmed RED leaks. For attributed stacks, capture with malloc stack logging enabled at launch.
+- **Memory leaks**: Objects allocated but never freed. Common causes include retain cycles, unclosed resources, or forgotten observers. Argent records via `xctrace --attach`, which has no malloc-stack history, so on the simulator most leaks come back **unattributed** (`<Call stack limit reached>`, no library) and are dominated by benign system allocations; these are reported as a low-confidence YELLOW summary, not confirmed RED leaks. For attributed stacks, capture with malloc stack logging enabled at launch.
 
 ---
 
@@ -103,6 +103,6 @@ Each bottleneck type indicates a different class of problem:
 
 - **Simulator vs device**: Simulator profiling reflects host Mac performance, not real device hardware. Use device profiling for accurate CPU timings and memory behavior.
 - **xctrace availability (iOS)**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`.
-- **Profiler overhead**: xctrace instrumentation adds CPU load. If `JSLexer`, `JSONEmitter`, or Hermes runtime internals dominate the JS thread in CPU hotspot results, those reflect profiler overhead — not app work. Discount those entries when evaluating findings.
+- **Profiler overhead**: xctrace instrumentation adds CPU load. If `JSLexer`, `JSONEmitter`, or Hermes runtime internals dominate the JS thread in CPU hotspot results, those reflect profiler overhead, not app work. Discount those entries when evaluating findings.
 - **Run-to-run variance**: Small fluctuations in CPU percentages between runs are normal. Treat only consistent directional changes (across 2+ runs or >15% delta) as actionable signal.
 - **Live data variability**: If the app fetches live API data, different responses between runs change rendering workload independently of code changes. Note when data-dependent screens show variance.

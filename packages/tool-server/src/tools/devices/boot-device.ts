@@ -72,7 +72,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Vega (Fire TV): VVD image to boot — the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+      "Vega (Fire TV): VVD image to boot: the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
     ),
   bootTimeoutMs: z
     .number()
@@ -91,7 +91,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Android only: boot the emulator with audio output enabled. Defaults to false — argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega/Electron, which argent never mutes."
+      "Android only: boot the emulator with audio output enabled. Defaults to false: argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega/Electron, which argent never mutes."
     ),
   headless: z
     .boolean()

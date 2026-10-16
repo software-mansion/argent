@@ -27,7 +27,10 @@ export const iosDeviceImpl: PlatformImpl<
     }
 
     await ensureDeviceReady(params.udid);
-    await launchApp(params.udid, params.bundleId, { terminateExisting: true });
+    await launchApp(params.udid, params.bundleId, {
+      terminateExisting: true,
+      args: params.launchArgs,
+    });
 
     setCurrentIosDeviceApp(params.udid, params.bundleId);
 

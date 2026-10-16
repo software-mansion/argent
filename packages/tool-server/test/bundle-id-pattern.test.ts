@@ -24,6 +24,7 @@ describe("advertised bundleId pattern", () => {
       "reinstall-app",
       "restart-app",
       "settings-permissions",
+      "terminate-app",
     ]);
   });
 

@@ -6,16 +6,16 @@ description: Optimizes a React Native app by profiling first to find real bottle
 ## Rules
 
 - Do not apply shotgun optimizations. Measure first, define what "good enough" looks like (target metric + threshold), fix the top offender, re-measure honestly.
-- **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
-- **Deep measure** — load `argent-react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
-- **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
+- **Quick scan**: `react-profiler-renders` for a live render count table. Identifies hot components instantly.
+- **Deep measure**: load `argent-react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
+- **Inspect**: `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
 - **Verify correctness** - before fixing, recollect information from steps above and make a logical conclusion whether the approach is worth undertaking.
-- **Fix** — apply one fix. Validate with `debugger-evaluate` before committing.
-- **Re-measure** — report whether the target metric improved, regressed, or stayed flat. Check for regressions in other areas. If no net benefit or unacceptable tradeoffs, revert.
+- **Fix**: apply one fix. Validate with `debugger-evaluate` before committing.
+- **Re-measure**: report whether the target metric improved, regressed, or stayed flat. Check for regressions in other areas. If no net benefit or unacceptable tradeoffs, revert.
 - **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
-- **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped — re-profile once after the batch. When the measurement involves device interaction, record it as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps.
+- **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped; re-profile once after the batch. When the measurement involves device interaction, record it as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps.
 - **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
-- **Sub-agents**: Phases 1–2 dispatch sub-agents — one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the device - all profiling and E2E verification must happen in the main agent.
+- **Sub-agents**: Phases 1–2 dispatch sub-agents: one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the device - all profiling and E2E verification must happen in the main agent.
 
 ## Pipeline
 
@@ -25,20 +25,20 @@ Copy this checklist into your TODO list:
 
 ```
 Optimization Progress:
-- [ ] Phase 1: Lint sweep (deterministic — catch mechanical issues without a running app)
-- [ ] Phase 2: Semantic sweep (judgment — memoization, lists, animations, etc.)
+- [ ] Phase 1: Lint sweep (deterministic: catch mechanical issues without a running app)
+- [ ] Phase 2: Semantic sweep (judgment: memoization, lists, animations, etc.)
 - [ ] Phase 3: Baseline profile (find real bottlenecks, fix top offenders)
 - [ ] Phase 4: Verify no regressions (crashes, errors, red screens)
 ```
 
 ### Phase 1: Lint sweep
 
-Run ESLint once at the project root with a comprehensive RN performance ruleset. Dispatch sub-agents to fix results — one per file.
+Run ESLint once at the project root with a comprehensive RN performance ruleset. Dispatch sub-agents to fix results: one per file.
 See [references/lint-rules.md](references/lint-rules.md) for ruleset and procedure.
 
 ### Phase 2: Semantic sweep
 
-Review each area requiring judgment — memoization, list rendering, animations, async patterns, effect cleanup, state hygiene, context architecture. Dispatch one sub-agent per checklist item.
+Review each area requiring judgment: memoization, list rendering, animations, async patterns, effect cleanup, state hygiene, context architecture. Dispatch one sub-agent per checklist item.
 See [references/semantic-checklist.md](references/semantic-checklist.md) for full checklist.
 
 ### Phase 3: Visual profiling
@@ -51,7 +51,7 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 
 ### Phase 4: Verify no regressions
 
-Navigate every screen and UI flow within scope, confirm each renders without errors. If no scope was specified, verify the entire app — cover all reachable screens via `argent-device-interact`. Use `debugger-log-registry` to check for runtime errors (if it returns `status: "not_connected"` there is no log file — follow its `guidance` to reconnect first) and take screenshots to check for red/yellow error screens. Check for regressions introduced by fixes (e.g., fewer re-renders but higher CPU, or new jank in a different screen). Main agent only.
+Navigate every screen and UI flow within scope, confirm each renders without errors. If no scope was specified, verify the entire app: cover all reachable screens via `argent-device-interact`. Use `debugger-log-registry` to check for runtime errors (if it returns `status: "not_connected"` there is no log file; follow its `guidance` to reconnect first) and take screenshots to check for red/yellow error screens. Check for regressions introduced by fixes (e.g., fewer re-renders but higher CPU, or new jank in a different screen). Main agent only.
 
 ## App-wide optimization
 

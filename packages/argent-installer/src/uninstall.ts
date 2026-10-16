@@ -206,9 +206,13 @@ export function removeBundledSkillInstalls(
   for (const skillName of skillNames) {
     const targetPath = path.join(targetDir, skillName);
     try {
-      if (!fs.existsSync(targetPath)) continue;
+      // lstat, not existsSync: an editor dir holds symlinks into .agents/skills,
+      // which this run has already emptied, so the links are dangling.
+      // existsSync follows the link and reports them missing; lstat sees the
+      // link itself.
+      const stats = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+      if (!stats) continue;
 
-      const stats = fs.lstatSync(targetPath);
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         fs.rmSync(targetPath, { recursive: true, force: true });
       } else {

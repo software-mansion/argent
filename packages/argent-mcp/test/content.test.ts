@@ -349,6 +349,19 @@ describe("flowRunToMcpContent", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("names each baseline a run over a link returned but could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks).toContainEqual({
+      type: "text",
+      text: "✗ baseline not written: /p/b.png: EACCES: permission denied",
+    });
+  });
+
   it("produces header and footer text blocks", async () => {
     const input: FlowExecuteResult = { flow: "test", steps: [] };
     const blocks = await flowRunToMcpContent(input);

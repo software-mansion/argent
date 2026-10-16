@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
 import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import { HostProjectAccess } from "../../src/tools/flows/project-access";
 import { ArtifactStore } from "../../src/artifacts";
 import {
   diffPngFiles,
@@ -156,6 +157,7 @@ function opts(overrides: Partial<Parameters<typeof runSnapshot>[1]> = {}) {
     updateBaselines: false,
     appIdentity: "/apps/app-a",
     seenKeys: new Map<string, string>(),
+    project: new HostProjectAccess(),
     ...overrides,
   };
 }
@@ -646,6 +648,43 @@ describe("runSnapshot cropOn", () => {
     // Two baseline files on disk — the second write did not clobber the first.
     const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
     expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
+  });
+
+  it("keys same-name crops that differ only by scope to distinct baselines", async () => {
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "Toggle", within: { identifier: "row-1" } } })
+    );
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "Toggle", within: { identifier: "row-2" } } })
+    );
+
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
+    // Two baseline files on disk — row-2 did not overwrite row-1's baseline.
+    const files = await fs.readdir(path.join(tmpDir, "__baselines__", "checkout"));
+    expect(files.sort()).toEqual([`${r1.snapshotKey}.png`, `${r2.snapshotKey}.png`].sort());
+  });
+
+  it("keys the same scope reached through different relations apart", async () => {
+    const r1 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "Toggle", after: { identifier: "row" } } })
+    );
+    const r2 = await runSnapshot(
+      env,
+      opts({ updateBaselines: true, cropOn: { text: "Toggle", next: { identifier: "row" } } })
+    );
+
+    expect(r1.snapshotKey).not.toBe(r2.snapshotKey);
+  });
+
+  it("keys an unscoped selector by its own fields alone", async () => {
+    // Committed baselines predate scope-aware keys; adding a scope must not
+    // rename the file an unscoped crop already writes.
+    const r = await runSnapshot(env, opts({ updateBaselines: true, cropOn }));
+
+    expect(r.snapshotKey).toBe(cropKey);
   });
 
   it("keys a selector canonically regardless of property insertion order", async () => {

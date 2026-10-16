@@ -11,6 +11,7 @@ import {
   type DeviceSetPath,
 } from "./ios-device-sets";
 import { externalNativeId, isExternalId } from "./external-devices";
+import { resolveDevice } from "./device-info";
 
 const execFileAsync = promisify(execFile);
 
@@ -129,6 +130,12 @@ const runtimeKindCache = new Map<string, "mobile" | "tv">();
 export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
   const cached = runtimeKindCache.get(udid);
   if (cached) return cached;
+  const kind = (await findIosSimulator(udid))?.runtimeKind;
+  if (kind) runtimeKindCache.set(udid, kind);
+  return kind;
+}
+
+export async function findIosSimulator(udid: string): Promise<IosSimulator | undefined> {
   /**
    * An external provider's simulator is not in any configured set, so the
    * all-sets listing cannot see it. Scope to the set the provider declared and
@@ -137,9 +144,8 @@ export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | 
   const listing = isExternalId(udid)
     ? await listDeviceSetSimulators(await deviceSetForUdid(udid))
     : await listIosSimulators();
-  const kind = listing.find((s) => s.udid === externalNativeId(udid))?.runtimeKind;
-  if (kind) runtimeKindCache.set(udid, kind);
-  return kind;
+  const native = externalNativeId(udid);
+  return listing.find((s) => s.udid === native);
 }
 
 /** True when the given iOS-shaped UDID is actually a tvOS (Apple TV) simulator. */
@@ -268,13 +274,11 @@ export async function isFoldableDeviceType(identifier: string): Promise<boolean>
  * False for a UDID no listing knows.
  */
 export async function isFoldableSimulator(udid: string): Promise<boolean> {
+  const device = resolveDevice(udid);
+  if (device.platform !== "ios" || device.kind !== "simulator") return false;
   const cached = foldableCache.get(udid);
   if (cached !== undefined) return cached;
-  const listing = isExternalId(udid)
-    ? await listDeviceSetSimulators(await deviceSetForUdid(udid))
-    : await listIosSimulators();
-  const native = externalNativeId(udid);
-  const found = listing.find((s) => s.udid === native);
+  const found = await findIosSimulator(udid);
   const foldable = found?.foldable === true;
   // A listing that did not see the UDID at all is not evidence about it;
   // memoize only what a listing answered.

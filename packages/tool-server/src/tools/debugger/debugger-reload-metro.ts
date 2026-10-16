@@ -11,7 +11,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
 });
 

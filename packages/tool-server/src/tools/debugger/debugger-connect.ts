@@ -3,14 +3,14 @@ import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
-import { takeReapedSession } from "../../utils/reaped-sessions";
+import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
 
 const zodSchema = z.object({
   port: metroPortField,
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it — forwarding it still resolves here, but the list-devices id is the stable one."
+      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it. Forwarding it still resolves here, but the list-devices id is the stable one."
     ),
 });
 
@@ -24,6 +24,7 @@ export const debuggerConnectTool: ToolDefinition<
     logicalDeviceId: string | undefined;
     isNewDebugger: boolean;
     connected: boolean;
+    note?: string;
   }
 > = {
   id: "debugger-connect",
@@ -35,8 +36,8 @@ export const debuggerConnectTool: ToolDefinition<
       `Failed to connect JavaScript debugger: ${failureSignal.error_code}`,
   },
   description: `Connect to a JS runtime CDP debugger.
-iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device — port is ignored.
-Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), and isNewDebugger. If already connected, returns the existing connection.
+iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device; port is ignored.
+Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), and isNewDebugger, plus a note naming the kept log file when the previous session ended because the app crashed. If already connected, returns the existing connection.
 Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Chromium CDP terminated).`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
@@ -45,20 +46,19 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    // Drop this device's teardown breadcrumb: its only consumer,
-    // `debugger-log-registry`, reads it only on an EMPTY registry, so one left
-    // here outlives every read that finds entries and later blames an unrelated
-    // empty read on a teardown. An explicit connect makes it wrong anyway —
-    // from here the capture is this session's.
+    // Take this device's breadcrumb: `debugger-log-registry` reads it only on
+    // an empty or not-connected read, so one left here outlives every read that
+    // finds entries and later pins an unrelated empty read on the old session.
+    // An explicit connect makes it wrong anyway — from here the capture is this
+    // session's.
     //
     // Not in the blueprint's factory: that also runs for the implicit resolve
     // `debugger-log-registry` reconnects through, which would consume the
     // breadcrumb just before the read that exists to report it.
-    for (const id of new Set(
-      [params.device_id, api.logicalDeviceId].filter((v): v is string => v !== undefined)
-    )) {
-      takeReapedSession("js-runtime-debugger", id);
-    }
+    const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
+      params.device_id,
+      api.logicalDeviceId,
+    ]);
     return {
       port: api.port,
       projectRoot: api.projectRoot,
@@ -67,6 +67,9 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
       logicalDeviceId: api.logicalDeviceId,
       isNewDebugger: api.isNewDebugger,
       connected: api.cdp.isConnected(),
+      ...(reaped?.connectionLost
+        ? { note: describeReapedSession(reaped, "previous JS-runtime debugger session") }
+        : {}),
     };
   },
 };

@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build-runner:
     name: Compile the XCUITest runner
-    runs-on: macos-latest
+    runs-on: macos-latest-xlarge
     timeout-minutes: 20
     permissions:
       contents: read

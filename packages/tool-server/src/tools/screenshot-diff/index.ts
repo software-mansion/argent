@@ -25,6 +25,7 @@ import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotati
 import type { RotationPeek } from "../../utils/device-orientation";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
+import { summaryReportsDimensionMismatch } from "./screenshot-diff-summary";
 
 const zodSchema = z
   .object({
@@ -65,7 +66,7 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "Directory where diff artifacts should be written. Optional — defaults to a temp directory; the diff images are returned in the result either way."
+        "Directory where diff artifacts should be written. Optional: defaults to a temp directory; the diff images are returned in the result either way."
       ),
   })
   .strict();
@@ -104,7 +105,10 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
   id: "screenshot-diff",
   interaction: {
     startedMsg: () => "Comparing screenshots",
-    completedMsg: () => "Compared screenshots",
+    completedMsg: ({ result }) =>
+      summaryReportsDimensionMismatch(result.summary)
+        ? "Skipped comparison - screenshot dimensions differ"
+        : "Compared screenshots",
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.

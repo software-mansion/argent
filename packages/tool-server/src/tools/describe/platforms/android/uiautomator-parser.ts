@@ -682,7 +682,10 @@ export function parseUiAutomatorDump(
   if (xmlEnd !== -1) xml = xml.slice(0, xmlEnd + "</hierarchy>".length);
   const root = parseUiAutomatorXml(xml);
   if (!root) {
-    throw new FailureError("Failed to parse uiautomator dump output", {
+    const got = rawOutput.trim()
+      ? `${rawOutput.length} chars: ${JSON.stringify(rawOutput.slice(0, 200))}`
+      : "empty";
+    throw new FailureError(`Failed to parse uiautomator dump output (${got})`, {
       error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_PARSE_FAILED,
       failure_stage: "android_uiautomator_parse_dump",
       failure_area: "tool_server",

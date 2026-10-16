@@ -12,6 +12,8 @@ describe("describe native adapter", () => {
     expect(mapNativeTraitsToDescribeRole(["button"])).toBe("AXButton");
     expect(mapNativeTraitsToDescribeRole(["toggleButton"])).toBe("AXButton");
     expect(mapNativeTraitsToDescribeRole(["staticText"])).toBe("AXStaticText");
+    expect(mapNativeTraitsToDescribeRole(["textEntry"])).toBe("AXTextField");
+    expect(mapNativeTraitsToDescribeRole(["searchField", "textEntry"])).toBe("AXTextField");
     expect(mapNativeTraitsToDescribeRole([])).toBe("AXGroup");
   });
 

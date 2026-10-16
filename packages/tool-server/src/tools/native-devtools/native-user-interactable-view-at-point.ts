@@ -73,7 +73,7 @@ Unlike native-view-at-point, this respects userInteractionEnabled and is closer 
 UIKit hit-testing semantics.
 
 Use when a tap lands somewhere unexpected or does nothing, to see which control
-UIKit would hand the touch to — a transparent overlay swallowing it, a parent
+UIKit would hand the touch to: a transparent overlay swallowing it, a parent
 recognizer, a disabled button.
 
 Returns { status: "ok", view }: the hit-test winner with its class name, frames,
@@ -85,8 +85,8 @@ normalized [0,1] simulator tap coordinates. To get them from a describe frame,
 multiply the normalized values by the screen size in points. Do this also when
 the UI is landscape.
 
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised — follow the message (re-boot the simulator) rather than retrying this tool.
-A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal — never retry it), and the point query itself can error or time out.`,
+If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
+A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), and the point query itself can error or time out.`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),

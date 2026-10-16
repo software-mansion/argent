@@ -43,7 +43,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Whether the drag releases with momentum; default true (a constant-speed drag). Pass false to decelerate into the release point (ease-out) so an app deriving fling from pointer release velocity (carousels, drag libraries) reads ~0 and applies little to no momentum — use it when the drag must stop where it was aimed rather than fling past. Deceleration needs wall clock: under ~100ms the whole drag fits inside the velocity window a page averages over (tens of ms), so some fling survives, and under ~70ms its extra frames cannot dispatch fast enough to fit durationMs. Keep durationMs at its default when the fling must be fully suppressed."
+      "Whether the drag releases with momentum; default true (a constant-speed drag). Pass false to decelerate into the release point (ease-out) so an app deriving fling from pointer release velocity (carousels, drag libraries) reads ~0 and applies little to no momentum. Use it when the drag must stop where it was aimed rather than fling past. Deceleration needs wall clock: under ~100ms the whole drag fits inside the velocity window a page averages over (tens of ms), so some fling survives, and under ~70ms its extra frames cannot dispatch fast enough to fit durationMs. Keep durationMs at its default when the fling must be fully suppressed."
     ),
   // `momentum`'s earlier spelling, with the opposite polarity. Declared so this
   // non-strict object refuses it instead of stripping it and running the default.
@@ -78,10 +78,9 @@ export const gestureDragTool: ToolDefinition<Params, Result> = {
       `Dragged from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to drag: ${failureSignal.error_code}`,
   },
-  description: `Press the left mouse button at a start point, move to an end point, and release — a desktop mouse drag in a Chromium app. All positions are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe, except that a coordinate of exactly 1.0 lands one pixel inside the window edge (gesture-tap maps it to the edge itself). Interpolates mouse-move events at ~60fps over durationMs for a natural drag (a momentum-free drag samples more finely when durationMs is short, so its ease-out has a curve).
-Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop — use gesture-scroll for lists/pages. Chromium only — on iOS/Android use gesture-swipe.
+  description: `Press the left mouse button at a start point, move to an end point, and release: a desktop mouse drag in a Chromium app. All positions are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe, except that a coordinate of exactly 1.0 lands one pixel inside the window edge (gesture-tap maps it to the edge itself). Interpolates mouse-move events at ~60fps over durationMs for a natural drag (a momentum-free drag samples more finely when durationMs is short, so its ease-out has a curve).
+Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop; use gesture-scroll for lists/pages. Chromium only: on iOS/Android use gesture-swipe.
 Pass momentum:false for a momentum-free drag that decelerates into the release, so apps that compute a fling from the pointer stream read ~0 velocity and the drag ends where it was aimed instead of flinging past it (a durationMs under ~100ms is too short for the deceleration to suppress the fling entirely). Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
-  alwaysLoad: true,
   searchHint: "drag drop slider mouse press move release chromium select",
   zodSchema,
   capability,
@@ -127,6 +126,13 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
       err.name = "AbortError";
       return err;
     };
+    // Marks the button up before dispatching, so a release that rejects is not
+    // retried by the recovery path below.
+    let buttonDown: boolean;
+    const release = async (x: number, y: number): Promise<void> => {
+      buttonDown = false;
+      await chromium.dispatchMouseEvent({ type: "mouseReleased", x, y, clickCount: 1 });
+    };
     // Release where the pointer is: the delivered press would otherwise capture
     // every later click, and releasing at the end point delivers travel the caller
     // cancelled. Best effort - a cancel is when the CDP session can be going away
@@ -135,12 +141,7 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
     const releaseAndAbort = async (frame: number): Promise<never> => {
       const err = abortError(frame);
       try {
-        await chromium.dispatchMouseEvent({
-          type: "mouseReleased",
-          x: lastX,
-          y: lastY,
-          clickCount: 1,
-        });
+        await release(lastX, lastY);
       } catch (releaseErr) {
         err.cause = releaseErr;
       }
@@ -154,31 +155,36 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
       y: startPx.y,
       clickCount: 1,
     });
-    for (let i = 1; i < steps; i++) {
-      if (ctx?.signal?.aborted) await releaseAndAbort(i);
-      await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
-      const t = i / steps;
-      const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
-      const x = startPx.x + (endPx.x - startPx.x) * progress;
-      const y = startPx.y + (endPx.y - startPx.y) * progress;
-      await chromium.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "left" });
-      lastX = x;
-      lastY = y;
+    buttonDown = true;
+    try {
+      for (let i = 1; i < steps; i++) {
+        if (ctx?.signal?.aborted) await releaseAndAbort(i);
+        await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
+        const t = i / steps;
+        const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
+        const x = startPx.x + (endPx.x - startPx.x) * progress;
+        const y = startPx.y + (endPx.y - startPx.y) * progress;
+        await chromium.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "left" });
+        lastX = x;
+        lastY = y;
+      }
+      // The loop stops one short of the release, so the last frame is checked on
+      // both sides of its wait: before, to skip the wait; after, to catch an abort
+      // landing during it. Both report `steps` - a wait delivers no pointer events.
+      if (ctx?.signal?.aborted) await releaseAndAbort(steps);
+      // Spend the last frame's wait here rather than on another move at the
+      // endpoint: a move followed by a still frame reads as a hold.
+      await sleep(Math.max(0, t0 + durationMs - Date.now()));
+      if (ctx?.signal?.aborted) await releaseAndAbort(steps);
+      await release(endPx.x, endPx.y);
+    } catch (err) {
+      // A mid-drag dispatch that rejects leaves the renderer holding the button
+      // - the CDP session survives a timed-out send - and every later click on
+      // that page is then read as a drag. Best effort, and the caller keeps
+      // seeing the original failure.
+      if (buttonDown) await release(lastX, lastY).catch(() => {});
+      throw err;
     }
-    // The loop stops one short of the release, so the last frame is checked on
-    // both sides of its wait: before, to skip the wait; after, to catch an abort
-    // landing during it. Both report `steps` - a wait delivers no pointer events.
-    if (ctx?.signal?.aborted) await releaseAndAbort(steps);
-    // Spend the last frame's wait here rather than on another move at the
-    // endpoint: a move followed by a still frame reads as a hold.
-    await sleep(Math.max(0, t0 + durationMs - Date.now()));
-    if (ctx?.signal?.aborted) await releaseAndAbort(steps);
-    await chromium.dispatchMouseEvent({
-      type: "mouseReleased",
-      x: endPx.x,
-      y: endPx.y,
-      clickCount: 1,
-    });
     return { dragged: true, timestampMs };
   },
 };

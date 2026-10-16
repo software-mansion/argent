@@ -34,7 +34,7 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
   description: `Find a React component's source via tree-sitter AST lookup: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
 Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
-When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col) — check it before assuming the returned file is the one you meant.`,
+When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
   zodSchema,
   // Declared so the tool catalogue groups this with the other react-profiler-*
   // tools; the HTTP gate itself is a no-op here, as there is no device arg to

@@ -1,10 +1,10 @@
 ---
-description: Argent iOS Simulator and Android Emulator Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
+description: Argent iOS Simulator and Android Emulator Agent, always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
 alwaysApply: true
 ---
 
 <description>
-If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, physical iPhone, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`. Physical iPhones (iPads are not supported) appear in `list-devices` as iOS entries with kind `"device"`; they are driven over USB cable only, and the on-device runner's signing is auto-detected from the Mac's keychain (`ARGENT_IOS_TEAM_ID` overrides). Automation there is app-scoped: `launch-app` registers the target app before anything else can act. Read `argent-ios-device-setup` to get one connected and `argent-ios-device-interact` before interacting.
+If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, physical iPhone, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit, driven by tv-remote (D-pad) and tagged `platform: "vega"`. Physical iPhones (iPads are not supported) appear in `list-devices` as iOS entries with kind `"device"`; they are driven over USB cable only, and the on-device runner's signing is auto-detected from the Mac's keychain (`ARGENT_IOS_TEAM_ID` overrides). Automation there is app-scoped: `launch-app` registers the target app before anything else can act. Read `argent-ios-device-setup` to get one connected and `argent-ios-device-interact` before interacting.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -17,7 +17,7 @@ Use cases:
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS, Android or Vega)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
-- Running, debugging, or testing a Chromium (CDP) app — an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222` / `ARGENT_CHROMIUM_PORTS`); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag` — `gesture-swipe` is touch-only
+- Running, debugging, or testing a Chromium (CDP) app: an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222` / `ARGENT_CHROMIUM_PORTS`); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag`; `gesture-swipe` is touch-only
   </description>
 
 <availability_check>
@@ -37,9 +37,9 @@ If argent is ABSENT, treat it as an expected state, not an error to retry. Do no
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from screenshot pixels</important>
-Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree — the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
+Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree: the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
 
-Call a discovery tool yourself only when you have no fresh tree for the current screen — before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
+Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
 
 - `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
@@ -70,12 +70,12 @@ Decision order:
 
 <general_rules>
 
-- All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`,
+- All simulator/emulator interactions go through argent MCP tools; never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot and the element tree automatically.
   Call `screenshot` or `describe` separately only for a baseline before any action or after a delay.
-- Always open apps with `launch-app` or `open-url` — never tap home screen icons.
+- Always open apps with `launch-app` or `open-url`; never tap home screen icons.
 - If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
@@ -90,7 +90,7 @@ Decision order:
 <react_native_detection>
 Project type is determined by the `argent-environment-inspector` subagent (see `subagents` section).
 When the subagent result is available, use its `is_react_native` field as the authoritative
-source — do not re-inspect files manually.
+source; do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding. Always use subagents if available to run `gather-workspace-data` data tool, if possible do not run yourself.
 
@@ -98,11 +98,11 @@ When `is_react_native` is true: load `argent-react-native-app-workflow` skill. U
 </react_native_detection>
 
 <skill_routing>
-Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
+Load the matching skill before starting work and executing tools from argent-mcp: skills contain the full step-by-step
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
+If the user did not specify a platform, call `list-devices` first and pick the booted target; do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
@@ -119,18 +119,18 @@ Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Covers phone/tablet iOS and Android simulators and emulators plus Chromium (CDP) apps: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`
-When: You must change an app runtime permission (camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders) that the app itself can't flip — pre-authorize or deny it before the app asks, re-enable one the user already denied (iOS never re-prompts), or reset it so the first-run dialog reappears. Works on the iOS simulator and Android emulator/device. Do NOT use it when the app has an in-app toggle or is showing its own permission dialog — tap that instead (see `argent-device-interact`); nor for permissions/settings outside that list.
+When: You must change an app runtime permission (camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders) that the app itself can't flip: pre-authorize or deny it before the app asks, re-enable one the user already denied (iOS never re-prompts), or reset it so the first-run dialog reappears. Works on the iOS simulator and Android emulator/device. Do NOT use it when the app has an in-app toggle or is showing its own permission dialog; tap that instead (see `argent-device-interact`); nor for permissions/settings outside that list.
 Prompt keywords: permission, grant, deny, revoke, reset permission, privacy, camera access, location access, TCC
 
 TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
-When: Any TV target — a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
+When: Any TV target: a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
 Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
-Saved artifacts: on Vega, a replayable path is `argent-create-flow` and an acceptance-criteria regression test is `argent-qa-flows` — both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no saved-flow support; report that limitation.
+Saved artifacts: on Vega, a replayable path is `argent-create-flow` and an acceptance-criteria regression test is `argent-qa-flows`; both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no saved-flow support; report that limitation.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
@@ -159,7 +159,7 @@ When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). iOS o
 
 PERFORMANCE OPTIMIZATION
 Use skill: `argent-react-native-optimization`
-When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `argent-react-native-profiler` for measurement.
+When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work; it delegates to `argent-react-native-profiler` for measurement.
 
 INTERACTIVE UI TESTING (ONE-OFF, NOT SAVED)
 Skill: `argent-test-ui-flow`
@@ -178,7 +178,7 @@ Routing: one-off check → `argent-test-ui-flow`; saved path → `argent-create-
 
 PROPOSING DESIGN VARIANTS FOR HUMAN SELECTION
 Use skill: `argent-lens`
-When: The user asks for design alternatives / options / A-B choices for a screen or component, or you have produced more than one candidate look for an element and want a human to pick before committing. Covers the build → navigate → screenshot → propose_variant loop and the single blocking await_user_selection call. (Gated behind the `argent-lens` flag, off by default — run `argent enable argent-lens` first.)
+When: The user asks for design alternatives / options / A-B choices for a screen or component, or you have produced more than one candidate look for an element and want a human to pick before committing. Covers the build → navigate → screenshot → propose_variant loop and the single blocking await_user_selection call. (Gated behind the `argent-lens` flag, off by default; run `argent enable argent-lens` first.)
 Prompt keywords: variant, design option, alternative, A/B, "let me pick", "show me options"
 </skill_routing>
 
@@ -189,7 +189,7 @@ When:
 - Environment context of the project is not yet known
 - No "Project Environment" section exists in project memory / `MEMORY.md` or you lack information about basic setup workflows
 - Need to determine build commands, startup scripts, metro port, platform support, or QA tooling
-  If the subagent already ran this session (result in memory), use that context directly — do NOT re-run.
+  If the subagent already ran this session (result in memory), use that context directly; do NOT re-run.
 Rules:
   - Run the `argent-environment-inspector` subagent if possible. Never call `gather-workspace-data` yourself - do only if subagent is not available.
   - The main agent is responsible for persisting the subagent's JSON result to project memory

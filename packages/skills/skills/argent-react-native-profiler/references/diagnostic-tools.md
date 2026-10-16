@@ -8,7 +8,7 @@ These tools can be called independently without starting a profiling session.
 { "port": 8081, "device_id": "<UDID>", "top_n": 20 }
 ```
 
-Call `react-profiler-renders`. Returns render counts and durations per component — useful for spotting hot components before a full profile.
+Call `react-profiler-renders`. Returns render counts and durations per component, useful for spotting hot components before a full profile.
 
 ## Component hierarchy
 
@@ -16,7 +16,7 @@ Call `react-profiler-renders`. Returns render counts and durations per component
 { "port": 8081, "device_id": "<UDID>", "max_depth": 10, "filter": "MyComponent" }
 ```
 
-Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm React Compiler is active for a given component. If `useMemoCache` is absent, the compiler bailed out for that component — memoization hints are safe to propose.
+Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm React Compiler is active for a given component. If `useMemoCache` is absent, the compiler bailed out for that component; memoization hints are safe to propose.
 
 ## Console logs
 
@@ -24,7 +24,7 @@ Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm Rea
 { "port": 8081, "device_id": "<UDID>" }
 ```
 
-Call `debugger-log-registry`. When connected (`status: "connected"`) it returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep` on the log file to filter by level or search for specific messages. When the debugger is unreachable it does not fail — it returns `{ status: "not_connected", reason, detail, guidance }` with no log file; follow the `guidance` (do not retry in a loop, and do not try to grep a file in this state).
+Call `debugger-log-registry`. When connected (`status: "connected"`) it returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep` on the log file to filter by level or search for specific messages. When the debugger is unreachable it does not fail: it returns `{ status: "not_connected", reason, detail, guidance }` with no log file; follow the `guidance` (do not retry in a loop, and do not try to grep a file in this state).
 
 ---
 
@@ -40,16 +40,16 @@ These require a completed profiling session (`react-profiler-stop` + `react-prof
 
 Call `profiler-cpu-query`. Modes:
 
-- `top_functions` — global CPU hotspots. Add `time_window_ms: { start, end }` to filter.
-- `time_window` — CPU breakdown for a specific time range (e.g. during a slow commit).
-- `call_tree` — callers and callees of a specific `function_name`.
-- `component_cpu` — aggregate CPU during all commits of a `component_name`.
+- `top_functions`: global CPU hotspots. Add `time_window_ms: { start, end }` to filter.
+- `time_window`: CPU breakdown for a specific time range (e.g. during a slow commit).
+- `call_tree`: callers and callees of a specific `function_name`.
+- `component_cpu`: aggregate CPU during all commits of a `component_name`.
 
 > **Component names:** pass the name exactly as the report shows it. The report strips
 > `Forget(...)` / `Memo(...)` / `ForwardRef(...)` wrappers and marks them with a
 > `[React Compiler]` / `[React.memo] `/ `[forwardRef]` tag; both that displayed name and the
 > underlying wrapped name resolve. If a name maps to several distinct fibers the tool lists
-> the exact names to retry with rather than merging them — a combined total would not describe
+> the exact names to retry with rather than merging them; a combined total would not describe
 > any real component.
 
 ## Commit query
@@ -60,10 +60,10 @@ Call `profiler-cpu-query`. Modes:
 
 Call `profiler-commit-query`. Modes:
 
-- `by_component` — all commits where a component rendered.
-- `by_time_range` — commits in a `time_range_ms` window.
-- `by_index` — full detail of a single `commit_index`.
-- `cascade_tree` — parent-child re-render cascade for a commit.
+- `by_component`: all commits where a component rendered.
+- `by_time_range`: commits in a `time_range_ms` window.
+- `by_index`: full detail of a single `commit_index`.
+- `cascade_tree`: parent-child re-render cascade for a commit.
 
 ## iOS Instruments query
 
@@ -73,10 +73,10 @@ Call `profiler-commit-query`. Modes:
 
 Call `profiler-stack-query` after `native-profiler-analyze`. Modes:
 
-- `hang_stacks` — full CPU context during a specific hang.
-- `function_callers` — who calls a specific native `function_name`.
-- `thread_breakdown` — CPU time split by thread, optionally filtered.
-- `leak_stacks` — memory leak details, optionally filtered by `object_type`.
+- `hang_stacks`: full CPU context during a specific hang.
+- `function_callers`: who calls a specific native `function_name`.
+- `thread_breakdown`: CPU time split by thread, optionally filtered.
+- `leak_stacks`: memory leak details, optionally filtered by `object_type`.
 
 ## Combined report
 
@@ -94,8 +94,8 @@ Call `profiler-combined-report` when both React Profiler and iOS Instruments ran
 
 Call `profiler-load`. Modes:
 
-- `list` — show all saved profiling sessions (React + iOS) in `/tmp/argent-profiler-cwd/`.
-- `load_react` — reload a React profiler session by `session_id` + `device_id`. Populates the `port:device_id`-keyed in-memory cache for `profiler-cpu-query` and `profiler-commit-query` (which must be called with the same `device_id` afterward).
-- `load_native` — re-parse native profiler XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
+- `list`: show all saved profiling sessions (React + iOS) in `/tmp/argent-profiler-cwd/`.
+- `load_react`: reload a React profiler session by `session_id` + `device_id`. Populates the `port:device_id`-keyed in-memory cache for `profiler-cpu-query` and `profiler-commit-query` (which must be called with the same `device_id` afterward).
+- `load_native`: re-parse native profiler XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
 
 Use this to revisit an earlier profiling session without re-profiling. Each `react-profiler-analyze` run saves raw data with a unique timestamp.

@@ -47,7 +47,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial) — the same id used with debugger-connect."
+      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
     ),
   requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
   includeBody: z.coerce
@@ -120,7 +120,7 @@ export const networkRequestTool: ToolDefinition<
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
 Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
 Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
+Returns an error message string if the requestId is not found; use view-network-logs to get valid requestId values.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {

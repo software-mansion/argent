@@ -20,7 +20,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Device id (iOS udid / Android serial) the variants were captured on. The preview window " +
-        "streams THIS device directly — pass the same udid you screenshotted/described with, so " +
+        "streams THIS device directly; pass the same udid you screenshotted/described with, so " +
         "the human never has to pick a simulator. Set it on the first propose_variant of a round; " +
         "later calls may omit it (the last non-empty value wins)."
     ),
@@ -82,7 +82,7 @@ const zodSchema = z.object({
         .optional()
         .describe(
           "Normalized [0..1] bounds (fractions of screen width/height) of the target element AS IT " +
-            "APPEARS IN THIS VARIANT — read the matched node's `frame` from `describe` AFTER applying " +
+            "APPEARS IN THIS VARIANT. Read the matched node's `frame` from `describe` AFTER applying " +
             "this variant. The preview window crops the screenshot to these bounds, so each variant " +
             "shows its own re-laid-out element instead of every variant sharing one stale frame. The " +
             "element moves/resizes between variants, so capture it per variant. Omit if unknown."
@@ -108,17 +108,17 @@ export function createProposeVariantTool(registry: Registry): ToolDefinition<Par
 Use when you have produced multiple alternative designs for an element and want the human to pick.
 Call this once per variant: e.g. propose_variant("Foo", v1), propose_variant("Foo", v2),
 propose_variant("Bar", v1)…  Variants accumulate per element and across elements. The agent is NOT
-blocked — keep proposing and keep working. Each element appears live in the Argent Lens window (a
+blocked: keep proposing and keep working. Each element appears live in the Argent Lens window (a
 native window that opens automatically) as a floating card beside the streamed simulator, with a thin
 line connecting it to the matched on-screen element; you don't open or display anything yourself. Pass
 variant.previewImage (e.g. a screenshot path) to show how each variant looks.
 
-When you have proposed every variant for every element, you are done staging — the human reviews them
+When you have proposed every variant for every element, you are done staging. The human reviews them
 in the Argent Lens window and sends back their picks and comments. If an \`await_user_selection\` tool
 is available, call it once to block until they submit; otherwise just end your turn and their feedback
 arrives as a follow-up message (this is the case in an \`argent lens\` CLI session).
 
-Returns { round, elementId, variantId, element, variantCount, totalElements } — confirmation only;
+Returns { round, elementId, variantId, element, variantCount, totalElements }: confirmation only;
 it does not wait for the user.`,
     searchHint: "propose design variant alternative option for element non-blocking ab choice",
     zodSchema,

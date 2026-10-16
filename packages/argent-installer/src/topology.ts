@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { resolvePackageRoot } from "./package-root.js";
@@ -32,8 +32,11 @@ function isTempRunnerPath(binaryPath: string): boolean {
  */
 function getGlobalBinaryPath(): string | null {
   try {
-    const cmd = process.platform === "win32" ? "where" : "which -a";
-    const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
+    const [cmd, args] =
+      process.platform === "win32"
+        ? ["where", [MCP_BINARY_NAME]]
+        : ["which", ["-a", MCP_BINARY_NAME]];
+    const output = execFileSync(cmd, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });

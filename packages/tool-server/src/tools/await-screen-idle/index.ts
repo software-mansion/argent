@@ -26,37 +26,39 @@ const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_MIN_STABLE_MS = 250;
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
-  timeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .max(120_000)
-    .optional()
-    .describe(
-      `Max time to wait for the screen to settle before giving up (default ${DEFAULT_TIMEOUT_MS}).`
-    ),
-  pollIntervalMs: z
-    .number()
-    .int()
-    .min(50)
-    .max(5000)
-    .optional()
-    .describe(`How often to re-read the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
-  minStableMs: z
-    .number()
-    .int()
-    .min(0)
-    .max(10_000)
-    .optional()
-    .describe(
-      `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
-    ),
-});
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .min(1)
+      .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(120_000)
+      .optional()
+      .describe(
+        `Max time to wait for the screen to settle before giving up (default ${DEFAULT_TIMEOUT_MS}).`
+      ),
+    pollIntervalMs: z
+      .number()
+      .int()
+      .min(50)
+      .max(5000)
+      .optional()
+      .describe(`How often to re-read the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
+    minStableMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(10_000)
+      .optional()
+      .describe(
+        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
+      ),
+  })
+  .strict();
 
 type Params = z.infer<typeof zodSchema>;
 
@@ -128,7 +130,7 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
 Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it
 has content and that content holds identical for minStableMs (default ${DEFAULT_MIN_STABLE_MS}ms), or timeoutMs (default
-${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls } — settled=false means the screen never went
+${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls }; settled=false means the screen never went
 still before the timeout. Use after a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",

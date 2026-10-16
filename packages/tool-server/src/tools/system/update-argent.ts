@@ -105,7 +105,7 @@ const zodSchema = z.object({
     .enum(["auto", "global", "local", "both"])
     .optional()
     .describe(
-      "Which install to update. 'auto' (default) updates the install serving this session — " +
+      "Which install to update. 'auto' (default) updates the install serving this session: " +
         "the global PATH install or this project's local devDependency, whichever this server runs from. " +
         "Pass 'global' / 'local' to force one, or 'both' when the user has both and wants each updated."
     ),

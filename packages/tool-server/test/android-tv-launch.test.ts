@@ -157,3 +157,18 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
     );
   });
 });
+
+describe("resolveLauncherActivity — failure message", () => {
+  it.each([
+    ["package:/data/app/base.apk\n", /It is installed but declares no such activity/],
+    ["", /It is not installed on emulator-5554: install it with `reinstall-app`/],
+  ])("names the remedy from `pm path` output %j", async (pmPath, message) => {
+    execFileMock.mockImplementation((_cmd: string, args: string[]) => ({
+      stdout: shellCmd(args).startsWith("pm path ") ? pmPath : "No activity found\n",
+      stderr: "",
+    }));
+    await expect(resolveLauncherActivity("emulator-5554", "com.example.app")).rejects.toThrow(
+      message
+    );
+  });
+});

@@ -134,6 +134,12 @@ export function isIosPhysicalDevice(device: Pick<DeviceInfo, "platform" | "kind"
   return device.platform === "ios" && device.kind === "device";
 }
 
+export function isIosSimulator(device: Pick<DeviceInfo, "platform" | "kind">): boolean {
+  return (
+    (device.platform === "ios" && device.kind === "simulator") || device.platform === "ios-remote"
+  );
+}
+
 export function parseChromiumCdpPort(udid: string): number | null {
   if (!udid.startsWith(CHROMIUM_ID_PREFIX)) return null;
   const tail = udid.slice(CHROMIUM_ID_PREFIX.length);

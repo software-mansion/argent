@@ -19,7 +19,7 @@ import { simctlLaunch, simctlTerminate } from "./sim-remote";
  * Merging the two branches means changing that `services()` first.
  */
 export interface SimctlBackend {
-  launch(udid: string, bundleId: string): Promise<void>;
+  launch(udid: string, bundleId: string, args?: string[]): Promise<void>;
   terminate(udid: string, bundleId: string): Promise<void>;
 }
 

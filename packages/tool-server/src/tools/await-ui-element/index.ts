@@ -105,7 +105,7 @@ const zodSchema = z
           "`visible`: selector is present with a non-zero on-screen frame. `hidden`: selector is absent " +
           "or zero-area. `text`: the first visible match in reading order (topmost), falling back to the first match overall if none is visible, " +
           "contains (or, with textMatch `equals`, exactly matches) " +
-          "expectedText — if a loose selector hits several elements, only that one is checked, so narrow it to target the intended element."
+          "expectedText. If a loose selector hits several elements, only that one is checked, so narrow it to target the intended element."
       ),
     selector: selectorSchema.describe("Element to match (text / identifier / role)."),
     expectedText: z
@@ -113,7 +113,7 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "For condition `text`: the string the first visible matched element (topmost in reading order; the first match overall if none is visible) must contain (default) or equal — see `textMatch`. Case-insensitive."
+        "For condition `text`: the string the first visible matched element (topmost in reading order; the first match overall if none is visible) must contain (default) or equal (see `textMatch`). Case-insensitive."
       ),
     textMatch: z
       .enum(["contains", "equals"])
@@ -145,6 +145,7 @@ const zodSchema = z
       .optional()
       .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
   })
+  .strict()
   .refine((p) => p.condition !== "text" || p.expectedText !== undefined, {
     message: "condition `text` requires expectedText",
     path: ["expectedText"],
@@ -355,13 +356,13 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     description: `Block until a UI element reaches an expected state or a timeout elapses, so you don't have to poll screenshot/describe yourself.
 
 Conditions:
-  exists   — the selector matches an element anywhere in the tree.
-  visible  — the selector matches an element with a non-zero on-screen frame.
-  hidden   — the selector matches nothing, or only a zero-area element (e.g. a spinner that disappeared).
-  text     — the first VISIBLE match in reading order (topmost, then leftmost; falling back to the first match
+  exists:    the selector matches an element anywhere in the tree.
+  visible:   the selector matches an element with a non-zero on-screen frame.
+  hidden:    the selector matches nothing, or only a zero-area element (e.g. a spinner that disappeared).
+  text:      the first VISIBLE match in reading order (topmost, then leftmost; falling back to the first match
              overall if none is visible) contains expectedText (case-insensitive substring), or exactly matches
              it when textMatch is \`equals\`. A loose selector can match several elements; only that one is
-             inspected, so if a different match is the one holding the text the wait still reports failure —
+             inspected, so if a different match is the one holding the text the wait still reports failure;
              narrow the selector to target it.
 
 The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
@@ -372,10 +373,10 @@ It polls the same accessibility / DOM tree as \`describe\`
 Vega automation toolkit) every pollIntervalMs
 (default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
 
-Returns { success: boolean, elapsed: number, note?, cause? } — success=false means the wait ended without the
-condition holding, which is not always a verdict on the condition: \`cause\` says which it was — \`unmet\` (the tree
+Returns { success: boolean, elapsed: number, note?, cause? }. success=false means the wait ended without the
+condition holding, which is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree
 was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or
-\`cancelled\` — and \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check. Use this after a
+\`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check. Use this after a
 tap/navigation to wait for the next screen, or before tapping an element that appears asynchronously.`,
     alwaysLoad: true,
     searchHint:

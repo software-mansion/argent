@@ -13,6 +13,13 @@ export enum ServiceState {
 }
 
 /**
+ * The request header the argent tools client sets to `1` on every call it
+ * sends over `argent link` or `ARGENT_TOOLS_URL`, a link to 127.0.0.1
+ * included. The tool-server reads it as {@link InvokeToolOptions.linked}.
+ */
+export const LINKED_CALL_HEADER = "x-argent-linked";
+
+/**
  * True when a node holds (or is acquiring) a real process to tear down. ERROR
  * and TERMINATING nodes hold none — a start that threw (e.g. a tvOS UDID the
  * SimulatorServer blueprint rejects) leaves an ERROR node behind — so the stop
@@ -102,6 +109,18 @@ export interface InvokeToolOptions {
    * authoritative result.
    */
   emitProgress?: (event: unknown) => void;
+  /**
+   * True when the call came over HTTP with the header `x-argent-linked: 1`,
+   * which the argent client sends on every call over `argent link` or
+   * `ARGENT_TOOLS_URL`. Absent for a direct invocation and for a sub-tool call.
+   */
+  linked?: boolean;
+  /**
+   * Internal: the run-stack entries of the flow runs that enclose this call,
+   * outermost first, which a sub-tool call passes on to a nested
+   * `flow-execute`. The HTTP route never sets it.
+   */
+  flowStack?: readonly { canonical: string; display: string }[];
 }
 
 /**
@@ -225,6 +244,12 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * warm for the call's duration.
    */
   longRunning?: boolean;
+  /**
+   * Leaves the tool out of the MCP adapter's tool list, so it costs agents no
+   * context. It stays in `GET /tools` and callable over HTTP, for programmatic
+   * callers such as the Node client and `argent run`.
+   */
+  hideFromMcp?: boolean;
   /**
    * Gates this tool behind a flag name in @argent/configuration-core's
    * FLAG_REGISTRY. Enforced in TWO places, both re-checked per request so

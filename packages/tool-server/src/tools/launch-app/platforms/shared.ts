@@ -10,8 +10,17 @@ export function buildIosLaunchHandler(backend: SimctlBackend) {
   ): Promise<LaunchAppResult> => {
     const blocked = await precheckNativeDevtools(services.nativeDevtools, params.udid);
     if (blocked) return blocked;
+    // A plain launch only foregrounds an app that is already running, so the
+    // arguments would be dropped. Terminate first to apply them.
+    if (params.launchArgs?.length) {
+      try {
+        await backend.terminate(params.udid, params.bundleId);
+      } catch {
+        // App may not be running
+      }
+    }
     try {
-      await backend.launch(params.udid, params.bundleId);
+      await backend.launch(params.udid, params.bundleId, params.launchArgs);
     } catch (err) {
       throw new FailureError(
         `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,

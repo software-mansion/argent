@@ -73,6 +73,8 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   // devicectl launches the named receiving app with the URL as its payload.
   // Web URLs default to Safari and any other scheme must name the app.
   "open-url",
+  // The keyboard backend's XCTest typeText: Delete presses, then the text.
+  "fill",
 ];
 
 describe("apple.device capability ratchet", () => {

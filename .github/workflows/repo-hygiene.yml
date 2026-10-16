@@ -44,5 +44,18 @@ jobs:
             exit 1
           fi
 
+      - name: Shell scripts parse
+        # A sourced script that fails to parse runs only up to the error, so the
+        # functions below it are never defined and nothing else fails loudly.
+        run: |
+          status=0
+          while IFS= read -r -d '' script; do
+            bash -n "$script" || status=1
+          done < <(git ls-files -z '*.sh')
+          if [ "$status" -ne 0 ]; then
+            echo "::error::A tracked shell script does not parse (bash -n)."
+          fi
+          exit "$status"
+
       - name: Workspace versions in sync
         run: node scripts/check-workspace-versions.mjs

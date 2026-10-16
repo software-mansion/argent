@@ -546,7 +546,7 @@ export class FlowScriptExecutor {
     // Unref'd because the lifeline end holds a reference on the tool server's
     // event loop, which would keep the server alive past its idle shutdown.
     // Never read from or write to it — the runner only watches for its close.
-    const lifeline = child.stdio[4] as
+    const lifeline = child.stdio?.[4] as
       | { unref?: () => void; destroy?: () => void }
       | null
       | undefined;

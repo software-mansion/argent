@@ -33,6 +33,23 @@ describe("describe ax-service adapter", () => {
     expect(node?.role).toBe("AXStaticText");
   });
 
+  it("maps a text input to AXTextField, focused only while editing", () => {
+    const idle = adaptAXElement({
+      value: "Email",
+      frame: { x: 0.05, y: 0.2, width: 0.9, height: 0.04 },
+      traits: ["textEntry"],
+    });
+    const editing = adaptAXElement({
+      value: "Password",
+      frame: { x: 0.05, y: 0.25, width: 0.9, height: 0.04 },
+      traits: ["textEntry", "isEditing"],
+    });
+    expect(idle?.role).toBe("AXTextField");
+    expect(idle?.focused).toBeUndefined();
+    expect(editing?.role).toBe("AXTextField");
+    expect(editing?.focused).toBe(true);
+  });
+
   it("defaults to AXGroup for empty traits", () => {
     const node = adaptAXElement({
       label: "Container",

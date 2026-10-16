@@ -33,6 +33,9 @@ function makeAXServiceApi(
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
     livePanel: async () => null,
+    foregroundApp: async () => ({ alertVisible: false }),
+    fill: async () => ({ focused: false, verified: false }),
+    tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => true,
   };
 }
@@ -1071,6 +1074,9 @@ describe("describe tool — ax-service read failure", () => {
       alertCheck: async () => false,
       ping: async () => true,
       livePanel: async () => null,
+      foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => ({ focused: false, verified: false }),
+      tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     };
   }
 

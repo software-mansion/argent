@@ -10,6 +10,7 @@ import {
   getProjectSkillLockPath,
   listArgentSkillsInLock,
   listBundledSkills,
+  npxChildEnv,
   withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
@@ -77,9 +78,14 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   // Project-scope `skills` commands act on their cwd, and this can run from a
   // detached updater that inherited the tool-server's editor-chosen cwd (often
   // `/` or `$HOME`) — pin every run to the project.
-  const execOpts = { stdio: ["ignore", "pipe", "pipe"] as const, cwd: projectRoot } as {
+  const execOpts = {
+    stdio: ["ignore", "pipe", "pipe"] as const,
+    cwd: projectRoot,
+    env: npxChildEnv(),
+  } as {
     stdio: ["ignore", "pipe", "pipe"];
     cwd: string;
+    env: NodeJS.ProcessEnv;
   };
 
   for (const spec of getScopeSpecs(projectRoot)) {

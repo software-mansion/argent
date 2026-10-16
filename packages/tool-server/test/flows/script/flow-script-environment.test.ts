@@ -65,6 +65,7 @@ describe("flow script executor — the environment allowlist", () => {
     withEnv("ARGENT_AUTH_TOKEN", "tool-server-bearer-token");
     withEnv("ARGENT_PORT", "43111");
     withEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    withEnv("HOME", "/argent-test-home");
     const ws = workspace();
     const script = ws.write(
       "env.mjs",
@@ -77,7 +78,7 @@ describe("flow script executor — the environment allowlist", () => {
     expect(env.ARGENT_PORT).toBeNull();
     expect(env.ARGENT_SECRET_APP_PASSWORD).toBeNull();
     expect(env.PATH).toBe(process.env.PATH);
-    expect(env.HOME).toBe(process.env.HOME);
+    expect(env.HOME).toBe("/argent-test-home");
   });
 
   it("copies every npm_config_ value, so a project's npm settings survive", async () => {

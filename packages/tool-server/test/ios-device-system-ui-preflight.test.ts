@@ -184,3 +184,50 @@ describe("launch-app (ios-device): signing readiness note", () => {
     }
   });
 });
+
+describe("launch arguments (ios-device)", () => {
+  const ARGS = ["-FeatureFlag", "YES"];
+
+  it("launch-app relaunches the app with the arguments", async () => {
+    await launchImpl.handler(
+      {},
+      { udid: UDID, bundleId: "com.example.app", launchArgs: ARGS },
+      DEVICE
+    );
+    expect(launchApp).toHaveBeenCalledWith(UDID, "com.example.app", {
+      terminateExisting: true,
+      args: ARGS,
+    });
+  });
+
+  it("launch-app keeps a plain launch for an empty list", async () => {
+    await launchImpl.handler(
+      {},
+      { udid: UDID, bundleId: "com.example.app", launchArgs: [] },
+      DEVICE
+    );
+    expect(launchApp).toHaveBeenCalledWith(UDID, "com.example.app");
+  });
+
+  it("launch-app rejects arguments for system UI before any device contact", async () => {
+    const err = await launchImpl
+      .handler({}, { udid: UDID, bundleId: SPRINGBOARD, launchArgs: ARGS }, DEVICE)
+      .then(() => null)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InvalidToolInputError);
+    expect(ensureDeviceReady).not.toHaveBeenCalled();
+    expect(launchApp).not.toHaveBeenCalled();
+  });
+
+  it("restart-app passes the arguments", async () => {
+    await restartImpl.handler(
+      {},
+      { udid: UDID, bundleId: "com.example.app", launchArgs: ARGS },
+      DEVICE
+    );
+    expect(launchApp).toHaveBeenCalledWith(UDID, "com.example.app", {
+      terminateExisting: true,
+      args: ARGS,
+    });
+  });
+});

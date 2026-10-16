@@ -1205,7 +1205,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     expect(line, "description has no requiresRestart rule").toBeTypeOf("string");
     expect(line!).toBe(
       "If requiresRestart is true: call restart-app once, then proceed with the native feature. " +
-        "Read state before acting on a second such reading — indeterminate reaches this rule too, " +
+        "Read state before acting on a second such reading. Indeterminate reaches this rule too, " +
         "and its line below bounds it at that one restart."
     );
   });
@@ -1315,7 +1315,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     // still contains "do not restart it".
     for (const tool of tools) {
       expect(tool.description!, `${tool.id} qualifies the connecting prohibition`).toContain(
-        "do not restart it, wait"
+        "Do not restart it, wait"
       );
     }
   });
@@ -1462,15 +1462,15 @@ describe("native-* tool descriptions document every precheck outcome", () => {
   it.each([
     [
       "connecting",
-      "If state is connecting: do NOT restart the app — launching it is what starts the connection, so a relaunch discards the one in progress and returns this same state. Wait a few seconds and repeat this call.",
+      "If state is connecting: do NOT restart the app. Launching it is what starts the connection, so a relaunch discards the one in progress and returns this same state. Wait a few seconds and repeat this call.",
     ],
     [
       "unregistered",
-      "If state is unregistered: do NOT restart the app again — it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it — treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
+      "If state is unregistered: do NOT restart the app again: it already launched under the terms a restart would recreate. Restart the tool-server (`argent server stop && argent server start --detach`), then retry. If it reads unregistered again after that restart, stop: the process loads argent's dylib but never dials, and no further restart on either side changes it. Treat native devtools as unavailable, then use `describe` or `screenshot` and drive by coordinate.",
     ],
     [
       "indeterminate",
-      "If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again — the service is stale rather than the app uninjected, so restart the tool-server (`argent server stop && argent server start --detach`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.",
+      "If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again: the service is stale rather than the app uninjected, so restart the tool-server (`argent server stop && argent server start --detach`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.",
     ],
   ] as const)("routes %s in the description exactly as written", (state, line) => {
     expect(guidanceLine(state)).toBe(line);
@@ -1479,11 +1479,11 @@ describe("native-* tool descriptions document every precheck outcome", () => {
   it.each([
     [
       "connect_pending",
-      "If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry.",
+      "If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry.",
     ],
     [
       "service_stale",
-      "If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback.",
+      "If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback.",
     ],
   ])("routes %s identically on all six native-* tools", (status, clause) => {
     for (const tool of tools) {

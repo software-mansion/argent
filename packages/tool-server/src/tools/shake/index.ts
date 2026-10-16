@@ -35,7 +35,7 @@ export const shakeTool: ToolDefinition<ShakeParams, ShakeResult> = {
   },
   description: `Shake the device (iOS simulator or Android emulator).
 Use to trigger anything bound to the shake gesture: iOS's "Undo Typing" / "Redo Typing" prompt in a text field, React Native's developer menu in a debug build, or an app's own shake-to-report handler.
-iOS delivers one discrete shake per gesture (the same motion event a physical device raises). Android has no OS-level shake event — the accelerometer is driven through a burst of hard direction changes so app-side detectors fire, and the resting orientation is restored afterwards.
+iOS delivers one discrete shake per gesture (the same motion event a physical device raises). Android has no OS-level shake event: the accelerometer is driven through a burst of hard direction changes so app-side detectors fire, and the resting orientation is restored afterwards.
 Set \`count\` above 1 when a detector needs sustained motion before it triggers.
 Returns { shaken: true, count }.
 Works on local and remote (sim-remote) iOS simulators.
