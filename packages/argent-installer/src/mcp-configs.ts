@@ -51,7 +51,7 @@ export interface McpServerEntry {
 // Argent config or client state outside the scope init just wrote that can keep
 // that entry from taking effect. Adapters only report; init-stale-config.ts
 // decides removal vs. warning.
-export interface ShadowingConfigFinding {
+interface ShadowingConfigFinding {
   /** Human-readable location, e.g. `~/.claude.json (project-local scope)`. */
   location: string;
   /** One-line consequence for the user, e.g. `takes precedence over .mcp.json`. */
