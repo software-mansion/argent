@@ -32,7 +32,13 @@ export type {
   Platform,
   TelemetryDeviceKind,
 } from "./events.js";
-export { DEBUGGER_NOT_CONNECTED_REASONS, DEBUGGER_TOOL_OUTCOMES, PLATFORMS } from "./events.js";
+export {
+  DEBUGGER_NOT_CONNECTED_REASONS,
+  DEBUGGER_TOOL_OUTCOMES,
+  PLATFORMS,
+  ZOD_ISSUE_CODES,
+} from "./events.js";
+export type { ZodIssueCode } from "./events.js";
 export type { Runtime } from "./base-props.js";
 export type { TelemetryResetResult } from "./uninstall-reset.js";
 export { resetLocalTelemetryState } from "./uninstall-reset.js";
