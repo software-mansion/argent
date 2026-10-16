@@ -32,6 +32,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function reasonText(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || "no reason given";
+}
+
 function firstFailingStep(steps: unknown): string | undefined {
   if (!Array.isArray(steps)) return undefined;
   for (const entry of steps) {
@@ -45,8 +50,7 @@ function firstFailingStep(steps: unknown): string | undefined {
         : typeof entry.kind === "string"
           ? entry.kind
           : "step";
-    const why = typeof entry.reason === "string" ? entry.reason : "no reason given";
-    return `${what}: ${why}`;
+    return `${what}: ${reasonText(entry.reason)}`;
   }
   return undefined;
 }
@@ -112,7 +116,7 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
       status: "fail",
       reason:
         `run-sequence stopped at ${tool} after ${count(result.completed)} of ` +
-        `${count(result.total)} steps: ${String(failed.error)}`,
+        `${count(result.total)} steps: ${reasonText(failed.error)}`,
     };
   }
 
