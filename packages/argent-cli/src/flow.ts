@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
+import { FAILURE_CODES, FLOW_NAME_PATTERN, SELECTABLE_PLATFORMS } from "@argent/registry";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -160,7 +160,7 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega | ios-remote — narrow
+  --platform <p>         ${SELECTABLE_PLATFORMS.join(" | ")} — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of flows that tool: flow-execute steps run,
@@ -197,7 +197,9 @@ const RUN_OPTIONS = {
   "json-stream": { kind: "boolean" },
   "recursive": { kind: "boolean", alias: "r" },
   "device": { kind: "value" },
-  "platform": { kind: "value" },
+  // The tool-server's schema rejection carries no error_kind, so in a directory
+  // run it would stop the whole batch.
+  "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
 

@@ -8,6 +8,7 @@ import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  LAUNCH_PLATFORMS,
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
   type ClientFileDirective,
@@ -686,7 +687,7 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
  * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
- * drift. Narrower than {@link SelectablePlatform}, which a RUN is selected
+ * drift. Narrower than `SelectablePlatform`, which a RUN is selected
  * with: a guard is authored text, and `ios-remote` is not writable.
  */
 export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
@@ -2277,21 +2278,6 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
 }
 
 /**
- * The platforms an AUTHOR can name in a flow file: launch-map keys and
- * `when: { platform }` guards ({@link WhenPlatform}).
- */
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
-
-/**
- * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
- * flow-run's `platform` param. `ios-remote` is selectable but deliberately not
- * writable: a flow says what it drives, not which machine hosts the simulator,
- * so `when:` and launch maps stay on {@link LAUNCH_PLATFORMS}.
- */
-export const SELECTABLE_PLATFORMS = [...LAUNCH_PLATFORMS, "ios-remote"] as const;
-export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
-
-/**
  * The platform a flow AUTHOR names, for a device the runner resolved.
  *
  * `ios-remote` is an iOS simulator reached over the sim-remote tunnel: same OS,
@@ -2300,7 +2286,7 @@ export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
  * `ios`, which is why `ios-remote` stays out of {@link LAUNCH_PLATFORMS}.
  *
  * Deliberately NOT applied where the question is "which machine am I driving?":
- * device selection ({@link SELECTABLE_PLATFORMS}, `resolveFlowDevice`, the
+ * device selection (`SELECTABLE_PLATFORMS`, `resolveFlowDevice`, the
  * `platform` run param) and service refs / transports all keep the real
  * platform.
  */
