@@ -1399,6 +1399,9 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
           );
         }
         if (classifyDevice(params.udid!) === "ios-remote") {
+          if (classifyDevice(stripRemotePrefix(params.udid!)) !== "ios") {
+            throw new InvalidToolInputError(`'${params.udid}' is not \`remote:<simulator udid>\`.`);
+          }
           return bootIosRemote(params.udid!, registry, params.force);
         }
         return bootIos(params.udid!, registry, params.force, params.headless);
