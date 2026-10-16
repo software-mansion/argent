@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, changing a device-wide setting (dark mode, text size, accessibility toggles, Android radios), or checking visible app state after interactions. Not for TV targets.
 ---
 
 ## Unified tool surface
@@ -69,6 +69,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Rotate device     | `rotate`            | Orientation changes                                               |
 | Fold device       | `fold`              | Foldable iOS simulator: closed / half-open / open, or an angle    |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
+| Device setting    | `system-settings`   | Dark mode, text size, a11y toggles, Android radios                |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
 | Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
 
@@ -221,6 +222,19 @@ Rules:
 - A fold between two angles that are not 0 or 180 can keep the current panel. The result names the active panel. To change panels, fold to `closed` or `open`.
 - Fold between gestures, not during a gesture. A gesture stays on the panel where it started.
 - If argent cannot find the active panel, it uses the cover panel. The tool result then has a `warning`, and a screenshot-diff summary has a `panel:` line. Take a screenshot to see what the device shows, then do the check that the warning gives.
+
+### system-settings: Device-wide display, accessibility and radio settings
+
+Puts the device into a state during test setup without walking the Settings app. Device-wide, so there is no `bundleId`.
+
+```json
+{ "udid": "<UDID>", "setting": "appearance", "value": "dark" }
+```
+
+- iOS simulator and Android: `appearance` (`light`/`dark`), `text-size` (a Dynamic Type category, default `large`), `increase-contrast`, `reduce-motion`, `invert-colors`.
+- Android only: `wifi`, `cellular`, `airplane-mode`, `location` (Android 10+), `auto-rotate`. Over wireless adb, `wifi` off and `airplane-mode` on are refused because they would cut the connection.
+- `location` is the device-wide switch, not one app's permission (use `argent-settings-permissions`). `auto-rotate` is the rotation lock; to turn the screen use `rotate`.
+- Confirm the change from the tool result, not a screenshot: captures can miss `invert-colors`, and a flow pins the status bar. If an app does not pick up appearance or text size, `restart-app`.
 
 ### await-ui-element: Block until a UI element reaches a state
 

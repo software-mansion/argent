@@ -6,6 +6,7 @@ import { parse as parseIni } from "ini";
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   subprocessFailureMetadata,
   type FailureSignal,
 } from "@argent/registry";
@@ -590,13 +591,33 @@ const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
 
 /**
  * True when an adb error message names a device state no retry can fix
- * (unauthorized / not found / offline / no devices). Lets callers tell a genuine
- * transport/device failure, which should propagate with adb's own cause, apart
- * from a command-level rejection they can classify themselves (e.g. `pm`
- * refusing a permission).
+ * (unauthorized / not found / offline / no devices).
  */
-export function isTerminalAdbError(message: string): boolean {
+function isTerminalAdbError(message: string): boolean {
   return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+// Kept out of `isTerminalAdbError` because `waitForBootCompleted` retries these.
+const ADB_DAEMON_TRANSPORT_PATTERNS: RegExp[] = [
+  /connection reset by peer/i,
+  /cannot connect to daemon/i,
+  /protocol fault/i,
+  /device still connecting/i,
+  /device still authorizing/i,
+];
+
+/**
+ * True when the command never got the device's answer: a dead link, an
+ * unready device, or a timeout. Lets a caller that reads a non-zero exit as
+ * "the device refused" keep adb's own failure instead.
+ */
+export function isAdbTransportFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    isTerminalAdbError(message) ||
+    ADB_DAEMON_TRANSPORT_PATTERNS.some((pattern) => pattern.test(message)) ||
+    getFailureSignal(err)?.error_kind === "timeout"
+  );
 }
 
 /**

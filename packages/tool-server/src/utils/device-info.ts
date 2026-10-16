@@ -90,6 +90,28 @@ export function isAndroidEmulatorSerial(serial: string): boolean {
   return serial.startsWith("emulator-");
 }
 
+// adb names a device found over mDNS by its service instance, with no address.
+const ADB_WIRELESS_MDNS_SERVICES = ["_adb._tcp", "_adb-tls-connect._tcp", "_adb-tls-pairing._tcp"];
+
+// A loopback `host:port` is a forwarded port (docker-android, a tunnel), not Wi-Fi.
+const LOOPBACK_ADB_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function isLoopbackAdbHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  return LOOPBACK_ADB_HOSTS.has(lower) || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(lower);
+}
+
+/**
+ * True when adb reaches the device over the network: a `host:port` serial from
+ * `adb connect` on a non-loopback host, or an mDNS serial. A host-only VM
+ * network counts too, since it cannot be told apart from a LAN address.
+ */
+export function isWirelessAdbSerial(serial: string): boolean {
+  if (ADB_WIRELESS_MDNS_SERVICES.some((service) => serial.includes(service))) return true;
+  const host = /^(.+):\d+$/.exec(serial)?.[1];
+  return host !== undefined && !isLoopbackAdbHost(host);
+}
+
 /**
  * Kind is defaulted by shape (a physical-iOS-shaped UDID gets 'device');
  * platform impls can enrich the result with name/state/sdkLevel from
