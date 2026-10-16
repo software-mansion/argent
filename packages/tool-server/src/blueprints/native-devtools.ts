@@ -10,6 +10,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
+import { socketTag } from "../utils/socket-tag";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -502,9 +503,11 @@ interface AppConnection {
 }
 
 function getNativeDevtoolsSocketPath(udid: string): string {
-  // Deterministic and short: 28 chars, well under the 104-char macOS Unix
-  // socket limit.
-  return `/tmp/argent-nd-${udid.slice(0, 8)}.sock`;
+  /**
+   * Deterministic and short, at most 32 chars, well under the 104-char macOS
+   * Unix socket limit.
+   */
+  return `/tmp/argent-nd-${socketTag(udid)}.sock`;
 }
 
 /**

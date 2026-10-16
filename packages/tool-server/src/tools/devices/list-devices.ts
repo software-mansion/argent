@@ -7,7 +7,7 @@ import {
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import { isFoldableSimulator, listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix } from "../../utils/device-info";
@@ -72,6 +72,11 @@ type AndroidDevice = {
 type ExternalListedDevice = {
   capabilities: string[];
   external: true;
+  /**
+   * Present and true for a foldable simulator (the iPhone Duo), as on a plain
+   * iOS row.
+   */
+  foldable?: true;
   id: string;
   kind: "device" | "emulator" | "simulator";
   name: string;
@@ -233,10 +238,11 @@ export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string)
   }
 }
 
-function toListedExternal(device: ExternalDevice): ExternalListedDevice {
+function toListedExternal(device: ExternalDevice, foldable: boolean): ExternalListedDevice {
   return {
     capabilities: Array.from(device.capabilities).sort(),
     external: true,
+    ...(foldable ? { foldable: true as const } : {}),
     id: device.id,
     kind: device.kind,
     name: device.name,
@@ -250,6 +256,31 @@ function toListedExternal(device: ExternalDevice): ExternalListedDevice {
     /** Mirror the id into the key the agent associates with the platform. */
     ...(device.platform === "ios" ? { udid: device.id } : { serial: device.id }),
   };
+}
+
+/**
+ * Whether each external device is a foldable simulator. The plain simctl row a
+ * provider's simulator shadows (its device set is in
+ * `ios.additionalDeviceSets`) already carries the verdict; otherwise it is read
+ * from the provider's device set, memoized per UDID. A foldable only differs
+ * in which panel shows the UI, so an agent needs the flag to know `fold`
+ * applies, whoever drives the device.
+ */
+async function externalFoldables(
+  external: readonly ExternalDevice[],
+  ios: readonly IosSimulator[]
+): Promise<boolean[]> {
+  const listed = new Map(ios.map((sim) => [sim.udid, sim.foldable === true]));
+
+  return Promise.all(
+    external.map(async (device) => {
+      if (device.platform !== "ios" || device.kind !== "simulator") return false;
+
+      return (
+        listed.get(device.nativeId) ?? (await isFoldableSimulator(device.id).catch(() => false))
+      );
+    })
+  );
 }
 
 /**
@@ -343,6 +374,12 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
 
     const externalShadows = externalShadowIds(external);
 
+    const externalFoldable = await withDeadline(
+      externalFoldables(external, ios),
+      external.map(() => false),
+      "external-foldable"
+    );
+
     const iosTagged: IosDevice[] = ios
       .filter((simulator) => !externalShadows.has(simulator.udid))
       .map((simulator) => ({ platform: "ios", ...simulator }));
@@ -389,7 +426,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       ...androidDeduped,
       ...chromium,
       ...vega,
-      ...external.map(toListedExternal),
+      ...external.map((device, i) => toListedExternal(device, externalFoldable[i] === true)),
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 

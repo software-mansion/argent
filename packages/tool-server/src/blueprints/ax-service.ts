@@ -14,6 +14,7 @@ import {
 } from "@argent/registry";
 import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
+import { socketTag } from "../utils/socket-tag";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
 export {
@@ -160,7 +161,7 @@ const LIVE_PANEL_TIMEOUT_MS = 2_000;
 const FILL_TIMEOUT_MS = 6_000;
 
 function getSocketPath(udid: string): string {
-  return `/tmp/ax-${udid.slice(0, 8)}.sock`;
+  return `/tmp/ax-${socketTag(udid)}.sock`;
 }
 
 interface PendingRpc {

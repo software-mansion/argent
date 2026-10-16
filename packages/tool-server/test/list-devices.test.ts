@@ -97,6 +97,16 @@ vi.mock("../src/utils/ios-device/devicectl", async () => {
   };
 });
 
+// Whether a provider's simulator is foldable is read from its device set when
+// the plain listing does not carry it; that read is the seam, off by default.
+vi.mock("../src/utils/ios-devices", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/ios-devices")>(
+    "../src/utils/ios-devices"
+  );
+
+  return { ...actual, isFoldableSimulator: vi.fn(async () => false) };
+});
+
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -104,6 +114,7 @@ import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
+import { isFoldableSimulator } from "../src/utils/ios-devices";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -701,6 +712,54 @@ describe("list-devices — external provider shadows", () => {
       external: true,
       udid: `ext:acme-3f2a9c:${CLAIMED_UDID}`,
     });
+  });
+
+  it("marks a claimed foldable simulator with foldable: true", async () => {
+    /**
+     * The provider's device set is not configured, so the plain listing does
+     * not see the device and the verdict is read from the provider's set.
+     */
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    vi.mocked(isFoldableSimulator).mockResolvedValueOnce(true);
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const claimed = result.devices.find(
+      (device) => "udid" in device && device.udid === `ext:acme-3f2a9c:${CLAIMED_UDID}`
+    );
+
+    expect(claimed).toMatchObject({ external: true, foldable: true });
+    expect(isFoldableSimulator).toHaveBeenCalledWith(`ext:acme-3f2a9c:${CLAIMED_UDID}`);
+  });
+
+  it("leaves foldable off a claimed simulator that is not foldable", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const claimed = result.devices.find(
+      (device) => "udid" in device && device.udid === `ext:acme-3f2a9c:${CLAIMED_UDID}`
+    );
+
+    expect(claimed).toBeDefined();
+    expect(claimed).not.toHaveProperty("foldable");
   });
 
   it("leaves an unclaimed simulator in the plain listing", async () => {
