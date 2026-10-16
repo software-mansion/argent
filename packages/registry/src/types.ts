@@ -121,6 +121,12 @@ export interface InvokeToolOptions {
    * `flow-execute`. The HTTP route never sets it.
    */
   flowStack?: readonly { canonical: string; display: string }[];
+  /**
+   * Internal: one holder shared by a flow run and every run nested in it, set
+   * once a step of any of them types a `{{secret:…}}` value. A sub-tool call
+   * passes it on as it does {@link flowStack}. The HTTP route never sets it.
+   */
+  flowSecret?: { typed?: boolean };
 }
 
 /**
