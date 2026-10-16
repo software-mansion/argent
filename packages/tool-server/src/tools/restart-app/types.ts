@@ -20,3 +20,4 @@ export interface RestartAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
 export type RestartAppVegaServices = Record<string, never>;
+export type RestartAppHarmonyServices = Record<string, never>;

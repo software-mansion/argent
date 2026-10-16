@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.software-mansion/argent",
   "title": "Argent",
-  "description": "Drive iOS Simulators, Android emulators, TVs and Electron/web apps from your coding agent",
+  "description": "Drive iOS, Android, HarmonyOS, TV and Electron/web apps from your coding agent",
   "repository": {
     "url": "https://github.com/software-mansion/argent",
     "source": "github",

@@ -54,7 +54,7 @@ import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
@@ -131,6 +131,11 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
 // both its trees are the iOS ones — it earns the iOS prose, not the fallback.
 function platformOf(udid: unknown): string | undefined {
   return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
+}
+
+/** Whether this device has a flow tree at all, so a silent source is absent rather than down. */
+function hasRunnerTree(udid: unknown): boolean {
+  return typeof udid === "string" && supportsFlowTree(resolveDevice(udid).platform);
 }
 
 /**
@@ -571,12 +576,15 @@ async function probeAgainstRunnerTree(
         `reads and nothing else. Whether it would convert to \`await:\`/\`assert:\` is UNKNOWN, ` +
         `not known-bad — ` +
         // A timeout and an outage need different next moves: "once that tree
-        // source is back" is nonsense for a source that never left.
+        // source is back" is nonsense for a source that never left, and for one
+        // that never existed.
         (timedOut
           ? `re-record this step when the device is quieter, or settle the conversion directly by ` +
             `putting the directive in a flow and running \`flow-execute\`, which has no such ` +
             `ceiling`
-          : `re-probe once that tree source is back before trusting the conversion` +
+          : (hasRunnerTree(args.udid)
+              ? `re-probe once that tree source is back before trusting the conversion`
+              : `this platform's runner has no tree to probe, so the conversion stays unverified`) +
             indeterminateReasonCaveat(args.udid)),
     };
   }

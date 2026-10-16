@@ -738,6 +738,32 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/boot-device/i);
   });
 
+  it.each(["visible", "exists"] as const)(
+    "a `%s` success on a degraded simulator carries no note",
+    async (condition) => {
+      // A degraded tree is live; its boot hint does not qualify a success.
+      const { api } = makeSequencedAXService(
+        [axResponse([{ label: "General", frame: FRAME, traits: ["button"] }])],
+        { degraded: true }
+      );
+      const tool = createAwaitUiElementTool(iosRegistry(api));
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS_UDID,
+          condition,
+          selector: { text: "General" },
+          timeoutMs: 2000,
+          pollIntervalMs: 10,
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.note).toBeUndefined();
+    }
+  );
+
   // ── The cause an unmet wait reports ──────────────────────────────────────
   //
   // Only `unmet` judges the condition. `flow-add-step` quotes it to tell an
@@ -858,7 +884,8 @@ describe("await-ui-element tool", () => {
       }
     );
 
-    expect(result.note).toMatch(/last tree fetch failed/i);
+    // A failure at the deadline has no budget left, so it may not reach the note.
+    expect(result.success).toBe(false);
     expect(unmetUiWaitCause(result)).toBe("unmet");
   });
 

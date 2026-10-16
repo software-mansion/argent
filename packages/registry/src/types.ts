@@ -134,7 +134,7 @@ export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;
 }
 
-export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega";
+export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony";
 
 export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
 
@@ -181,6 +181,11 @@ export interface ToolCapability {
     vvd?: boolean;
     device?: boolean;
   };
+  /** `emulator` is a DevEco instance only `boot-device` addresses; interaction tools drive `device`. */
+  harmony?: {
+    emulator?: boolean;
+    device?: boolean;
+  };
   supports?: (device: DeviceInfo) => boolean;
 }
 
@@ -196,7 +201,14 @@ export interface ToolCapability {
  * A missing binary answers 424 Failed Dependency with an install hint the agent
  * can surface verbatim.
  */
-export type ToolDependency = "adb" | "xcrun" | "emulator" | "sim-remote" | "vega";
+export type ToolDependency =
+  | "adb"
+  | "xcrun"
+  | "emulator"
+  | "sim-remote"
+  | "vega"
+  | "harmony-emulator"
+  | "hdc";
 
 export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;

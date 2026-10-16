@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { DeviceInfo, DeviceKind, Platform } from "@argent/registry";
 import {
   EXTERNAL_PREFIX,
@@ -58,6 +59,53 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
  */
 const VEGA_SERIAL_PREFIX = "amazon-";
 
+/** argent-minted HarmonyOS id prefix, as `chromium-cdp-` is. */
+export const HARMONY_ID_PREFIX = "harmony-";
+
+/**
+ * Marks an emulator instance (what `Emulator -start` boots) as opposed to an
+ * `hdc` connect key (what `uitest` drives); an instance name could be spelled
+ * like a serial, so the id carries the distinction. A running emulator is
+ * listed as both, like an AVD and its adb serial.
+ */
+export const HARMONY_EMULATOR_ID_PREFIX = "harmony-emulator-";
+
+export function harmonyEmulatorId(instanceName: string): string {
+  return `${HARMONY_EMULATOR_ID_PREFIX}${instanceName}`;
+}
+
+export function harmonyDeviceId(connectKey: string): string {
+  return `${HARMONY_ID_PREFIX}${connectKey}`;
+}
+
+/** Strips exactly one prefix; any other id passes through and fails as an unknown instance. */
+export function harmonyInstanceName(udid: string): string {
+  return udid.startsWith(HARMONY_EMULATOR_ID_PREFIX)
+    ? udid.slice(HARMONY_EMULATOR_ID_PREFIX.length)
+    : udid;
+}
+
+/**
+ * The connect key behind a `harmony-<key>` id. An instance id is refused: a
+ * flow step reaches here without the HTTP capability gate.
+ */
+export function harmonyConnectKey(udid: string): string {
+  if (udid.startsWith(HARMONY_EMULATOR_ID_PREFIX)) {
+    throw new FailureError(
+      `"${udid}" names a HarmonyOS emulator instance, not a device to drive. Start it with ` +
+        "boot-device and drive the `harmony-<connectKey>` id that returns.",
+      {
+        error_code: FAILURE_CODES.HARMONY_DEVICE_ID_INVALID,
+        failure_stage: "harmony_connect_key",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  return udid.startsWith(HARMONY_ID_PREFIX) ? udid.slice(HARMONY_ID_PREFIX.length) : udid;
+}
+
+/** Returns the platform a `udid` belongs to based on its shape. */
 export function classifyDevice(udid: string): Platform {
   /**
    * An `ext:<providerId>:<nativeId>` device classifies by its NATIVE id's
@@ -74,6 +122,7 @@ export function classifyDevice(udid: string): Platform {
   if (udid.startsWith(REMOTE_PREFIX)) return "ios-remote";
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
+  if (udid.startsWith(HARMONY_ID_PREFIX)) return "harmony";
   return nativeIdPlatform(udid);
 }
 
@@ -116,11 +165,15 @@ export function resolveDevice(udid: string): DeviceInfo {
         ? "simulator"
         : platform === "vega"
           ? "vvd"
-          : platform === "android"
-            ? isAndroidEmulatorSerial(shapeId)
+          : platform === "harmony"
+            ? shapeId.startsWith(HARMONY_EMULATOR_ID_PREFIX)
               ? "emulator"
               : "device"
-            : "app";
+            : platform === "android"
+              ? isAndroidEmulatorSerial(shapeId)
+                ? "emulator"
+                : "device"
+              : "app";
   return { id: udid, platform, kind };
 }
 

@@ -268,6 +268,10 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   if (typeof (data as Record<string, unknown>).avdName === "string") {
     return { platform: "android" };
   }
+  // HarmonyOS twin: an instance is named, not addressed.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") {
+    return { platform: "harmony" };
+  }
   return null;
 }
 

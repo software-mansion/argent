@@ -222,4 +222,31 @@ describe("dispatchByPlatform", () => {
     await expect(a({}, { udid: iosUdid })).resolves.toBe("ok");
     await expect(a({}, { udid: androidUdid })).resolves.toBe("ok");
   });
+
+  // Chromium is the dispatch fallthrough.
+  it("rejects a HarmonyOS device instead of falling through to the chromium handler", async () => {
+    const chromiumHandler = vi.fn().mockResolvedValue("from-chromium");
+
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
+      toolId: "test",
+      capability: {
+        ...capabilityBoth,
+        harmony: { device: true, emulator: true },
+        chromium: { app: true },
+      },
+      ios: { handler: vi.fn() },
+      android: { handler: vi.fn() },
+      chromium: { handler: chromiumHandler },
+    });
+
+    for (const udid of ["harmony-Phone_1", "harmony-emulator-argent_phone"]) {
+      await expect(execute({}, { udid })).rejects.toBeInstanceOf(NotImplementedOnPlatformError);
+      expect(chromiumHandler).not.toHaveBeenCalled();
+    }
+  });
 });

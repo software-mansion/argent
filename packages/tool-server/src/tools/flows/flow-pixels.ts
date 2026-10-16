@@ -301,7 +301,8 @@ async function chromiumScrollOffset(api: ChromiumCdpApi): Promise<{ x: number; y
  * `screenshot` tool routes it: tvOS and Vega through their own shells (neither
  * has a simulator-server backend), everything else through the simulator-server
  * both iOS and Android share. Chromium does not appear here — it answers with
- * bytes, never a file (see captureChromiumPng).
+ * bytes, never a file (see captureChromiumPng). Nor does HarmonyOS, which a
+ * `snapshot` step captures through the `screenshot` tool (flow-visual.ts).
  *
  * The `screenshot` tool itself is deliberately not reused: it registers every
  * capture as an artifact, and a settle takes tens of them per step.

@@ -18,6 +18,7 @@ import {
   SELECTOR_RELATIONS,
   type FlowSelector,
 } from "./flow-utils";
+import { supportsFlowTree } from "./flow-tree";
 import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
 import { foldablePostureHint } from "../../utils/foldable";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
@@ -219,7 +220,8 @@ export async function runSnapshot(
   // outage on `ActionEnv.treeOutage` for a later gesture to spend. A gesture
   // that swallows one warns; a capture has no `warning` channel, which makes
   // this the one settle that passes silently.
-  if (opts.cropOn === undefined) {
+  // Skipped where no flow tree source exists: every read would fail.
+  if (opts.cropOn === undefined && supportsFlowTree(env.device.platform)) {
     try {
       await settleTree(env);
     } catch {
