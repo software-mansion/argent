@@ -51,6 +51,7 @@ import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./pr
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
@@ -1450,6 +1451,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           }
         );
       }
+      if (isDebuggerNotConnectedResult(params.command, toolResult))
+        throw new Error(
+          `${params.command} found no debugger (${toolResult.reason}): ${toolResult.detail} - nothing was recorded; ${toolResult.guidance}`
+        );
 
       // A wait that HELD is asked the runner's tree as well, so the author
       // learns now — rather than after polish — whether the conversion is safe.
