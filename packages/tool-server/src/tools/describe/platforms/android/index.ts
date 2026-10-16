@@ -99,7 +99,29 @@ async function awaitWebViewPublished(
   return tree;
 }
 
-async function uiautomatorDump(serial: string): Promise<string> {
+/**
+ * A second `uiautomator dump` started while one is running on the same device
+ * gets killed, so dumps on one serial run one at a time. A wait tool that hits
+ * its deadline abandons its dump without cancelling it, and the describe that
+ * follows would otherwise start on top of it.
+ */
+const dumpQueues = new Map<string, Promise<void>>();
+
+function uiautomatorDump(serial: string): Promise<string> {
+  const previous = dumpQueues.get(serial) ?? Promise.resolve();
+  const dump = previous.then(() => runUiautomatorDump(serial));
+  const done = dump.then(
+    () => undefined,
+    () => undefined
+  );
+  dumpQueues.set(serial, done);
+  void done.then(() => {
+    if (dumpQueues.get(serial) === done) dumpQueues.delete(serial);
+  });
+  return dump;
+}
+
+async function runUiautomatorDump(serial: string): Promise<string> {
   // Per-call dump path so concurrent describes on the same serial don't cat each
   // other's half-written dump.
   const randomSuffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;

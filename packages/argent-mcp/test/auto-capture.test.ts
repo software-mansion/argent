@@ -214,6 +214,23 @@ describe("getAutoScreenshotDelayMs", () => {
     }
   });
 
+  // A cap is spent in full on every screen that never reads as settled, so a
+  // large in-app cap is dead wait there. App launches are exempt so their cold
+  // start cap can be raised.
+  const APP_LAUNCH_TOOLS = new Set(["launch-app", "restart-app", "open-url"]);
+  it("keeps every in-app-transition settle cap at or below 3s", () => {
+    for (const [tool, ms] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
+      if (APP_LAUNCH_TOOLS.has(tool)) continue;
+      expect(ms, `${tool} settle cap`).toBeLessThanOrEqual(3000);
+    }
+  });
+
+  // The "returns configured delay" test reads its expected value from the map,
+  // so it can't catch a change to this entry.
+  it("caps the run-sequence settle wait at 3s", () => {
+    expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["run-sequence"]).toBe(3000);
+  });
+
   it("returns default 1400ms for an unknown tool", () => {
     expect(getAutoScreenshotDelayMs("some-new-tool")).toBe(1400);
   });

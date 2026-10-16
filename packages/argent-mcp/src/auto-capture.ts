@@ -42,7 +42,14 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-tap": 1500,
   "gesture-pinch": 1500,
   "gesture-rotate": 1500,
-  "run-sequence": 15000,
+  // Bounds only the settle after the last step. Steps are in-app actions whose
+  // standalone tools cap at 1.5 s or less, so 3 s leaves margin. The full cap is
+  // spent whenever the screen never reads as settled: a tree that keeps
+  // changing (a ticker, a carousel), an empty tree (a canvas or game view, a
+  // blank loading screen), tree reads that keep failing or take too long to
+  // repeat within the cap (Android's ~2 s uiautomator fallback), or Vega, where
+  // the screen can't be polled and the cap is a plain sleep.
+  "run-sequence": 3000,
   "button": 1500,
   "rotate": 1000,
   // The fold tool already waits for the panel hand-over; the cap covers the
