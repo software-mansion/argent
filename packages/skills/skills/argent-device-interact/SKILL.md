@@ -52,7 +52,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | ----------------- | ------------------- | ----------------------------------------------------------------- |
 | Multiple actions  | `run-sequence`      | Batch steps in one call (no intermediate screenshots)             |
 | Open an app       | `launch-app`        | **Always: never tap home-screen icons**                           |
-| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID                               |
+| Restart an app    | `restart-app`       | Terminate and relaunch by bundle ID. Not on Chromium              |
 | Open URL/scheme   | `open-url`          | Web pages, deep links, URL schemes                                |
 | Single tap        | `gesture-tap`       | Buttons, links, checkboxes                                        |
 | Scroll/swipe      | `gesture-swipe`     | Straight-line scroll or swipe                                     |

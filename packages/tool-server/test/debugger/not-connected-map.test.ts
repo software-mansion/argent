@@ -97,5 +97,7 @@ describe("guidance platform-correctness", () => {
     expect(metro.guidance).toContain("restart-app");
     expect(chromium.guidance).not.toContain("restart-app");
     expect(chromium.guidance).toContain("electronAppPath");
+    // boot-device ignores `force` on the Electron path.
+    expect(chromium.guidance).not.toContain("force");
   });
 });
