@@ -4,6 +4,7 @@ import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlTargetForUdid } from "../../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -15,12 +16,18 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
     const absolute = resolvePath(appPath);
     const { nativeId, prefix } = await simctlTargetForUdid(udid);
     try {
-      await execFileAsync("xcrun", [...prefix, "uninstall", nativeId, bundleId]);
+      await execFileAsync("xcrun", [...prefix, "uninstall", nativeId, bundleId], {
+        timeout: 30_000,
+        killSignal: SIMCTL_KILL_SIGNAL,
+      });
     } catch {
       // App may not be installed
     }
     try {
-      await execFileAsync("xcrun", [...prefix, "install", nativeId, absolute]);
+      await execFileAsync("xcrun", [...prefix, "install", nativeId, absolute], {
+        timeout: 180_000,
+        killSignal: SIMCTL_KILL_SIGNAL,
+      });
     } catch (err) {
       throw new FailureError(
         `Failed to install iOS app bundle on ${udid}.`,
