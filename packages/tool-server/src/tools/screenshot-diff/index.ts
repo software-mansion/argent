@@ -43,13 +43,13 @@ const zodSchema = z
       .string()
       .min(1)
       .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-    captureBaseline: z.coerce
+    captureBaseline: z
       .boolean()
       .optional()
       .describe(
         "Capture the baseline screenshot live at full resolution before diffing. Cannot be combined with captureCurrent."
       ),
-    captureCurrent: z.coerce
+    captureCurrent: z
       .boolean()
       .optional()
       .describe(
