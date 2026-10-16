@@ -195,7 +195,7 @@ export function start(): void {
   const serverStartedAt = Date.now();
   const updateChecker = startUpdateChecker();
 
-  const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
+  const { stop: stopWatcher } = startSimulatorWatcher(registry);
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
@@ -394,10 +394,11 @@ export function start(): void {
     },
   });
 
-  // Do not bind until the first watcher poll has attempted dylib injection for
-  // every booted simulator (so launch-app cannot race it) and the identity
-  // warm-up has settled (so the accept path never pays for it).
-  Promise.all([watcherReady, identityWarm])
+  // Bind once the identity warm-up settles, so the accept path never pays for it.
+  // Not on the watcher's first poll: a cold CoreSimulatorService can hold that
+  // `simctl list` for close to a minute, and launch-app / restart-app arm
+  // injection themselves.
+  identityWarm
     .then(() => {
       server = httpHandle.app.listen(PORT, HOST, () => {
         // Past this point a crash is a serving-time fault, not a startup fault.

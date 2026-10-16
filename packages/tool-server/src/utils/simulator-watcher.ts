@@ -226,9 +226,8 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // Awaited: the server does not bind until ensureEnv has been attempted for
-  // every booted simulator, so launch-app cannot race it.
-  const ready = poll(true);
+  // Settles once ensureEnv has been attempted for every simulator booted at start.
+  const ready = poll(true).catch(() => {});
 
   const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);
 
