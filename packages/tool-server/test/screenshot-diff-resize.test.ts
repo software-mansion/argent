@@ -141,6 +141,18 @@ describe("normalizeToCommonSize", () => {
     expect(result!.baseline.height).toBe(result!.current.height);
   });
 
+  it("returns null for two different devices inside the 1% aspect band", () => {
+    // iPhone 16 vs 16 Pro Max (~0.22% apart): beyond what rescale rounding produces.
+    const result = normalizeToCommonSize(gradientImage(1179, 2556), gradientImage(1320, 2868));
+    expect(result).toBeNull();
+  });
+
+  it("normalizes a rounded 0.25x rescale of the same screen", () => {
+    // sips -Z 639 of 1179x2556 yields 294x639.
+    const result = normalizeToCommonSize(gradientImage(1179, 2556), gradientImage(294, 639));
+    expect(result).not.toBeNull();
+  });
+
   it("returns null for a transposed aspect ratio", () => {
     // Case 3a: 20x10 (2.0) vs 10x20 (0.5).
     const result = normalizeToCommonSize(gradientImage(20, 10), gradientImage(10, 20));

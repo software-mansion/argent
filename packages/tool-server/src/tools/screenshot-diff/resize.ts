@@ -19,7 +19,7 @@ const ASPECT_RATIO_TOLERANCE = 0.01;
 
 /**
  * Downscale the larger image to the smaller one's dimensions when both share an
- * aspect ratio within {@link ASPECT_RATIO_TOLERANCE}; never upscales.
+ * aspect ratio within min({@link ASPECT_RATIO_TOLERANCE}, 2 / shortest side); never upscales.
  *
  * @returns `null` when the aspect ratios genuinely differ — a hard dimension
  * mismatch for callers.
@@ -60,7 +60,8 @@ function aspectRatiosMatch(a: DecodedRgbaImage, b: DecodedRgbaImage): boolean {
   const aspectB = b.width / b.height;
   const largest = Math.max(aspectA, aspectB);
   if (largest === 0) return false;
-  return Math.abs(aspectA - aspectB) / largest <= ASPECT_RATIO_TOLERANCE;
+  const shortest = Math.min(a.width, a.height, b.width, b.height);
+  return Math.abs(aspectA - aspectB) / largest <= Math.min(ASPECT_RATIO_TOLERANCE, 2 / shortest);
 }
 
 /**
