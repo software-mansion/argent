@@ -35,6 +35,7 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  normalizeToolName,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -174,6 +175,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
+  const warmedDevices = new Set<string>();
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     const t0 = Date.now();
     await spyLog({
@@ -182,6 +184,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       name: params.name,
       args: params.arguments,
     });
+    // First touch of a device: start its accessibility reader in the
+    // background (a read-only describe), so the first action's element tree
+    // does not pay the ~1.7s cold start after the action itself.
+    // An explicit describe starts the reader itself, so it counts as warm.
+    const warmUdid = getUdidFromArgs(params.arguments);
+    if (autoDescribeOn && warmUdid && !warmedDevices.has(warmUdid)) {
+      if (normalizeToolName(params.name) === "describe") {
+        warmedDevices.add(warmUdid);
+      } else if (shouldAutoDescribe(params.name)) {
+        warmedDevices.add(warmUdid);
+        void callTool("describe", { udid: warmUdid }).catch(() => {});
+      }
+    }
     try {
       const { result, outputHint, note } = await callTool(params.name, params.arguments);
 

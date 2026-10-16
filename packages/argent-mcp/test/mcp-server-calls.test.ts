@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
+import { setFlag } from "@argent/configuration-core";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -91,6 +92,15 @@ async function startStub(token?: string): Promise<Stub> {
       if (req.method === "POST" && reqUrl === "/tools/reject") return json(422, { error: "nope" });
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return json(200, { data: { tapped: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
+        return json(200, { data: { settled: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, { data: { description: "ROOT AXGroup" } });
       }
       json(404, { error: "not found" });
     });
@@ -221,6 +231,73 @@ describe("startMcpServer tool calls", () => {
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
     expect(textOf(result)).toContain('"ok": true');
+  });
+});
+
+describe("startMcpServer warming the screen reader", () => {
+  let stub: Stub;
+  let client: Client | undefined;
+
+  const tap = (udid: string) =>
+    client!.callTool({ name: "gesture-tap", arguments: { udid, x: 0.5, y: 0.5 } });
+  const describes = () => stub.requests.filter((r) => r.url === "/tools/describe").length;
+
+  async function start(flags: { autoDescribe: boolean }): Promise<void> {
+    // Off: the screenshot is not under test, and the stub has no screenshot route.
+    setFlag("disable-auto-screenshot", true, "global", { homeDir: TEST_HOME });
+    setFlag("disable-auto-describe", !flags.autoDescribe, "global", { homeDir: TEST_HOME });
+    client = await connect({
+      bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+      simulatorServerDir: "",
+      nativeDevtoolsDir: "",
+    });
+  }
+
+  beforeEach(async () => {
+    stub = await startStub();
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+  });
+
+  afterEach(async () => {
+    await client?.close();
+    client = undefined;
+    setFlag("disable-auto-screenshot", false, "global", { homeDir: TEST_HOME });
+    setFlag("disable-auto-describe", false, "global", { homeDir: TEST_HOME });
+    vi.unstubAllEnvs();
+    await stub.close();
+  });
+
+  it("reads the screen in the background on a device's first action only", async () => {
+    await start({ autoDescribe: true });
+
+    const first = await tap("u");
+    expect(textOf(first)).toContain("ROOT AXGroup");
+    // The background read plus the element tree attached to the result.
+    await vi.waitFor(() => expect(describes()).toBe(2));
+
+    await tap("u");
+    expect(describes()).toBe(3);
+
+    await tap("other");
+    await vi.waitFor(() => expect(describes()).toBe(5));
+  });
+
+  it("does not warm a device the agent already described", async () => {
+    await start({ autoDescribe: true });
+
+    await client!.callTool({ name: "describe", arguments: { udid: "u" } });
+    await tap("u");
+
+    expect(describes()).toBe(2);
+  });
+
+  it("does not warm when the element tree is turned off", async () => {
+    await start({ autoDescribe: false });
+
+    await tap("u");
+
+    expect(describes()).toBe(0);
   });
 });
 
