@@ -305,6 +305,17 @@ describe("runSnapshot baselines", () => {
     });
   });
 
+  it("passes a diff exactly at maxMismatch despite float error, and fails one just over", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    h.mismatchPercentage = (7 / 1000) * 100; // 0.7000000000000001
+    expect((await runSnapshot(env, opts({ maxMismatch: 0.7 }))).status).toBe("pass");
+
+    h.mismatchPercentage = (701 / 100000) * 100;
+    expect((await runSnapshot(env, opts({ maxMismatch: 0.7 }))).status).toBe("fail");
+  });
+
   it("fails without a diff artifact when the differ produced no context image", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());

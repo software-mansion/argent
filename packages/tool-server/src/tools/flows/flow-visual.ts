@@ -495,7 +495,8 @@ export async function runSnapshot(
         };
       }
 
-      const within = result.mismatchPercentage <= opts.maxMismatch;
+      // Absorbs float error: 7 of 1000 pixels computes 0.7000000000000001%.
+      const within = result.mismatchPercentage - opts.maxMismatch <= 1e-9;
       const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
         return { status: "pass", reason, ...captureWarned };
