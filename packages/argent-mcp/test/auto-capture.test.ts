@@ -15,6 +15,8 @@ import {
   normalizeToolName,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
+  renderAutoDescribe,
+  AUTO_DESCRIBE_HEADER,
 } from "../src/auto-capture.js";
 
 // ---------------------------------------------------------------------------
@@ -332,5 +334,59 @@ describe("containsSecretPlaceholder", () => {
       })
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderAutoDescribe
+// ---------------------------------------------------------------------------
+describe("renderAutoDescribe", () => {
+  // describeIos's result for an app launched before argent's injection.
+  const EMPTY_TREE_RENDER =
+    "Source: ax-service\nMode: flat\n" +
+    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.\n" +
+    "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.\n" +
+    "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n" +
+    "\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n";
+  const HINT =
+    "The running com.example.app process cannot reach this simulator's native-devtools endpoint — " +
+    "it was launched either before argent's instrumentation was in place or against an earlier " +
+    "tool-server's listener. A fresh process picks up the current one: call restart-app then retry.";
+
+  it("appends the hint to the tree", () => {
+    expect(
+      renderAutoDescribe({
+        description: EMPTY_TREE_RENDER,
+        source: "ax-service",
+        hint: HINT,
+        should_restart: true,
+      })
+    ).toBe(`${AUTO_DESCRIBE_HEADER}\n${EMPTY_TREE_RENDER}\n\n${HINT}`);
+  });
+
+  it("shows a hint the description already contains once", () => {
+    const description = `App: com.example.tv\nFocused: (none)\n\nNote: ${HINT}`;
+    expect(renderAutoDescribe({ description, source: "tv-focus", hint: HINT })).toBe(
+      `${AUTO_DESCRIBE_HEADER}\n${description}`
+    );
+  });
+
+  it("emits the block for a hint with no tree", () => {
+    expect(renderAutoDescribe({ description: "", hint: HINT })).toBe(
+      `${AUTO_DESCRIBE_HEADER}\n${HINT}`
+    );
+  });
+
+  it("renders a tree without a hint on its own", () => {
+    expect(renderAutoDescribe({ description: "ROOT  AXApplication", source: "ax-service" })).toBe(
+      `${AUTO_DESCRIBE_HEADER}\nROOT  AXApplication`
+    );
+  });
+
+  it("returns null when there is nothing to show", () => {
+    expect(renderAutoDescribe({ description: "" })).toBeNull();
+    expect(renderAutoDescribe({})).toBeNull();
+    expect(renderAutoDescribe(null)).toBeNull();
+    expect(renderAutoDescribe("not an object")).toBeNull();
   });
 });
