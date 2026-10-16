@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Registry } from "@argent/registry";
+import request from "supertest";
+import { Registry } from "@argent/registry";
 
 type ExecFileCallback = (error: Error | null, stdout?: string, stderr?: string) => void;
 
@@ -59,6 +60,7 @@ vi.mock("../src/blueprints/ax-service", () => ({
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
+import { createHttpApp } from "../src/http";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
@@ -739,4 +741,84 @@ describe("boot-device — iOS udid on non-darwin", () => {
       tool.execute!({}, { udid: "deadbeef-dead-beef-dead-beefdeadbeef" })
     ).rejects.not.toThrow(/xcode-select/);
   });
+
+  it.each([
+    ["iPhone 16 Pro", /requires a macOS host/],
+    ["chromium-cdp-9222", /`electronAppPath`/],
+  ])("answers %s with %s", async (udid, message) => {
+    const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
+    await expect(tool.execute!({}, { udid })).rejects.toThrow(message);
+  });
+});
+
+describe("boot-device — non-iOS device id passed as `udid`", () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    vi.clearAllMocks();
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      getCallback(args)(null, "", "");
+      return {} as never;
+    });
+    listIosSimulatorsMock.mockReset().mockResolvedValue([]);
+    setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it.each([
+    ["chromium-cdp-9222", /`electronAppPath`/],
+    ["amazon-4a27df03c9777152", /`vvdImage`/],
+    ["emulator-5554", /Boot an Android emulator by passing `avdName`/],
+  ])("refuses %s and names the parameter that boots it", async (udid, hint) => {
+    const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
+
+    await expect(tool.execute!({}, { udid })).rejects.toThrow(/`udid` takes an iOS simulator UDID/);
+    await expect(tool.execute!({}, { udid })).rejects.toThrow(hint);
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["iPhone 16 Pro", "4A27DF03"])(
+    "refuses %s without calling it an Android emulator",
+    async (udid) => {
+      const tool = createBootDeviceTool({
+        resolveService: async () => ({}),
+      } as unknown as Registry);
+
+      const error = await tool.execute!({}, { udid }).catch((e: Error) => e);
+      expect((error as Error).message).toMatch(/Copy it exactly/);
+      expect((error as Error).message).not.toMatch(/Boot an Android emulator/);
+      expect(mockExecFile).not.toHaveBeenCalled();
+    }
+  );
+
+  // `sim-remote` is not in the primed dep cache, so this error proves the route.
+  it("routes a `remote:` id to the remote simulator path", async () => {
+    const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
+
+    await expect(
+      tool.execute!({}, { udid: "remote:11111111-1111-1111-1111-111111111111" })
+    ).rejects.toThrow(/`sim-remote` CLI not found/);
+  });
+
+  it.each([{ udid: "chromium-cdp-9222" }, { udid: "iPhone 16 Pro" }, {}])(
+    "answers %j with a 400, not a server error",
+    async (body) => {
+      const registry = new Registry();
+      registry.registerTool(createBootDeviceTool(registry));
+      const { app } = createHttpApp(registry);
+
+      const res = await request(app).post("/tools/boot-device").send(body);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error_code).toBe("BOOT_DEVICE_TARGET_SELECTION_INVALID");
+    }
+  );
 });

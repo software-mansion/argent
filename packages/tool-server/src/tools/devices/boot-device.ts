@@ -37,7 +37,11 @@ import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
-import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import {
+  classifyDevice,
+  isAndroidEmulatorSerial,
+  stripRemotePrefix,
+} from "../../utils/device-info";
 import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
 import { InvalidToolInputError } from "../../utils/capability";
 import {
@@ -1322,6 +1326,30 @@ function bootVega(params: {
   return promise;
 }
 
+/** The capability gate admits these ids for the other parameters, so they can arrive as a `udid`. */
+const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
+  android: "Boot an Android emulator by passing `avdName` (an AVD name from `list-devices`).",
+  chromium: "Boot an Electron app by passing `electronAppPath`.",
+  vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
+};
+
+/**
+ * `classifyDevice` calls every unrecognised id `android`; only an `emulator-`
+ * serial is known to be one. Off macOS, `undefined` leaves `bootIos` to say
+ * that no simulator can boot there.
+ */
+function nonIosUdidHint(
+  udid: string,
+  platform: "android" | "chromium" | "vega"
+): string | undefined {
+  if (platform !== "android" || isAndroidEmulatorSerial(udid)) return NON_IOS_UDID_HINT[platform];
+  if (process.platform !== "darwin") return undefined;
+  return (
+    "Copy it exactly. " +
+    "An Android emulator boots through `avdName`; a connected Android phone needs no boot."
+  );
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
@@ -1359,13 +1387,11 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
       const hasElectron = Boolean(params.electronAppPath);
       const provided = [hasUdid, hasAvd, hasVega, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
-        throw new FailureError(
+        throw new InvalidToolInputError(
           "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron).",
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
-            failure_area: "tool_server",
-            error_kind: "validation",
           }
         );
       }
@@ -1398,8 +1424,20 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
             }
           );
         }
-        if (classifyDevice(params.udid!) === "ios-remote") {
+        const platform = classifyDevice(params.udid!);
+        if (platform === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
+        }
+        const hint = platform === "ios" ? undefined : nonIosUdidHint(params.udid!, platform);
+        if (hint) {
+          throw new InvalidToolInputError(
+            `\`udid\` takes an iOS simulator UDID from \`list-devices\`; \`${params.udid}\` is not one. ` +
+              hint,
+            {
+              error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+              failure_stage: "boot_device_target_selection",
+            }
+          );
         }
         return bootIos(params.udid!, registry, params.force, params.headless);
       }
