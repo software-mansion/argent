@@ -59,6 +59,34 @@ export function notAnsweredError(stage: string): FailureError {
   );
 }
 
+/** Same code as {@link notVerifiedError}: a web page that did not answer, so fill sent it nothing that writes. */
+export function pageNotAnsweringError(stage: string): FailureError {
+  return new FailureError(
+    "The page did not answer, so fill changed nothing. A JavaScript dialog (alert, confirm or " +
+      "prompt) may be open, or the page is busy: close any dialog, then retry.",
+    {
+      error_code: FAILURE_CODES.FILL_NOT_VERIFIED,
+      failure_stage: stage,
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
+/** Same code as {@link notVerifiedError}: a web page that started the fill and did not finish it in time. */
+export function pageNotFinishedError(stage: string): FailureError {
+  return new FailureError(
+    "The page did not finish the fill in time; it may have opened a JavaScript dialog. The field " +
+      "may have changed, and may still change when the page resumes: read it before retrying.",
+    {
+      error_code: FAILURE_CODES.FILL_NOT_VERIFIED,
+      failure_stage: stage,
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
 export function unsupportedFieldError(detail: string, stage: string): InvalidToolInputError {
   return new InvalidToolInputError(
     `fill cannot set this field's text: ${detail}. Nothing was changed.`,

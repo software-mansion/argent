@@ -97,7 +97,7 @@ export function createFillTool(registry: Registry): ToolDefinition<Params, FillR
     },
     description: `Set the text of the focused text field to exactly \`text\`, replacing what it holds; "" clears it. Tap the field first.
 Returns { verified }, never the text: true when the field was read back holding the text, false on a physical iPhone, where nothing can read it back.
-Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text, FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; nothing is changed). Fails if the device's ax-service or devtools helper predates fill; update argent. Not supported on TV targets or Vega.`,
+Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIFIED when the field does not read back the text or the device does not answer in time, FILL_UNSUPPORTED_FIELD for a field that cannot take the text (a date or time input, a newline in a single-line field; on Chromium also text over the field's maxlength, text a number or email input would change, or focus in a cross-origin frame; nothing is changed). Fails if the device's ax-service or devtools helper predates fill; update argent. Not supported on TV targets or Vega.`,
     hideFromMcp: true,
     zodSchema,
     capability,
