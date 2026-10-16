@@ -562,6 +562,7 @@ function describeValue(value) {
   if (value === undefined) return "undefined";
   const type = typeof value;
   if (type === "number") {
+    if (Number.isFinite(value)) return "a number";
     if (Number.isNaN(value)) return "NaN";
     return value > 0 ? "Infinity" : "-Infinity";
   }
