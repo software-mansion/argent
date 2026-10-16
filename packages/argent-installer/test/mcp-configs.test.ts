@@ -1762,6 +1762,45 @@ describe("copyRulesAndAgents", () => {
       expect(agentsLine).toContain(`.claude/agents -> ${path.join(".agents", "agents")}`);
     });
 
+    // homedir() is the link; project roots and realpath'd targets are physical.
+    describe("under a home reached through a symlink", () => {
+      let realHome: string;
+
+      beforeEach(() => {
+        realHome = path.join(fs.realpathSync(tmpDir), "realhome");
+        fs.mkdirSync(realHome);
+        fs.symlinkSync("realhome", path.join(tmpDir, "home"));
+        homedirOverride = path.join(tmpDir, "home");
+      });
+
+      it("labels a global write-through target and its destination with ~", () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        fs.mkdirSync(path.join(realHome, ".agents", "agents"), { recursive: true });
+        fs.mkdirSync(path.join(realHome, ".claude"));
+        fs.symlinkSync("../.agents/agents", path.join(realHome, ".claude", "agents"));
+
+        const results = copyRulesAndAgents([claudeAdapter], tmpDir, "global", rulesDir, agentsDir);
+
+        expect(results).toContain("  Copied agents to ~/.claude/agents -> ~/.agents/agents");
+      });
+
+      it("labels a project under home with ~", () => {
+        const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+        const projectRoot = path.join(realHome, "Dev", "app");
+        fs.mkdirSync(projectRoot, { recursive: true });
+
+        const results = copyRulesAndAgents(
+          [claudeAdapter],
+          projectRoot,
+          "local",
+          rulesDir,
+          agentsDir
+        );
+
+        expect(results).toContain("  Copied rules to ~/Dev/app/.claude/rules");
+      });
+    });
+
     it("installs rules into a symlinked .claude/rules", () => {
       const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
       const canonical = path.join(tmpDir, ".agents", "rules");

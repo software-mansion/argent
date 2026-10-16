@@ -440,6 +440,33 @@ describe("resolveProjectRoot", () => {
     expect(resolveProjectRoot(home, home)).toBe(home);
   });
 
+  // process.cwd() is physical; HOME may name it through a link.
+  describe.skipIf(process.platform === "win32")("home reached through a symlink", () => {
+    it.each([
+      ["HOME is itself a symlink", "realhome", "realhome", "home"],
+      ["an ancestor of HOME is a symlink", "var/home/u", "var/home", "home/u"],
+    ])("stops at home when %s", (_shape, physicalHome, linkTarget, homeVar) => {
+      const realHome = path.join(fs.realpathSync(tmpDir), physicalHome);
+      const projectRoot = path.join(realHome, "Dev", "argent-test");
+      fs.mkdirSync(path.join(realHome, ".claude"), { recursive: true });
+      fs.mkdirSync(projectRoot, { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, "package.json"), "{}");
+      fs.symlinkSync(linkTarget, path.join(tmpDir, "home"));
+
+      expect(resolveProjectRoot(projectRoot, path.join(tmpDir, homeVar))).toBe(projectRoot);
+    });
+
+    it("stops at home when the start directory names it through the link", () => {
+      const realHome = path.join(fs.realpathSync(tmpDir), "realhome");
+      fs.mkdirSync(path.join(realHome, ".claude"), { recursive: true });
+      fs.symlinkSync("realhome", path.join(tmpDir, "home"));
+      const projectRoot = path.join(tmpDir, "home", "Dev", "argent-test");
+      fs.mkdirSync(projectRoot, { recursive: true });
+
+      expect(resolveProjectRoot(projectRoot, realHome)).toBe(projectRoot);
+    });
+  });
+
   it("recognizes opencode.jsonc as a project root marker", () => {
     const projectRoot = path.join(tmpDir, "project");
     const nestedDir = path.join(projectRoot, "src");

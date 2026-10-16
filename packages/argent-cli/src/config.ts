@@ -13,6 +13,7 @@ import {
   getConfigDefinition,
   getConfigValueByKey,
   getConfigValueAtScope,
+  isHomeDir,
   setConfigValue,
   unsetConfigValue,
   listConfig,
@@ -236,7 +237,7 @@ function scopeLabel(scope: FlagScope): string {
 function degenerateProjectScopeWarning(scope: FlagScope): string | null {
   if (scope !== "project") return null;
   const projDir = configDir("project");
-  if (path.resolve(projDir) === path.resolve(configDir("global"))) {
+  if (isHomeDir(path.dirname(projDir))) {
     return (
       `WARNING: no project found between ${process.cwd()} and your home directory — ` +
       `"project" scope resolved to the home directory, so this writes the GLOBAL ` +

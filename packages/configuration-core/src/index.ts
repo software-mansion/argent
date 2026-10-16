@@ -17,6 +17,7 @@ export {
 export {
   argentHomeDir,
   resolveHomeDir,
+  isHomeDir,
   configDir,
   configFilePath,
   type ConfigPathOptions,

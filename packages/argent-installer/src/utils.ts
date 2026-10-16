@@ -145,13 +145,15 @@ const PROJECT_ROOT_MARKERS = [
 // The walk never climbs into the home directory: `~/.claude`, `~/.cursor`,
 // `~/.codex`, … are the editors' global config dirs, not project markers, so
 // matching them would resolve every markerless project under home to home.
+// Home is matched by real path: process.cwd() is physical, while $HOME may run
+// through a symlink (Fedora Atomic's /home -> /var/home).
 export function resolveProjectRoot(startDir: string, homeDir: string = os.homedir()): string {
   const initialDir = path.resolve(startDir);
-  const home = path.resolve(homeDir);
+  const home = realpathOrSelf(path.resolve(homeDir));
   let currentDir = initialDir;
 
   while (true) {
-    if (currentDir === home && currentDir !== initialDir) {
+    if (currentDir !== initialDir && realpathOrSelf(currentDir) === home) {
       return initialDir;
     }
 

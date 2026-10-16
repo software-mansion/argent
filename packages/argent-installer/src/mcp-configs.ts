@@ -1689,9 +1689,11 @@ function formatCopyDestination(
 }
 
 function formatManagedPathLabel(targetPath: string, root: string): string {
-  const home = homedir();
-  if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
-    return `~${targetPath.slice(home.length)}`;
+  // targetPath may be physical (from process.cwd() or realpath) while $HOME is a symlink.
+  for (const home of [homedir(), realpathOrSelf(homedir())]) {
+    if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
+      return `~${targetPath.slice(home.length)}`;
+    }
   }
 
   const relative = path.relative(root, targetPath);

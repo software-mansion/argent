@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveProjectRoot, type FlagScope } from "./flags.js";
@@ -27,6 +28,22 @@ export function resolveHomeDir(options: ConfigPathOptions = {}): string {
   return process.platform === "win32"
     ? (nonEmpty(process.env.USERPROFILE) ?? os.homedir())
     : (nonEmpty(process.env.HOME) ?? os.homedir());
+}
+
+/**
+ * Whether `dir` is the home directory, by real path: project roots walked up from
+ * `process.cwd()` are physical, while HOME may run through a symlink.
+ */
+export function isHomeDir(dir: string, options: ConfigPathOptions = {}): boolean {
+  return realDir(dir) === realDir(resolveHomeDir(options));
+}
+
+function realDir(dir: string): string {
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
 }
 
 export function argentHomeDir(): string {
