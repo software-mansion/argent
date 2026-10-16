@@ -155,6 +155,20 @@ const NATIVE_DEVTOOLS_AGE_SLOP_MS = 3000;
 export const NATIVE_DEVTOOLS_CONNECT_BUDGET_MS = 15_000;
 
 /**
+ * How long attach mode waits, after the provider's socket accepts us, for the
+ * `Control` frame that names the app it is lending. Until it lands nothing is
+ * in `connections`, so a factory that resolved on `connect` alone handed the
+ * very first call a service that answered "not connected".
+ *
+ * A provider re-serving a live agent connection has the bundle id in hand and
+ * sends it straight after accept, so this only needs to cover a loaded host's
+ * scheduling, not an app's cold start. Past it the factory resolves anyway (the
+ * pre-wait behaviour) so a provider that is slow or has no app on offer yet,
+ * still attaches and the tool's own not-connected error names the bundle.
+ */
+export const NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS = 2_000;
+
+/**
  * The agent-facing remedy for each measured state. `connected` is excluded at
  * the type level so an unhandled future state is a compile error rather than a
  * silent fall-through to the least specific advice.
@@ -790,7 +804,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // the RPC responses it answers with. Same wire protocol whether our dylib
     // dialled in or we dialled out to a lent socket, so only who connects
     // differs.
-    const serveAgentConnection = (socket: net.Socket) => {
+    const serveAgentConnection = (socket: net.Socket, onHandshake?: () => void) => {
       let bundleId: string | null = null;
       attachNdjsonReader(socket, {
         onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
@@ -818,6 +832,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
                 }) + "\n"
               );
             }
+            onHandshake?.();
             return;
           }
 
@@ -913,7 +928,47 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         });
       });
 
-      serveAgentConnection(lentSocket);
+      const attached = lentSocket;
+
+      /**
+       * Hold the factory until the provider's opening `Control` frame puts the
+       * app in `connections`. Accept alone proves only that the provider is
+       * listening: resolving there let the readiness gate pass this service
+       * (`provider_attached`) to a first RPC that found no connection.
+       *
+       * @see {@linkcode NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS}
+       */
+      const hungUpBeforeHandshake = await new Promise<boolean>((resolve) => {
+        const finish = (hungUp: boolean) => {
+          clearTimeout(timer);
+          attached.off("close", onClose);
+          resolve(hungUp);
+        };
+
+        const onClose = () => finish(true);
+        const timer = setTimeout(() => finish(false), NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS);
+
+        attached.once("close", onClose);
+        serveAgentConnection(attached, () => finish(false));
+      });
+
+      /**
+       * Nothing to keep: the registry sets `node.instance` only once the
+       * factory resolves, so a rejection here leaves the next call to attach
+       * afresh, exactly as a hang-up after resolving does.
+       */
+      if (hungUpBeforeHandshake) {
+        throw new FailureError(
+          `${NATIVE_DEVTOOLS_NAMESPACE} lost the agent connection its provider was lending ` +
+            `before the provider named the app it serves.`,
+          {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_ATTACH_LOST,
+            error_kind: "network",
+            failure_area: "tool_server",
+            failure_stage: "native_devtools_attach",
+          }
+        );
+      }
 
       /**
        * A provider hangs up when the app it was lending goes away. We are the

@@ -5,7 +5,10 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
+import {
+  NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS,
+  nativeDevtoolsBlueprint,
+} from "../src/blueprints/native-devtools";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
 import {
@@ -39,18 +42,35 @@ let temporaryDirectory: string;
 type LentAgent = {
   close: () => Promise<void>;
   hangUp: () => void;
+  peerCount: () => number;
   received: Array<{ type: string; payload: Record<string, unknown> }>;
+  /** Sends the opening `Control` frame on every socket still waiting for it. */
+  sendHandshake: () => void;
   socketPath: string;
 };
 
-async function startLentAgent(): Promise<LentAgent> {
+/**
+ * `handshake` controls when the opening `Control` frame goes out: straight
+ * after accept (the default), after a delay or only when the test calls
+ * `sendHandshake`.
+ */
+async function startLentAgent(
+  options: { handshake?: "immediate" | "manual" | { delayMs: number } } = {}
+): Promise<LentAgent> {
+  const handshake = options.handshake ?? "immediate";
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
+  const awaitingHandshake: net.Socket[] = [];
+
+  const sendControl = (socket: net.Socket) =>
+    socket.write(JSON.stringify({ payload: { bundleId: BUNDLE_ID }, type: "Control" }) + "\n");
 
   const server = net.createServer((socket) => {
     sockets.push(socket);
-    socket.write(JSON.stringify({ payload: { bundleId: BUNDLE_ID }, type: "Control" }) + "\n");
+    if (handshake === "immediate") sendControl(socket);
+    else if (handshake === "manual") awaitingHandshake.push(socket);
+    else setTimeout(() => sendControl(socket), handshake.delayMs);
 
     readline.createInterface({ input: socket }).on("line", (raw) => {
       const message = JSON.parse(raw);
@@ -76,7 +96,11 @@ async function startLentAgent(): Promise<LentAgent> {
     hangUp: () => {
       for (const socket of sockets.splice(0)) socket.destroy();
     },
+    peerCount: () => sockets.length,
     received,
+    sendHandshake: () => {
+      for (const socket of awaitingHandshake.splice(0)) sendControl(socket);
+    },
     socketPath,
   };
 }
@@ -292,6 +316,82 @@ describe("a provider that lends its native-devtools agent", () => {
     expect(terminated).toBe(false);
 
     await agent.close();
+  });
+
+  /**
+   * Accept proves only that the provider is listening; the app is not in the
+   * connection map until its `Control` frame lands. The readiness gate lets
+   * attach mode straight through, so a factory that resolved on accept handed
+   * the first call of a session a "not connected" error that a retry fixed.
+   */
+  describe("before the provider has named its app", () => {
+    it("serves the very first RPC once a prompt handshake lands", async () => {
+      const agent = await startLentAgent({ handshake: { delayMs: 100 } });
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const instance = await instantiate();
+
+      /** No `waitForConnectedBundle`: the first call is the one that failed. */
+      expect(instance.api.isConnected(BUNDLE_ID)).toBe(true);
+      await expect(
+        instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
+      ).resolves.toEqual({ role: "AXWindow" });
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    /**
+     * A provider with no app on offer yet must still attach, as it did before
+     * the wait existed and adopt the app once it names one.
+     */
+    it(
+      "attaches anyway when no handshake arrives in time, and adopts a late one",
+      async () => {
+        const agent = await startLentAgent({ handshake: "manual" });
+        publishDescriptor({ socketPath: agent.socketPath });
+
+        const startedAt = Date.now();
+        const instance = await instantiate();
+
+        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(
+          NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS - 50
+        );
+        expect(instance.api.listConnectedBundleIds()).toEqual([]);
+        await expect(
+          instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
+        ).rejects.toThrow(/not connected/);
+
+        agent.sendHandshake();
+        await waitForConnectedBundle(instance.api);
+        await expect(
+          instance.api.queryViewHierarchy(BUNDLE_ID, "ViewHierarchy.describeScreen")
+        ).resolves.toEqual({ role: "AXWindow" });
+
+        await instance.dispose();
+        await agent.close();
+      },
+      NATIVE_DEVTOOLS_ATTACH_HANDSHAKE_TIMEOUT_MS + 3_000
+    );
+
+    /** A service with a dead socket and no app would only fail every call. */
+    it("fails the attach when the provider hangs up before naming an app", async () => {
+      const agent = await startLentAgent({ handshake: "manual" });
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const attaching = instantiate();
+
+      /** Let the dial land before hanging up on it. */
+      while (agent.peerCount() === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      agent.hangUp();
+
+      await expect(attaching).rejects.toThrow(/before the provider named the app/);
+
+      await agent.close();
+    });
   });
 
   it("refuses to inject when the provider granted the mechanism but lent no socket", async () => {
