@@ -53,6 +53,8 @@ The key of the top-level object depends on the editor. Claude Code, Cursor and W
 
 The editor starts `argent mcp` as a child process and talks to it over standard input and output. The MCP server does not control the devices itself. The MCP server forwards each tool call to the Argent tool-server. The tool-server owns the simulators, emulators and device sessions.
 
+When the editor cancels a tool call, the MCP server closes the connection of that call to the tool-server. The tool-server then aborts the signal of the tool. Some tools stop, for example `flow-execute`, `run-sequence` and `await-ui-element`. Other tools continue to the end.
+
 By default, the MCP server starts a local tool-server when the editor starts the MCP server. If that tool-server runs already, the MCP server uses it. All agents that use the same Argent installation share this local tool-server. `argent link` and the `ARGENT_TOOLS_URL` variable send the tool calls to a different tool-server. In this section, both are a link. The MCP server reads the link when it starts. After you run `argent link` or `argent unlink`, restart the editor.
 
 Over a link, the MCP server uploads files with the same rules as the `argent` CLI:

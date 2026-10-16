@@ -174,7 +174,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
     const t0 = Date.now();
     await spyLog({
       ts: new Date().toISOString(),
@@ -183,7 +183,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       args: params.arguments,
     });
     try {
-      const { result, outputHint, note } = await callTool(params.name, params.arguments);
+      const { result, outputHint, note } = await callTool(params.name, params.arguments, {
+        signal,
+      });
 
       await spyLog({
         ts: new Date().toISOString(),
@@ -242,7 +244,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         const maxWaitMs = getAutoScreenshotDelayMs(params.name);
         if (maxWaitMs > 0) {
           try {
-            const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs });
+            const idle = await callTool(
+              "await-screen-idle",
+              { udid, timeoutMs: maxWaitMs },
+              { signal }
+            );
             await spyLog({
               ts: new Date().toISOString(),
               event: "auto_screenshot_readiness",
@@ -257,7 +263,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
         if (wantScreenshot) {
           try {
-            const screenshotResult = await callTool("screenshot", { udid });
+            const screenshotResult = await callTool("screenshot", { udid }, { signal });
             const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
               toolsUrl: TOOLS_URL,
               authToken: AUTH_TOKEN,
@@ -286,7 +292,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         if (wantTree) {
           const t1 = Date.now();
           try {
-            const d = await callTool("describe", { udid });
+            const d = await callTool("describe", { udid }, { signal });
             const desc = (d.result as { description?: unknown } | null)?.description;
             if (typeof desc === "string" && desc.length > 0) {
               content = [
