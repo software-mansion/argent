@@ -245,7 +245,7 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  * (https://github.com/software-mansion/argent/issues/932).
  *
  * MoQ has no per-command ack, so it reports less: a send the session refuses
- * (a closed track, a released machine) rejects, while a send that goes out is
+ * (a closed session, a released machine) rejects, while a send that goes out is
  * reported as delivered. That is strictly narrower than the WebSocket ack, and
  * it is still the difference between a failed gesture and `{ tapped: true }`.
  */
