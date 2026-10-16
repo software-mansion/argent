@@ -174,7 +174,7 @@ export function resolveProjectRoot(startDir: string, homeDir: string = os.homedi
 export function readToml(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
   try {
-    return parseToml(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    return parseToml(stripBom(fs.readFileSync(filePath, "utf8"))) as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -208,10 +208,17 @@ export function writeYaml(filePath: string, doc: Document): void {
 export function readJson(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(stripBom(fs.readFileSync(filePath, "utf8")));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
   } catch {
     return {};
   }
+}
+
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 export function writeJson(filePath: string, data: unknown): void {
@@ -452,6 +459,16 @@ export function getLatestVersion(): string {
 export function isNewerVersion(candidate: string, current: string): boolean {
   if (!semver.valid(candidate) || !semver.valid(current)) return false;
   return semver.gt(candidate, current);
+}
+
+/**
+ * Whether `nodeVersion` meets a package.json `engines.node` range. Null when
+ * the range can't be parsed. Prereleases (a Node RC or nightly) count, which
+ * plain `semver.satisfies` would reject.
+ */
+export function nodeSatisfiesEngines(nodeVersion: string, range: string): boolean | null {
+  if (!semver.validRange(range)) return null;
+  return semver.satisfies(nodeVersion, range, { includePrerelease: true });
 }
 
 // Every `npx` call is `npm exec`, which evaluates the host project's

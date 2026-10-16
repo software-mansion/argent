@@ -33,7 +33,7 @@ const cache = new Map<ToolDependency, CacheEntry>();
 // how to unblock the user. The agent will run what a hint says, so each one
 // names a route that works on any host, and any package-manager command names
 // its platform: an unlabelled `brew install` reads as the fix on Linux too.
-const INSTALL_HINTS: Record<ToolDependency, string> = {
+export const INSTALL_HINTS: Record<ToolDependency, string> = {
   "xcrun":
     "Xcode command-line tools not found — iOS/tvOS simulators need a macOS host with them installed. On macOS, run `xcode-select --install` (or install Xcode from the App Store) and retry.",
   "adb":

@@ -46,6 +46,11 @@ export interface McpServerEntry {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /**
+   * The key that switches the entry off (`enabled: false` / `disabled: true`).
+   * Only some editors honour each key; callers decide.
+   */
+  switchedOffBy?: "enabled" | "disabled";
 }
 
 // Argent config or client state outside the scope init just wrote that can keep
@@ -205,16 +210,22 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
       rawEnv && Object.keys(rawEnv).length > 0
         ? Object.fromEntries(Object.entries(rawEnv).map(([key, value]) => [key, String(value)]))
         : undefined;
+    const switchedOffBy: McpServerEntry["switchedOffBy"] =
+      raw.enabled === false ? "enabled" : raw.disabled === true ? "disabled" : undefined;
+    const extra = {
+      ...(env ? { env } : {}),
+      ...(switchedOffBy ? { switchedOffBy } : {}),
+    };
     // opencode stores the command as a single array: { command: [cmd, ...args] }.
     if (Array.isArray(raw.command) && raw.command.every((c) => typeof c === "string")) {
       const [command = "", ...args] = raw.command as string[];
-      return { command, args, ...(env ? { env } : {}) };
+      return { command, args, ...extra };
     }
     if (typeof raw.command === "string") {
       const args = Array.isArray(raw.args)
         ? raw.args.filter((a): a is string => typeof a === "string")
         : [];
-      return { command: raw.command, args, ...(env ? { env } : {}) };
+      return { command: raw.command, args, ...extra };
     }
   }
   return { command: "", args: [] };
@@ -713,6 +724,20 @@ function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: strin
   };
   const target = canonical(root);
   return Object.keys(projects).filter((key) => key === root || canonical(key) === target);
+}
+
+/**
+ * True when Claude Code's `/mcp` toggle has switched argent off for this
+ * project (`projects[<root>].disabledMcpServers` in ~/.claude.json).
+ */
+export function isArgentDisabledInClaudeProject(root: string): boolean {
+  const projects = readJson(path.join(homedir(), ".claude.json")).projects;
+  if (!isRecord(projects)) return false;
+  return claudeProjectKeysForRoot(projects, root).some((key) => {
+    const project = projects[key];
+    const disabled = isRecord(project) ? project.disabledMcpServers : undefined;
+    return Array.isArray(disabled) && disabled.includes(MCP_SERVER_KEY);
+  });
 }
 
 // A recorded "reject" for the argent .mcp.json server: a rejection made before

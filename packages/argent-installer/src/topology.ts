@@ -12,16 +12,22 @@ import { isYarnPnp } from "./preflight.js";
 // update/uninstall probe and handle each independently.
 
 // `which argent` also matches temp package runners (npx / pnpm dlx / bunx /
-// yarn dlx), which prepend their cache .bin/ dir to PATH.
+// yarn dlx / yarn berry scripts), which prepend their cache .bin/ dir to PATH.
 const TEMP_RUNNER_MARKERS = [
   "_npx",
   "/dlx-",
   "\\dlx-",
+  "/dlx/",
+  "\\dlx\\",
+  "/bunx-",
+  "\\bunx-",
+  "/xfs-",
+  "\\xfs-",
   "bun/install/cache",
   ".bun\\install\\cache",
 ];
 
-function isTempRunnerPath(binaryPath: string): boolean {
+export function isTempRunnerPath(binaryPath: string): boolean {
   return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
 }
 

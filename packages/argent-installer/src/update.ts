@@ -697,9 +697,9 @@ export async function update(args: string[]): Promise<void> {
       // extra args, env vars) is a deliberate override — rewriting it would
       // destroy the customization AND launder it into a bare shape the
       // stale-config sweep below could judge dead and delete. Everything else is
-      // rewritten unconditionally; the write also REPAIRS state the normalized
-      // view can't see (an opencode `enabled: false`, or getArgentEntry's
-      // unreadable sentinel { command: "" }).
+      // rewritten unconditionally; the write also REPAIRS getArgentEntry's
+      // unreadable sentinel { command: "" } and drops an `enabled: false` /
+      // `disabled: true` switch.
       for (const { adapter, scope, configPath } of configuredScopes) {
         const normScope = scope === "project" ? "local" : "global";
         // Allowlists and rules still refresh for this adapter either way — only

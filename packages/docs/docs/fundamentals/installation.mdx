@@ -48,6 +48,16 @@ The installation wizard:
   caption="The wizard detects your editors, then asks where the MCP server should live"
 />
 
+## Check the installation
+
+Run `argent doctor` to check the installation. The command checks the install, the editor configuration, the skills and the device toolchains. It prints the fix for each problem.
+
+```bash
+argent doctor
+```
+
+With a local install, `argent` is not on `PATH`. Run it through your package manager instead: `npx argent doctor`, or `yarn argent doctor` in a Yarn Plug'n'Play project.
+
 ## Manual install
 
 ```bash
