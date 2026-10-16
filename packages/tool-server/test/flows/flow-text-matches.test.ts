@@ -147,7 +147,7 @@ describe("text matches: execution", () => {
     }
   }, 10_000);
 
-  // An element with no text reads as "", so `'^$'` can check an empty field.
+  // An element with no text reads as "", so `'^$'` can check it.
   it("passes an empty-matchable pattern on an element with no text", async () => {
     currentTree = () =>
       screen([

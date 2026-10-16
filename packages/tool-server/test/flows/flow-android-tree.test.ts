@@ -299,6 +299,31 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(evaluateCondition("text", "Row 50", feed)).toBe(false);
   });
 
+  // reference/flow-yaml.mdx lists these as fields `'^$'` never passes on.
+  it("reads an empty password, hinted or described field as text, so '^$' fails", () => {
+    // Attributes as the helper dumps them: an empty field with a hint carries
+    // the hint as its text.
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.EditText" resource-id="plain" package="com.acme.app" text="" bounds="[40,100][1040,180]" />
+    <node index="1" class="android.widget.EditText" resource-id="hinted" package="com.acme.app" text="Type here" hint="Type here" showing-hint="true" bounds="[40,200][1040,280]" />
+    <node index="2" class="android.widget.EditText" resource-id="secret" package="com.acme.app" password="true" text="" bounds="[40,300][1040,380]" />
+    <node index="3" class="android.widget.EditText" resource-id="described" package="com.acme.app" content-desc="Name" text="" bounds="[40,400][1040,480]" />
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const field = (id: string) => findAll(tree, { identifier: id });
+
+    expect(evaluateCondition("text", "^$", field("plain"), "matches")).toBe(true);
+    expect(field("hinted")[0]!.label).toBe("Type here");
+    expect(field("secret")[0]!.label).toBe("[password]");
+    expect(field("described")[0]!.label).toBe("Name");
+    for (const id of ["hinted", "secret", "described"]) {
+      expect(evaluateCondition("text", "^$", field(id), "matches")).toBe(false);
+    }
+  });
+
   it("never hoists a password field's text (placeholder only)", () => {
     const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
     const [pw] = findAll(tree, { identifier: "password" });

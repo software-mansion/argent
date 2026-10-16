@@ -803,6 +803,19 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "txt")!.label).toBe("typed text");
   });
 
+  // reference/flow-yaml.mdx lists these as fields `'^$'` never passes on.
+  it("reads an input's aria-label or placeholder in place of its value, and an empty one's title", () => {
+    const { tree } = run([
+      inputEl({ value: "abc", attrs: { "id": "aria", "aria-label": "Name" }, rect: BOX }),
+      inputEl({ value: "abc", placeholder: "Type here", attrs: { id: "ph" }, rect: BOX }),
+      inputEl({ attrs: { id: "titled", title: "Hint" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "aria")).toMatchObject({ label: "Name" });
+    expect(findById(tree, "ph")).toMatchObject({ label: "Type here" });
+    expect(findById(tree, "titled")).toMatchObject({ label: "Hint" });
+    expect(JSON.stringify(tree)).not.toContain("abc");
+  });
+
   // ---- input focus (the flow type directive's focus wait reads this) ----
   it("marks the document's activeElement as focused, excluding the body", () => {
     const focusedInput = el({ tag: "input", attrs: { id: "focused-input" }, rect: BOX });
