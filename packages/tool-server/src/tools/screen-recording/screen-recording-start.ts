@@ -9,9 +9,16 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
-import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
+import {
+  setPointerTrail,
+  setPointerVisible,
+  startServerRecording,
+  stopServerRecording,
+} from "../../utils/simulator-client";
 import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../../utils/foldable";
-import { startCapture, type PanelFollow, type PointerControl } from "./capture";
+import { startCapture, type PanelFollow } from "./capture";
+import type { PointerControl } from "./pointer-control";
+import type { ServerRecordingControl } from "./server-capture";
 import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
@@ -20,6 +27,9 @@ const MAX_TIME_LIMIT_SECONDS = 600;
 const POINTER_TRAIL_LENGTH = 8;
 /** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
+/** Stop muxes the mp4 before it answers, so it gets the larger budget. */
+const RECORDING_START_TIMEOUT_MS = 10_000;
+const RECORDING_STOP_TIMEOUT_MS = 60_000;
 
 const zodSchema = z.object({
   udid: z
@@ -78,7 +88,7 @@ By default every tap, swipe, drag, pinch and rotate is drawn into the video as a
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported).`,
+Fails if a recording is already running on the device, the device is not booted, the host has to encode the video and ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega and remote simulators are unsupported).`,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     zodSchema,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
@@ -168,6 +178,10 @@ Fails if a recording is already running on the device, the device is not booted,
         watermark: isFeatureEnabled("video-watermark"),
         trimStatic: params.trimStatic ?? true,
         pointer,
+        // The server recorder keeps to one panel. A provider's server is outside
+        // the endpoint allowlist, and its video path is on another host.
+        server:
+          followPanel || simulator.external ? undefined : makeServerRecordingControl(simulator),
         followPanel,
       });
       return warning !== undefined ? { ...started, warning } : started;
@@ -213,6 +227,21 @@ export function makePointerControl(simulator: SimulatorServerApi): PointerContro
       const pending = enabling;
       if (pending) await pending.catch(() => {});
       await setPointerVisible(simulator, false, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
+    },
+  };
+}
+
+export function makeServerRecordingControl(simulator: SimulatorServerApi): ServerRecordingControl {
+  return {
+    async start(opts) {
+      const id = await startServerRecording(
+        simulator,
+        opts,
+        AbortSignal.timeout(RECORDING_START_TIMEOUT_MS)
+      );
+      if (id === null) return null;
+      return () =>
+        stopServerRecording(simulator, id, AbortSignal.timeout(RECORDING_STOP_TIMEOUT_MS));
     },
   };
 }
