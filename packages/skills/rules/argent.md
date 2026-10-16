@@ -78,11 +78,13 @@ Decision order:
 - Always open apps with `launch-app` or `open-url`; never tap home screen icons.
 - If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
-- When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
-  naming the devices this session actually used. One tool-server is shared by every other agent using this
-  argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
-  machine-wide cleanup.
-  If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
+- Do not stop simulator servers when a task finishes: the next task reuses them, and stopping them makes its
+  first device action start cold again. Call `stop-all-simulator-servers` when the user asks to clean up or
+  ends the session, or when a skill tells you to recycle a device's services (e.g. before a QA proof pass).
+  Always pass `devices: [...]` naming the devices this session used. One tool-server is shared by every other
+  agent using this argent install, so an unscoped call tears down their devices too; reserve that form for a
+  deliberate machine-wide cleanup.
+  Never stop a Metro the user started unless they ask (`stop-metro`, specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc. Not on a physical iPhone.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
