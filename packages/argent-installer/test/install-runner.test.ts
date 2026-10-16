@@ -4,9 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import * as p from "@clack/prompts";
+import { track } from "@argent/telemetry";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
-import { isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
+import { isGloballyInstalled, isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
+import { probeGlobalInstallTarget } from "../src/global-prefix.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
 
 // Exercises installLocally's failure handling: the retry-once semantics, the
@@ -32,7 +34,16 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     isYarnPnp: vi.fn(() => false),
     getLocallyInstalledVersion: vi.fn(() => "1.0.0"),
     detectProjectPackageManager: vi.fn(() => "pnpm" as const),
+    detectPackageManager: vi.fn(() => "npm" as const),
+    isGloballyInstalled: vi.fn(() => false),
+    getGloballyInstalledVersion: vi.fn(() => "1.0.0"),
+    getLatestVersion: vi.fn(() => "2.0.0"),
   };
+});
+
+vi.mock("../src/global-prefix.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/global-prefix.js")>();
+  return { ...original, probeGlobalInstallTarget: vi.fn(() => null) };
 });
 
 // Real clack spinners animate on a TTY; stub the UI surface entirely.
@@ -41,6 +52,7 @@ vi.mock("@clack/prompts", async (importOriginal) => {
   return {
     ...actual,
     spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), message: vi.fn() })),
+    select: vi.fn(),
     log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
   };
 });
@@ -230,4 +242,75 @@ describe("installLocally failure handling", () => {
       }
     }
   );
+});
+
+describe("global install preflight", () => {
+  const storeTarget = {
+    dir: "/nix/store/abc-nodejs-22/lib/node_modules",
+    blocked: true,
+    nixStore: true,
+  };
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let tel: ReturnType<typeof makeTel>;
+
+  beforeEach(() => {
+    tel = makeTel();
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(p.log.error).mockClear();
+    vi.mocked(p.log.warn).mockClear();
+    vi.mocked(p.select).mockClear();
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(storeTarget);
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new ExitCalled(code);
+    }) as never);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(null);
+    vi.mocked(isGloballyInstalled).mockReturnValue(false);
+  });
+
+  function globalInstall(fromTar: string | null, nonInteractive = true): Promise<string> {
+    return runInstall({ installMode: "global", fromTar, nonInteractive, version: "1.0.0", tel });
+  }
+
+  it("refuses a fresh install into a blocked directory, naming the npx remedy", async () => {
+    await expect(globalInstall(null)).rejects.toThrow(new ExitCalled(1));
+
+    expect(runShellCommand).not.toHaveBeenCalled();
+    expect(String(vi.mocked(p.log.error).mock.calls[0]?.[0])).toContain(
+      "npx @swmansion/argent init --local"
+    );
+    expect(tel.trackPackageAction).toHaveBeenCalledWith(
+      "fresh_install",
+      expect.any(Number),
+      false,
+      expect.objectContaining({ error_code: "INSTALL_GLOBAL_PREFIX_UNWRITABLE" })
+    );
+  });
+
+  it("refuses a --from reinstall into a blocked directory", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(true);
+
+    await expect(globalInstall("/tmp/argent.tgz")).rejects.toThrow(new ExitCalled(1));
+
+    expect(runShellCommand).not.toHaveBeenCalled();
+    expect(String(vi.mocked(p.log.error).mock.calls[0]?.[0])).toContain("read-only Nix store");
+  });
+
+  it("warns instead of offering an update it cannot install", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(true);
+
+    await expect(globalInstall(null, false)).resolves.toBe("1.0.0");
+
+    expect(p.select).not.toHaveBeenCalled();
+    expect(runShellCommand).not.toHaveBeenCalled();
+    expect(String(vi.mocked(p.log.warn).mock.calls[0]?.[0])).toContain("cannot update");
+    expect(track).toHaveBeenCalledWith("installation:update_decision", {
+      from_major: 1,
+      to_major: 2,
+      decision: "skip",
+    });
+  });
 });
