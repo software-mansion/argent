@@ -465,9 +465,14 @@ describe("detectPackageManager", () => {
     expect(detectPackageManager()).toBe("npm");
   });
 
-  it("returns yarn for yarn agent", () => {
-    process.env.npm_config_user_agent = "yarn/4.0.0";
+  it("returns yarn for a Yarn 1 agent", () => {
+    process.env.npm_config_user_agent = "yarn/1.22.22";
     expect(detectPackageManager()).toBe("yarn");
+  });
+
+  it("returns npm for a Yarn 2+ agent", () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    expect(detectPackageManager()).toBe("npm");
   });
 
   it("returns pnpm for pnpm agent", () => {

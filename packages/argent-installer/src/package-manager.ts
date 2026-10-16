@@ -22,7 +22,8 @@ export function shellQuotePath(dir: string): string {
 
 export function detectPackageManager(): PackageManager {
   const agent = process.env.npm_config_user_agent ?? "";
-  if (agent.startsWith("yarn")) return "yarn";
+  // Yarn 2+ has no `yarn global`; npm installs for it.
+  if (agent.startsWith("yarn/1.")) return "yarn";
   if (agent.startsWith("pnpm")) return "pnpm";
   if (agent.startsWith("bun")) return "bun";
   return "npm";
