@@ -21,6 +21,20 @@ describe("chromium-server/navigation", () => {
     expect(send).toHaveBeenCalledWith("Page.navigate", { url: "https://example.com" });
   });
 
+  it("navigate: throws on the errorText of a failed navigation", async () => {
+    const send = vi.fn().mockResolvedValue({ errorText: "net::ERR_NAME_NOT_RESOLVED" });
+    await expect(navigate({ send } as unknown as CDPClient, "http://x.invalid/")).rejects.toThrow(
+      "Chromium could not navigate to http://x.invalid/: net::ERR_NAME_NOT_RESOLVED"
+    );
+  });
+
+  it("navigate: resolves on an HTTP error status", async () => {
+    const send = vi.fn().mockResolvedValue({ errorText: "net::ERR_HTTP_RESPONSE_CODE_FAILURE" });
+    await expect(navigate({ send } as unknown as CDPClient, "http://h/404")).resolves.toBe(
+      undefined
+    );
+  });
+
   it("reload: forwards ignoreCache flag", async () => {
     const cdp = stubCdp();
     await reload(cdp, true);

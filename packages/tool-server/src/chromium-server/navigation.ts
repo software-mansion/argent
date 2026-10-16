@@ -6,7 +6,10 @@ interface NavigationHistory {
 }
 
 export async function navigate(cdp: CDPClient, url: string): Promise<void> {
-  await cdp.send("Page.navigate", { url });
+  const { errorText } = (await cdp.send("Page.navigate", { url })) as { errorText?: string };
+  // An HTTP error status still got a response, so it is not a failed navigation.
+  if (errorText && errorText !== "net::ERR_HTTP_RESPONSE_CODE_FAILURE")
+    throw new Error(`Chromium could not navigate to ${url}: ${errorText}`);
 }
 
 export async function reload(cdp: CDPClient, ignoreCache = false): Promise<void> {
