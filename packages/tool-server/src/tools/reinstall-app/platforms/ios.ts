@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlTargetForUdid } from "../../../utils/ios-device-sets";
+import { assertInstallableArtifact, assertNotInsideDeviceContainer } from "../validate-artifact";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -12,8 +12,12 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
   requires: ["xcrun"],
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
-    const absolute = resolvePath(appPath);
     const { nativeId, prefix } = await simctlTargetForUdid(udid);
+    // Both checks run before the uninstall — see validate-artifact.ts. The
+    // container check is the one that catches installing from the simulator's
+    // own container, where the uninstall deletes the source bundle.
+    const absolute = await assertInstallableArtifact(appPath, "ios");
+    await assertNotInsideDeviceContainer(absolute, udid, nativeId);
     try {
       await execFileAsync("xcrun", [...prefix, "uninstall", nativeId, bundleId]);
     } catch {
