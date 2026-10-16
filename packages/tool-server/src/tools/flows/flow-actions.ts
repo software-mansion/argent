@@ -1681,11 +1681,13 @@ async function waitForCondition(
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
+      const prevMatches = lastMatches;
       const data = await readFlowTree(env);
       lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
       const blind = isBlindRead(data, everMatched);
+      if (blind) lastMatches = prevMatches;
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
       if (
@@ -1787,8 +1789,7 @@ async function waitForCondition(
         step.expectedText,
         step.textMatch,
         lastMatches,
-        // The read `lastMatches` came from is the last one that answered, and
-        // only a read that answers writes the orientation.
+        // The orientation of the last read that answered, even a blind final poll.
         readingOrientation(env)
       ) + blipNote,
   };

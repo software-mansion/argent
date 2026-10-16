@@ -353,4 +353,44 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
       /final poll could not read the UI tree: native devtools disconnected/
     );
   });
+
+  it("assert text: an empty final poll within the tolerance keeps the trusted text mismatch", async () => {
+    let firstReadAt: number | undefined;
+    currentFetch = () => {
+      firstReadAt ??= Date.now();
+      return {
+        tree:
+          Date.now() - firstReadAt >= 950
+            ? screen([])
+            : screen([
+                n({
+                  identifier: "total",
+                  label: "Total $41.50",
+                  frame: { x: 0.1, y: 0.1, width: 0.8, height: 0.1 },
+                }),
+              ]),
+        source: "native-devtools",
+      };
+    };
+
+    await writeFlow("blank-blip-text", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "total" },
+          expectedText: "Total $42.00",
+          textMatch: "equals",
+        },
+      ],
+    });
+
+    const result = await run("blank-blip-text");
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toBe(
+      'element matched id="total" but its text was "Total $41.50" (wanted to equal "Total $42.00")'
+    );
+  });
 });
