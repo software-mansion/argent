@@ -298,6 +298,34 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
   return device.kind === "device" ? "android_device" : "android";
 }
 
+/**
+ * The emulator controller finds an AVD's gRPC bridge through the emulator's
+ * discovery file (`avd/running/pid_*.ini` under the user's home). An emulator
+ * started outside argent with another HOME (a CI runner, a service account)
+ * has no such file where argent looks, so simulator-server exits with "not
+ * found among running emulators". The phone controller (screen-sharing agent
+ * over adb) needs nothing but adb, so such an emulator is retried through it
+ * instead of leaving the device with no screenshot, tap or swipe at all.
+ */
+const EMULATOR_NOT_DISCOVERED = /not found among running emulators/;
+
+async function spawnWithEmulatorFallback(
+  device: DeviceInfo
+): ReturnType<typeof spawnSimulatorServerProcess> {
+  const subcommand = subcommandForDevice(device);
+  try {
+    return await spawnSimulatorServerProcess(device.id, subcommand);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (subcommand !== "android" || !EMULATOR_NOT_DISCOVERED.test(message)) throw err;
+    process.stderr.write(
+      `[sim ${device.id}] emulator not found through gRPC discovery; ` +
+        `falling back to the adb screen-sharing controller\n`
+    );
+    return spawnSimulatorServerProcess(device.id, "android_device");
+  }
+}
+
 async function spawnSimulatorServerProcess(
   udid: string,
   subcommand: "ios" | "android" | "android_device"
@@ -567,10 +595,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
-      device.id,
-      subcommandForDevice(device)
-    );
+    const { proc, apiUrl, streamUrl } = await spawnWithEmulatorFallback(device);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 

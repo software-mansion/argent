@@ -210,6 +210,35 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     });
   });
 
+  it("falls back to `android_device` when the emulator's gRPC discovery file is missing", async () => {
+    // An emulator launched outside argent under another HOME has no discovery
+    // file where argent looks, so the gRPC controller cannot find it; the adb
+    // screen-sharing controller still drives it.
+    const grpcLess = makeFakeProc();
+    const fallback = makeFakeProc();
+    spawnMock.mockReturnValueOnce(grpcLess).mockReturnValueOnce(fallback);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const serial = "emulator-5570";
+    const device = androidDevice(serial);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      grpcLess.stderr.push(
+        'Error: emulator "emulator-5570" not found among running emulators (a token-less `-grpc` launch omits grpc.token; check avd/running/*.ini)\n'
+      );
+      setTimeout(() => {
+        grpcLess.emit("exit", 1);
+        signalReady(fallback, 55570);
+      }, 20);
+    });
+    await factoryPromise;
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
+    expect(spawnMock.mock.calls[1]![1]).toEqual(["android_device", "--id", serial]);
+  });
+
   it("spawns the `android_device` subcommand for a physical Android device", async () => {
     // A physical phone (kind 'device') is driven by a different simulator-server
     // controller than an emulator — the screen-sharing-agent path. The blueprint
