@@ -9,10 +9,13 @@ import { metroPort } from "../../utils/debugger/metro-port";
  * Vega go through Metro, Chromium goes direct over CDP.
  *
  * Vega (Fire TV) works because everything in this matrix needs only
- * `Runtime.evaluate`, which the legacy Hermes inspector in its RN 0.72 fork
- * serves — the network inspector included, since it monkey-patches `fetch`
- * rather than using the CDP `Network` domain. Requires a Debug `.vpkg` + Metro
- * reachable from the device; see the argent-tv-interact skill.
+ * `Runtime.evaluate`, `Runtime.callFunctionOn` and `Runtime.getProperties`,
+ * which the legacy Hermes inspector in its RN 0.72 fork serves — the network
+ * inspector included, since it monkey-patches `fetch` rather than using the
+ * CDP `Network` domain. That inspector acknowledges `Runtime.releaseObjectGroup`
+ * without doing anything, so what `debugger-evaluate` returns there stays alive
+ * until the debugger disconnects. Requires a Debug `.vpkg` + Metro reachable
+ * from the device; see the argent-tv-interact skill.
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true },

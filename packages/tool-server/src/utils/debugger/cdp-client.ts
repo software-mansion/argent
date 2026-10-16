@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError, TypedEventEmitter } from "@argent/registry";
+import { FAILURE_CODES, FailureError, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 import * as crypto from "node:crypto";
 
 export interface ScriptInfo {
@@ -113,6 +113,35 @@ interface PendingBinding {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+
+interface RemoteObjectLike {
+  type?: string;
+  subtype?: string;
+  className?: string;
+  objectId?: string;
+  value?: unknown;
+  description?: string;
+}
+
+interface RemoteResult {
+  result?: RemoteObjectLike;
+  exceptionDetails?: CDPExceptionDetails;
+}
+
+const REJECTION_REASON =
+  `function(){var e=this.e;` +
+  `try{if(e&&typeof e.stack==="string")return e.stack}catch(_){}` +
+  `try{var j=JSON.stringify(e);if(j!==undefined)return j}catch(_){}` +
+  `try{return String(e)}catch(_){return Object.prototype.toString.call(e)}}`;
+
+function runtimeException(details: CDPExceptionDetails): FailureError {
+  return new FailureError(formatExceptionDetails(details), {
+    error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
+    failure_stage: "debugger_cdp_evaluate",
+    failure_area: "tool_server",
+    error_kind: "unknown",
+  });
+}
 
 export class CDPClient {
   readonly events = new TypedEventEmitter<CDPClientEvents>();
@@ -384,16 +413,177 @@ export class CDPClient {
       exceptionDetails?: CDPExceptionDetails;
     };
 
-    if (result.exceptionDetails) {
-      throw new FailureError(formatExceptionDetails(result.exceptionDetails), {
-        error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
+    if (result.exceptionDetails) throw runtimeException(result.exceptionDetails);
+
+    return result.result?.value;
+  }
+
+  /**
+   * Evaluate and return the value, settling a Promise result first.
+   *
+   * Hermes ignores `awaitPromise` and answers with the Promise object itself,
+   * so it is never requested and every runtime takes the same path: the
+   * expression runs once without serializing; if the result has a `then`
+   * method, its settle callbacks write the outcome into a box object that is
+   * polled with `Runtime.getProperties`, which compiles no script. Every
+   * handle belongs to one object group, released when the call ends. The
+   * whole call shares one `timeout` budget.
+   */
+  async evaluateAwaited(expression: string, options?: { timeout?: number }): Promise<unknown> {
+    const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
+    const deadline = Date.now() + timeout;
+    const objectGroup = `argent-await-${crypto.randomUUID()}`;
+    let ran = false;
+    try {
+      const first = (await this.send(
+        "Runtime.evaluate",
+        { expression, objectGroup, returnByValue: false },
+        timeout
+      )) as RemoteResult;
+      ran = true;
+      if (first.exceptionDetails) throw runtimeException(first.exceptionDetails);
+      if (first.result?.type === "symbol") return first.result.description;
+      const objectId = first.result?.objectId;
+      if (!objectId) return first.result?.value;
+      return await this.settleRemote(objectId, objectGroup, deadline, timeout);
+    } catch (err) {
+      if (
+        ran &&
+        err instanceof Error &&
+        getFailureSignal(err)?.error_code === FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED
+      ) {
+        throw new FailureError(
+          "The connection closed after the expression ran, before its result was read.",
+          {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED,
+            failure_stage: "debugger_cdp_evaluate",
+            failure_area: "tool_server",
+            error_kind: "network",
+          },
+          { cause: err }
+        );
+      }
+      throw err;
+    } finally {
+      this.send("Runtime.releaseObjectGroup", { objectGroup }, 1000).catch(() => undefined);
+    }
+  }
+
+  private async settleRemote(
+    objectId: string,
+    objectGroup: string,
+    deadline: number,
+    timeout: number
+  ): Promise<unknown> {
+    const left = () => Math.max(1, deadline - Date.now());
+    const verdict = (
+      await this.callOn(
+        objectId,
+        objectGroup,
+        `function(){"use strict";try{if(!this||typeof this.then!=="function")` +
+          `return {v:typeof this==="symbol"?String(this):this}}catch(_){}return {pending:true}}`,
+        true,
+        left()
+      )
+    ).value as { v?: unknown; pending?: true } | undefined;
+    if (!verdict?.pending) return verdict?.v;
+
+    const box = (
+      await this.callOn(
+        objectId,
+        objectGroup,
+        `function(){var b={s:0};function no(e){b.e=e;b.s=2}` +
+          `try{Promise.resolve(this).then(function(v){b.v=v;b.s=1},no)}catch(e){no(e)}return b}`,
+        false,
+        left()
+      )
+    ).objectId;
+    if (!box) {
+      throw new FailureError("The runtime returned no handle to wait on the Promise with.", {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
         failure_stage: "debugger_cdp_evaluate",
         failure_area: "tool_server",
         error_kind: "unknown",
       });
     }
 
-    return result.result?.value;
+    for (;;) {
+      if (this.paused) throw this.pausedError("the Promise's callbacks");
+      let props: { result?: { name: string; value?: RemoteObjectLike }[] };
+      try {
+        props = (await this.send(
+          "Runtime.getProperties",
+          { objectId: box, ownProperties: true },
+          left()
+        )) as typeof props;
+      } catch (err) {
+        if (
+          !(err instanceof Error) ||
+          getFailureSignal(err)?.error_code !== FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR
+        ) {
+          throw err;
+        }
+        throw new FailureError(
+          "Lost the Promise while waiting for it: the JS context was reloaded or replaced.",
+          {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
+            failure_stage: "debugger_cdp_evaluate",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          },
+          { cause: err }
+        );
+      }
+      const state = props.result?.find((p) => p.name === "s")?.value?.value;
+      if (state === 1) {
+        return (
+          await this.callOn(
+            box,
+            objectGroup,
+            `function(){var v=this.v;return typeof v==="symbol"?String(v):v}`,
+            true,
+            left()
+          )
+        ).value;
+      }
+      if (state === 2) {
+        const reason = (await this.callOn(box, objectGroup, REJECTION_REASON, true, left())).value;
+        throw new FailureError(`Promise rejected: ${String(reason)}`, {
+          error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
+          failure_stage: "debugger_cdp_evaluate",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        });
+      }
+      if (Date.now() >= deadline) {
+        throw new FailureError(
+          `The expression returned a Promise that did not settle within ${timeout}ms.`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+            failure_stage: "debugger_cdp_evaluate",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          }
+        );
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  private async callOn(
+    objectId: string,
+    objectGroup: string,
+    functionDeclaration: string,
+    returnByValue: boolean,
+    timeout: number
+  ): Promise<RemoteObjectLike> {
+    const res = (await this.send(
+      "Runtime.callFunctionOn",
+      { objectId, objectGroup, functionDeclaration, returnByValue },
+      timeout
+    )) as RemoteResult;
+    if (res.exceptionDetails) throw runtimeException(res.exceptionDetails);
+    return res.result ?? {};
   }
 
   async addBinding(name: string): Promise<void> {
