@@ -37,9 +37,9 @@ If argent is ABSENT, treat it as an expected state, not an error to retry. Do no
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from screenshot pixels</important>
-Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree: the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
+Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, `await-ui-element`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree: the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
 
-Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
+Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load without `await-ui-element`, or when the last tree did not list your target. Preferred tools are, in order:
 
 - `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
