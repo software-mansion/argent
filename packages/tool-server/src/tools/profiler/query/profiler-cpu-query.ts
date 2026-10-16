@@ -7,6 +7,7 @@ import {
 } from "../../../blueprints/react-profiler-session";
 import {
   buildCpuSampleIndex,
+  buildChildToParent,
   queryCpuWindow,
   deserializeCpuSampleIndex,
   isArgentProfilerFunction,
@@ -323,7 +324,7 @@ function renderCallTree(
   return lines.join("\n");
 }
 
-function renderComponentCpu(
+export function renderComponentCpu(
   index: CpuSampleIndex,
   commitTree: {
     commits: {
@@ -377,20 +378,50 @@ function renderComponentCpu(
     { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
   >();
 
+  const childToParent = index.childToParent ?? buildChildToParent(index.nodeMap);
+
   for (const window of commitWindows.values()) {
     const { hotspots } = queryCpuWindow(index, window.start, window.end, 50);
+    // Rows are per call-tree node. Self time adds; inclusive time sums only
+    // the outermost of a name's nodes (`members`), since recursion nests them.
+    const perWindow = new Map<
+      string,
+      {
+        selfMs: number;
+        totalMs: number;
+        members: { nodeId: number; totalMs: number }[];
+        url?: string;
+        lineNumber?: number;
+      }
+    >();
     for (const hs of hotspots) {
-      const existing = aggregated.get(hs.name);
-      if (existing) {
-        existing.selfMs += hs.selfMs;
-        existing.totalMs += hs.totalMs;
+      const seen = perWindow.get(hs.name);
+      if (seen) {
+        seen.selfMs += hs.selfMs;
+        if (!seen.members.some((m) => isAncestor(m.nodeId, hs.nodeId, childToParent))) {
+          seen.members = seen.members.filter(
+            (m) => !isAncestor(hs.nodeId, m.nodeId, childToParent)
+          );
+          seen.members.push({ nodeId: hs.nodeId, totalMs: hs.totalMs });
+          seen.totalMs = seen.members.reduce((sum, m) => sum + m.totalMs, 0);
+        }
       } else {
-        aggregated.set(hs.name, {
+        perWindow.set(hs.name, {
           selfMs: hs.selfMs,
           totalMs: hs.totalMs,
+          members: [{ nodeId: hs.nodeId, totalMs: hs.totalMs }],
           url: hs.url,
           lineNumber: hs.lineNumber,
         });
+      }
+    }
+    for (const [name, win] of perWindow) {
+      const existing = aggregated.get(name);
+      if (existing) {
+        existing.selfMs += win.selfMs;
+        existing.totalMs += win.totalMs;
+      } else {
+        aggregated.set(name, { ...win });
       }
     }
   }
@@ -426,6 +457,18 @@ function renderComponentCpu(
 function shortenUrl(url: string): string {
   const parts = url.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
+}
+
+function isAncestor(ancestor: number, nodeId: number, childToParent: Map<number, number>): boolean {
+  const seen = new Set<number>([nodeId]);
+  let current = nodeId;
+  while (childToParent.has(current)) {
+    current = childToParent.get(current)!;
+    if (current === ancestor) return true;
+    if (seen.has(current)) return false;
+    seen.add(current);
+  }
+  return false;
 }
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {

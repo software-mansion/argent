@@ -10,7 +10,7 @@ export type ReRenderReason =
 export interface HotCommitComponentEntry {
   name: string;
   selfDurationMs: number; // total across all instances in this commit
-  // Inclusive: self + subtree. Never sum across siblings — parents already count children.
+  // Inclusive: self + subtree, of the largest instance. Never sum: instances and rows nest.
   actualDurationMs: number;
   count: number; // fiber instances with this name (>1 = list items)
   isFirstMount?: boolean; // only when every instance in the group was a mount
@@ -24,6 +24,7 @@ export interface CpuCommitHotspot {
   name: string;
   selfMs: number;
   totalMs: number;
+  nodeId: number;
   url?: string;
   lineNumber?: number;
 }

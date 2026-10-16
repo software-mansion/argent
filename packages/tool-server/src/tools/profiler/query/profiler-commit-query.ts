@@ -105,7 +105,7 @@ function formatReason(commit: DevToolsFiberCommit): string {
   return parts.join(" ");
 }
 
-function renderByComponent(
+export function renderByComponent(
   commits: DevToolsFiberCommit[],
   componentName: string,
   topN: number
@@ -143,13 +143,15 @@ function renderByComponent(
     .map(([idx, entries]) => ({
       commitIndex: idx,
       instances: entries.length,
-      totalDuration: entries.reduce((s, e) => s + e.actualDuration, 0),
+      // Same-named instances nest, so inclusive durations can't be summed.
+      maxSubtree: entries.reduce((m, e) => Math.max(m, e.actualDuration), 0),
+      totalSelf: entries.reduce((s, e) => s + e.selfDuration, 0),
       commitDuration: entries[0]!.commitDuration,
       timestamp: entries[0]!.timestamp,
       reason: formatReason(entries[0]!),
       parentName: entries[0]!.parentName ?? "—",
     }))
-    .sort((a, b) => b.totalDuration - a.totalDuration)
+    .sort((a, b) => b.totalSelf - a.totalSelf)
     .slice(0, topN);
 
   const lines: string[] = [
@@ -158,13 +160,13 @@ function renderByComponent(
     ...(resolutionNote ? [resolutionNote, ""] : []),
     `**Total occurrences:** ${matching.length} across ${byCommit.size} commits`,
     "",
-    "| Commit | Instances | Duration (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",
-    "|---|---|---|---|---|---|---|",
+    "| Commit | Instances | Self (ms) | Largest subtree (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",
+    "|---|---|---|---|---|---|---|---|",
   ];
 
   for (const c of sortedCommits) {
     lines.push(
-      `| #${c.commitIndex} | ${c.instances} | ${c.totalDuration.toFixed(1)} | ${c.commitDuration.toFixed(1)} | ${c.timestamp.toFixed(0)} | ${c.reason} | \`${c.parentName}\` |`
+      `| #${c.commitIndex} | ${c.instances} | ${c.totalSelf.toFixed(1)} | ${c.maxSubtree.toFixed(1)} | ${c.commitDuration.toFixed(1)} | ${c.timestamp.toFixed(0)} | ${c.reason} | \`${c.parentName}\` |`
     );
   }
 
@@ -218,7 +220,7 @@ function renderByTimeRange(
     lines.push("");
     for (const comp of s.topComponents) {
       lines.push(
-        `- \`${comp.name}\` ×${comp.count} ${comp.totalDuration.toFixed(1)}ms — ${comp.reason}`
+        `- \`${comp.name}\` ×${comp.count} self ${comp.totalSelf.toFixed(1)}ms, largest subtree ${comp.maxSubtree.toFixed(1)}ms — ${comp.reason}`
       );
     }
     lines.push("");
@@ -346,31 +348,38 @@ function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number):
   return lines.join("\n");
 }
 
-function getTopComponents(
+export function getTopComponents(
   entries: DevToolsFiberCommit[],
   topN: number
-): { name: string; count: number; totalDuration: number; reason: string }[] {
+): { name: string; count: number; totalSelf: number; maxSubtree: number; reason: string }[] {
   const byName = new Map<
     string,
-    { count: number; totalDuration: number; first: DevToolsFiberCommit }
+    { count: number; totalSelf: number; maxSubtree: number; first: DevToolsFiberCommit }
   >();
   for (const e of entries) {
     const existing = byName.get(e.componentName);
     if (existing) {
       existing.count++;
-      existing.totalDuration += e.actualDuration;
+      existing.totalSelf += e.selfDuration;
+      existing.maxSubtree = Math.max(existing.maxSubtree, e.actualDuration);
     } else {
-      byName.set(e.componentName, { count: 1, totalDuration: e.actualDuration, first: e });
+      byName.set(e.componentName, {
+        count: 1,
+        totalSelf: e.selfDuration,
+        maxSubtree: e.actualDuration,
+        first: e,
+      });
     }
   }
 
   return [...byName.entries()]
-    .sort((a, b) => b[1].totalDuration - a[1].totalDuration)
+    .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
     .slice(0, topN)
-    .map(([name, { count, totalDuration, first }]) => ({
+    .map(([name, { count, totalSelf, maxSubtree, first }]) => ({
       name,
       count,
-      totalDuration,
+      totalSelf,
+      maxSubtree,
       reason: formatReason(first),
     }));
 }
