@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
+import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { isExternalDeviceUrn } from "../../utils/external-devices";
 import {
   DEVICE_OWNED_NAMESPACES,
@@ -111,14 +112,7 @@ Returns { stopped } - the URNs of the services that were actually live and got s
           // reported stopped.
           const wasLive = isLiveServiceState(entry.state);
           await registry.disposeService(urn);
-          /**
-           * A device from an external provider is disposed (dropping our
-           * cached handle) but never reported as stopped. Its `dispose()` is a
-           * no-op by design, so nothing was actually shut down and claiming
-           * otherwise would tell the agent it had cleaned up a server it does
-           * not own.
-           */
-          if (wasLive && !isExternalDeviceUrn(urn)) stopped.push(urn);
+          if (wasLive && !isBorrowedSimulatorServerUrn(urn)) stopped.push(urn);
         } else if (
           scoped &&
           isLiveServiceState(entry.state) &&
@@ -157,4 +151,16 @@ Returns { stopped } - the URNs of the services that were actually live and got s
       return result;
     },
   };
+}
+
+/**
+ * The simulator-server of a device from an external provider is borrowed: it is
+ * disposed (dropping our cached handle) but never reported as stopped. Its
+ * `dispose()` is a no-op by design, so nothing was actually shut down and
+ * claiming otherwise would tell the agent it had cleaned up a server it does
+ * not own. Every other service of that device (AXService, NativeDevtools, ...)
+ * is Argent's own and really is shut down, so it is reported like any other.
+ */
+function isBorrowedSimulatorServerUrn(urn: string): boolean {
+  return urn.startsWith(`${SIMULATOR_SERVER_NAMESPACE}:`) && isExternalDeviceUrn(urn);
 }

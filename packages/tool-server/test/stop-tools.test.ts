@@ -807,6 +807,31 @@ describe("stop-all-simulator-servers device scoping", () => {
     expect(result).toEqual({ stopped: [`NativeDevtools:${MINE}`] });
     expect(registry.disposeService).toHaveBeenCalledOnce();
   });
+
+  it("lists an external device's own services as stopped but not its borrowed simulator-server", async () => {
+    // An `ext:` device's simulator-server belongs to its provider: Argent only
+    // borrows it and its `dispose()` is a no-op, so claiming it stopped would
+    // be false. The AX daemon and devtools client are Argent's own and really
+    // are shut down, so they must be reported like any other device's.
+    const ext = "ext:acme-abc123:39EEA8E5-94DF-4EED-BE6E-586E4BA9AEC8";
+
+    const services = new Map([
+      [`SimulatorServer:${ext}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`AXService:${ext}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`NativeDevtools:${ext}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`AXService:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+    const result = await tool.execute!({}, { devices: [ext] });
+
+    expect(result).toEqual({ stopped: [`AXService:${ext}`, `NativeDevtools:${ext}`] });
+    // The borrowed server is still disposed, which drops Argent's cached
+    // handle.
+    expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${ext}`);
+    expect(registry.disposeService).not.toHaveBeenCalledWith(`AXService:${THEIRS}`);
+  });
 });
 
 describe("stop-all-simulator-servers unmatched ids", () => {
