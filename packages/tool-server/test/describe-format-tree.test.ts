@@ -603,3 +603,78 @@ describe("formatDescribeTree", () => {
     expect(out).toMatch(/Button\s+"Like"/);
   });
 });
+
+describe("formatDescribeTree — overlapping elements", () => {
+  const node = (role: string, label: string, x: number, y: number, w: number, h: number) => ({
+    role,
+    label,
+    frame: { x, y, width: w, height: h },
+    children: [],
+  });
+  // A long list: the "Add Player" row slid under the sticky "Continue" footer.
+  const root = {
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      node("AXGroup", "Add Player", 0.055, 0.845, 0.891, 0.09),
+      node("AXButton", "Continue", 0.055, 0.86, 0.891, 0.088),
+      node("AXStaticText", "Add Players", 0.299, 0.075, 0.402, 0.055),
+      node("AXButton", "Options", 0.871, 0.086, 0.075, 0.034),
+    ],
+  };
+  const lineOf = (out: string, label: string) =>
+    out.split("\n").find((l) => new RegExp(`^\\s+\\w+ "${label}"`).test(l))!;
+
+  it("marks both elements of a partial overlap", () => {
+    const out = formatDescribeTree(root as any, { source: "ax-service" });
+    expect(lineOf(out, "Add Player")).toContain(
+      `overlaps "Continue": one covers the other — scroll to separate them before tapping`
+    );
+    expect(lineOf(out, "Continue")).toContain(`overlaps "Add Player"`);
+  });
+
+  it("leaves separate elements alone", () => {
+    const out = formatDescribeTree(root as any, { source: "ax-service" });
+    expect(lineOf(out, "Add Players")).not.toContain("overlaps");
+    expect(lineOf(out, "Options")).not.toContain("overlaps");
+  });
+
+  it("ignores two overlapping labels", () => {
+    const labels = {
+      ...root,
+      children: [
+        node("AXStaticText", "Title", 0.1, 0.1, 0.5, 0.05),
+        node("AXStaticText", "Subtitle", 0.1, 0.13, 0.5, 0.05),
+      ],
+    };
+    expect(formatDescribeTree(labels as any, { source: "ax-service" })).not.toContain("overlaps");
+  });
+
+  it("ignores an element nested inside another (text inside a button)", () => {
+    const nested = {
+      ...root,
+      children: [
+        node("AXButton", "Buy", 0.1, 0.5, 0.8, 0.1),
+        node("AXStaticText", "Buy now", 0.2, 0.52, 0.3, 0.05),
+      ],
+    };
+    expect(formatDescribeTree(nested as any, { source: "ax-service" })).not.toContain("overlaps");
+  });
+});
+
+describe("formatDescribeTree — overlap notes are iOS-flat only", () => {
+  it("adds no overlap notes to a nested Android tree", () => {
+    const leaf = (label: string, x: number, y: number) => ({
+      role: "Button",
+      label,
+      frame: { x, y, width: 0.8, height: 0.09 },
+      children: [],
+    });
+    const root = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [leaf("Add Player", 0.055, 0.845), leaf("Continue", 0.055, 0.86)],
+    };
+    expect(formatDescribeTree(root as any, { source: "uiautomator" })).not.toContain("overlaps");
+  });
+});
