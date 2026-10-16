@@ -62,6 +62,8 @@ Over a link, the MCP server uploads files with the same rules as the `argent` CL
 - `flow-execute` also uploads the `run:` fragments and the nested flows that the flow reaches, its snapshot baselines and the file arguments of its `tool:` steps. A fragment larger than 32 MiB stops the flow before the first step. See [Remote runs](/docs/reference/flow-yaml#remote-runs).
 - Other path parameters reach the tool-server as a path only, for example the `workspacePath` of `gather-workspace-data`.
 
+The MCP server resolves a relative path in some arguments, for example `appPath` of `reinstall-app`, against the directory where the editor starts it. See [Relative paths](/docs/reference/tools#relative-paths).
+
 Run `argent server status` to see the state of the local tool-server. Run `argent server logs` to read its output.
 
 ## Configure the MCP server
