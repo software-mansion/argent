@@ -132,6 +132,14 @@ const flowAddStepSchema: JsonSchema = {
     project_root: { type: "string" },
     command: { type: "string" },
     args: { type: "string" },
+    selector: {
+      type: "object",
+      properties: {
+        text: { type: "string" },
+        identifier: { type: "string" },
+        role: { type: "string" },
+      },
+    },
     delayMs: { type: "integer" },
   },
   required: ["name", "project_root", "command"],

@@ -63,6 +63,14 @@ function startServer(cap: Captured): Promise<{ url: string; close: () => Promise
                   project_root: { type: "string" },
                   command: { type: "string" },
                   args: { type: "string" },
+                  selector: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      identifier: { type: "string" },
+                      role: { type: "string" },
+                    },
+                  },
                   delayMs: { type: "integer", minimum: 0, maximum: 9007199254740991 },
                 },
                 required: ["name", "project_root", "command"],
