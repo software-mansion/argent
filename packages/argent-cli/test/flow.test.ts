@@ -1238,6 +1238,47 @@ describe("argent flow run", () => {
     expect(logs.join("\n")).toBe(".argent/flows/linked.yaml");
   });
 
+  it("reports a missing flows directory on stdout, without failing", async () => {
+    const listRoot = path.join(tempRoot, "list-absent-project");
+    await fsp.mkdir(listRoot, { recursive: true });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe("No .argent/flows directory in the current working directory.");
+    expect(errs).toEqual([]);
+  });
+
+  it.skipIf(!canDenyRead)(
+    "fails an unreadable flows directory instead of calling it absent",
+    async () => {
+      const listRoot = path.join(tempRoot, "list-unreadable-project");
+      const flowsDir = path.join(listRoot, ".argent", "flows");
+      await fsp.mkdir(flowsDir, { recursive: true });
+      await fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n");
+      await fsp.chmod(flowsDir, 0o000);
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(listRoot);
+        await expect(flow(["list"], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        process.chdir(previousCwd);
+        // Restore before afterAll's rm walks the tree (see there).
+        await fsp.chmod(flowsDir, 0o700);
+      }
+
+      const runRoot = await fsp.realpath(listRoot);
+      expect(errs).toEqual([
+        `Could not read flow directory: ${path.join(runRoot, ".argent", "flows")}`,
+      ]);
+      expect(logs).toEqual([]);
+    }
+  );
+
   it("prints the no-flows message when no entry in the directory is runnable", async () => {
     const listRoot = path.join(tempRoot, "list-empty-project");
     const flowsDir = path.join(listRoot, ".argent", "flows");
