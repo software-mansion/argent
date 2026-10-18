@@ -36,6 +36,7 @@ import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../utils/simctl-config";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
 import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
 import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
@@ -440,7 +441,10 @@ async function bootIos(
 
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
   if (force && simState === "Booted") {
-    await execFileAsync("xcrun", [...prefix, "shutdown", udid]);
+    await execFileAsync("xcrun", [...prefix, "shutdown", udid], {
+      timeout: 30_000,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    });
   }
 
   const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
@@ -454,13 +458,19 @@ async function bootIos(
     });
   }
 
-  await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
+  await execFileAsync("xcrun", [...prefix, "boot", udid], {
+    timeout: 120_000,
+    killSignal: SIMCTL_KILL_SIGNAL,
+  }).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"]);
+  await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"], {
+    timeout: 480_000,
+    killSignal: SIMCTL_KILL_SIGNAL,
+  });
 
   // tvOS only: a boot transition orphans the host-side tvos-hid-daemon, which
   // holds a SimDeviceLegacyClient bound to the previous boot for its whole
@@ -1335,6 +1345,8 @@ export function createBootDeviceTool(
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
+    // Boots routinely run past the 30s MCP fetch timeout.
+    longRunning: true,
     interaction: {
       startedMsg: ({ params }) => `Starting ${bootTarget(params)}`,
       completedMsg: ({ params }) => `Started ${bootTarget(params)}`,

@@ -144,6 +144,8 @@ function makeDescribeExecute(
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
     id: "describe",
+    // ~50s worst case on Android, past the 30s MCP fetch timeout.
+    longRunning: true,
     interaction: {
       startedMsg: () => "Reading screen",
       completedMsg: () => "Read screen",

@@ -433,6 +433,28 @@ describe("boot-device — iOS path", () => {
     );
   });
 
+  it("SIGKILL-bounds every simctl call, since longRunning lifts the client timeout", async () => {
+    const registry = {
+      resolveService: vi.fn(async () => ({
+        getInitFailure: () => null,
+        reverifyEnv: async () => {},
+      })),
+    } as unknown as Registry;
+
+    await createBootDeviceTool(registry).execute!(
+      {},
+      { udid: "22222222-2222-2222-2222-222222222222", force: true }
+    );
+
+    const simctl = mockExecFile.mock.calls.filter(
+      ([file, args]) => file === "xcrun" && args[0] === "simctl"
+    );
+    expect(simctl.map(([, args]) => args[1])).toEqual(["shutdown", "boot", "bootstatus"]);
+    for (const [, , options] of simctl) {
+      expect(options).toMatchObject({ killSignal: "SIGKILL", timeout: expect.any(Number) });
+    }
+  });
+
   it("force=true on a Booted sim triggers shutdown → pre-boot write → boot", async () => {
     const resolveService = vi.fn(async () => ({
       getInitFailure: () => null,

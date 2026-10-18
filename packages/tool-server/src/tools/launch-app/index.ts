@@ -63,6 +63,8 @@ const capability: ToolCapability = {
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
+    // ~40s worst case on Android, past the 30s MCP fetch timeout.
+    longRunning: true,
     interaction: {
       startedMsg: ({ params }) => `Launching ${params.bundleId}`,
       completedMsg: ({ params }) => `Launched ${params.bundleId}`,
