@@ -7,6 +7,7 @@ import {
   makeNetworkLogReadScript,
   makeNetworkDetailReadScript,
 } from "../../src/utils/debugger/scripts/network-interceptor";
+import { PREVIOUS_NETWORK_INTERCEPTOR_SCRIPT } from "./previous-network-interceptor";
 
 // React Native's global fetch is this build: react-native/Libraries/Network/fetch.js requires it.
 const WHATWG_FETCH = readFileSync(require.resolve("whatwg-fetch/dist/fetch.umd.js"), "utf8");
@@ -1798,6 +1799,38 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
 
   // Each wrapper replaced the global fetch at startup, before the install: the global fetch the
   // interceptor finds is the app's.
+  describe("over the previous fetch-only interceptor", () => {
+    // A tool-server upgrade without a reload of the app: the previous script wrapped fetch first.
+    it("empties the previous script's buffers and keeps them empty", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.run(PREVIOUS_NETWORK_INTERCEPTOR_SCRIPT);
+      const oldLog = rt.run("__argent_network_log") as unknown[];
+      const oldById = rt.run("__argent_network_by_id") as Record<string, unknown>;
+      for (let i = 0; i < 3; i++) {
+        const pending = rt.run(
+          `fetch('https://api.test/x').then(function(r) { return r.text(); })`
+        ) as Promise<unknown>;
+        rt.last().respond(200, {}, "hello");
+        await pending;
+        await settle();
+      }
+      expect(oldLog.length).toBe(3);
+      rt.install();
+      expect(oldLog.length).toBe(0);
+
+      const pending = rt.run(
+        `fetch('https://api.test/x').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      rt.last().respond(200, {}, "hello");
+      await pending;
+      await settle();
+      expect(oldLog.length).toBe(0);
+      expect(Object.keys(oldById)).toHaveLength(0);
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "hello" });
+    });
+  });
+
   describe("app wrappers over React Native's fetch", () => {
     it.each([
       {

@@ -20,6 +20,19 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var g = globalThis;
   if (g.__argent_network_v2) return JSON.stringify({ installed: false, reason: 'already installed' });
   g.__argent_network_v2 = true;
+  // The previous fetch-only script, injected by an older tool-server before an upgrade, stays
+  // installed until the app reloads. Its fetch wrapper keeps the buffers below in a closure, so
+  // empty them and stop them from growing: it then still reads each response, but keeps nothing.
+  if (g.__argent_network_installed && Array.isArray(g.__argent_network_log)) {
+    var oldLog = g.__argent_network_log;
+    oldLog.length = 0;
+    oldLog.push = function() { return 0; };
+    var oldById = g.__argent_network_by_id;
+    if (oldById && typeof oldById === 'object') {
+      for (var oldKey in oldById) delete oldById[oldKey];
+      Object.freeze(oldById);
+    }
+  }
   // The previous fetch-only script checks this flag; setting it stops an older tool-server
   // from replacing the buffer below with its own.
   g.__argent_network_installed = true;
