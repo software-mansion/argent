@@ -49,9 +49,11 @@ First the agent reads the list of records in the network log. Each line shows on
 {id: rn-net-4} "GET /v1/users" 200 OK Fetch 12.4 kB 143 ms
 ```
 
+In the JS runtime layer, a request that a redirect sent to a different URL ends with that URL, for example `→ /v2/users`.
+
 Then the agent reads the details of one record. The details contain these items:
 
-- The URL, the method and the status
+- The URL, the method and the status. In the JS runtime layer, `redirectedTo` gives the final URL after a redirect.
 - The headers of the request and of the response
 - The duration and the size
 - The bodies of the request and of the response

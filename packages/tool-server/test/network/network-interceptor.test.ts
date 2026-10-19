@@ -4178,6 +4178,27 @@ describe("makeNetworkLogReadScript", () => {
     expect(script).not.toContain("responseBody: s.responseBody");
   });
 
+  it("lists the final URL of a redirected request", async () => {
+    const rt = createRuntime();
+    rt.install();
+    rt.run(`
+      var x = new XMLHttpRequest();
+      x.open('GET', 'https://api.test/old');
+      x.onloadend = function() {};
+      x.send();
+    `);
+    rt.last().respond(200, { "content-type": "text/plain" }, "ok", "https://api.test/new");
+    await settle();
+
+    const { entries } = JSON.parse(rt.run(makeNetworkLogReadScript(0, 50, 8081)) as string) as {
+      entries: Array<{ request: { url: string }; response: { url: string } }>;
+    };
+    expect(entries[0]).toMatchObject({
+      request: { url: "https://api.test/old" },
+      response: { url: "https://api.test/new" },
+    });
+  });
+
   it("is a valid IIFE", () => {
     const script = makeNetworkLogReadScript(0, 50, 8081);
     expect(script.trim()).toMatch(/^\(function\(\)/);

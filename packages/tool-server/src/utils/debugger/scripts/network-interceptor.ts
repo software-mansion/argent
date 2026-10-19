@@ -881,7 +881,7 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
       requestId: s.requestId,
       state: s.state,
       request: s.request ? { url: s.request.url, method: s.request.method } : undefined,
-      response: s.response ? { status: s.response.status, statusText: s.response.statusText, mimeType: s.response.mimeType } : undefined,
+      response: s.response ? { url: s.response.url, status: s.response.status, statusText: s.response.statusText, mimeType: s.response.mimeType } : undefined,
       resourceType: s.resourceType,
       encodedDataLength: s.encodedDataLength,
       timestamp: s.timestamp,

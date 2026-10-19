@@ -33,7 +33,8 @@ interface LogEntry {
   requestId: string;
   state: string;
   request?: { url: string; method: string };
-  response?: { status: number; statusText: string; mimeType: string };
+  /** `url` is the final URL, after redirects. */
+  response?: { url?: string; status: number; statusText: string; mimeType: string };
   resourceType?: string;
   encodedDataLength?: number;
   timestamp?: number;
@@ -41,17 +42,40 @@ interface LogEntry {
   errorText?: string;
 }
 
+/** Whether a response's final URL is another than the request URL, not the same one written differently. */
+export function isRedirect(requestUrl: string | undefined, finalUrl: string | undefined): boolean {
+  if (!finalUrl || requestUrl === undefined || finalUrl === requestUrl) return false;
+  try {
+    return new URL(finalUrl).href !== new URL(requestUrl).href;
+  } catch {
+    return true;
+  }
+}
+
+// The path of a URL, or its host for the root. With `from`, the host too when it differs from that one's.
+function shortName(url: string, from?: string): string {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname === "/" ? "" : parsed.pathname;
+    let sameHost = true;
+    try {
+      sameHost = from === undefined || new URL(from).host === parsed.host;
+    } catch {
+      sameHost = false;
+    }
+    if (sameHost) return path || parsed.hostname;
+    return parsed.host + path;
+  } catch {
+    return url;
+  }
+}
+
 function formatEntry(entry: LogEntry): string {
   const method = entry.request?.method ?? "???";
   const url = entry.request?.url ?? "unknown";
-
-  let name: string;
-  try {
-    const parsed = new URL(url);
-    name = parsed.pathname === "/" ? parsed.hostname : parsed.pathname;
-  } catch {
-    name = url;
-  }
+  const name = shortName(url);
+  const finalUrl = entry.response?.url;
+  const redirect = finalUrl && isRedirect(url, finalUrl) ? `→ ${shortName(finalUrl, url)}` : "";
 
   let status: string;
   if (entry.state === "failed") {
@@ -67,7 +91,9 @@ function formatEntry(entry: LogEntry): string {
   const size = entry.encodedDataLength != null ? formatBytes(entry.encodedDataLength) : "";
   const duration = entry.durationMs != null ? `${entry.durationMs} ms` : "";
 
-  return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();
+  return [`{id: ${entry.requestId}}`, `"${method} ${name}"`, status, type, size, duration, redirect]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {

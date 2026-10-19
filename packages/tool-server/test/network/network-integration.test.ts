@@ -259,6 +259,7 @@ function handleLogReadScript(ws: WebSocket, id: number, expr: string) {
     request: { url: e.request.url, method: e.request.method },
     response: e.response
       ? {
+          url: e.response.url,
           status: e.response.status,
           statusText: e.response.statusText,
           mimeType: e.response.mimeType,
@@ -607,6 +608,69 @@ describe("NetworkInspector integration (mock server)", () => {
       networkLog.splice(
         networkLog.findIndex((e) => e.requestId === "rn-net-dropped"),
         1
+      );
+    }
+  });
+
+  it("shows the final URL of a redirected request", async () => {
+    const redirected = (requestId: string, url: string, finalUrl: string) => ({
+      id: networkLog.length,
+      requestId,
+      state: "finished",
+      request: { url, method: "GET", headers: {} },
+      response: {
+        url: finalUrl,
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "text/plain",
+      },
+      resourceType: "XHR",
+      timestamp: Date.now() / 1000,
+      durationMs: 5,
+    });
+    networkLog.push(
+      redirected("rn-net-moved", "https://api.example.com/old", "https://api.example.com/new"),
+      redirected("rn-net-cdn", "https://api.example.com/file", "https://cdn.example.com/f/1"),
+      // The same URL written differently is no redirect.
+      redirected("rn-net-same", "https://api.example.com", "https://api.example.com/")
+    );
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+      expect(result).toContain('{id: rn-net-moved} "GET /old" 200 OK XHR 5 ms → /new');
+      expect(result).toContain(
+        '{id: rn-net-cdn} "GET /file" 200 OK XHR 5 ms → cdn.example.com/f/1'
+      );
+      expect(result).toMatch(/\{id: rn-net-same\} "GET api\.example\.com" 200 OK XHR 5 ms$/m);
+
+      const details = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-moved",
+      })) as { request: { url: string }; response: { redirectedTo?: string } };
+      expect(details.request.url).toBe("https://api.example.com/old");
+      expect(details.response.redirectedTo).toBe("https://api.example.com/new");
+
+      const same = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-same",
+      })) as { response: Record<string, unknown> };
+      expect(same.response).not.toHaveProperty("redirectedTo");
+
+      const plain = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-1",
+      })) as { response: Record<string, unknown> };
+      expect(plain.response).not.toHaveProperty("redirectedTo");
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "rn-net-moved"),
+        3
       );
     }
   });
