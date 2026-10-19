@@ -65,6 +65,7 @@ const networkLog: Array<{
   durationMs?: number;
   responseBody?: string;
   bodyTruncated?: boolean;
+  bodyLength?: number;
 }> = [];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
@@ -758,6 +759,51 @@ describe("NetworkInspector integration (mock server)", () => {
       if (idx >= 0) networkLog.splice(idx, 1);
     }
   });
+
+  it.each([
+    {
+      requestId: "rn-net-cut-text",
+      mimeType: "text/plain",
+      fields: { responseBody: "x".repeat(1_048_576), bodyTruncated: true, bodyLength: 9_000_000 },
+      says: "the full length of a cut text body",
+      message: "original size: 9000000 chars",
+    },
+  ])(
+    "view-network-request-details gives $says",
+    async ({ requestId, mimeType, fields, message }) => {
+      networkLog.push({
+        id: networkLog.length,
+        requestId,
+        state: "finished" as const,
+        request: { url: "https://api.example.com/x", method: "GET", headers: {} },
+        response: {
+          url: "https://api.example.com/x",
+          status: 200,
+          statusText: "OK",
+          headers: {},
+          mimeType,
+        },
+        resourceType: "XHR",
+        timestamp: Date.now() / 1000,
+        durationMs: 100,
+        ...fields,
+      });
+
+      try {
+        const result = (await registry.invokeTool("view-network-request-details", {
+          port: mockPort,
+          device_id: "mock-device",
+          requestId,
+          includeBody: true,
+        })) as Record<string, unknown>;
+
+        expect((result.response as Record<string, unknown>).body).toContain(message);
+      } finally {
+        const idx = networkLog.findIndex((e) => e.requestId === requestId);
+        if (idx >= 0) networkLog.splice(idx, 1);
+      }
+    }
+  );
 
   it.each([
     {

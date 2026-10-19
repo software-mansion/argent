@@ -101,6 +101,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return n;
   }
 
+  // The UTF-8 size of a text body the interceptor keeps whole. A longer body is cut, and its size
+  // is recorded in characters (bodyLength) instead: counting its bytes would take the app's JS
+  // thread a time that grows with the body.
+  function textSize(text) {
+    return text.length > BODY_CAP ? undefined : utf8Length(text);
+  }
+
   function mimeTypeOf(headers) {
     return hasOwn.call(headers, 'content-type') ? String(headers['content-type']).split(';')[0].trim() : '';
   }
@@ -244,7 +251,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       e.bodyBytes = body;
       if (byId[e.requestId] === e) { bufferedChars += body.byteLength; evict(); }
     } else if (typeof body === 'string') {
-      if (body.length > BODY_CAP) { body = body.slice(0, BODY_CAP); truncated = true; }
+      if (body.length > BODY_CAP) { e.bodyLength = body.length; body = body.slice(0, BODY_CAP); truncated = true; }
       e.responseBody = body;
       if (truncated) e.bodyTruncated = true;
       if (byId[e.requestId] === e) { bufferedChars += body.length; evict(); }
@@ -317,8 +324,11 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var type = xhr.responseType || '';
       if (type === '' || type === 'text') {
         var text = xhr.responseText;
-        if (typeof text === 'string') return complete(rec, text, utf8Length(text), false);
+        if (typeof text === 'string') return complete(rec, text, textSize(text), false);
       } else if (type === 'json') {
+        // React Native keeps the text it received, which spares a serialization of the whole object.
+        var raw = xhr._response;
+        if (typeof raw === 'string') return complete(rec, raw, textSize(raw), false);
         var json = xhr.response == null ? undefined : JSON.stringify(xhr.response);
         // Re-serialized, so its length is not the size received: record no size.
         if (typeof json === 'string') return complete(rec, json, undefined, false);
@@ -579,7 +589,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       bodyEnded();
     }, track);
     tapMethod(response, 'text', function(text) {
-      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, utf8Length(text), false);
+      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, textSize(text), false);
       bodyEnded();
     }, track);
     started.then(function() {
@@ -885,7 +895,8 @@ export function makeNetworkDetailReadScript(requestId: string): string {
     durationMs: entry.durationMs,
     errorText: entry.errorText,
     responseBody: entry.responseBody,
-    bodyTruncated: entry.bodyTruncated
+    bodyTruncated: entry.bodyTruncated,
+    bodyLength: entry.bodyLength
   });
 })()`;
 }
