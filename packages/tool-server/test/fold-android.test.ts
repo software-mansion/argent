@@ -49,7 +49,10 @@ interface FakeEmulator {
   dismissals: number;
   consoleRefuses: boolean;
   /** `cmd device_state` fails: the image has no such service, or adb lost the device. */
-  deviceStateFails?: "no-service" | "no-device";
+  deviceStateFails?: "no-service" | "no-device" | "transient";
+  /** A stuck lock screen clears this long after the first dismissal. */
+  clearsAfterMs?: number;
+  clearAt?: number;
 }
 
 const POSTURE_TO_STATE: Record<string, { state: string; angle: number }> = {
@@ -147,12 +150,16 @@ const runAdbMock = vi.fn(async (args: string[]) => {
       if (emu.deviceStateFails === "no-service") {
         throw new Error(`adb ${args.join(" ")} failed: cmd: Can't find service: device_state`);
       }
+      if (emu.deviceStateFails === "transient") {
+        throw new Error(`adb ${args.join(" ")} failed: adb: protocol fault (couldn't read status)`);
+      }
       if (emu.deviceStateFails === "no-device") {
         throw new Error(`adb ${args.join(" ")} failed: adb: device '${args[1]}' not found`);
       }
       return { stdout: emu.states, stderr: "" };
     }
     if (command.startsWith("cmd device_state print-state;")) {
+      if (emu.clearAt !== undefined && Date.now() >= emu.clearAt) emu.keyguard = false;
       const wakefulness = emu.awake ? "Awake" : "Asleep";
       const read = `${emu.state}\nmScreenOnFully=${emu.screenOn}\nmWakefulness=${wakefulness}\nisKeyguardShowing=${emu.keyguard}\n`;
       advance();
@@ -160,7 +167,8 @@ const runAdbMock = vi.fn(async (args: string[]) => {
     }
     if (command === "wm dismiss-keyguard") {
       emu.dismissals++;
-      if (!emu.stuck) emu.keyguard = false;
+      if (emu.clearsAfterMs !== undefined) emu.clearAt ??= Date.now() + emu.clearsAfterMs;
+      else if (!emu.stuck) emu.keyguard = false;
       return { stdout: "", stderr: "" };
     }
   }
@@ -283,8 +291,18 @@ describe("fold on Android — execute", () => {
     expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
     expect(result.warning).toMatch(/could not dismiss it/);
     expect(emu.dismissals).toBeLessThanOrEqual(3);
-    // Settling takes about a second; the dismissal gives up two seconds later.
-    expect(Date.now() - started).toBeLessThan(4_000);
+    // Settling takes about a second; the dismissal gives up five seconds later.
+    expect(Date.now() - started).toBeLessThan(7_000);
+  });
+
+  it("waits for a lock screen that clears seconds after the dismissal", async () => {
+    emu = fresh({ raisesKeyguard: true, clearsAfterMs: 3_000 });
+    const result = await fold({ posture: "closed" });
+
+    expect(result).toEqual({ posture: "closed", deviceState: "CLOSED", hingeAngle: 0 });
+    expect(emu.keyguard).toBe(false);
+    // One call a second until it clears.
+    expect(emu.dismissals).toBe(3);
   });
 
   it("leaves a lock screen that was up before the fold alone, and warns about it", async () => {
@@ -486,6 +504,14 @@ describe("fold on Android — execute", () => {
 
     expect(getFailureSignal(err)?.error_code).not.toBe(FAILURE_CODES.ANDROID_FOLD_UNSUPPORTED);
     expect(String(err)).toMatch(/device 'emulator-5580' not found/);
+  });
+
+  it("keeps adb's error for a transient adb failure", async () => {
+    emu = fresh({ deviceStateFails: "transient" });
+    const err = await fold({ posture: "open" }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).not.toBe(FAILURE_CODES.ANDROID_FOLD_UNSUPPORTED);
+    expect(String(err)).toMatch(/protocol fault/);
   });
 
   it("rejects a phone profile as unsupported", async () => {

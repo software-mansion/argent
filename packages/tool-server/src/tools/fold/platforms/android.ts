@@ -1,6 +1,6 @@
-import { FAILURE_CODES, FailureError, getFailureSignal, type DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type DeviceInfo } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { isTerminalAdbError, runAdb } from "../../../utils/adb";
+import { runAdb } from "../../../utils/adb";
 import { runEmuConsole } from "../../../utils/emulator-console";
 
 /**
@@ -45,11 +45,14 @@ const SETTLE_TIMEOUT_MS = 15_000;
 const STABLE_READS = 3;
 
 /**
- * `wm dismiss-keyguard` calls, and how long the lock screen may stay up, before
- * a fold's lock screen counts as one argent cannot dismiss (a PIN keeps it up).
+ * `wm dismiss-keyguard` calls, their spacing, and how long the lock screen may
+ * stay up before a fold's lock screen counts as one argent cannot dismiss (a
+ * PIN keeps it up). A swipe lock screen can take 3-4 s to clear on a loaded
+ * emulator, so the calls are spread over the wait rather than sent at once.
  */
 const MAX_DISMISS_ATTEMPTS = 3;
-const DISMISS_TIMEOUT_MS = 2_000;
+const DISMISS_SPACING_MS = 1_000;
+const DISMISS_TIMEOUT_MS = 5_000;
 
 /**
  * Extra reads an asleep result needs when the device was asleep before an
@@ -233,6 +236,7 @@ async function dismissFoldLockScreen(
 ): Promise<string | undefined> {
   let clear = 0;
   let attempts = 0;
+  let lastAttempt = -Infinity;
   const deadline = Date.now() + DISMISS_TIMEOUT_MS;
   for (;;) {
     if (!(await readSnapshot(serial)).keyguard) {
@@ -240,7 +244,11 @@ async function dismissFoldLockScreen(
     } else {
       clear = 0;
       if (Date.now() >= deadline) break;
-      if (attempts++ < MAX_DISMISS_ATTEMPTS) await shell(serial, "wm dismiss-keyguard");
+      if (attempts < MAX_DISMISS_ATTEMPTS && Date.now() - lastAttempt >= DISMISS_SPACING_MS) {
+        attempts++;
+        lastAttempt = Date.now();
+        await shell(serial, "wm dismiss-keyguard");
+      }
     }
     await sleep(POLL_MS, signal);
   }
@@ -272,16 +280,22 @@ function withDeviceLock<T>(serial: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The device states the guest lists. An image without `cmd device_state`
- * (before Android 12) has no foldable states either; an adb error about the
- * device itself stays adb's.
+ * What `cmd device_state` prints on an image without the service (before
+ * Android 12), or without `cmd` itself.
+ */
+const NO_DEVICE_STATE_SERVICE =
+  /Can't find service: device_state|cmd: not found|No shell command implementation/i;
+
+/**
+ * The device states the guest lists. An image without `cmd device_state` has
+ * no foldable states either; every other failure (a lost device, a daemon
+ * restart, a timeout) stays adb's.
  */
 async function readDeviceStates(serial: string): Promise<Map<string, string>> {
   try {
     return parseDeviceStates(await shell(serial, "cmd device_state print-states"));
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (isTerminalAdbError(message) || getFailureSignal(err)?.error_kind === "timeout") throw err;
+    if (!NO_DEVICE_STATE_SERVICE.test(err instanceof Error ? err.message : String(err))) throw err;
     return new Map();
   }
 }

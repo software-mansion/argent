@@ -58,7 +58,7 @@ const zodSchema = z
       .enum(POSTURES)
       .optional()
       .describe(
-        "Where to move the hinge: `closed` (the cover panel; on a generic foldable AVD, the left part of the display), `half-open` or `open` (the inner panel). Exactly one of `posture` and `angle`."
+        "Where to move the hinge: `closed` (the cover panel), `half-open` or `open` (the inner panel). Exactly one of `posture` and `angle`."
       ),
     angle: z
       .number()
