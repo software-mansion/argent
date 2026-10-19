@@ -54,14 +54,39 @@ export function reasonPhrase(status: number): string {
   return STATUS_CODES[status] ?? "";
 }
 
+/**
+ * A URL in the form two URLs are compared in: without its fragment, which is never sent, and with
+ * its percent-encoding undone. The native layer can encode the URL the app gave again (iOS encodes
+ * the "%" of a URL that holds a space) or write a space in a query as "+" instead of "%20".
+ * decodeURI keeps the escapes that change what a URL means ("%2F", "%3F", "%26", "%2B").
+ */
+function comparableUrl(url: string): string {
+  let text = url;
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    text = parsed.search ? parsed.href : parsed.href.replace(/\?$/, "");
+  } catch {
+    // Compared as it is written.
+  }
+  text = text.replace(/\+/g, " ");
+  for (let i = 0; i < 4; i++) {
+    let decoded: string;
+    try {
+      decoded = decodeURI(text);
+    } catch {
+      break;
+    }
+    if (decoded === text) break;
+    text = decoded;
+  }
+  return text.replace(/%[0-9a-f]{2}/gi, (escape) => escape.toUpperCase());
+}
+
 /** Whether a response's final URL is another than the request URL, not the same one written differently. */
 export function isRedirect(requestUrl: string | undefined, finalUrl: string | undefined): boolean {
   if (!finalUrl || requestUrl === undefined || finalUrl === requestUrl) return false;
-  try {
-    return new URL(finalUrl).href !== new URL(requestUrl).href;
-  } catch {
-    return true;
-  }
+  return comparableUrl(finalUrl) !== comparableUrl(requestUrl);
 }
 
 // The path of a URL, or its host for the root. With `from`, the host too when it differs from that one's.

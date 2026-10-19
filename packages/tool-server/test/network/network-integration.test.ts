@@ -4,7 +4,7 @@ import * as http from "node:http";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../../src/blueprints/network-inspector";
-import { networkLogsTool } from "../../src/tools/network/network-logs";
+import { isRedirect, networkLogsTool } from "../../src/tools/network/network-logs";
 import { networkRequestTool } from "../../src/tools/network/network-request";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -1064,5 +1064,37 @@ describe("NetworkInspector integration (mock server)", () => {
 
     expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}:mock-device`)).toBe("IDLE");
     expect(registry.getServiceState(`NetworkInspector:${mockPort}:mock-device`)).toBe("IDLE");
+  });
+});
+
+describe("isRedirect", () => {
+  it.each([
+    ["the same URL", "https://api.test/a?q=1", "https://api.test/a?q=1"],
+    [
+      "a space the native layer encoded",
+      "https://api.test/a b?q=x y",
+      "https://api.test/a%20b?q=x%20y",
+    ],
+    ["a URL iOS encoded again", "https://api.test/a b?q=%20", "https://api.test/a%20b?q=%2520"],
+    ["an app that encoded twice", "https://api.test/q=%2520", "https://api.test/q=%20"],
+    ["+ for a space in a query", "https://api.test/s?q=a%20b", "https://api.test/s?q=a+b"],
+    ["escapes OkHttp adds", "https://api.test/a|b^c", "https://api.test/a%7Cb%5Ec"],
+    ["lower-case escapes", "https://api.test/a%2fb", "https://api.test/a%2Fb"],
+    ["a fragment, which is never sent", "https://api.test/a#top", "https://api.test/a"],
+    ["an empty query", "https://api.test/a?", "https://api.test/a"],
+    ["a trailing slash on the root", "https://API.test", "https://api.test/"],
+  ])("is false for %s", (_, requestUrl, finalUrl) => {
+    expect(isRedirect(requestUrl, finalUrl)).toBe(false);
+  });
+
+  it.each([
+    ["another path", "https://api.test/old", "https://api.test/new"],
+    ["another host", "https://api.test/f", "https://cdn.test/f"],
+    ["http to https", "http://api.test/a", "https://api.test/a"],
+    ["an escaped slash decoded", "https://api.test/a%2Fb", "https://api.test/a/b"],
+    ["an escaped & decoded", "https://api.test/s?q=a%26b", "https://api.test/s?q=a&b"],
+    ["another query", "https://api.test/s?q=1", "https://api.test/s?q=2"],
+  ])("is true for %s", (_, requestUrl, finalUrl) => {
+    expect(isRedirect(requestUrl, finalUrl)).toBe(true);
   });
 });
