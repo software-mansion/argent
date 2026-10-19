@@ -121,6 +121,12 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return text.length > BODY_CAP ? undefined : utf8Length(text);
   }
 
+  // A body of one of these types is not text: its size is recorded and it is not read as text.
+  var BINARY_TYPES = /^(image\\/(?!svg)|audio\\/|video\\/|font\\/|application\\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
+  function isBinaryType(mime) {
+    return typeof mime === 'string' && BINARY_TYPES.test(mime.toLowerCase());
+  }
+
   function mimeTypeOf(headers) {
     return hasOwn.call(headers, 'content-type') ? String(headers['content-type']).split(';')[0].trim() : '';
   }
@@ -285,10 +291,36 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return value !== undefined && value !== '' && n >= 0 && Math.floor(n) === n ? n : undefined;
   }
 
+  function isBinaryResponse(rec) {
+    return !!rec.entry.response && isBinaryType(rec.entry.response.mimeType);
+  }
+
+  // The size of a text body, unless the body is binary: its text is then not stored (see storeBody).
+  function textSizeOf(rec, text) {
+    return isBinaryResponse(rec) ? undefined : textSize(text);
+  }
+
+  // Records a body that is not kept, once: the details show its size instead.
+  function omitBody(rec, byteLength) {
+    var e = rec.entry;
+    if (e.responseBody !== undefined || e.encodedDataLength !== undefined || e.bodyOmitted) return;
+    e.bodyOmitted = true;
+    if (typeof byteLength === 'number') e.encodedDataLength = byteLength;
+  }
+
   // Stores the body of a response, once: text, or bytes that keepBytes cut.
   function storeBody(rec, body, byteLength, truncated) {
     var e = rec.entry;
-    if (e.responseBody !== undefined || e.encodedDataLength !== undefined) return;
+    if (e.responseBody !== undefined || e.encodedDataLength !== undefined || e.bodyOmitted) return;
+    if (typeof body === 'string' && isBinaryResponse(rec)) {
+      // A binary body read as text (an XHR's default responseType, Expo's text()) is not that text.
+      // Its size is the one the server gave, else the length of the text, close to it: a byte that is
+      // not UTF-8 reads as one character.
+      var declared = e.state === 'failed' ? undefined : contentLength(e.response);
+      omitBody(rec, declared);
+      if (declared === undefined) e.bodyLength = body.length;
+      return;
+    }
     if (typeof byteLength === 'number') e.encodedDataLength = byteLength;
     if (body instanceof Uint8Array) {
       e.bodyBytes = body;
@@ -372,12 +404,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         typeof xhr.onabort === 'function' && typeof xhr.ontimeout === 'function';
     };
 
-    // A body of one of these types is not text: its size is recorded and it is not read.
-    var BINARY_TYPES = /^(image\\/(?!svg)|audio\\/|video\\/|font\\/|application\\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
     var isBinaryBlob = function(rec, blob) {
       var mime = rec.entry.response && rec.entry.response.mimeType;
       try { if (!mime) mime = blob.type; } catch (e) {}
-      return typeof mime === 'string' && BINARY_TYPES.test(mime.toLowerCase());
+      return isBinaryType(mime);
     };
 
     // iOS resolves readAsText with null when the cut splits a UTF-8 character, so step back a
@@ -385,7 +415,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     // The size is read up front: RN's Blob throws on every access once the app closes it.
     var readBlob = function(rec, blob, size, end) {
       if (end === Math.min(size, BODY_CAP) && isBinaryBlob(rec, blob)) {
-        rec.entry.bodyOmitted = true;
+        omitBody(rec, size);
         return complete(rec, undefined, size, false);
       }
       var part = end < size ? blob.slice(0, end) : blob;
@@ -410,7 +440,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var type = xhr.responseType || '';
       if (type === '' || type === 'text') {
         var text = xhr.responseText;
-        if (typeof text === 'string') return complete(rec, text, textSize(text), false);
+        if (typeof text === 'string') return complete(rec, text, textSizeOf(rec, text), false);
       } else if (type === 'json') {
         // React Native keeps the text it received, which spares a serialization of the whole object.
         var raw = xhr._response;
@@ -544,7 +574,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       }
       var result = origAbort.apply(this, arguments);
       if (typeof partial === 'string' && partial && request.rec.entry.state === 'failed') {
-        storeBody(request.rec, partial, utf8Length(partial), false);
+        storeBody(request.rec, partial, textSizeOf(request.rec, partial), false);
       }
       return result;
     };
@@ -706,7 +736,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       bodyEnded();
     }, track);
     tapMethod(response, 'text', function(text) {
-      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, textSize(text), false);
+      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, textSizeOf(rec, text), false);
       bodyEnded();
     }, track);
     started.then(function() {

@@ -4219,6 +4219,78 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       }
     );
 
+    // Android reads the bytes of a text responseType as UTF-8, each invalid byte as U+FFFD.
+    const PNG_AS_TEXT = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
+    ]).toString("utf8");
+
+    it.each([
+      { headers: { "Content-Length": "10" }, fields: { encodedDataLength: 10 } },
+      { headers: {}, fields: { bodyLength: PNG_AS_TEXT.length } },
+      {
+        headers: { "Content-Length": "8", "Content-Encoding": "gzip" },
+        fields: { bodyLength: PNG_AS_TEXT.length },
+      },
+    ])(
+      "keeps no text of a binary XHR body read as text, with the size from %j",
+      ({ headers, fields }) => {
+        const rt = createRuntime();
+        rt.install();
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://img.test/a.png'); x.send();`);
+        rt.last().respond(200, { "content-type": "image/png", ...headers }, PNG_AS_TEXT);
+        const [record] = rt.records();
+
+        expect(record).toMatchObject({ state: "finished", bodyOmitted: true, ...fields });
+        expect(record!.responseBody).toBeUndefined();
+        if (!("encodedDataLength" in fields)) expect(record!.encodedDataLength).toBeUndefined();
+      }
+    );
+
+    it("keeps no text of a binary XHR body the app aborts while it arrives", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://img.test/a.png'); x.send();`);
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, { "content-type": "image/png", "content-length": "5000" });
+      xhr.receiveText(PNG_AS_TEXT);
+      rt.run("x.abort()");
+      const [record] = rt.records();
+
+      expect(record).toMatchObject({
+        state: "failed",
+        bodyOmitted: true,
+        bodyLength: PNG_AS_TEXT.length,
+      });
+      expect(record!.responseBody).toBeUndefined();
+      expect(record!.encodedDataLength).toBeUndefined();
+    });
+
+    it.each([
+      {
+        headers: { "Content-Type": "image/png", "Content-Length": "4" },
+        fields: { encodedDataLength: 4 },
+      },
+      { headers: { "Content-Type": "image/png" }, fields: { bodyLength: 4 } },
+    ])(
+      "keeps no text of a binary body Expo's text() reads, with the size from %j",
+      async ({ headers, fields }) => {
+        const rt = createRuntime({ expo: { sdk: 57 } });
+        rt.install();
+        const pending = rt.run(
+          `expoFetch('https://img.test/a.png').then(function(r) { return r.text(); })`
+        ) as Promise<string>;
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(200, headers, new Uint8Array([0xff, 0xfe, 0x00, 0x01]));
+        // Native text() reads each byte that is not UTF-8 as U+FFFD; the app gets that text.
+        expect(await pending).toBe("\ufffd\ufffd\u0000\u0001");
+        await settle();
+
+        const [record] = rt.records();
+        expect(record).toMatchObject({ state: "finished", bodyOmitted: true, ...fields });
+        expect(record!.responseBody).toBeUndefined();
+      }
+    );
+
     it("reads no text of a blob response whose own type is binary", async () => {
       const rt = createRuntime();
       rt.install();

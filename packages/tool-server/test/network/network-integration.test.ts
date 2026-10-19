@@ -964,6 +964,13 @@ describe("NetworkInspector integration (mock server)", () => {
       says: "that it did not read a binary body",
       message: "[body omitted: binary image/png, 300000 bytes]",
     },
+    {
+      requestId: "rn-net-png-text",
+      mimeType: "image/png",
+      fields: { bodyLength: 4096, bodyOmitted: true },
+      says: "the estimated size of a binary body read as text",
+      message: "[body omitted: binary image/png, ~4096 bytes]",
+    },
   ])(
     "view-network-request-details gives $says",
     async ({ requestId, mimeType, fields, message }) => {

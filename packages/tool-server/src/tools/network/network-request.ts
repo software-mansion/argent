@@ -254,7 +254,13 @@ Returns an error message string if the requestId is not found: use view-network-
       }
 
       if (params.includeBody && entry.bodyOmitted) {
-        const size = entry.encodedDataLength != null ? `, ${entry.encodedDataLength} bytes` : "";
+        // A length in characters, of a binary body read as text, is close to its size in bytes.
+        const size =
+          entry.encodedDataLength != null
+            ? `, ${entry.encodedDataLength} bytes`
+            : entry.bodyLength != null
+              ? `, ~${entry.bodyLength} bytes`
+              : "";
         resp.body = `[body omitted: binary ${entry.response.mimeType || "data"}${size}]`;
       } else if (params.includeBody && entry.responseBody != null) {
         const body = entry.responseBody;
