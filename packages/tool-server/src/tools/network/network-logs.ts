@@ -1,3 +1,4 @@
+import { STATUS_CODES } from "node:http";
 import { z } from "zod";
 import bytesUtil from "bytes";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
@@ -33,7 +34,8 @@ interface LogEntry {
   requestId: string;
   state: string;
   request?: { url: string; method: string };
-  response?: { status: number; statusText: string; mimeType: string };
+  /** `url` is the final URL, after redirects. */
+  response?: { url?: string; status: number; statusText: string; mimeType: string };
   resourceType?: string;
   encodedDataLength?: number;
   /** The full length, in characters, of a text body the interceptor cut without a byte size. */
@@ -43,24 +45,62 @@ interface LogEntry {
   errorText?: string;
 }
 
+/**
+ * The standard reason phrase of a status ("OK", "Not Found"), or "" for a status without one. The JS
+ * runtime records whatever text the platform gives: none from React Native's XHR and fetch, a
+ * localised description from iOS for Expo ("no error"), so the tools show this phrase for all.
+ */
+export function reasonPhrase(status: number): string {
+  return STATUS_CODES[status] ?? "";
+}
+
+/** Whether a response's final URL is another than the request URL, not the same one written differently. */
+export function isRedirect(requestUrl: string | undefined, finalUrl: string | undefined): boolean {
+  if (!finalUrl || requestUrl === undefined || finalUrl === requestUrl) return false;
+  try {
+    return new URL(finalUrl).href !== new URL(requestUrl).href;
+  } catch {
+    return true;
+  }
+}
+
+// The path of a URL, or its host for the root. With `from`, the host too when it differs from that one's.
+function shortName(url: string, from?: string): string {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname === "/" ? "" : parsed.pathname;
+    let sameHost = true;
+    try {
+      sameHost = from === undefined || new URL(from).host === parsed.host;
+    } catch {
+      sameHost = false;
+    }
+    if (sameHost) return path || parsed.hostname;
+    return parsed.host + path;
+  } catch {
+    return url;
+  }
+}
+
 function formatEntry(entry: LogEntry): string {
   const method = entry.request?.method ?? "???";
   const url = entry.request?.url ?? "unknown";
-
-  let name: string;
-  try {
-    const parsed = new URL(url);
-    name = parsed.pathname === "/" ? parsed.hostname : parsed.pathname;
-  } catch {
-    name = url;
-  }
+  const name = shortName(url);
+  const finalUrl = entry.response?.url;
+  const redirect = finalUrl && isRedirect(url, finalUrl) ? `→ ${shortName(finalUrl, url)}` : "";
 
   let status: string;
   if (entry.state === "failed") {
     status = entry.errorText ?? "failed";
   } else if (entry.response) {
     // A response whose body has not completed.
-    status = `${entry.response.status} ${entry.response.statusText}${entry.state === "pending" ? " (pending)" : ""}`;
+    status = [
+      entry.response.status,
+      entry.response.statusText,
+      entry.state === "pending" ? "(pending)" : "",
+    ]
+      .filter((part) => part !== "")
+      .join(" ");
   } else {
     status = "pending";
   }
@@ -75,7 +115,9 @@ function formatEntry(entry: LogEntry): string {
         : "";
   const duration = entry.durationMs != null ? `${entry.durationMs} ms` : "";
 
-  return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();
+  return [`{id: ${entry.requestId}}`, `"${method} ${name}"`, status, type, size, duration, redirect]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {
@@ -201,7 +243,16 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
 
     if (!data.interceptorInstalled) return notInstalled(installError);
 
-    const lines = data.entries.map(formatEntry);
+    const lines = data.entries.map((entry) =>
+      formatEntry(
+        entry.response
+          ? {
+              ...entry,
+              response: { ...entry.response, statusText: reasonPhrase(entry.response.status) },
+            }
+          : entry
+      )
+    );
 
     return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${data.total} total) ===\n\n${lines.join("\n")}`;
   },

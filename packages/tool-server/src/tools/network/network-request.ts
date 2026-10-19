@@ -10,6 +10,7 @@ import {
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { isRedirect, reasonPhrase } from "./network-logs";
 
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -114,6 +115,8 @@ interface NetworkRequestDetails {
   response?: {
     status: number;
     statusText: string;
+    /** The final URL, when a redirect led away from the request URL. */
+    redirectedTo?: string;
     headers: Record<string, string>;
     mimeType: string;
     body?: string;
@@ -238,10 +241,13 @@ Returns an error message string if the requestId is not found: use view-network-
     if (entry.response) {
       const resp: NetworkRequestDetails["response"] = {
         status: entry.response.status,
-        statusText: entry.response.statusText,
+        statusText: reasonPhrase(entry.response.status),
         headers: redactHeaders(entry.response.headers),
         mimeType: entry.response.mimeType,
       };
+      if (isRedirect(entry.request?.url, entry.response.url)) {
+        resp.redirectedTo = entry.response.url;
+      }
 
       if (params.includeBody && entry.bodyOmitted) {
         const size = entry.encodedDataLength != null ? `, ${entry.encodedDataLength} bytes` : "";
