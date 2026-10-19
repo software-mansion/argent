@@ -53,6 +53,15 @@ function cutMarker(fullSize: string, mimeType?: string): string {
   return `[TRUNCATED: first ${MAX_BODY_SIZE} chars shown, full size: ${fullSize}${mime}]`;
 }
 
+/** The text of a body that CDP sent as base64, or its bytes when they are not UTF-8 text. */
+function utf8Text(bytes: Buffer): string | Buffer {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return bytes;
+  }
+}
+
 /** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
 function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
   // A body the interceptor cut is always longer than MAX_BODY_SIZE.
@@ -196,13 +205,15 @@ Returns an error message string if the requestId is not found: use view-network-
               requestId: rec.requestId,
             })) as { body?: string; base64Encoded?: boolean };
             if (out.body != null) {
-              const body = out.base64Encoded
-                ? Buffer.from(out.body, "base64").toString("utf8")
-                : out.body;
-              resp.body =
-                body.length > MAX_BODY_SIZE
-                  ? `${cutMarker(`${body.length} chars`, resp.mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`
-                  : body;
+              const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
+              if (typeof body !== "string") {
+                resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
+              } else {
+                resp.body =
+                  body.length > MAX_BODY_SIZE
+                    ? `${cutMarker(`${body.length} chars`, resp.mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`
+                    : body;
+              }
             }
           } catch {
             // Body not retained: navigated away, evicted, or never had one.

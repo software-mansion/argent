@@ -88,7 +88,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - If the app does not read the body of a successful Expo `fetch()` response, the record has no body and no size. A response that cannot have a body, for example the response to a `HEAD` request, has the size 0.
 - Argent finds the network module of React Native in the list of modules that Metro adds to a development build. Without this list, Argent does not record the requests that a library sends to the network module itself.
 - The network log keeps the most recent records only. The limits are 2000 records for the JS runtime layer and 1000 records for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native log holds fewer than 1000 requests.
-- The JS runtime layer does not read a binary response body, for example an image, a font, a PDF file or an `application/octet-stream` body. The record gives the type and the size of the body only.
+- The JS runtime layer does not read a binary response body, for example an image, a font, a PDF file or an `application/octet-stream` body. The record gives the type and the size of the body only. For Chromium, Argent does not show a response body that is not UTF-8 text. The details give the type and the size of this body only.
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
 - The `NSURLProtocol` layer is available on iOS only. On Android, use the JS runtime layer.

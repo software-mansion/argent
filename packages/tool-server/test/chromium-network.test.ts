@@ -258,6 +258,45 @@ describe("view-network-request-details (chromium branch)", () => {
   });
 
   it.each([
+    {
+      kind: "a PNG",
+      mimeType: "image/png",
+      bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a],
+      omitted: true,
+    },
+    {
+      kind: "octet-stream",
+      mimeType: "application/octet-stream",
+      bytes: [0, 1, 2, 0xff, 0xfe],
+      omitted: true,
+    },
+    { kind: "UTF-8 text", mimeType: "text/plain", bytes: [...Buffer.from("café")], omitted: false },
+  ])("returns $kind body sent as base64 as text only when it is UTF-8", async (c) => {
+    const record = rec({
+      requestId: "r3",
+      url: "https://x.test/b",
+      status: 200,
+      mimeType: c.mimeType,
+    });
+    const body = Buffer.from(c.bytes).toString("base64");
+    const send = vi.fn(async () => ({ body, base64Encoded: true }));
+    const services = {
+      chromium: { cdp: { send }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(services, {
+      device_id: "chromium-cdp-9222",
+      port: 8081,
+      requestId: "r3",
+      includeBody: true,
+    })) as { response: { body?: string } };
+
+    expect(details.response.body).toBe(
+      c.omitted ? `[body omitted: binary ${c.mimeType}, ${c.bytes.length} bytes]` : "café"
+    );
+  });
+
+  it.each([
     { size: 1000, cut: false, returns: "whole, as it is at the 1000-char limit" },
     { size: 1001, cut: true, returns: "cut to 1000 chars with its size, one char past the limit" },
   ])("returns a request body of $size chars $returns", async ({ size, cut }) => {
