@@ -37,7 +37,9 @@ const SETTLE_TIMEOUT_MS = 15_000;
  * the screen fully on. A Pixel fold turns one panel off and the other on,
  * which takes 0.3-0.5 s after the state commits; until then the guest takes
  * no input. An angle has no state to wait for, so the agreement is also what
- * tells a committed state from one the guest has not left yet.
+ * tells a committed state from one the guest has not left yet. A device that
+ * was asleep before the fold need not wake (a fold to closed leaves it dark),
+ * so there the screen only has to hold still.
  */
 const STABLE_READS = 3;
 
@@ -54,7 +56,7 @@ export interface AndroidFoldResult {
   deviceState: string;
   /** The hinge angle as the sensor reads it. */
   hingeAngle?: number;
-  /** Set when the fold left the lock screen up, or the state did not settle. */
+  /** Set when the lock screen is up after the fold, or the state did not settle. */
   warning?: string;
 }
 
@@ -149,12 +151,14 @@ export function parseHingeAngle(stdout: string): number | undefined {
 
 /**
  * Poll until the guest holds one device state (the expected one, when the
- * request names it) with the screen fully on for {@link STABLE_READS} reads.
- * The first read waits a poll: the console answered before the guest reacted.
+ * request names it) and one screen state, fully on when `screenOn` asks for
+ * it, for {@link STABLE_READS} reads. The first read waits a poll: the console
+ * answered before the guest reacted.
  */
 async function awaitSettled(
   serial: string,
   expected: string | undefined,
+  screenOn: boolean,
   signal: AbortSignal | undefined
 ): Promise<{ last: Snapshot | undefined; settled: boolean }> {
   let last: Snapshot | undefined;
@@ -165,10 +169,11 @@ async function awaitSettled(
     const read = await readSnapshot(serial);
     const ready =
       read.state !== undefined &&
-      read.screenOn &&
+      (read.screenOn || !screenOn) &&
       (expected === undefined || read.state === expected);
+    const same = read.state === last?.state && read.screenOn === last?.screenOn;
     if (!ready) agreeing = 0;
-    else agreeing = agreeing > 0 && read.state === last?.state ? agreeing + 1 : 1;
+    else agreeing = agreeing > 0 && same ? agreeing + 1 : 1;
     last = read;
     if (agreeing >= STABLE_READS) return { last, settled: true };
   }
@@ -205,6 +210,110 @@ function targetLabel(params: AndroidFoldParams): string {
   return params.posture ?? `${params.angle}°`;
 }
 
+/**
+ * Serializes folds per device. Two folds that overlap send their console
+ * commands back to back, and the one that loses waits for a state the guest
+ * has already left. Agents share an emulator, so overlap is ordinary; a waiter
+ * costs the fold ahead of it.
+ */
+const inFlightByDevice = new Map<string, Promise<unknown>>();
+
+function withDeviceLock<T>(serial: string, fn: () => Promise<T>): Promise<T> {
+  const previous = inFlightByDevice.get(serial) ?? Promise.resolve();
+  // A failed fold must not wedge the queue.
+  const run = previous.then(fn, fn);
+  const settled = run.catch(() => {});
+  inFlightByDevice.set(serial, settled);
+  void settled.then(() => {
+    if (inFlightByDevice.get(serial) === settled) inFlightByDevice.delete(serial);
+  });
+  return run;
+}
+
+async function fold(
+  serial: string,
+  params: AndroidFoldParams,
+  device: DeviceInfo,
+  signal: AbortSignal | undefined
+): Promise<AndroidFoldResult> {
+  const states = parseDeviceStates(await shell(serial, "cmd device_state print-states"));
+  const byId = new Map([...states].map(([name, id]) => [id, name]));
+  const supported = POSTURES.filter((p) => states.has(EMULATOR_POSTURES[p].state));
+  if (supported.length === 0) {
+    throw unsupported(
+      `${device.id} is not a foldable emulator: it lists no CLOSED, HALF_OPENED or OPENED device state. ` +
+        "Boot a foldable AVD (a Pixel Fold or a generic foldable profile); `list-devices` marks them with `foldable: true`.",
+      "android_fold_not_foldable"
+    );
+  }
+  const expected = params.posture ? states.get(EMULATOR_POSTURES[params.posture].state) : undefined;
+  if (params.posture && expected === undefined) {
+    throw unsupported(
+      `${device.id} has no ${EMULATOR_POSTURES[params.posture].state} device state for the ${params.posture} posture; it supports ${supported.join(", ")}.`,
+      "android_fold_posture_unsupported"
+    );
+  }
+
+  // The screen and the lock screen before the fold decide what the fold must
+  // leave: a lit screen stays lit, and a lock screen already up stays up.
+  const before = await readSnapshot(serial);
+
+  try {
+    if (params.posture) {
+      await runEmuConsole(serial, ["posture", EMULATOR_POSTURES[params.posture].id]);
+    } else {
+      await runEmuConsole(serial, ["sensor", "set", "hinge-angle0", String(params.angle)]);
+    }
+  } catch (err) {
+    throw failed(
+      `Failed to fold ${serial} to ${targetLabel(params)}: ${err instanceof Error ? err.message : String(err)}`,
+      "android_fold_console",
+      err
+    );
+  }
+
+  const { last, settled } = await awaitSettled(serial, expected, before.screenOn, signal);
+  const stateName = last?.state !== undefined ? (byId.get(last.state) ?? last.state) : "unknown";
+  if (!settled && expected !== undefined) {
+    throw failed(
+      last?.state === expected
+        ? `${serial} reached device state ${stateName} for the ${params.posture} posture, but ` +
+            (last.screenOn ? "the state did not hold" : "the screen did not turn on") +
+            ` within ${SETTLE_TIMEOUT_MS / 1000} s. Take a screenshot before the next action.`
+        : `${serial} did not reach the ${params.posture} posture: the guest still reports device state ${stateName}. ` +
+            "Fold again; a screenshot shows what the device renders.",
+      "android_fold_unverified"
+    );
+  }
+
+  let warning: string | undefined;
+  if (!settled) {
+    warning = `The device state did not settle within ${SETTLE_TIMEOUT_MS / 1000} s; it last read ${stateName}. Take a screenshot before the next action.`;
+  } else if (stateName === "CLOSED" && !before.keyguard) {
+    warning = await dismissFoldLockScreen(serial, signal);
+  } else if (last?.keyguard) {
+    // A lock screen that was up before the fold is not the fold's to clear,
+    // but every later tap lands on it.
+    warning =
+      "The lock screen is showing after the fold. Unlock or dismiss it before the next action.";
+  }
+
+  let hingeAngle: number | undefined;
+  try {
+    hingeAngle = parseHingeAngle(await runEmuConsole(serial, ["sensor", "get", "hinge-angle0"]));
+  } catch {
+    // The fold is verified by the state; the angle is only reported.
+  }
+
+  const posture = POSTURES.find((p) => EMULATOR_POSTURES[p].state === stateName);
+  return {
+    ...(posture ? { posture } : {}),
+    deviceState: stateName,
+    ...(hingeAngle !== undefined ? { hingeAngle } : {}),
+    ...(warning ? { warning } : {}),
+  };
+}
+
 export const androidImpl: PlatformImpl<unknown, AndroidFoldParams, AndroidFoldResult> = {
   requires: ["adb"],
   async handler(_services, params, device: DeviceInfo, options): Promise<AndroidFoldResult> {
@@ -220,76 +329,6 @@ export const androidImpl: PlatformImpl<unknown, AndroidFoldParams, AndroidFoldRe
       );
     }
 
-    const states = parseDeviceStates(await shell(serial, "cmd device_state print-states"));
-    const byId = new Map([...states].map(([name, id]) => [id, name]));
-    const supported = POSTURES.filter((p) => states.has(EMULATOR_POSTURES[p].state));
-    if (supported.length === 0) {
-      throw unsupported(
-        `${device.id} is not a foldable emulator: it lists no CLOSED, HALF_OPENED or OPENED device state. ` +
-          "Boot a foldable AVD (a Pixel Fold or a generic foldable profile); `list-devices` marks them with `foldable: true`.",
-        "android_fold_not_foldable"
-      );
-    }
-    const expected = params.posture
-      ? states.get(EMULATOR_POSTURES[params.posture].state)
-      : undefined;
-    if (params.posture && expected === undefined) {
-      throw unsupported(
-        `${device.id} has no ${EMULATOR_POSTURES[params.posture].state} device state for the ${params.posture} posture; it supports ${supported.join(", ")}.`,
-        "android_fold_posture_unsupported"
-      );
-    }
-
-    // Only a fold that ends closed can raise the lock screen, and an angle may
-    // end there too, so the keyguard is read before either.
-    const mayClose = params.posture === "closed" || params.angle !== undefined;
-    const lockedBefore = mayClose ? (await readSnapshot(serial)).keyguard : true;
-
-    try {
-      if (params.posture) {
-        await runEmuConsole(serial, ["posture", EMULATOR_POSTURES[params.posture].id]);
-      } else {
-        await runEmuConsole(serial, ["sensor", "set", "hinge-angle0", String(params.angle)]);
-      }
-    } catch (err) {
-      throw failed(
-        `Failed to fold ${serial} to ${targetLabel(params)}: ${err instanceof Error ? err.message : String(err)}`,
-        "android_fold_console",
-        err
-      );
-    }
-
-    const { last, settled } = await awaitSettled(serial, expected, signal);
-    const stateName = last?.state !== undefined ? (byId.get(last.state) ?? last.state) : "unknown";
-    if (!settled && expected !== undefined) {
-      throw failed(
-        `${serial} did not reach the ${params.posture} posture: the guest still reports device state ${stateName}` +
-          (last && !last.screenOn ? " with the screen off" : "") +
-          ". Fold again; a screenshot shows what the device renders.",
-        "android_fold_unverified"
-      );
-    }
-
-    let warning: string | undefined;
-    if (!settled) {
-      warning = `The device state did not settle within ${SETTLE_TIMEOUT_MS / 1000} s; it last read ${stateName}. Take a screenshot before the next action.`;
-    } else if (stateName === "CLOSED" && !lockedBefore) {
-      warning = await dismissFoldLockScreen(serial, signal);
-    }
-
-    let hingeAngle: number | undefined;
-    try {
-      hingeAngle = parseHingeAngle(await runEmuConsole(serial, ["sensor", "get", "hinge-angle0"]));
-    } catch {
-      // The fold is verified by the state; the angle is only reported.
-    }
-
-    const posture = POSTURES.find((p) => EMULATOR_POSTURES[p].state === stateName);
-    return {
-      ...(posture ? { posture } : {}),
-      deviceState: stateName,
-      ...(hingeAngle !== undefined ? { hingeAngle } : {}),
-      ...(warning ? { warning } : {}),
-    };
+    return withDeviceLock(serial, () => fold(serial, params, device, signal));
   },
 };

@@ -26,6 +26,9 @@ interface FakeEmulator {
   pending: string;
   angle: number;
   keyguard: boolean;
+  /** `mScreenOnFully`; a fold to open wakes an asleep device, `darkens` turns it off. */
+  screenOn: boolean;
+  darkens: boolean;
   /** The fold to closed raises the lock screen; `stuck` keeps it up. */
   raisesKeyguard: boolean;
   stuck: boolean;
@@ -50,6 +53,8 @@ function fresh(overrides: Partial<FakeEmulator> = {}): FakeEmulator {
     pending: "2",
     angle: 180,
     keyguard: false,
+    screenOn: true,
+    darkens: false,
     raisesKeyguard: false,
     stuck: false,
     ignoresPosture: false,
@@ -68,6 +73,8 @@ const runAdbMock = vi.fn(async (args: string[]) => {
       if (!emu.ignoresPosture) emu.pending = target.state;
       emu.angle = target.angle;
       if (target.state === "0" && emu.raisesKeyguard) emu.keyguard = true;
+      if (target.state === "2") emu.screenOn = true;
+      if (emu.darkens) emu.screenOn = false;
       return { stdout: "OK\n", stderr: "" };
     }
     if (rest[0] === "sensor" && rest[1] === "set") {
@@ -83,7 +90,7 @@ const runAdbMock = vi.fn(async (args: string[]) => {
     const command = rest.join(" ");
     if (command === "cmd device_state print-states") return { stdout: emu.states, stderr: "" };
     if (command.startsWith("cmd device_state print-state;")) {
-      const read = `${emu.state}\nmScreenOnFully=true\nisKeyguardShowing=${emu.keyguard}\n`;
+      const read = `${emu.state}\nmScreenOnFully=${emu.screenOn}\nisKeyguardShowing=${emu.keyguard}\n`;
       emu.state = emu.pending;
       return { stdout: read, stderr: "" };
     }
@@ -198,11 +205,54 @@ describe("fold on Android — execute", () => {
     expect(result.warning).toMatch(/lock screen/);
   });
 
-  it("leaves a lock screen that was up before the fold alone", async () => {
+  it("leaves a lock screen that was up before the fold alone, and warns about it", async () => {
     emu = fresh({ keyguard: true });
-    await fold({ posture: "closed" });
+    const result = await fold({ posture: "closed" });
 
     expect(emu.dismissals).toBe(0);
+    expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
+    expect(result.warning).toMatch(/lock screen is showing/);
+  });
+
+  it("warns when the lock screen is up after a fold to open", async () => {
+    emu = fresh({ state: "0", pending: "0", angle: 0, keyguard: true });
+    const result = await fold({ posture: "open" });
+
+    expect(emu.dismissals).toBe(0);
+    expect(result).toMatchObject({ posture: "open", deviceState: "OPENED" });
+    expect(result.warning).toMatch(/lock screen is showing/);
+  });
+
+  it("folds an asleep device to closed without waiting for the screen", async () => {
+    emu = fresh({ screenOn: false, keyguard: true });
+    const started = Date.now();
+    const result = await fold({ posture: "closed" });
+
+    expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(emu.screenOn).toBe(false);
+  });
+
+  it("says the state was reached when only the screen stays off", async () => {
+    emu = fresh({ darkens: true });
+    const err = await fold({ posture: "closed" }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_FAILED);
+    expect(String(err)).toMatch(/reached device state CLOSED.*screen did not turn on/);
+    expect(String(err)).not.toMatch(/did not reach/);
+  });
+
+  it("runs two overlapping folds on one device one after the other", async () => {
+    const first = foldTool.execute!({}, { udid: SERIAL, posture: "closed" } as never);
+    const second = foldTool.execute!({}, { udid: SERIAL, posture: "open" } as never);
+    await vi.runAllTimersAsync();
+
+    expect(await first).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
+    expect(await second).toMatchObject({ posture: "open", deviceState: "OPENED" });
+    const calls = runAdbMock.mock.calls.map(([args]) => args.slice(2).join(" "));
+    const firstDone = calls.indexOf("emu sensor get hinge-angle0");
+    expect(firstDone).toBeGreaterThan(-1);
+    expect(calls.indexOf("emu posture 3")).toBeGreaterThan(firstDone);
   });
 
   it("fails when the guest never commits the posture", async () => {
@@ -211,6 +261,7 @@ describe("fold on Android — execute", () => {
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_FAILED);
     expect(String(err)).toMatch(/did not reach the closed posture.*OPENED/);
+    expect(String(err)).not.toMatch(/screen off/);
   });
 
   it("fails when the console refuses the posture", async () => {
