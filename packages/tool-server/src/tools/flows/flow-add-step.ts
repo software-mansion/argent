@@ -1052,9 +1052,11 @@ async function rewriteSiblingFlowPath(
     ({ spelling } = await project.resolveFlowFile(flowDir, suppliedBase));
   } catch (err) {
     if (path.resolve(flowDir) === path.resolve(flowsDir)) throw err;
-    // The argent client sends a flow_path for this check only beside the recording.
+    // An argent client older than this tool-server sends a flow_path for this
+    // check only beside the recording.
     throw invalid(
-      `over a link, only an e2e test beside the recording can be named by flow_path ` +
+      `over a link, this argent client sends a flow_path only for an e2e test beside the ` +
+        `recording; update the argent CLI or MCP adapter on the client ` +
         `(${err instanceof Error ? err.message : String(err)})`
     );
   }

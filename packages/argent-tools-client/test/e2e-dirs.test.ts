@@ -281,6 +281,25 @@ describe("a recorded step on a tool-server that predates .argent/e2e", () => {
   });
 });
 
+describe("a recorded step that nests a legacy test by flow_path over a link", () => {
+  it("sends the test in .argent/flows beside the recording in .argent/e2e", async () => {
+    await write(legacy("old.yaml"));
+    const { client, posts } = stubServer(newerTools, true);
+
+    await client.callTool("e2e-add-step", {
+      name: "rec",
+      project_root: root,
+      command: "e2e-execute",
+      args: JSON.stringify({ flow_path: legacy("old.yaml"), project_root: root }),
+    });
+    const members = (posts[0]!.body.project_root as FileInputWire).members ?? [];
+    const keys = members.map((m) => m.key);
+    expect(keys).toContain(flowMemberKey(path.dirname(e2e("rec.yaml")), "rec.yaml"));
+    expect(keys).toContain(flowMemberKey(path.dirname(legacy("old.yaml")), "old.yaml"));
+    expect(keys).toContain(flowMemberKey(path.dirname(e2e("old.yaml")), "old.yaml"));
+  });
+});
+
 describe("a call by name whose test hides a legacy test of the same name", () => {
   const warning = () =>
     `${legacy("both.yaml")} is not used: ${e2e("both.yaml")} has the same name and is read first.`;

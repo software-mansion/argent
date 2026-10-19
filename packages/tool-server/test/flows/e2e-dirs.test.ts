@@ -333,6 +333,57 @@ describe("recording", () => {
     ).rejects.toThrow(`resolves "frag" to "${e2e("frag.yaml")}" instead`);
   });
 
+  it.each([
+    ["name", () => ({ name: "frag", project_root: root })],
+    ["flow_path", () => ({ flow_path: legacy("frag.yaml"), project_root: root })],
+  ])(
+    "over a link, records a nested fragment in .argent/flows by %s as run: of its path",
+    async (_by, nestedArgs) => {
+      await write(legacy("frag.yaml"), echoes("hi"));
+      const invokeTool = vi.fn(async () => ({ ok: true, steps: [] }));
+      const registry = { invokeTool, getTool: vi.fn(() => ({})) } as unknown as Registry;
+      const addStep = createFlowAddStepTool(registry);
+      await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+      const client = path.resolve(__dirname, "../../../argent-tools-client/src");
+      const { prepareFileInputs } = (await import(path.join(client, "file-inputs.ts"))) as {
+        prepareFileInputs(specs: unknown, args: unknown, opts: object): Promise<unknown>;
+      };
+      const { collectStepMembers } = (await import(path.join(client, "flow-files.ts"))) as {
+        collectStepMembers: unknown;
+      };
+      const call = {
+        name: "rec",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify(nestedArgs()),
+      };
+      const sent = (await prepareFileInputs(addStep.fileInputs, call, {
+        includeContent: true,
+        collectStepMembers,
+      })) as Record<string, unknown>;
+      const boundary = await resolveFileInputs(
+        addStep as unknown as ToolDefinition<Record<string, unknown>, unknown>,
+        sent
+      );
+      try {
+        await addStep.execute({}, boundary.args as typeof call, {
+          artifacts: new ArtifactStore(),
+          linked: true,
+          fileInputs: boundary.fileInputs,
+        });
+      } finally {
+        await boundary.cleanup();
+      }
+
+      expect(invokeTool).toHaveBeenCalledWith(
+        "e2e-execute",
+        expect.objectContaining({ name: "frag", project_root: root })
+      );
+      const yaml = await fs.readFile(e2e("rec.yaml"), "utf8");
+      expect(parseFlow(yaml).steps).toEqual([{ kind: "run", flow: "../flows/frag.yaml" }]);
+    }
+  );
+
   it("records run: for a fragment saved in both directories and replays the .argent/e2e copy", async () => {
     await write(e2e("frag.yaml"), echoes("from e2e"));
     await write(legacy("frag.yaml"), echoes("from flows"));

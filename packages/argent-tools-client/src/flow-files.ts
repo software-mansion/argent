@@ -688,7 +688,8 @@ function recordedStep(
  * sibling `<name>.yaml` there, which a nested flow is recorded as a `run:`
  * step of only when it is the flow that ran. A `flow_path` the recorder
  * rewrites to that sibling's name (it is a file in the recording's
- * directory) is sent under its own spelling too, for the recorder's on-disk
+ * directory, or in the project's other e2e test directory) is sent under its
+ * own spelling too, for the recorder's on-disk
  * spelling check, and its run as the name the recorder runs it by. Nothing
  * for a call without a valid `name` and absolute `project_root`, or whose
  * step does not parse. `recordingDirFor` is where the tool-server records:
@@ -722,8 +723,14 @@ export async function collectStepMembers(
     const named = nestedFlowTarget(runArgs);
     if (named?.kind === "flow_path") {
       const stem = path.basename(named.path, ".yaml");
-      if (path.resolve(path.dirname(named.path)) === path.resolve(path.dirname(recording))) {
-        await collector.flow(path.dirname(recording), path.basename(named.path));
+      const base = path.basename(named.path);
+      const dir = path.resolve(path.dirname(named.path));
+      const recordingDir = path.dirname(recording);
+      // The project's other e2e test directory too: the recorder accepts a
+      // test there as the same name, and records it by its path.
+      const dirs = [recordingDir, ...e2eRunFallbackDirs(recordingDir, base)];
+      if (dirs.some((d) => path.resolve(d) === dir)) {
+        await collector.flow(path.dirname(named.path), base);
         runArgs = { ...runArgs, name: stem };
         delete runArgs.flow_path;
       }

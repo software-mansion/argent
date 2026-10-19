@@ -1277,16 +1277,6 @@ function rejectionVerdict(code: string | undefined): string {
 }
 
 /**
- * Whether a wire value is a report the renderers can walk. They run past the
- * try on both runners, so a value this admits and they then throw on takes
- * down the whole ledger rather than one line of it — hence the elements are
- * checked too. A non-array `steps` throws on `for (… of report.steps)` and a
- * nullish element on the first field read off it; a primitive element throws
- * nowhere, which is worse — the verdict is the report's own `ok`, so `ok: true`
- * exits 0 over steps no renderer can read: renderReport prints a line of
- * `undefined` fields for each, and the batch's renderFailedSteps prints none.
- */
-/**
  * The warnings carried in `tool:` step results, at any depth: a nested
  * `e2e-execute name: X` that read .argent/e2e over a shadowed .argent/flows
  * file says so only in its result. No renderer reads results, so the run
@@ -1309,6 +1299,16 @@ function printWarnings(warnings: readonly string[], json: boolean): void {
   }
 }
 
+/**
+ * Whether a wire value is a report the renderers can walk. They run past the
+ * try on both runners, so a value this admits and they then throw on takes
+ * down the whole ledger rather than one line of it — hence the elements are
+ * checked too. A non-array `steps` throws on `for (… of report.steps)` and a
+ * nullish element on the first field read off it; a primitive element throws
+ * nowhere, which is worse — the verdict is the report's own `ok`, so `ok: true`
+ * exits 0 over steps no renderer can read: renderReport prints a line of
+ * `undefined` fields for each, and the batch's renderFailedSteps prints none.
+ */
 function isFlowReport(data: unknown): data is FlowReport {
   const steps = (data as FlowReport | undefined)?.steps;
   return Array.isArray(steps) && steps.every((step) => !!step && typeof step === "object");
