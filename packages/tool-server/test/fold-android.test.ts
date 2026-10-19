@@ -34,9 +34,9 @@ interface FakeEmulator {
   wakeAfter: number;
   /** A fold to closed puts the device to sleep. */
   sleepsOnClose: boolean;
-  /** After the fold, an awake screen stays dark for this many reads. */
+  /** After the fold (or the wake), the screen stays dark for this many reads. */
   screenLag: number;
-  /** Every read flips between awake and lit and asleep and dark. */
+  /** The screen of an awake device flips on every read. */
   flaps: boolean;
   /** Countdowns the reads drive. */
   wakeIn: number | null;
@@ -97,17 +97,21 @@ function afterFold(state: string): void {
   if (emu.darkens) emu.screenOn = false;
 }
 
+const snapshotReads = () =>
+  runAdbMock.mock.calls.filter(([args]) => args[3]?.startsWith("cmd device_state print-state;"))
+    .length;
+
 /** One snapshot read moves the guest a step on. */
 function advance(): void {
   emu.state = emu.pending;
   if (emu.flaps) {
-    emu.awake = !emu.awake;
-    emu.screenOn = emu.awake;
+    emu.screenOn = !emu.screenOn;
   } else if (emu.wakeIn !== null) {
     if (emu.wakeIn-- > 0) return;
     emu.wakeIn = null;
     emu.awake = true;
-    emu.screenOn = true;
+    if (emu.screenLag > 0) emu.darkFor = emu.screenLag;
+    else emu.screenOn = true;
   } else if (emu.darkFor > 0 && --emu.darkFor === 0) {
     emu.screenOn = true;
   }
@@ -294,43 +298,61 @@ describe("fold on Android — execute", () => {
     expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(emu.screenOn).toBe(false);
-    // Both warnings survive.
-    expect(result.warning).toMatch(/screen is off after the fold/);
-    expect(result.warning).toMatch(/lock screen is showing/);
+    expect(result.warning).toBe(
+      "The screen is off and the lock screen is showing after the fold. Wake and unlock the device before the next action."
+    );
   });
 
-  it("waits for an asleep device that wakes on unfold", async () => {
+  it("waits for an asleep device that wakes a second after the unfold", async () => {
     emu = fresh({
       state: "0",
       pending: "0",
       angle: 0,
       screenOn: false,
       awake: false,
-      wakeAfter: 2,
+      wakeAfter: 3,
     });
     const result = await fold({ posture: "open" });
 
     expect(result).toEqual({ posture: "open", deviceState: "OPENED", hingeAngle: 180 });
     expect(emu.awake).toBe(true);
+    // One read before the fold, one of the old state, three asleep ones the
+    // grace reads hold back, three awake ones that agree.
+    expect(snapshotReads()).toBe(8);
   });
 
-  it("waits for a screen that comes on only after several reads", async () => {
-    emu = fresh({ screenLag: 6 });
-    const result = await fold({ posture: "closed" });
+  it("waits for the screen of a device that wakes on unfold", async () => {
+    emu = fresh({
+      state: "0",
+      pending: "0",
+      angle: 0,
+      screenOn: false,
+      awake: false,
+      screenLag: 6,
+    });
+    const result = await fold({ posture: "open" });
 
-    expect(result).toEqual({ posture: "closed", deviceState: "CLOSED", hingeAngle: 0 });
-    const reads = runAdbMock.mock.calls.filter(([args]) =>
-      args[3]?.startsWith("cmd device_state print-state;")
-    );
-    // One read before the fold, six dark ones, three that agree.
-    expect(reads.length).toBeGreaterThanOrEqual(10);
+    expect(result).toEqual({ posture: "open", deviceState: "OPENED", hingeAngle: 180 });
+    expect(emu.screenOn).toBe(true);
+    // One read before the fold, one of the old state, six awake and dark
+    // ones, three lit ones that agree.
+    expect(snapshotReads()).toBe(11);
   });
 
-  it("does not fail a fold whose screen keeps flipping", async () => {
-    emu = fresh({ flaps: true });
+  it("settles a fold whose screen flaps, with a warning, when it ends lit", async () => {
+    emu = fresh({ flaps: true, screenOn: true });
     const result = await fold({ posture: "half-open" });
 
     expect(result).toMatchObject({ posture: "half-open", deviceState: "HALF_OPENED" });
+    expect(result.warning).toMatch(/did not hold steady/);
+  });
+
+  it("fails a fold whose screen flaps when it ends dark", async () => {
+    emu = fresh({ flaps: true, screenOn: false });
+    const err = await fold({ posture: "half-open" }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_FAILED);
+    expect(String(err)).toMatch(/reached device state HALF_OPENED.*screen did not stay on/);
   });
 
   it("settles an angle fold that puts the device to sleep, and warns", async () => {
@@ -341,8 +363,20 @@ describe("fold on Android — execute", () => {
     expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED", hingeAngle: 10 });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(result.warning).toBe(
-      "The screen is off after the fold; wake the device before the next action."
+      "The screen is off after the fold. Wake the device before the next action."
     );
+  });
+
+  it("does not try to dismiss the lock screen of a device the fold put to sleep", async () => {
+    emu = fresh({ sleepsOnClose: true, raisesKeyguard: true });
+    const started = Date.now();
+    const result = await fold({ posture: "closed" });
+
+    expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(emu.dismissals).toBe(0);
+    expect(result.warning).toMatch(/screen is off and the lock screen is showing/);
+    expect(result.warning).not.toMatch(/PIN/);
   });
 
   it("says the state was reached when only the screen stays off", async () => {
@@ -350,7 +384,7 @@ describe("fold on Android — execute", () => {
     const err = await fold({ posture: "closed" }).catch((e: unknown) => e);
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_FAILED);
-    expect(String(err)).toMatch(/reached device state CLOSED.*screen did not come on/);
+    expect(String(err)).toMatch(/reached device state CLOSED.*screen did not stay on/);
     expect(String(err)).not.toMatch(/did not reach/);
   });
 

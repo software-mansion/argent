@@ -44,6 +44,14 @@ const SETTLE_TIMEOUT_MS = 15_000;
  */
 const STABLE_READS = 3;
 
+/**
+ * Extra reads an asleep result needs when the device was asleep before an
+ * unfold. An image that wakes on unfold reports `Awake` up to about a second
+ * after the state commits; without them the fold ends on the dark screen
+ * before the wake.
+ */
+const WAKE_GRACE_READS = 2;
+
 export interface AndroidFoldParams {
   udid: string;
   posture?: Posture;
@@ -126,7 +134,9 @@ interface Snapshot {
  * One read of the state, the screen, the wakefulness and the lock screen.
  * `mScreenOnFully` is absent on an image that does not report it, which
  * counts as on: a missing signal must not stall every fold for the whole
- * budget. A missing `mWakefulness` follows the screen for the same reason.
+ * budget. A missing `mWakefulness` follows the screen for the same reason;
+ * on such an image a screen that stays dark ends the fold as asleep, with a
+ * warning, not as a failure.
  */
 export function parseSnapshot(stdout: string): Snapshot {
   const screenOn = !/mScreenOnFully=false/.test(stdout);
@@ -168,18 +178,21 @@ function isReady(read: Snapshot, expected: string | undefined): boolean {
 
 /**
  * Poll until the guest holds one device state (the expected one, when the
- * request names it) and one wakefulness for {@link STABLE_READS} ready reads.
- * A device that wakes on unfold restarts the count, so the fold does not end
- * on the dark screen before the wake. A read still ready at the deadline is
- * a settled fold too: a wake that keeps resetting the count must not fail a
- * fold that ended where it should. The first read waits a poll: the console
- * answered before the guest reacted.
+ * request names it) and one wakefulness for {@link STABLE_READS} ready reads,
+ * plus {@link WAKE_GRACE_READS} for an asleep result away from `closedId` on
+ * a device that was asleep before. A device that wakes on unfold restarts the
+ * count, so the fold does not end on the dark screen before the wake. A read
+ * still ready at the deadline is a settled fold too, but not a `steady` one:
+ * a screen that keeps resetting the count must not fail a fold that ended
+ * where it should. The first read waits a poll: the console answered before
+ * the guest reacted.
  */
 async function awaitSettled(
   serial: string,
   expected: string | undefined,
+  wake: { wasAsleep: boolean; closedId: string | undefined },
   signal: AbortSignal | undefined
-): Promise<{ last: Snapshot | undefined; settled: boolean }> {
+): Promise<{ last: Snapshot | undefined; settled: boolean; steady: boolean }> {
   let last: Snapshot | undefined;
   let agreeing = 0;
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
@@ -190,9 +203,13 @@ async function awaitSettled(
     if (!isReady(read, expected)) agreeing = 0;
     else agreeing = agreeing > 0 && same ? agreeing + 1 : 1;
     last = read;
-    if (agreeing >= STABLE_READS) return { last, settled: true };
+    const mayWake = wake.wasAsleep && !read.awake && read.state !== wake.closedId;
+    if (agreeing >= STABLE_READS + (mayWake ? WAKE_GRACE_READS : 0)) {
+      return { last, settled: true, steady: true };
+    }
   }
-  return { last, settled: last !== undefined && isReady(last, expected) };
+  const settled = last !== undefined && isReady(last, expected);
+  return { last, settled, steady: false };
 }
 
 /**
@@ -289,15 +306,22 @@ async function fold(
     );
   }
 
-  const { last, settled } = await awaitSettled(serial, expected, signal);
+  const { last, settled, steady } = await awaitSettled(
+    serial,
+    expected,
+    { wasAsleep: !before.awake, closedId: states.get("CLOSED") },
+    signal
+  );
   const stateName = last?.state !== undefined ? (byId.get(last.state) ?? last.state) : "unknown";
-  // Not ready with a state means the device is awake and its screen stayed dark.
+  // Not ready with a state means the device is awake and its screen was dark
+  // at the end: it never came on, or it came on and went off again.
   const darkAwake = last?.state !== undefined && last.awake && !last.screenOn;
+  const budget = `${SETTLE_TIMEOUT_MS / 1000} s`;
   if (!settled && expected !== undefined) {
     throw failed(
       last?.state === expected
         ? `${serial} reached device state ${stateName} for the ${params.posture} posture, but the device is awake ` +
-            `and the screen did not come on within ${SETTLE_TIMEOUT_MS / 1000} s. Take a screenshot before the next action.`
+            `and the screen did not stay on within ${budget}. Take a screenshot before the next action.`
         : `${serial} did not reach the ${params.posture} posture: the guest still reports device state ${stateName}. ` +
             "Fold again; a screenshot shows what the device renders.",
       "android_fold_unverified"
@@ -308,18 +332,33 @@ async function fold(
   if (!settled) {
     warnings.push(
       darkAwake
-        ? `The device state is ${stateName}, but the screen did not come on within ${SETTLE_TIMEOUT_MS / 1000} s. Take a screenshot before the next action.`
-        : `The device state did not settle within ${SETTLE_TIMEOUT_MS / 1000} s; it last read ${stateName}. Take a screenshot before the next action.`
+        ? `The device state is ${stateName}, but the screen did not stay on within ${budget}. Take a screenshot before the next action.`
+        : `The device state did not settle within ${budget}; it last read ${stateName}. Take a screenshot before the next action.`
     );
-  } else if (last && !last.screenOn) {
-    warnings.push("The screen is off after the fold; wake the device before the next action.");
+  } else if (!steady) {
+    warnings.push(
+      `The screen did not hold steady within ${budget}. Take a screenshot before the next action.`
+    );
   }
-  if (stateName === "CLOSED" && !before.keyguard) {
+
+  // `wm dismiss-keyguard` cannot clear the lock screen of an asleep device;
+  // the screen-off warning covers that case.
+  let lockScreen = last?.keyguard ?? false;
+  if (stateName === "CLOSED" && !before.keyguard && last?.awake) {
+    lockScreen = false;
     const warning = await dismissFoldLockScreen(serial, signal);
     if (warning) warnings.push(warning);
-  } else if (last?.keyguard) {
-    // A lock screen that was up before the fold is not the fold's to clear,
-    // but every later tap lands on it.
+  }
+  // A lock screen that was up before the fold is not the fold's to clear, but
+  // every later tap lands on it.
+  const screenOff = settled && last !== undefined && !last.screenOn;
+  if (screenOff && lockScreen) {
+    warnings.push(
+      "The screen is off and the lock screen is showing after the fold. Wake and unlock the device before the next action."
+    );
+  } else if (screenOff) {
+    warnings.push("The screen is off after the fold. Wake the device before the next action.");
+  } else if (lockScreen) {
     warnings.push(
       "The lock screen is showing after the fold. Unlock or dismiss it before the next action."
     );

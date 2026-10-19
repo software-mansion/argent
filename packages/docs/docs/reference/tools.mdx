@@ -58,7 +58,7 @@ On an Android emulator:
 - The result gives `deviceState`, the state that Android committed: `CLOSED`, `HALF_OPENED` or `OPENED`. `posture` is the matching preset.
 - If the fold to closed shows the lock screen, Argent dismisses it. A lock screen with a PIN or a password stays. The tool result then has a warning.
 - Argent does not dismiss a lock screen that shows before the fold. If the lock screen shows after the fold, the tool result has a warning. Unlock the device before the next action.
-- A fold to closed can keep an asleep device asleep. If the screen is off after the fold, the tool result has a warning. Wake the device before the next action.
+- A fold can keep an asleep device asleep. If the screen is off after the fold, the tool result has a warning. Wake the device before the next action.
 - A Pixel Fold profile has a cover panel. A generic foldable profile, for example "7.6in Foldable", does not have one. When the device is closed, the emulator shows only the left part of the inner display. `describe` frames still use the full width, so you cannot see or tap the elements in the right part.
 - A physical Android device and an emulator without a hinge reject the call.
 
