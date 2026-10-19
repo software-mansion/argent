@@ -265,17 +265,24 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     e.response = { url: url || e.request.url, status: status, statusText: statusText || '', headers: headers, mimeType: mimeTypeOf(headers) };
   }
 
-  // The Content-Length of a response, when it gives one.
-  function contentLength(response) {
+  // A response header, by its name in lower case.
+  function headerValue(response, wanted) {
     var headers = response && response.headers;
     if (!headers) return undefined;
     for (var name in headers) {
-      if (hasOwn.call(headers, name) && name.toLowerCase() === 'content-length') {
-        var n = Number(headers[name]);
-        return headers[name] !== '' && n >= 0 && Math.floor(n) === n ? n : undefined;
-      }
+      if (hasOwn.call(headers, name) && name.toLowerCase() === wanted) return String(headers[name]);
     }
     return undefined;
+  }
+
+  // The Content-Length of a response, when it gives the size of the body the app gets. With a
+  // Content-Encoding (gzip, br) it is the compressed size, which iOS keeps on the decoded response.
+  function contentLength(response) {
+    var encoding = headerValue(response, 'content-encoding');
+    if (encoding !== undefined && encoding.trim().toLowerCase() !== 'identity' && encoding.trim() !== '') return undefined;
+    var value = headerValue(response, 'content-length');
+    var n = Number(value);
+    return value !== undefined && value !== '' && n >= 0 && Math.floor(n) === n ? n : undefined;
   }
 
   // Stores the body of a response, once: text, or bytes that keepBytes cut.

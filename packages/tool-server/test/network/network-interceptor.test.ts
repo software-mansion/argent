@@ -4257,6 +4257,13 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
     it.each([
       { headers: { "content-length": String(2 * BODY_CAP) }, size: 2 * BODY_CAP },
       { headers: {} as Record<string, string>, size: undefined },
+      // iOS keeps the compressed size of a body it decoded.
+      { headers: { "Content-Length": "3000", "Content-Encoding": "gzip" }, size: undefined },
+      { headers: { "content-length": "3000", "content-encoding": "br" }, size: undefined },
+      {
+        headers: { "content-length": String(2 * BODY_CAP), "content-encoding": "identity" },
+        size: 2 * BODY_CAP,
+      },
     ])(
       "gives a cut text body the Content-Length $size as its size, and its length in the list",
       ({ headers, size }) => {
