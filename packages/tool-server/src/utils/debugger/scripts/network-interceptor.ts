@@ -949,10 +949,15 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         }
         rec.entry.durationMs = Date.now() - rec.startedAt;
         if (typeof received === 'string') {
-          if (responseType !== 'base64') return complete(rec, received, textSize(received), false);
+          if (responseType !== 'base64') return complete(rec, received, textSizeOf(rec, received), false);
           var n = received.length;
           var padding = received.charAt(n - 1) === '=' ? (received.charAt(n - 2) === '=' ? 2 : 1) : 0;
           var size = Math.max(0, Math.floor(n * 3 / 4) - padding);
+          // A binary body keeps no bytes (see storeBody).
+          if (isBinaryResponse(rec)) {
+            omitBody(rec, size);
+            return complete(rec, undefined, size, false);
+          }
           // Decoded when the agent reads the record, as bytes are.
           rec.entry.bodyBase64 = received.slice(0, Math.ceil((BODY_CAP + 3) / 3) * 4);
           if (byId[rec.entry.requestId] === rec.entry) { bufferedChars += rec.entry.bodyBase64.length; evict(); }
@@ -965,6 +970,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
               return readBlob(rec, blobOf(received, blobSize), blobSize, Math.min(blobSize, BODY_CAP), function(end) { return blobOf(received, end); });
             } catch (e) {}
           }
+          if (isBinaryResponse(rec)) omitBody(rec, blobSize);
           return complete(rec, undefined, blobSize, false);
         }
         storeStreamed();

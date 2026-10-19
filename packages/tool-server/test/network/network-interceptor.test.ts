@@ -4178,6 +4178,8 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
 
       it.each([1, 2, 3, 4, 5])("records the size of a binary body of %i bytes", async (length) => {
         const rt = libRuntime();
+        // Without a decoder too, a binary body is marked as omitted.
+        rt.context.TextDecoder = undefined;
         rt.install();
         const pending = rt.run(
           `fetch('https://api.test/img', { reactNative: { __nativeResponseType: 'base64' } })`
@@ -4192,7 +4194,11 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         await pending;
         await settle();
 
-        expect(rt.records()[0]).toMatchObject({ state: "finished", encodedDataLength: length });
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          encodedDataLength: length,
+          bodyOmitted: true,
+        });
         expect(rt.records()[0]!.responseBody).toBeUndefined();
       });
 
