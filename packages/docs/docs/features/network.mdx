@@ -51,9 +51,11 @@ First the agent reads the list of records in the network log. Each line shows on
 
 In the JS runtime layer, the text after the status is the standard reason phrase of the status code, for example `OK` or `Not Found`. A request that a redirect sent to a different URL ends with that URL, for example `→ /v2/users`.
 
+A size with `~`, for example `~1.2 MB`, is approximate. The JS runtime layer shows this size for a large text body when the size in bytes is not known. This size is the length of the body in characters. The size in bytes is equal to this length or larger.
+
 Then the agent reads the details of one record. The details contain these items:
 
-- The URL, the method and the status. In the JS runtime layer, `redirectedTo` gives the final URL after a redirect.
+- The URL, the method and the status. In the JS runtime layer, the details also give the final URL after a redirect.
 - The headers of the request and of the response
 - The duration and the size
 - The bodies of the request and of the response
@@ -79,7 +81,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - Chrome DevTools Protocol layer: Argent attaches to the Chromium app.
   - Native `NSURLProtocol` layer: you activate the native inspection.
 - A reload or a restart of the app clears the network log of the JS runtime layer. Argent starts the capture again when the agent reads the network log.
-- After an upgrade of Argent, the network capture of the earlier version stays in the app until the app reloads. It keeps no records, but it still reads a copy of each `fetch()` response. Reload the app to remove it.
+- After an upgrade of Argent, the network capture of the earlier version stays in the app until the app reloads. The earlier network capture keeps no records, but it still reads a copy of each `fetch()` response. Reload the app to remove the earlier network capture.
 - Expo `fetch()` does not always report a connection that breaks in the middle of the response body. The app then gets a part of the body, or its read of the body does not end. The record shows the same: that part of the body, or a pending request. If the app does not read the body, the record shows a finished request.
 - If the app aborts an `XMLHttpRequest` while the response body streams, the record shows a failed request with the error `aborted`. The record contains the part of the text body that the app received before the abort. For example, `react-native-sse` aborts its request to close the connection. The same applies to a library request that streams text, for example a react-native-fetch-api request with `textStreaming`. If the app aborts an Expo `fetch()` while it streams the body, the record has no body.
 - A `fetch()` call that fails before it sends the request has no record. An example is a call with a signal that is already aborted.

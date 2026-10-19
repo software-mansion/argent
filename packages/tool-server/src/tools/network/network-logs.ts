@@ -21,7 +21,7 @@ const ITEMS_PER_PAGE = 50;
 function notInstalled(installError: string | undefined): string {
   return installError
     ? `Network interceptor could not be installed in the app's JS runtime: ${installError}`
-    : "Network interceptor not installed — the app's JS runtime reloaded, which clears captured requests. Call view-network-logs again to reinstall it, then repeat the action that sends the requests.";
+    : "Network interceptor not installed: the app's JS runtime reloaded, which clears captured requests. Call view-network-logs again to reinstall it, then repeat the action that sends the requests.";
 }
 
 // Auto-scaled base-1024 units: a big download reads `1.4 GB`, not `1433.6 MB`.
@@ -169,7 +169,7 @@ function renderChromiumPage(
 ): string {
   const total = records.length;
   if (total === 0) {
-    return "No network traffic captured. Recording is active on the active tab — navigate or reload the page to populate it (requests made before the device was attached are not captured).";
+    return "No network traffic captured. Recording is active on the active tab. Navigate or reload the page to populate it (requests made before the device was attached are not captured).";
   }
   const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
   const pageIndex = pageIndexParam === "latest" ? pageCount - 1 : pageIndexParam;
@@ -208,6 +208,7 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   },
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
+A size with "~" is estimated from the body's length in characters; "→ <url>" is the final URL after a redirect.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
 On React Native (iOS / Android / Vega) interception is injected into the JS runtime: it records each request once: XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module itself, such as react-native-fetch-api (found in a Metro development build). Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
