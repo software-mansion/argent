@@ -72,7 +72,8 @@ run_phase() {
   assert_ok   "$P" button back   "{\"udid\":\"$DEV\",\"button\":\"back\"}"
   assert_ok   "$P" rotate landscape "{\"udid\":\"$DEV\",\"orientation\":\"LandscapeLeft\"}"
   assert_ok   "$P" rotate portrait  "{\"udid\":\"$DEV\",\"orientation\":\"Portrait\"}"
-  assert_ok   "$P" keyboard text "{\"udid\":\"$DEV\",\"text\":\"hello e2e\"}"
+  # A read-back failure still exits 0, with `verified: false`; absent (no focused field) passes.
+  assert_field "$P" keyboard text "{\"udid\":\"$DEV\",\"text\":\"hello e2e\"}" '(.verified != false)' 'true'
   assert_ok   "$P" keyboard key  "{\"udid\":\"$DEV\",\"key\":\"enter\"}"
   # Both halves in ONE call is rejected — a guard the two legal calls above
   # cannot exercise. The 400 comes from `execute`, not from schema validation:

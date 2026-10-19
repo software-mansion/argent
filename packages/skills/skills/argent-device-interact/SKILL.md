@@ -169,6 +169,8 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 
 One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8): `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
 
+On an Android phone or tablet the typed text is read back, because `adb input text` can silently drop characters on a field that re-renders per keystroke. `verified: true` means the field holds the text; `verified: false` means it does not, and stops the surrounding `run-sequence` before the Enter. An absent `verified` means the check did not run or could not conclude, not that the text landed; on Android `note` says why.
+
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms); applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
 **Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
@@ -375,7 +377,7 @@ Tap, wait for the next screen, then act on it: the `await-ui-element` step **gat
 
 Prefer this over a fixed `delayMs` when a step depends on a screen transition: it adapts to real load time, and if the condition is not met before the timeout the sequence **stops there** so the next tap can't fire against a screen that never settled.
 
-Stops on the first error (or unmet `await-ui-element` condition) and returns partial results.
+Stops on the first error (or unmet `await-ui-element` condition, or a `keyboard` step returning `verified: false`) and returns partial results.
 
 ---
 

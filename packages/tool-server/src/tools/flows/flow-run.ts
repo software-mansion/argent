@@ -66,6 +66,7 @@ import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke"
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 import {
   resolveFlowDevice,
   bindDeviceArgs,
@@ -2982,6 +2983,17 @@ async function execLeafStep(
             status: "fail",
             tool: step.name,
             reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            result,
+            outputHint,
+            args,
+          };
+        }
+        if (isUnlandedKeyboardTextResult(step.name, result)) {
+          return {
+            ...base,
+            status: "fail",
+            tool: step.name,
+            reason: `typed text did not land${result.note ? `: ${result.note}` : ""}`,
             result,
             outputHint,
             args,

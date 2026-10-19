@@ -60,6 +60,19 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+/** An Android read-back that proved the text did not land. Absent `verified` is not a failure. */
+export function isUnlandedKeyboardTextResult(
+  toolId: string,
+  result: unknown
+): result is { verified: false; note?: string } {
+  return (
+    toolId === "keyboard" &&
+    typeof result === "object" &&
+    result !== null &&
+    (result as { verified?: unknown }).verified === false
+  );
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
@@ -109,12 +122,16 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      completedMsg: ({ params, result }) =>
+        params.text === undefined
+          ? "Pressed a key"
+          : `Entered text${result.verified === false ? " (text did not land)" : ""}`,
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
+Returns { typed: string, keys: number, verified?: boolean, note?: string }. On physical iOS, reactivated: true = app was re-fronted; re-describe.
+On an Android phone or tablet the focused field is read back, because \`adb input text\` can silently drop characters on a field that re-renders per keystroke. verified=true: the field holds the text. verified=false: it does not, and note gives the character counts. verified is absent when the check could not conclude (note says why), and on every other platform, including Android TV: absent means "not checked". A verified=false step stops a \`run-sequence\` and fails a flow step. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
 A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\`, resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\`: that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1-f12). NOT supported on TV targets; move focus with \`tv-remote\` instead. Physical iOS: only \`enter\` and \`backspace\`.
@@ -123,8 +140,9 @@ One call does one action: pass text OR key, never both. To type and then press a
     zodSchema,
     capability,
     alwaysLoad: true,
-    // Typing time grows with text length on several backends and can outlast the MCP
-    // fetch timeout, whose abort replays the call: the text would be typed twice.
+    // Typing time grows with text length on several backends, and the Android read-back
+    // can first resolve its helper (an APK install, up to a 30 s READY timeout). Either can
+    // outlast the MCP fetch timeout, whose abort replays the call: the text would be typed twice.
     longRunning: true,
     searchHint:
       "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
