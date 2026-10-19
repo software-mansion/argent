@@ -10,7 +10,7 @@ import {
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
-import { isRedirect } from "./network-logs";
+import { isRedirect, reasonPhrase } from "./network-logs";
 
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -237,7 +237,7 @@ Returns an error message string if the requestId is not found: use view-network-
     if (entry.response) {
       const resp: NetworkRequestDetails["response"] = {
         status: entry.response.status,
-        statusText: entry.response.statusText,
+        statusText: reasonPhrase(entry.response.status),
         headers: redactHeaders(entry.response.headers),
         mimeType: entry.response.mimeType,
       };

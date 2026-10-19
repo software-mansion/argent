@@ -1,3 +1,4 @@
+import { STATUS_CODES } from "node:http";
 import { z } from "zod";
 import bytesUtil from "bytes";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
@@ -42,6 +43,15 @@ interface LogEntry {
   errorText?: string;
 }
 
+/**
+ * The standard reason phrase of a status ("OK", "Not Found"), or "" for a status without one. The JS
+ * runtime records whatever text the platform gives: none from React Native's XHR and fetch, a
+ * localised description from iOS for Expo ("no error"), so the tools show this phrase for all.
+ */
+export function reasonPhrase(status: number): string {
+  return STATUS_CODES[status] ?? "";
+}
+
 /** Whether a response's final URL is another than the request URL, not the same one written differently. */
 export function isRedirect(requestUrl: string | undefined, finalUrl: string | undefined): boolean {
   if (!finalUrl || requestUrl === undefined || finalUrl === requestUrl) return false;
@@ -82,7 +92,13 @@ function formatEntry(entry: LogEntry): string {
     status = entry.errorText ?? "failed";
   } else if (entry.response) {
     // A response whose body has not completed.
-    status = `${entry.response.status} ${entry.response.statusText}${entry.state === "pending" ? " (pending)" : ""}`;
+    status = [
+      entry.response.status,
+      entry.response.statusText,
+      entry.state === "pending" ? "(pending)" : "",
+    ]
+      .filter((part) => part !== "")
+      .join(" ");
   } else {
     status = "pending";
   }
@@ -219,7 +235,16 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
 
     if (!data.interceptorInstalled) return notInstalled(installError);
 
-    const lines = data.entries.map(formatEntry);
+    const lines = data.entries.map((entry) =>
+      formatEntry(
+        entry.response
+          ? {
+              ...entry,
+              response: { ...entry.response, statusText: reasonPhrase(entry.response.status) },
+            }
+          : entry
+      )
+    );
 
     return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${data.total} total) ===\n\n${lines.join("\n")}`;
   },

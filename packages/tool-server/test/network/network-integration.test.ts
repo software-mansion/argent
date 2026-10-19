@@ -675,6 +675,64 @@ describe("NetworkInspector integration (mock server)", () => {
     }
   });
 
+  it("shows the standard reason phrase of each status, whatever text the platform gave", async () => {
+    const record = (
+      requestId: string,
+      status: number,
+      statusText: string,
+      resourceType: string
+    ) => ({
+      id: networkLog.length,
+      requestId,
+      state: "finished",
+      request: { url: `https://api.example.com/${requestId}`, method: "GET", headers: {} },
+      response: {
+        url: `https://api.example.com/${requestId}`,
+        status,
+        statusText,
+        headers: {},
+        mimeType: "text/plain",
+      },
+      resourceType,
+      timestamp: Date.now() / 1000,
+    });
+    // Expo on iOS gives localised descriptions, React Native's XHR and fetch give none.
+    networkLog.push(
+      record("expo-ok", 200, "no error", "Fetch"),
+      record("expo-500", 500, "internal server error", "Fetch"),
+      record("xhr-404", 404, "", "XHR"),
+      record("xhr-299", 299, "", "XHR")
+    );
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+      expect(result).toContain('{id: expo-ok} "GET /expo-ok" 200 OK Fetch\n');
+      expect(result).toContain('{id: expo-500} "GET /expo-500" 500 Internal Server Error Fetch\n');
+      expect(result).toContain('{id: xhr-404} "GET /xhr-404" 404 Not Found XHR\n');
+      expect(result).toMatch(/\{id: xhr-299\} "GET \/xhr-299" 299 XHR$/m);
+
+      for (const [requestId, statusText] of [
+        ["expo-ok", "OK"],
+        ["xhr-404", "Not Found"],
+        ["xhr-299", ""],
+      ]) {
+        const details = (await registry.invokeTool("view-network-request-details", {
+          port: mockPort,
+          device_id: "mock-device",
+          requestId,
+        })) as { response: { statusText: string } };
+        expect(details.response.statusText).toBe(statusText);
+      }
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "expo-ok"),
+        4
+      );
+    }
+  });
+
   it("view-network-logs returns page index out-of-range error", async () => {
     const result = (await registry.invokeTool("view-network-logs", {
       port: mockPort,

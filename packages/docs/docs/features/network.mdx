@@ -49,7 +49,7 @@ First the agent reads the list of records in the network log. Each line shows on
 {id: rn-net-4} "GET /v1/users" 200 OK Fetch 12.4 kB 143 ms
 ```
 
-In the JS runtime layer, a request that a redirect sent to a different URL ends with that URL, for example `→ /v2/users`.
+In the JS runtime layer, the text after the status is the standard reason phrase of the status code, for example `OK` or `Not Found`. A request that a redirect sent to a different URL ends with that URL, for example `→ /v2/users`.
 
 Then the agent reads the details of one record. The details contain these items:
 
