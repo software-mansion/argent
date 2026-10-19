@@ -2576,7 +2576,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(rt.records()[0]).toMatchObject({
         resourceType: "Fetch",
         state: "pending",
-        request: { method: "GET", url: "https://api.test/me", headers: { "X-Id": "7" } },
+        request: { method: "GET", url: "https://api.test/me", headers: { "x-id": "7" } },
       });
       rt.native[0]!.respond(200, { "Content-Type": "application/json" }, TEXT_BODY);
       expect(await pending).toEqual({ name: "Zoë 👋" });
@@ -2689,6 +2689,23 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
       expect(rt.records()[0]!.responseBody).toBeUndefined();
       expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
+    });
+
+    it("records the request headers under lowercased names", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const pending = rt.run(
+        `expoFetch('https://api.test/me', { headers: [['Authorization', 'Bearer tok'], ['X-D', '4']] })`
+      ) as Promise<unknown>;
+      for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+      rt.native[0]!.respond(200, {}, "");
+      await pending;
+      await settle();
+
+      expect(rt.records()[0]!.request.headers).toEqual({
+        "authorization": "Bearer tok",
+        "x-d": "4",
+      });
     });
 
     /**

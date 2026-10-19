@@ -786,7 +786,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         if (!response || !promise || typeof promise.then !== 'function') return promise;
         try {
           var rec = createRecord('Fetch', String((init && init.method) || 'GET').toUpperCase(), String(url),
-            headersObject(init && init.headers), body, startedAt);
+            lowerCaseHeaders(init && init.headers), body, startedAt);
           nativeRecords.set(this, rec);
           observeExpoResponse(rec, response, promise);
         } catch (e) {}
