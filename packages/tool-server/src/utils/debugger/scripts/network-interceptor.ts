@@ -413,13 +413,24 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     // RN keeps _aborted set until the next open, so an abort called from a handler of an abort
     // still counts as one. An app can also abort from its own handler of HEADERS_RECEIVED, which
     // runs before the listener that records the headers: keep them.
+    // RN clears the response before it announces the abort, so the text an XHR has received while it
+    // streams (react-native-sse aborts to close) is taken first. The request stays failed: the body
+    // is only the part that arrived.
     proto.abort = function() {
       var request = live.get(this);
       if (request && this.readyState >= 2 && !request.rec.entry.response) onHeaders(this, request.rec);
       if (request && this.readyState === 4) {
         request.end(this._aborted ? 'abort' : this._hasError ? (this._timedOut ? 'timeout' : 'error') : 'load');
       }
-      return origAbort.apply(this, arguments);
+      var partial;
+      if (request && this.readyState === 3) {
+        try { if (this.responseType === '' || this.responseType === 'text') partial = this.responseText; } catch (e) {}
+      }
+      var result = origAbort.apply(this, arguments);
+      if (typeof partial === 'string' && partial && request.rec.entry.state === 'failed') {
+        storeBody(request.rec, partial, utf8Length(partial), false);
+      }
+      return result;
     };
   }
 

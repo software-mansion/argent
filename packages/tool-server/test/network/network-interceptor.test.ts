@@ -854,6 +854,12 @@ function createRuntime({
       this.responseURL = responseURL;
     }
 
+    /** Native side: a part of a response body arrives while the request streams (LOADING). */
+    receiveText(text: string): void {
+      this.raw = (this.raw as string) + text;
+      this.setReadyState(3);
+    }
+
     /** Native side: headers, data and completion of a response. */
     respond(
       status: number,
@@ -1491,6 +1497,62 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         errorText: "aborted",
         response: { status: 413, mimeType: "application/json" },
       });
+    });
+
+    it("keeps the text a streaming XHR received when the app aborts it", () => {
+      const rt = createRuntime();
+      rt.install();
+      // react-native-sse reads the events in onprogress and aborts the XHR in close().
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/sse'); x.onreadystatechange = function() {}; x.send();`
+      );
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, { "content-type": "text/event-stream" });
+      xhr.receiveText("data: 1\n\n");
+      xhr.receiveText("data: 2\n\n");
+      rt.run("x.abort()");
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "aborted",
+        response: { status: 200, mimeType: "text/event-stream" },
+        responseBody: "data: 1\n\ndata: 2\n\n",
+        encodedDataLength: 18,
+      });
+      expect(rt.records()[0]!.bodyTruncated).toBeUndefined();
+    });
+
+    it("caps the text of an aborted streaming XHR at 1 MiB", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/sse'); x.send();`);
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, {});
+      xhr.receiveText("e".repeat(BODY_CAP + 7));
+      rt.run("x.abort()");
+
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "aborted",
+        bodyTruncated: true,
+      });
+      expect(rt.records()[0]!.responseBody).toHaveLength(BODY_CAP);
+    });
+
+    it.each([
+      { when: "before the response", headers: false },
+      { when: "after the headers, before any data", headers: true },
+    ])("records no body for an XHR the app aborts $when", ({ headers }) => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/sse'); x.send();`);
+      if (headers) rt.last().receiveHeaders(200, {});
+      rt.run("x.abort()");
+
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText: "aborted" });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+      expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
     });
   });
 
