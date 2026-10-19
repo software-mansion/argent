@@ -54,13 +54,11 @@ On an iOS simulator:
 
 On an Android emulator:
 
-- Argent moves the hinge through the emulator console. A posture uses the hinge angle of the AVD profile. An angle sets the hinge sensor, and Android selects the posture from the angle.
-- The result gives `deviceState`, the state that Android committed: `CLOSED`, `HALF_OPENED` or `OPENED`. `posture` is the matching preset.
-- If the fold to closed shows the lock screen, Argent dismisses it. A lock screen with a PIN or a password stays. The tool result then has a warning.
-- Argent does not dismiss a lock screen that shows before the fold. If the lock screen shows after the fold, the tool result has a warning. Unlock the device before the next action.
-- A fold can keep an asleep device asleep. If the screen is off after the fold, the tool result has a warning. Wake the device before the next action.
-- A Pixel Fold profile has a cover panel. A generic foldable profile, for example "7.6in Foldable", does not have one. When the device is closed, the emulator shows only the left part of the display. `describe` frames do not match tap coordinates: the frames use the full display, but taps and screenshots use only the visible part. Argent can reliably tap only an element that covers the visible part, for example a full-width row. Use a Pixel Fold profile to test the cover panel.
-- A physical Android device and an emulator without a hinge reject the call.
+- The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.
+- Argent dismisses a lock screen that the fold to closed shows, if it has no PIN or password.
+- The result has a warning if the screen is off or the lock screen shows after the fold.
+- On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
+- A physical device and an emulator without a hinge reject the call.
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
