@@ -1625,6 +1625,108 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
     });
   });
 
+  describe("resource type", () => {
+    // An app's own XHR with the handlers and responseType React Native's fetch sets.
+    const FETCH_SHAPED_XHR = (responseType: string) => `
+      var x = new XMLHttpRequest();
+      x.open('GET', 'https://api.test/file.bin');
+      x.responseType = '${responseType}';
+      x.onload = function() {};
+      x.onabort = function() {};
+      x.ontimeout = function() {};
+      x.onerror = function() {};
+      x.send();`;
+
+    it.each(["blob", "arraybuffer"])(
+      "labels an app's own XHR with responseType %s as XHR",
+      async (responseType) => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.install();
+        rt.run(FETCH_SHAPED_XHR(responseType));
+        rt.last().respond(200, { "content-type": "application/octet-stream" }, "bytes");
+        await settle();
+
+        expect(rt.records().map((r) => r.resourceType)).toEqual(["XHR"]);
+      }
+    );
+
+    it("labels an axios-style XHR as XHR", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      rt.run(`
+        var x = new XMLHttpRequest();
+        x.open('POST', 'https://api.test/users', true);
+        x.setRequestHeader('Content-Type', 'application/json');
+        x.onloadend = function() {};
+        x.onabort = function() {};
+        x.onerror = function() {};
+        x.ontimeout = function() {};
+        x.send('{}');
+      `);
+      rt.last().respond(201, { "content-type": "application/json" }, "{}");
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["XHR"]);
+    });
+
+    it("labels React Native's fetch as Fetch, also through a reference taken before the install", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.run("var captured = fetch;");
+      rt.install();
+      // cache: 'no-store' makes whatwg-fetch add a query to the URL after it built the Request.
+      rt.run(`
+        fetch('https://api.test/a');
+        captured('https://api.test/b', { method: 'post', body: 'x' });
+        fetch(new Request('https://api.test/c', { cache: 'no-store' }));
+      `);
+      for (const xhr of rt.sends) xhr.respond(200, { "content-type": "text/plain" }, "ok");
+      await settle();
+
+      expect(rt.records().map((r) => `${r.resourceType} ${r.request.url.split("?")[0]}`)).toEqual([
+        "Fetch https://api.test/a",
+        "Fetch https://api.test/b",
+        "Fetch https://api.test/c",
+      ]);
+    });
+
+    it("labels an XHR the app opens after it built a Request of its own as XHR", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      await (rt.run(
+        `var request = new Request('https://api.test/file.bin'); tick()`
+      ) as Promise<unknown>);
+      rt.run(FETCH_SHAPED_XHR("blob"));
+      rt.last().respond(200, { "content-type": "application/octet-stream" }, "bytes");
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["XHR"]);
+    });
+
+    it("labels Expo's fetch as Fetch", async () => {
+      const rt = createRuntime(EXPO_GLOBAL);
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/me').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      rt.native[0]!.respond(200, { "content-type": "text/plain" }, "ok");
+      await pending;
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["Fetch"]);
+    });
+
+    it("tells React Native's fetch by the shape of its XHR when it has no whatwg-fetch Request", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(FETCH_SHAPED_XHR("blob"));
+      rt.last().respond(200, { "content-type": "application/octet-stream" }, "bytes");
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["Fetch"]);
+    });
+  });
+
   // Each wrapper replaced the global fetch at startup, before the install: the global fetch the
   // interceptor finds is the app's.
   describe("app wrappers over React Native's fetch", () => {

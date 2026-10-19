@@ -284,9 +284,34 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       setResponse(rec, xhr.responseURL, xhr.status, xhr.statusText, parseHeaders(raw));
     };
 
-    // An XHR that React Native's fetch sends: it reads every response as a blob (as an arraybuffer
-    // where Blob is unavailable) and sets these handlers. axios sets onloadend, not onload.
-    var isFetchXhr = function(xhr) {
+    // React Native's fetch is whatwg-fetch over XHR. Each call builds a Request of whatwg-fetch, whose
+    // constructor ends with _initBody, and then, in the same synchronous run, opens its XHR with that
+    // Request's method and URL. Its Request class is the global one, so wrapping _initBody marks the
+    // Request of each call, also of a fetch the app captured before the install, and the next open
+    // that matches it, before the run ends, is the call's XHR. Any other XHR is the app's own, even
+    // one that reads its response as a blob.
+    var fetchRequest = null;
+    var knowsFetch = false;
+    try {
+      var requestProto = typeof g.Request === 'function' && g.Request.prototype;
+      if (requestProto && hasOwn.call(requestProto, '_initBody') && typeof requestProto._initBody === 'function' &&
+        typeof Promise === 'function') {
+        var origInitBody = requestProto._initBody;
+        var markFetch = function() {
+          fetchRequest = this;
+          var marked = this;
+          Promise.resolve().then(function() { if (fetchRequest === marked) fetchRequest = null; });
+          return origInitBody.apply(this, arguments);
+        };
+        requestProto._initBody = markFetch;
+        knowsFetch = requestProto._initBody === markFetch;
+      }
+    } catch (e) {}
+    // Without that Request class, an XHR shaped as React Native's fetch sends it: it reads every
+    // response as a blob (as an arraybuffer where Blob is unavailable) and sets these handlers.
+    // axios sets onloadend, not onload.
+    var isFetchXhr = function(xhr, slot) {
+      if (knowsFetch) return slot.fetch;
       return (xhr.responseType === 'blob' || xhr.responseType === 'arraybuffer') && typeof xhr.onload === 'function' &&
         typeof xhr.onabort === 'function' && typeof xhr.ontimeout === 'function';
     };
@@ -370,8 +395,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     proto.open = function(method, url) {
       var orphan = live.get(this);
       var previous = slots.get(this);
+      var request = fetchRequest;
+      fetchRequest = null;
+      var slot = { method: String(method || 'GET').toUpperCase(), url: String(url), headers: {}, fetch: false };
+      // whatwg-fetch opens '' as the page's URL, which React Native does not have.
+      slot.fetch = !!request && String(request.method).toUpperCase() === slot.method && (String(request.url) === slot.url || request.url === '');
       // Set before the original open, which dispatches readystatechange: a handler may send from there.
-      slots.set(this, { method: String(method || 'GET').toUpperCase(), url: String(url), headers: {} });
+      slots.set(this, slot);
       var result;
       try {
         result = origOpen.apply(this, arguments);
@@ -401,7 +431,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var startedAt = Date.now();
       var result = origSend.apply(this, arguments);
       if (!slot || !slot.headers) return result;
-      var rec = createRecord(isFetchXhr(this) ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
+      var rec = createRecord(isFetchXhr(this, slot) ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
       noteSend(slot.method, slot.url, body);
       slot.headers = null;
       listen(this, rec);

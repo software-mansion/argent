@@ -35,6 +35,8 @@ In React Native, the JS runtime layer records each request where the request lea
 
 For `XMLHttpRequest` and the `fetch()` functions of React Native and Expo, Argent records each request one time. A function of the app that wraps `fetch()` does not change the number of records. An app can keep a reference to `fetch()` from before the capture started. Argent also records the requests through this reference.
 
+The type of a record is `Fetch` for the `fetch()` functions of React Native and Expo, and for a library that sets its own `fetch()`. The type is `XHR` for the `XMLHttpRequest` calls of the app, also from axios.
+
 For the `fetch()` function of Expo, Argent records the body of a response when the app reads the body. Expo gives the body to one reader only. Thus Argent does not read a body while the request runs. After the request ends, Argent takes the body of an error response that the app did not read. Argent gives this body to the app when the app reads it.
 
 Native code does not use these functions. For native code, use the iOS native layer.
