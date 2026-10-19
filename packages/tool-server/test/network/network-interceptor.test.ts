@@ -595,6 +595,24 @@ interface ExpoCalls {
 
 type Listener = (this: unknown) => void;
 
+/** A request React Native's network module got, answered by the test as the native side. */
+interface NetworkRequest {
+  id: number;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  data: unknown;
+  responseType: string;
+  incremental: boolean;
+  /** Sent by an XHR. */
+  fromXhr: boolean;
+  aborted: boolean;
+}
+
+/** React Native's native blob store: a blob's bytes by id, until the last reference is released. */
+const nativeBlobs = new Map<string, Buffer>();
+let nextBlobId = 1;
+
 class FakeBlob {
   readonly data: Buffer;
   readonly type: string;
@@ -658,6 +676,12 @@ interface RuntimeOptions {
   liveDispatch?: boolean;
   /** Runs just before a FileReader read delivers its result. */
   beforeReadResult?: (blob: FakeBlob) => void;
+  /** Metro's module list (`__r.getModules()`), as a development build has it. On by default. */
+  metro?: boolean;
+  /** How React Native's network module hands back a request id: iOS by default. */
+  networkPlatform?: "ios" | "android";
+  /** Whether the app has loaded React Native's network module before the install. */
+  networkModuleLoaded?: boolean;
 }
 
 /**
@@ -694,6 +718,213 @@ const APP_HELPERS = `
   }`;
 
 /**
+ * react-native-fetch-api 3.0.0 (src/Fetch.js, Request.js, Response.js, Body.js, BlobResponse.js,
+ * ArrayBufferResponse.js), cut to what a request goes through: a fetch over React Native's network
+ * module (`__networking`, the `Networking` of 'react-native'), and its own Request, Response and
+ * Headers. `__installLibrary()` sets them as the globals with React Native's polyfillGlobal, as
+ * react-native-polyfill-globals does: Object.defineProperty, never a plain assignment.
+ */
+const LIB_FETCH = `(function() {
+  var Networking = __networking;
+  class Headers {
+    constructor(init) {
+      this.map = new Map();
+      if (init instanceof Headers) init.forEach((value, name) => this.append(name, value));
+      else if (init) Object.getOwnPropertyNames(init).forEach((name) => this.append(name, init[name]));
+    }
+    append(name, value) {
+      name = String(name).trim().toLowerCase();
+      var old = this.map.get(name);
+      this.map.set(name, old ? old + ', ' + value : String(value));
+    }
+    set(name, value) { this.map.set(String(name).toLowerCase(), String(value)); }
+    get(name) { return this.map.has(name.toLowerCase()) ? this.map.get(name.toLowerCase()) : null; }
+    has(name) { return this.map.has(name.toLowerCase()); }
+    forEach(callback, thisArg) { this.map.forEach((value, name) => callback.call(thisArg, value, name, this)); }
+    entries() { return this.map.entries(); }
+  }
+  class Body {
+    constructor(body) {
+      this.bodyUsed = false;
+      this._bodyInit = body;
+      if (!body) { this._bodyText = ''; return; }
+      if (body instanceof Blob) { this._bodyBlob = body; this._mimeType = body.type; return; }
+      if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+        this._bodyArrayBuffer = body.slice(0); this._mimeType = 'application/octet-stream'; return;
+      }
+      if (body instanceof ReadableStream) { this._bodyReadableStream = body; this._mimeType = 'application/octet-stream'; return; }
+      this._bodyText = body.toString();
+      this._mimeType = 'text/plain;charset=UTF-8';
+    }
+    async text() {
+      if (this.bodyUsed) throw new TypeError('Already read');
+      this.bodyUsed = true;
+      if (this._bodyReadableStream) return readStream({ body: this._bodyReadableStream });
+      if (this._bodyBlob) {
+        var blob = this._bodyBlob;
+        return new Promise((resolve, reject) => {
+          var reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('read failed'));
+          reader.readAsText(blob);
+        });
+      }
+      if (this._bodyArrayBuffer) return new TextDecoder().decode(this._bodyArrayBuffer);
+      return this._bodyText;
+    }
+    get body() { return this._bodyReadableStream; }
+  }
+  class Request {
+    constructor(input, options = {}) {
+      this.url = input instanceof Request ? input.url : input;
+      this.method = (options.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      this._body = input instanceof Request && !options.body ? new Body(input._body._bodyInit) : new Body(options.body);
+      this.headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
+      this.signal = options.signal || (input instanceof Request ? input.signal : undefined);
+      this.credentials = 'same-origin';
+      if (!this.headers.has('content-type') && this._body._mimeType) this.headers.set('content-type', this._body._mimeType);
+    }
+  }
+  class Response {
+    constructor(body, options = {}) {
+      this.type = 'basic';
+      this.status = options.status ?? 200;
+      this.ok = this.status >= 200 && this.status < 300;
+      this.statusText = options.statusText ?? '';
+      this.headers = new Headers(options.headers);
+      this.url = options.url ?? '';
+      this._body = new Body(body);
+      if (!this.headers.has('content-type') && this._body._mimeType) this.headers.set('content-type', this._body._mimeType);
+    }
+    get bodyUsed() { return this._body.bodyUsed; }
+    get body() { return this._body.body; }
+    clone() {
+      return new Response(this._body._bodyInit, { status: this.status, statusText: this.statusText, headers: new Headers(this.headers), url: this.url });
+    }
+    text() { return this._body.text(); }
+    json() { return this._body.text().then(JSON.parse); }
+  }
+  class BlobResponse extends Response {
+    constructor(blobData, options) {
+      super(__blobManager.createFromOptions(blobData), options);
+      this._blobData = blobData;
+    }
+    clone() {
+      return new BlobResponse(this._blobData, { status: this.status, statusText: this.statusText, headers: new Headers(this.headers), url: this.url });
+    }
+  }
+  class ArrayBufferResponse extends Response {
+    constructor(base64, options) {
+      super(__base64Bytes(base64), options);
+      this._base64 = base64;
+    }
+  }
+  class AbortError extends Error {
+    constructor() { super('Aborted'); this.name = 'AbortError'; }
+  }
+  function defer() {
+    var deferred = {};
+    deferred.promise = new Promise((resolve, reject) => { deferred.resolve = resolve; deferred.reject = reject; });
+    return deferred;
+  }
+  class Fetch {
+    constructor(resource, options = {}) {
+      this._nativeNetworkSubscriptions = new Set();
+      this._nativeResponseType = 'blob';
+      this._nativeRequestHeaders = {};
+      this._textEncoder = new TextEncoder();
+      this._request = new Request(resource, options);
+      if (this._request.signal && this._request.signal.aborted) throw new AbortError();
+      this._abortFn = this.__abort.bind(this);
+      this._deferredPromise = defer();
+      if (this._request.signal) this._request.signal.addEventListener('abort', this._abortFn);
+      for (const [name, value] of this._request.headers.entries()) this._nativeRequestHeaders[name] = value;
+      var reactNative = options.reactNative;
+      if (reactNative && reactNative.textStreaming) this._nativeResponseType = 'text';
+      else this._nativeResponseType = (reactNative && reactNative.__nativeResponseType) || this._nativeResponseType;
+      this.__doFetch();
+      return this._deferredPromise.promise;
+    }
+    __subscribeToNetworkEvents() {
+      ['didReceiveNetworkResponse', 'didReceiveNetworkData', 'didReceiveNetworkIncrementalData', 'didCompleteNetworkResponse'].forEach((eventName) => {
+        this._nativeNetworkSubscriptions.add(Networking.addListener(eventName, (args) => { this['__' + eventName](...args); }));
+      });
+    }
+    __clearNetworkSubscriptions() {
+      this._nativeNetworkSubscriptions.forEach((subscription) => subscription.remove());
+      this._nativeNetworkSubscriptions.clear();
+    }
+    __abort() {
+      this._requestId && Networking.abortRequest(this._requestId);
+      this._streamController && this._streamController.error(new AbortError());
+      this._deferredPromise.reject(new AbortError());
+      this.__clearNetworkSubscriptions();
+    }
+    __doFetch() {
+      this.__subscribeToNetworkEvents();
+      Networking.sendRequest(this._request.method, this._request.url.toString(), this._request.url.toString(),
+        this._nativeRequestHeaders, this._request._body._bodyInit ?? null, this._nativeResponseType,
+        this._nativeResponseType === 'text', 0, this.__didCreateRequest.bind(this),
+        ['include', 'same-origin'].includes(this._request.credentials));
+    }
+    __didCreateRequest(requestId) { this._requestId = requestId; }
+    __didReceiveNetworkResponse(requestId, status, headers, url) {
+      if (requestId !== this._requestId) return;
+      var controller;
+      var stream = new ReadableStream({
+        start(c) { controller = c; },
+        cancel: () => { this.__clearNetworkSubscriptions(); Networking.abortRequest(this._requestId); }
+      });
+      this._streamController = controller;
+      this._responseStatus = status;
+      this._nativeResponseHeaders = headers;
+      this._responseUrl = url;
+      if (this._nativeResponseType === 'text') {
+        this._response = new Response(stream, { status, headers, url });
+        this._deferredPromise.resolve(this._response);
+      }
+    }
+    __didReceiveNetworkData(requestId, response) {
+      if (requestId !== this._requestId) return;
+      this._nativeResponse = response;
+    }
+    __didReceiveNetworkIncrementalData(requestId, responseText) {
+      if (requestId !== this._requestId) return;
+      this._streamController.enqueue(this._textEncoder.encode(responseText));
+    }
+    async __didCompleteNetworkResponse(requestId, errorMessage, didTimeOut) {
+      if (requestId !== this._requestId) return;
+      this.__clearNetworkSubscriptions();
+      if (this._request.signal) this._request.signal.removeEventListener('abort', this._abortFn);
+      if (didTimeOut) { this.__closeStream(); return this._deferredPromise.reject(new TypeError('Network request timed out')); }
+      if (errorMessage) { this.__closeStream(); return this._deferredPromise.reject(new TypeError('Network request failed: ' + errorMessage)); }
+      if (this._nativeResponseType === 'text') { this.__closeStream(); return; }
+      var ResponseClass = this._nativeResponseType === 'base64' ? ArrayBufferResponse : BlobResponse;
+      try {
+        this._response = new ResponseClass(this._nativeResponse, { status: this._responseStatus, url: this._responseUrl, headers: this._nativeResponseHeaders });
+        this._deferredPromise.resolve(this._response);
+      } catch (error) {
+        this._deferredPromise.reject(error);
+      } finally {
+        this.__closeStream();
+      }
+    }
+    __closeStream() { this._streamController && this._streamController.close(); }
+  }
+  var library = { fetch: (resource, options) => new Fetch(resource, options), Headers, Request, Response };
+  globalThis.__library = library;
+  globalThis.__installLibrary = function() {
+    ['fetch', 'Headers', 'Request', 'Response'].forEach(function(name) {
+      Object.defineProperty(globalThis, name, {
+        configurable: true, enumerable: true,
+        get: function() { return library[name]; },
+        set: function(value) { Object.defineProperty(globalThis, name, { value: value, writable: true, configurable: true, enumerable: true }); }
+      });
+    });
+  };
+})()`;
+
+/**
  * A JS context shaped like React Native's: its XHR, FileReader, Blob, FormData, AbortController
  * and fetch, and the app helpers above.
  */
@@ -703,6 +934,9 @@ function createRuntime({
   readAsTextNullOnInvalidUtf8 = false,
   liveDispatch = false,
   beforeReadResult,
+  metro = true,
+  networkPlatform = "ios",
+  networkModuleLoaded = true,
 }: RuntimeOptions = {}) {
   const sends: FakeXMLHttpRequest[] = [];
   const reads: FakeBlob[] = [];
@@ -725,6 +959,143 @@ function createRuntime({
     // Native text() keeps a byte order mark.
     decode: (bytes: Uint8Array) => new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes),
   };
+
+  /**
+   * React Native's network module (RCTNetworking), which XHR sends through. On iOS the id of a
+   * request comes back a native hop after the send and an abort ends it with no event; on Android
+   * the id comes back inside the send. Each event reaches the listeners as one array, as
+   * RCTDeviceEventEmitter hands it on.
+   */
+  const networkRequests: NetworkRequest[] = [];
+  const networkListeners = new Map<string, Array<(args: unknown[]) => void>>();
+  let nextRequestId = 1;
+  const networking = {
+    sendRequest(
+      method: string,
+      _trackingName: string | undefined,
+      url: string,
+      headers: Record<string, string>,
+      data: unknown,
+      responseType: string,
+      incrementalUpdates: boolean,
+      _timeout: number,
+      callback: ((id: number) => void) & { fromXhr?: boolean },
+      _withCredentials: boolean
+    ): void {
+      const request: NetworkRequest = {
+        id: nextRequestId++,
+        method,
+        url,
+        headers,
+        data,
+        responseType,
+        incremental: incrementalUpdates,
+        fromXhr: callback.fromXhr === true,
+        aborted: false,
+      };
+      networkRequests.push(request);
+      if (networkPlatform === "android") callback(request.id);
+      else setTimeout(() => callback(request.id), 0);
+    },
+    abortRequest(id: number): void {
+      const request = networkRequests.find((r) => r.id === id);
+      if (request) request.aborted = true;
+    },
+    addListener(event: string, listener: (args: unknown[]) => void): { remove(): void } {
+      const list = networkListeners.get(event) ?? [];
+      list.push(listener);
+      networkListeners.set(event, list);
+      return {
+        remove: () => {
+          const at = list.indexOf(listener);
+          if (at >= 0) list.splice(at, 1);
+        },
+      };
+    },
+  };
+  const emitNetwork = (event: string, args: unknown[]): void => {
+    for (const listener of [...(networkListeners.get(event) ?? [])]) listener(args);
+  };
+  const network = {
+    requests: networkRequests,
+    /** The requests a fetch library sent through the module itself, not an XHR. */
+    library: () => networkRequests.filter((r) => !r.fromXhr),
+    listeners: () => [...networkListeners.values()].reduce((n, list) => n + list.length, 0),
+    head(
+      request: NetworkRequest,
+      status: number,
+      headers: Record<string, string> = {},
+      url = request.url
+    ): void {
+      emitNetwork("didReceiveNetworkResponse", [request.id, status, headers, url]);
+    },
+    /** The whole body, as the request's response type has it. */
+    data(request: NetworkRequest, body: string | Uint8Array, type = ""): void {
+      const bytes = Buffer.from(body);
+      if (request.responseType === "blob") {
+        const blobId = `native-blob-${nextBlobId++}`;
+        nativeBlobs.set(blobId, bytes);
+        emitNetwork("didReceiveNetworkData", [
+          request.id,
+          { blobId, offset: 0, size: bytes.length, type, name: undefined, lastModified: 0 },
+        ]);
+      } else if (request.responseType === "base64") {
+        emitNetwork("didReceiveNetworkData", [request.id, bytes.toString("base64")]);
+      } else {
+        emitNetwork("didReceiveNetworkData", [request.id, bytes.toString("utf8")]);
+      }
+    },
+    /** A part of a text the request streams. */
+    part(request: NetworkRequest, text: string): void {
+      emitNetwork("didReceiveNetworkIncrementalData", [request.id, text, 0, -1]);
+    },
+    end(request: NetworkRequest, error = "", timedOut = false): void {
+      emitNetwork("didCompleteNetworkResponse", [request.id, error, timedOut]);
+    },
+    /** Head, data and the end of a request. */
+    respond(
+      request: NetworkRequest,
+      status: number,
+      headers: Record<string, string> = {},
+      body: string | Uint8Array = "",
+      url = request.url
+    ): void {
+      network.head(request, status, headers, url);
+      if (request.incremental) network.part(request, Buffer.from(body).toString("utf8"));
+      else network.data(request, body, headers["Content-Type"] ?? headers["content-type"] ?? "");
+      network.end(request);
+    },
+  };
+  // Metro's module list in a development build, with React Native's network module in it.
+  const metroModules = new Map<number, Record<string, unknown>>([
+    [
+      7,
+      {
+        verboseName: "node_modules/react-native/Libraries/Utilities/PolyfillFunctions.js",
+        isInitialized: true,
+        publicModule: { exports: { polyfillGlobal: () => {} } },
+      },
+    ],
+    [
+      42,
+      {
+        verboseName: "node_modules/react-native/Libraries/Network/RCTNetworking.ios.js",
+        isInitialized: networkModuleLoaded,
+        publicModule: { exports: networkModuleLoaded ? { default: networking } : {} },
+      },
+    ],
+  ]);
+  const metroRequire = Object.assign(
+    (id: number) => {
+      const mod = metroModules.get(id)!;
+      if (!mod.isInitialized) {
+        mod.isInitialized = true;
+        mod.publicModule = { exports: { default: networking } };
+      }
+      return (mod.publicModule as { exports: unknown }).exports;
+    },
+    { getModules: () => metroModules }
+  );
 
   /** Models React Native's XMLHttpRequest: event order, responseURL timing and incremental-events flag. */
   class FakeXMLHttpRequest {
@@ -795,6 +1166,23 @@ function createRuntime({
       this.body = body;
       this.incrementalAtSend.push(this._incrementalEvents || !!this.onreadystatechange);
       sends.push(this);
+      const created = Object.assign(() => {}, { fromXhr: true });
+      networking.sendRequest(
+        this.method,
+        undefined,
+        this.url,
+        this.requestHeaders,
+        body,
+        this.responseType === "blob"
+          ? "blob"
+          : this.responseType === "arraybuffer"
+            ? "base64"
+            : "text",
+        false,
+        0,
+        created,
+        false
+      );
     }
 
     abort(): void {
@@ -938,10 +1326,19 @@ function createRuntime({
 
     readAsText(blob: FakeBlob): void {
       reads.push(blob);
+      // A Blob of native blob data is read from the native store, in the order of the calls.
+      const data = blob.data as Buffer | { blobId: string; offset?: number; size: number };
+      const bytes = Buffer.isBuffer(data)
+        ? undefined
+        : nativeBlobs.get(data.blobId)?.subarray(data.offset ?? 0, (data.offset ?? 0) + data.size);
+      if (!Buffer.isBuffer(data) && !bytes) {
+        setImmediate(() => this.onerror?.());
+        return;
+      }
       setImmediate(() => {
         beforeReadResult?.(blob);
-        this.result =
-          readAsTextNullOnInvalidUtf8 && !isUtf8(blob.data) ? null : blob.data.toString("utf8");
+        const read = bytes ?? blob.data;
+        this.result = readAsTextNullOnInvalidUtf8 && !isUtf8(read) ? null : read.toString("utf8");
         this.onload?.();
       });
     }
@@ -955,6 +1352,8 @@ function createRuntime({
     AbortController,
     setTimeout,
     clearTimeout,
+    __networking: networking,
+    ...(metro ? { __r: metroRequire } : {}),
   });
   const run = (code: string): unknown => runInContext(code, context);
   run(APP_HELPERS);
@@ -990,8 +1389,10 @@ function createRuntime({
     expoCalls: (): ExpoCalls => ({ ...expoNative.calls }),
     /** The end events and start settlements of Expo's requests, in the order JS got them. */
     expoLog: () => expoNative.log.filter((event) => event !== "didReceiveResponseData"),
-    /** The requests that left JavaScript: XHR sends and Expo native starts. */
-    sent: () => sends.length + expoNative.requests.length,
+    /** React Native's network module, answered by the test. */
+    network,
+    /** The requests that left JavaScript: XHR sends, Expo native starts and library requests. */
+    sent: () => sends.length + expoNative.requests.length + network.library().length,
     install: () => JSON.parse(run(NETWORK_INTERCEPTOR_SCRIPT) as string) as unknown,
     /** The records, as the agent reads each one with view-network-request-details. */
     records: () =>
@@ -3302,822 +3703,569 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
     });
   });
 
-  describe("another fetch library", () => {
+  describe("a fetch library over React Native's network module", () => {
     /**
-     * react-native-fetch-api, as react-native-polyfill-globals installs it: a fetch over React
-     * Native's native network module, and a global Response class of its own. `touched` notes every
-     * touch of a body.
+     * react-native-fetch-api (LIB_FETCH) in a React Native runtime. With `installed`, it is the
+     * global fetch from startup, as react-native-polyfill-globals sets it; else `__library.fetch`.
      */
-    function libRuntime(options: RuntimeOptions = {}) {
-      const rt = createRuntime(options);
-      const touched: string[] = [];
-      const read = (name: string) => () => {
-        touched.push(name);
-        return Promise.resolve("native");
-      };
-      class LibResponse {
-        statusText = "OK";
-        headers = new Map([["content-type", "text/plain; charset=utf-8"]]);
-        constructor(
-          readonly url: string,
-          readonly status = 200
-        ) {}
-        get body(): object {
-          touched.push("body");
-          return { getReader: () => undefined };
-        }
-        // It shares its body stream with every clone when it streams text.
-        clone(): LibResponse {
-          touched.push("clone");
-          return new LibResponse(this.url, this.status);
-        }
-        text = read("text");
-        json = read("json");
-        blob = read("blob");
-        arrayBuffer = read("arrayBuffer");
-      }
-      // Kept for the tests that resolve React Native's own Response.
-      rt.context.__WhatwgResponse = rt.context.Response;
-      rt.context.Response = LibResponse;
-      rt.context.LibResponse = LibResponse;
-      return { rt, touched, LibResponse };
+    function libRuntime(options: RuntimeOptions & { installed?: boolean } = {}) {
+      const { installed = true, ...runtimeOptions } = options;
+      const rt = createRuntime({ polyfillFetch: true, ...runtimeOptions });
+      Object.assign(rt.context, {
+        ReadableStream,
+        TextEncoder,
+        TextDecoder,
+        __base64Bytes: (base64: string) => new Uint8Array(Buffer.from(base64, "base64")),
+        __blobManager: {
+          createFromOptions: (data: { blobId: string; type?: string }) => {
+            const blob = new FakeBlob([nativeBlobs.get(data.blobId)!], { type: data.type });
+            // The only reference: closing it frees the native blob.
+            blob.close = () => {
+              blob.closed = true;
+              nativeBlobs.delete(data.blobId);
+            };
+            return blob;
+          },
+        },
+      });
+      rt.run(LIB_FETCH);
+      if (installed) rt.run("__installLibrary()");
+      return rt;
     }
 
-    it("records a call when the app makes it, and its status and headers once it resolves", async () => {
-      const { rt, touched, LibResponse } = libRuntime();
-      let resolve: (response: unknown) => void = () => {};
-      rt.context.fetch = () => new Promise((r) => (resolve = r));
+    /** Waits until the library has sent `count` requests through the module. */
+    async function untilLibrarySent(rt: Runtime, count: number): Promise<NetworkRequest[]> {
+      for (let i = 0; i < 20 && rt.network.library().length < count; i++) await settle();
+      expect(rt.network.library()).toHaveLength(count);
+      // The id comes back a native hop later on iOS.
+      await settle();
+      return rt.network.library();
+    }
+
+    it("records a call as the request it sends, with the headers the library adds, and its body", async () => {
+      const rt = libRuntime();
       rt.install();
       const pending = rt.run(
-        `fetch('https://api.test/native', { method: 'post', headers: { 'X-Id': '1' }, body: 'q' })`
+        `fetch('https://api.test/signup', { method: 'post', headers: { 'X-Id': '1' }, body: '{"email":"a@b.c"}' })
+          .then(function(r) { return r.text().then(function(text) { return [r.status, text]; }); })`
       ) as Promise<unknown>;
       expect(rt.records()).toHaveLength(1);
-      expect(rt.records()[0]).toMatchObject({
-        state: "pending",
-        request: { method: "POST", url: "https://api.test/native", postData: "q" },
-      });
-      expect(rt.records()[0]!.response).toBeUndefined();
-      const response = new LibResponse("https://api.test/native");
-      resolve(response);
-      expect(await pending).toBe(response);
-      await settle();
+      expect(rt.records()[0]).toMatchObject({ state: "pending", resourceType: "Fetch" });
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(
+        request!,
+        422,
+        { "Content-Type": "application/json", "X-Trace": "t1" },
+        '{"error":"email taken"}',
+        "https://api.test/signup?v=2"
+      );
 
-      expect(touched).toEqual([]);
-      expect(rt.records()).toHaveLength(1);
+      expect(await pending).toEqual([422, '{"error":"email taken"}']);
+      await settle();
+      expectRecordPerRequest(rt, 1);
       expect(rt.records()[0]).toMatchObject({
         resourceType: "Fetch",
         state: "finished",
         request: {
           method: "POST",
-          url: "https://api.test/native",
-          headers: { "X-Id": "1" },
-          postData: "q",
+          url: "https://api.test/signup",
+          // The library adds a content-type for a text body.
+          headers: { "x-id": "1", "content-type": "text/plain;charset=UTF-8" },
+          postData: '{"email":"a@b.c"}',
         },
         response: {
-          url: "https://api.test/native",
-          status: 200,
-          statusText: "OK",
-          headers: { "content-type": "text/plain; charset=utf-8" },
-          mimeType: "text/plain",
+          url: "https://api.test/signup?v=2",
+          status: 422,
+          headers: { "content-type": "application/json", "x-trace": "t1" },
+          mimeType: "application/json",
         },
+        responseBody: '{"error":"email taken"}',
+        encodedDataLength: 23,
       });
       expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
-      expect(rt.records()[0]!.responseBody).toBeUndefined();
-      expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
     });
 
-    it("records each of several concurrent calls to different URLs once", async () => {
-      const { rt, LibResponse } = libRuntime();
-      rt.context.fetch = (url: string) => Promise.resolve(new LibResponse(url));
-      rt.install();
-      await (rt.run(
-        `Promise.all(['a', 'b', 'c'].map(function(path) { return fetch('https://api.test/' + path); }))`
-      ) as Promise<unknown>);
-      await settle();
-
-      expect(rt.records().map((r) => r.request.url)).toEqual([
-        "https://api.test/a",
-        "https://api.test/b",
-        "https://api.test/c",
-      ]);
-    });
-
-    it.each([
-      { hands: "one Response", copy: "" },
-      { hands: "a copy of one Response", copy: ".then(function(r) { return r.clone(); })" },
-    ])(
-      "records one request when the app's wrapper hands $hands to three callers",
-      async ({ copy }) => {
-        const { rt, LibResponse } = libRuntime();
-        let resolve: () => void = () => {};
-        let requests = 0;
-        rt.context.libFetch = (url: string) => {
-          requests++;
-          return new Promise((r) => (resolve = () => r(new LibResponse(url))));
-        };
-        rt.run(`var inflight = {};
-        fetch = function(u) {
-          if (!inflight[u]) inflight[u] = libFetch(u).finally(function() { delete inflight[u]; });
-          return inflight[u]${copy};
-        };`);
+    it.each(["ios", "android"] as const)(
+      "records each request once and an app XHR once, when the module hands back the id as on %s",
+      async (networkPlatform) => {
+        const rt = libRuntime({ networkPlatform });
         rt.install();
         const all = rt.run(
-          `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me'), fetch('https://api.test/me')])`
+          `Promise.all([fetch('https://api.test/a'), fetch('https://api.test/b')])`
         ) as Promise<unknown>;
-        resolve();
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/c'); x.send();`);
+        const requests = await untilLibrarySent(rt, 2);
+        for (const request of requests) rt.network.respond(request, 200, {}, "ok");
+        rt.sends[0]!.respond(200, {}, "xhr");
         await all;
         await settle();
 
-        expect(requests).toBe(1);
-        expect(rt.records()).toHaveLength(1);
-      }
-    );
-
-    it("records one request when the app's cache hands its stored Response to a later call", async () => {
-      const { rt, LibResponse } = libRuntime();
-      let requests = 0;
-      rt.context.libFetch = (url: string) => {
-        requests++;
-        return Promise.resolve(new LibResponse(url));
-      };
-      rt.run(`var cache = {};
-        fetch = function(u) {
-          if (cache[u]) return Promise.resolve(cache[u]);
-          return libFetch(u).then(function(r) { cache[u] = r; return r; });
-        };`);
-      rt.install();
-      await (rt.run(`fetch('https://api.test/config')`) as Promise<unknown>);
-      await settle();
-      // Later, so the two calls do not overlap.
-      await new Promise((r) => setTimeout(r, 5));
-      const cached = await (rt.run(`fetch('https://api.test/config')`) as Promise<unknown>);
-      await settle();
-
-      expect(cached).toBe(rt.run("cache['https://api.test/config']"));
-      expect(requests).toBe(1);
-      expect(rt.records()).toHaveLength(1);
-    });
-
-    it("records both a GET and a POST sent to one URL at the same time", async () => {
-      const { rt, LibResponse } = libRuntime();
-      rt.context.fetch = (url: string) => Promise.resolve(new LibResponse(url));
-      rt.install();
-      await (rt.run(
-        `Promise.all([fetch('https://api.test/items'), fetch('https://api.test/items', { method: 'POST', body: 'x' })])`
-      ) as Promise<unknown>);
-      await settle();
-
-      expect(rt.records().map((r) => `${r.request.method} ${r.request.url}`)).toEqual([
-        "GET https://api.test/items",
-        "POST https://api.test/items",
-      ]);
-    });
-
-    it("records the method, URL and headers of a Request the app passes", async () => {
-      const { rt, LibResponse } = libRuntime();
-      rt.context.Headers = Headers;
-      rt.context.fetch = (request: { url: string }) =>
-        Promise.resolve(new LibResponse(request.url));
-      // react-native-fetch-api's Request: the method upper-cased, the headers a Headers object.
-      rt.run(`function LibRequest(url, init) {
-        this.url = url;
-        this.method = String(init.method || 'GET').toUpperCase();
-        this.headers = new Headers(init.headers);
-      }`);
-      rt.install();
-      await (rt.run(
-        `fetch(new LibRequest('https://api.test/items/7', { method: 'put', headers: { 'X-Id': '7' } }))`
-      ) as Promise<unknown>);
-      await settle();
-
-      expect(rt.records()).toHaveLength(1);
-      expect(rt.records()[0]!.request).toEqual({
-        method: "PUT",
-        url: "https://api.test/items/7",
-        headers: { "x-id": "7" },
-      });
-    });
-
-    it("records each of two calls to one URL that do not overlap", async () => {
-      const { rt, LibResponse } = libRuntime();
-      rt.context.fetch = (url: string) => Promise.resolve(new LibResponse(url));
-      rt.install();
-      await (rt.run(`fetch('https://api.test/poll')`) as Promise<unknown>);
-      await settle();
-      await new Promise((r) => setTimeout(r, 5));
-      await (rt.run(`fetch('https://api.test/poll')`) as Promise<unknown>);
-      await settle();
-
-      expect(rt.records().map((r) => r.request.url)).toEqual([
-        "https://api.test/poll",
-        "https://api.test/poll",
-      ]);
-    });
-
-    it("records each call the app sends from the response of the one before, in the same millisecond", async () => {
-      const { rt, LibResponse } = libRuntime();
-      rt.run("Date.now = function() { return 1000; };");
-      let requests = 0;
-      rt.context.fetch = (url: string) => {
-        requests++;
-        return Promise.resolve(new LibResponse(url, 503));
-      };
-      rt.install();
-      // A retry or a poll: each call starts once the one before has its response.
-      await (rt.run(`(function loop(n) {
-        return fetch('https://api.test/status').then(function() { return n > 1 ? loop(n - 1) : null; });
-      })(5)`) as Promise<unknown>);
-      await settle();
-
-      expect(requests).toBe(5);
-      expect(rt.records()).toHaveLength(5);
-    });
-
-    it.each([
-      { passes: "init", call: "fetch(url, { method: 'POST', body: body })" },
-      // ky passes a Request, which holds the body, and options without one.
-      {
-        passes: "a Request",
-        call: "fetch(new LibRequest(url, { method: 'POST', body: body }), {})",
-      },
-    ])(
-      "records each of several calls in flight to one URL that send different bodies in $passes",
-      async ({ call }) => {
-        const { rt, LibResponse } = libRuntime();
-        const resolves: Array<() => void> = [];
-        let requests = 0;
-        rt.context.fetch = (input: string | { url: string }) => {
-          requests++;
-          const url = typeof input === "string" ? input : input.url;
-          return new Promise((r) => resolves.push(() => r(new LibResponse(url))));
-        };
-        // react-native-fetch-api's Request keeps its body in _body._bodyInit.
-        rt.run(`function LibRequest(url, init) {
-          this.url = url;
-          this.method = String(init.method || 'GET').toUpperCase();
-          this._body = { _bodyInit: init.body };
-        }`);
-        rt.install();
-        // GraphQL sends every query to one URL.
-        const all = rt.run(
-          `Promise.all([1, 2, 3].map(function(i) {
-            var url = 'https://api.test/graphql', body = JSON.stringify({ query: 'q' + i });
-            return ${call};
-          }))`
-        ) as Promise<unknown>;
-        for (const resolve of resolves) resolve();
-        await all;
-        await settle();
-
-        expect(requests).toBe(3);
-        expect(rt.records().map((r) => r.request.postData)).toEqual([
-          '{"query":"q1"}',
-          '{"query":"q2"}',
-          '{"query":"q3"}',
+        expectRecordPerRequest(rt, 3);
+        expect(rt.records().map((r) => `${r.resourceType} ${r.request.url} ${r.state}`)).toEqual([
+          "Fetch https://api.test/a finished",
+          "Fetch https://api.test/b finished",
+          "XHR https://api.test/c finished",
         ]);
       }
     );
 
-    it("records each of two calls in flight to one URL whose long bodies differ only in the middle", async () => {
-      const { rt, LibResponse } = libRuntime();
-      const resolves: Array<() => void> = [];
-      rt.context.fetch = (url: string) =>
-        new Promise((r) => resolves.push(() => r(new LibResponse(url))));
+    it("records the requests of a library installed after capture started, before the next injection", async () => {
+      // A route loaded later runs react-native-polyfill-globals.
+      const rt = libRuntime({ installed: false });
+      rt.install();
+      rt.run("__installLibrary()");
+      expect(rt.run("fetch === __library.fetch")).toBe(true);
+      const pending = rt.run(
+        `fetch('https://api.test/late').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, { "content-type": "text/plain" }, "late body");
+      expect(await pending).toBe("late body");
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        request: { url: "https://api.test/late" },
+        responseBody: "late body",
+      });
+      // A later injection changes nothing.
+      expect(rt.install()).toEqual({ installed: false, reason: "already installed" });
+      expect(rt.records()).toHaveLength(1);
+    });
+
+    it("records a library call and an app XHR with the same method, URL and body sent at the same time", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/graphql', { method: 'POST', body: '{"query":"q"}' })`
+      ) as Promise<unknown>;
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/graphql'); x.send('{"query":"q"}');`
+      );
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, {}, "lib");
+      rt.sends[0]!.respond(200, {}, "xhr");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => `${r.resourceType} ${r.responseBody}`)).toEqual([
+        "Fetch lib",
+        "XHR xhr",
+      ]);
+    });
+
+    it("records both of two calls with the same method, URL and body at the same time", async () => {
+      const rt = libRuntime();
       rt.install();
       const all = rt.run(
-        `Promise.all(['1', '2'].map(function(id) {
-          var body = JSON.stringify({ a: 'x'.repeat(3000), id: id + 'b1c2d3e4', b: 'y'.repeat(3000) });
-          return fetch('https://api.test/graphql', { method: 'POST', body: body });
-        }))`
+        `Promise.all([0, 1].map(function() { return fetch('https://api.test/track', { method: 'POST', body: '{"e":"view"}' }); }))`
       ) as Promise<unknown>;
-      for (const resolve of resolves) resolve();
+      const requests = await untilLibrarySent(rt, 2);
+      for (const request of requests) rt.network.respond(request, 204);
       await all;
       await settle();
 
-      expect(rt.records()).toHaveLength(2);
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => r.response?.status)).toEqual([204, 204]);
     });
 
-    describe("with the library's default Response, whose copies share its native blob", () => {
-      function blobRuntime() {
-        const lib = libRuntime();
-        let blobs = 0;
-        // React Native hands each response its own native blob, by id.
-        class BlobResponse extends lib.LibResponse {
-          constructor(
-            url: string,
-            status = 200,
-            readonly _blobData: { blobId: string } = { blobId: `blob-${++blobs}` }
-          ) {
-            super(url, status);
-          }
-          clone(): BlobResponse {
-            return new BlobResponse(this.url, this.status, this._blobData);
-          }
-        }
-        return { ...lib, BlobResponse };
-      }
-
-      it("records both requests two components send to one URL at the same time", async () => {
-        const { rt, BlobResponse } = blobRuntime();
-        const resolves: Array<(status: number) => void> = [];
-        rt.context.fetch = (url: string) =>
-          new Promise((r) => resolves.push((status) => r(new BlobResponse(url, status))));
-        rt.install();
-        const all = rt.run(
-          `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me')])`
-        ) as Promise<unknown>;
-        resolves[0]!(200);
-        await settle();
-        resolves[1]!(500);
-        await all;
-        await settle();
-
-        expect(rt.records().map((r) => r.response?.status)).toEqual([200, 500]);
-      });
-
-      it.each([
-        {
-          hands: "a wrapper that shares one request between callers",
-          wrapper: `var inflight = {};
-            fetch = function(u) {
-              if (!inflight[u]) inflight[u] = libFetch(u).finally(function() { delete inflight[u]; });
-              return inflight[u].then(function(r) { return r.clone(); });
-            };`,
-          calls: `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me'), fetch('https://api.test/me')])`,
-        },
-        {
-          hands: "a cache",
-          wrapper: `var cache = {};
-            fetch = function(u) {
-              if (cache[u]) return Promise.resolve(cache[u].clone());
-              return libFetch(u).then(function(r) { cache[u] = r; return r.clone(); });
-            };`,
-          calls: `fetch('https://api.test/me').then(function() { return fetch('https://api.test/me'); })`,
-        },
-      ])(
-        "records one request when $hands hands out copies of its Response",
-        async ({ wrapper, calls }) => {
-          const { rt, BlobResponse } = blobRuntime();
-          let requests = 0;
-          rt.context.libFetch = (url: string) => {
-            requests++;
-            return Promise.resolve(new BlobResponse(url));
-          };
-          rt.run(wrapper);
-          rt.install();
-          await (rt.run(calls) as Promise<unknown>);
-          await settle();
-
-          expect(requests).toBe(1);
-          expect(rt.records()).toHaveLength(1);
-        }
-      );
-    });
-
-    describe("with the library's base64 Response, which decodes its bytes again for each copy", () => {
-      // As react-native-fetch-api 3.0.0's ArrayBufferResponse: the bytes come from toByteArray(base64),
-      // and clone() builds a new ArrayBufferResponse from the base64 text, so it decodes them again.
-      function base64Runtime() {
-        const lib = libRuntime();
-        // _body is set by assignment, as the library's Response constructor does.
-        class ArrayBufferResponse extends lib.LibResponse {
-          declare _body: { _bodyInit: Uint8Array };
-          declare _base64: string;
-          constructor(base64: string, url: string, status = 200) {
-            super(url, status);
-            this._body = { _bodyInit: new Uint8Array(Buffer.from(base64, "base64")) };
-            this._base64 = base64;
-          }
-          clone(): ArrayBufferResponse {
-            return new ArrayBufferResponse(this._base64, this.url, this.status);
-          }
-        }
-        return { ...lib, ArrayBufferResponse };
-      }
-
-      it.each([
-        {
-          hands: "a wrapper that shares one request between callers",
-          wrapper: `var inflight = {};
-            fetch = function(u) {
-              if (!inflight[u]) inflight[u] = libFetch(u).finally(function() { delete inflight[u]; });
-              return inflight[u].then(function(r) { return r.clone(); });
-            };`,
-          calls: `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me'), fetch('https://api.test/me')])`,
-        },
-        {
-          hands: "a cache",
-          wrapper: `var cache = {};
-            fetch = function(u) {
-              if (cache[u]) return Promise.resolve(cache[u].clone());
-              return libFetch(u).then(function(r) { cache[u] = r; return r.clone(); });
-            };`,
-          calls: `fetch('https://api.test/me').then(function() { return fetch('https://api.test/me'); })`,
-        },
-      ])(
-        "records one request when $hands hands out copies of its Response",
-        async ({ wrapper, calls }) => {
-          const { rt, ArrayBufferResponse } = base64Runtime();
-          let requests = 0;
-          rt.context.libFetch = (url: string) => {
-            requests++;
-            return Promise.resolve(new ArrayBufferResponse("aGk=", url));
-          };
-          rt.run(wrapper);
-          rt.install();
-          await (rt.run(calls) as Promise<unknown>);
-          await settle();
-
-          expect(requests).toBe(1);
-          expect(rt.records()).toHaveLength(1);
-        }
-      );
-
-      it("records both of two requests whose responses have the same bytes", async () => {
-        const { rt, ArrayBufferResponse } = base64Runtime();
-        rt.context.fetch = (url: string) => Promise.resolve(new ArrayBufferResponse("aGk=", url));
-        rt.install();
-        await (rt.run(
-          `fetch('https://api.test/poll').then(function() { return fetch('https://api.test/poll'); })`
-        ) as Promise<unknown>);
-        await settle();
-
-        expect(rt.records()).toHaveLength(2);
-      });
-    });
-
-    it.each<{ transport: string; options: RuntimeOptions; send: string }>([
-      {
-        transport: "an XHR",
-        options: {},
-        send: `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/URL'); x.send();`,
-      },
-      {
-        transport: "an Expo request",
-        options: { expo: { sdk: 57 } },
-        send: `expoFetch('https://api.test/URL');`,
-      },
-    ])(
-      "records only $transport sent during a call to the same URL, as it may be the request of the call",
-      async ({ options, send }) => {
-        const { rt, LibResponse } = libRuntime(options);
-        let resolve: () => void = () => {};
-        rt.context.fetch = (url: string) =>
-          new Promise((r) => (resolve = () => r(new LibResponse(url))));
-        rt.install();
-        const pending = rt.run(`fetch('https://api.test/native')`) as Promise<unknown>;
-        rt.run(send.replace("URL", "native"));
-        await settle();
-        resolve();
-        await pending;
-        await settle();
-
-        expect(rt.records().map((r) => `${r.resourceType} ${r.request.url}`)).toEqual([
-          `${options.expo ? "Fetch" : "XHR"} https://api.test/native`,
-        ]);
-      }
-    );
-
-    it.each<{ transport: string; options: RuntimeOptions; send: string }>([
-      {
-        transport: "an XHR",
-        options: {},
-        send: `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/other'); x.send();`,
-      },
-      {
-        transport: "an Expo request",
-        options: { expo: { sdk: 57 } },
-        send: `expoFetch('https://api.test/other');`,
-      },
-      {
-        transport: "an XHR to the same URL with another method",
-        options: {},
-        send: `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/native'); x.send('{}');`,
-      },
-    ])("records a call during which the app sent $transport", async ({ options, send }) => {
-      const { rt, LibResponse } = libRuntime(options);
-      let resolve: () => void = () => {};
-      rt.context.fetch = (url: string) =>
-        new Promise((r) => (resolve = () => r(new LibResponse(url))));
+    it("records each request of an app wrapper that retries on 401 with a new token, with its own URL", async () => {
+      const rt = libRuntime();
+      rt.run(`var libFetch = fetch, token = 'old';
+        fetch = function(u, init) {
+          var send = function() { return libFetch(u + '?token=' + token, init); };
+          return send().then(function(r) {
+            if (r.status !== 401) return r;
+            token = 'new';
+            return send();
+          });
+        };`);
       rt.install();
-      const pending = rt.run(`fetch('https://api.test/native')`) as Promise<unknown>;
-      rt.run(send);
-      await settle();
-      resolve();
-      await pending;
-      await settle();
-
-      expect(rt.records()).toHaveLength(2);
-      expect(rt.records()[0]).toMatchObject({
-        resourceType: "Fetch",
-        state: "finished",
-        request: { method: "GET", url: "https://api.test/native" },
-      });
-    });
-
-    it("records a call during which the app sent an XHR to the same URL with another text body", async () => {
-      const { rt, LibResponse } = libRuntime();
-      let resolve: () => void = () => {};
-      rt.context.fetch = (url: string) =>
-        new Promise((r) => (resolve = () => r(new LibResponse(url))));
-      rt.install();
-      // A GraphQL client on the library and axios on XHR, both on one endpoint.
-      const pending = rt.run(
-        `fetch('https://api.test/graphql', { method: 'POST', body: '{"query":"lib"}' })`
-      ) as Promise<unknown>;
-      rt.run(
-        `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/graphql'); x.send('{"query":"axios"}');`
-      );
-      await settle();
-      resolve();
-      await pending;
+      const pending = rt.run(`fetch('https://api.test/me')`) as Promise<{ status: number }>;
+      const [first] = await untilLibrarySent(rt, 1);
+      rt.network.respond(first!, 401, {}, "expired");
+      const [, second] = await untilLibrarySent(rt, 2);
+      rt.network.respond(second!, 200, {}, "me");
+      expect((await pending).status).toBe(200);
       await settle();
 
-      expect(rt.records().map((r) => `${r.resourceType} ${r.request.postData}`)).toEqual([
-        'Fetch {"query":"lib"}',
-        'XHR {"query":"axios"}',
+      expectRecordPerRequest(rt, 2);
+      expect(
+        rt.records().map((r) => `${r.request.url} ${r.response?.status} ${r.responseBody}`)
+      ).toEqual([
+        "https://api.test/me?token=old 401 expired",
+        "https://api.test/me?token=new 200 me",
       ]);
     });
 
     it.each([
-      { others: 0, when: "alone" },
-      { others: 60, when: "while the app sends 60 other XHRs" },
+      {
+        wrapper: "returns a Response class of its own",
+        code: `${API_RESPONSE}
+          var libFetch = fetch;
+          fetch = function(u, init) { return libFetch(u, init).then(function(r) { return new ApiResponse(r); }); };`,
+        url: "https://api.test/item",
+      },
+      {
+        wrapper: "rewrites the URL",
+        code: `var libFetch = fetch;
+          fetch = function(u, init) { return libFetch(u.replace('api.test', 'api-v2.test'), init); };`,
+        url: "https://api-v2.test/item",
+      },
+      {
+        wrapper: "rewrites the URL, with a global Response the app set",
+        code: `var libFetch = fetch;
+          Response = function AppResponse() {};
+          fetch = function(u, init) { return libFetch(u.replace('api.test', 'api-v2.test'), init); };`,
+        url: "https://api-v2.test/item",
+      },
     ])(
-      "records only the XHR of a wrapper that builds the library's Response from React Native's fetch, $when",
-      async ({ others }) => {
-        const { rt } = libRuntime({ polyfillFetch: true });
-        // React Native's fetch sends its XHR at once, inside the call.
-        rt.run(`fetch = function(u, init) {
-          return rnFetch(u, init).then(function(r) { return r.text(); }).then(function() { return new LibResponse(u); });
-        };`);
+      "records one request with the URL sent when an app wrapper $wrapper",
+      async ({ code, url }) => {
+        const rt = libRuntime();
+        rt.run(code);
         rt.install();
-        const pending = rt.run(`fetch('https://api.test/me')`) as Promise<unknown>;
-        rt.run(
-          `for (var i = 0; i < ${others}; i++) { var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/other' + i); x.send(); }`
-        );
-        rt.sends[0]!.respond(200, {}, "me");
-        await pending;
+        const all = rt.run(
+          `Promise.all([fetch('https://api.test/item'), fetch('https://api.test/item').then(function() {})])`
+        ) as Promise<unknown>;
+        const requests = await untilLibrarySent(rt, 2);
+        for (const request of requests) rt.network.respond(request, 200, {}, "item");
+        await all;
         await settle();
 
-        expect(rt.sends).toHaveLength(1 + others);
-        expect(rt.records()).toHaveLength(1 + others);
-        expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "me" });
+        expectRecordPerRequest(rt, 2);
+        expect(rt.records().map((r) => `${r.request.url} ${r.state} ${r.responseBody}`)).toEqual([
+          `${url} finished item`,
+          `${url} finished item`,
+        ]);
       }
     );
 
-    it("records a rejected call as failed, and rejects the app's promise with the same error", async () => {
-      const { rt } = libRuntime();
-      const error = new TypeError(
-        "Network request failed: Failed to connect to localhost/127.0.0.1:1"
-      );
-      const original = Promise.reject(error);
-      original.catch(() => {});
-      rt.context.fetch = () => original;
+    it("records one request for callers of an app wrapper that share it or get it from a cache", async () => {
+      const rt = libRuntime();
+      rt.run(`var libFetch = fetch, inflight = {}, cache = {};
+        fetch = function(u) {
+          if (cache[u]) return Promise.resolve(cache[u].clone());
+          if (!inflight[u]) inflight[u] = libFetch(u).then(function(r) { cache[u] = r; delete inflight[u]; return r; });
+          return inflight[u].then(function(r) { return r.clone(); });
+        };`);
       rt.install();
-      const returned = rt.run(`fetch('https://api.test/down')`) as Promise<unknown>;
-
-      // A promise of its own: one the app never handles is still reported as unhandled.
-      expect(returned).not.toBe(original);
-      await expect(returned).rejects.toBe(error);
+      const all = rt.run(
+        `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me')])`
+      ) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, {}, "me");
+      await all;
+      await (rt.run(`fetch('https://api.test/me')`) as Promise<unknown>);
       await settle();
-      expect(rt.records()).toHaveLength(1);
-      expect(rt.records()[0]).toMatchObject({
-        state: "failed",
-        errorText: "Network request failed: Failed to connect to localhost/127.0.0.1:1",
-        request: { url: "https://api.test/down" },
-      });
-      expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
+
+      expectRecordPerRequest(rt, 1);
     });
 
-    it("records a call the app aborts as failed, and a call in flight as pending", async () => {
-      const { rt } = libRuntime();
-      // react-native-fetch-api rejects an aborted call with its own AbortError.
-      rt.run(`fetch = function(u, init) {
-        return new Promise(function(resolve, reject) {
-          if (init && init.signal) init.signal.addEventListener('abort', function() {
-            var error = new Error('Aborted'); error.name = 'AbortError'; reject(error);
-          });
+    describe("text streaming (reactNative.textStreaming)", () => {
+      it("keeps the record pending while the text streams, and finished with the whole text at its end", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const text = rt.run(
+          `fetch('https://api.test/sse', { reactNative: { textStreaming: true } }).then(readStream)`
+        ) as Promise<string>;
+        const [request] = await untilLibrarySent(rt, 1);
+        expect(request!.incremental).toBe(true);
+        rt.network.head(request!, 200, { "content-type": "text/event-stream" });
+        rt.network.part(request!, "data: 1\n\n");
+        rt.network.part(request!, "data: é\n\n");
+        await settle();
+        expect(rt.records()[0]).toMatchObject({ state: "pending", response: { status: 200 } });
+        rt.network.end(request!);
+
+        expect(await text).toBe("data: 1\n\ndata: é\n\n");
+        await settle();
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          response: { mimeType: "text/event-stream" },
+          responseBody: "data: 1\n\ndata: é\n\n",
+          encodedDataLength: 19,
         });
-      };`);
+      });
+
+      it("records a stream the app aborts as failed, with the text it got", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const done = rt.run(`var controller = new AbortController();
+          fetch('https://api.test/sse', { signal: controller.signal, reactNative: { textStreaming: true } })
+            .then(function(r) { return outcome(readStream(r)); })`) as Promise<{ error?: Error }>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.head(request!, 200, { "content-type": "text/event-stream" });
+        rt.network.part(request!, "data: 1\n\n");
+        await settle();
+        rt.run("controller.abort()");
+
+        expect((await done).error?.name).toBe("AbortError");
+        expect(request!.aborted).toBe(true);
+        await settle();
+        expect(rt.records()[0]).toMatchObject({
+          state: "failed",
+          errorText: "aborted",
+          responseBody: "data: 1\n\n",
+        });
+        // No listener stays behind for a request that never ends on iOS.
+        expect(rt.network.listeners()).toBe(0);
+      });
+
+      it("keeps the start of a long stream and its length", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const size = rt.run(
+          `fetch('https://api.test/log', { reactNative: { textStreaming: true } }).then(countStream)`
+        ) as Promise<number>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.head(request!, 200, { "content-type": "text/plain" });
+        for (let i = 0; i < 3; i++) rt.network.part(request!, "x".repeat(BODY_CAP / 2));
+        rt.network.end(request!);
+        expect(await size).toBe((BODY_CAP / 2) * 3);
+        await settle();
+
+        const record = rt.records()[0]!;
+        expect(record).toMatchObject({
+          state: "finished",
+          bodyTruncated: true,
+          bodyLength: (BODY_CAP / 2) * 3,
+        });
+        expect(record.responseBody).toHaveLength(BODY_CAP);
+        expect(record.encodedDataLength).toBeUndefined();
+      });
+    });
+
+    describe("base64 responses (ArrayBuffer)", () => {
+      it("records the text and size of a body", async () => {
+        const rt = libRuntime();
+        rt.context.TextDecoder = TextDecoder;
+        rt.install();
+        const text = rt.run(
+          `fetch('https://api.test/data', { reactNative: { __nativeResponseType: 'base64' } }).then(function(r) { return r.text(); })`
+        ) as Promise<string>;
+        const [request] = await untilLibrarySent(rt, 1);
+        expect(request!.responseType).toBe("base64");
+        rt.network.respond(
+          request!,
+          200,
+          { "content-type": "application/json" },
+          '{"name":"zażółć"}'
+        );
+
+        expect(await text).toBe('{"name":"zażółć"}');
+        await settle();
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          responseBody: '{"name":"zażółć"}',
+          encodedDataLength: Buffer.byteLength('{"name":"zażółć"}'),
+        });
+      });
+
+      it.each([1, 2, 3, 4, 5])("records the size of a binary body of %i bytes", async (length) => {
+        const rt = libRuntime();
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://api.test/img', { reactNative: { __nativeResponseType: 'base64' } })`
+        ) as Promise<unknown>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.respond(
+          request!,
+          200,
+          { "content-type": "image/png" },
+          new Uint8Array(length).fill(0xff)
+        );
+        await pending;
+        await settle();
+
+        expect(rt.records()[0]).toMatchObject({ state: "finished", encodedDataLength: length });
+        expect(rt.records()[0]!.responseBody).toBeUndefined();
+      });
+
+      it("keeps the start of a long body", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://api.test/big', { reactNative: { __nativeResponseType: 'base64' } })`
+        ) as Promise<unknown>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.respond(
+          request!,
+          200,
+          { "content-type": "text/plain" },
+          "y".repeat(BODY_CAP + 10)
+        );
+        await pending;
+        await settle();
+
+        const record = rt.records()[0]!;
+        expect(record).toMatchObject({ bodyTruncated: true, encodedDataLength: BODY_CAP + 10 });
+        expect(record.responseBody).toBe("y".repeat(BODY_CAP));
+      });
+    });
+
+    it("reads a blob body without closing it, and the app's close() still frees it", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/me')`) as Promise<{
+        _blobData: { blobId: string };
+        _body: { _bodyBlob: FakeBlob };
+      }>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, { "content-type": "application/json" }, '{"id":1}');
+      const response = await pending;
+      // The app closes the blob at once, without reading it.
+      response._body._bodyBlob.close();
+      await settle();
+
+      expect(nativeBlobs.has(response._blobData.blobId)).toBe(false);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: '{"id":1}',
+        encodedDataLength: 8,
+      });
+    });
+
+    it("records the size and no body of a binary blob, which it does not read", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/logo.png')`) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(
+        request!,
+        200,
+        { "content-type": "image/png" },
+        new Uint8Array([0x89, 0x50])
+      );
+      await pending;
+      await settle();
+
+      expect(rt.reads).toHaveLength(0);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        bodyOmitted: true,
+        encodedDataLength: 2,
+      });
+    });
+
+    it("keeps the start of a long blob body", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/big')`) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, { "content-type": "text/plain" }, "z".repeat(BODY_CAP + 5));
+      await pending;
+      await settle();
+
+      const record = rt.records()[0]!;
+      expect(record).toMatchObject({ bodyTruncated: true, encodedDataLength: BODY_CAP + 5 });
+      expect(record.responseBody).toBe("z".repeat(BODY_CAP));
+    });
+
+    it.each([
+      {
+        ends: "fails",
+        error: "Could not connect to the server.",
+        timedOut: false,
+        errorText: "Could not connect to the server.",
+      },
+      { ends: "times out", error: "", timedOut: true, errorText: "timeout" },
+    ])("records a request that $ends as failed", async ({ error, timedOut, errorText }) => {
+      const rt = libRuntime();
+      rt.install();
+      const result = rt.run(`outcome(fetch('https://api.test/down'))`) as Promise<{
+        error?: Error;
+      }>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.end(request!, error, timedOut);
+
+      expect((await result).error).toBeDefined();
+      await settle();
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText });
+      expect(rt.network.listeners()).toBe(0);
+    });
+
+    it("records a call the app aborts before the response as failed, and one in flight as pending", async () => {
+      const rt = libRuntime();
       rt.install();
       const aborted = rt.run(
         `var controller = new AbortController(); fetch('https://api.test/slow', { signal: controller.signal })`
       ) as Promise<unknown>;
       rt.run(`fetch('https://api.test/pending')`);
+      await untilLibrarySent(rt, 2);
       rt.run("controller.abort()");
 
       expect(await rejectionName(aborted)).toBe("AbortError");
       await settle();
       expect(rt.records().map((r) => `${r.request.url} ${r.state} ${r.errorText ?? "-"}`)).toEqual([
-        "https://api.test/slow failed Aborted",
+        "https://api.test/slow failed aborted",
         "https://api.test/pending pending -",
       ]);
     });
 
     it("keeps no record of a call that throws before it sends", () => {
-      const { rt } = libRuntime();
-      rt.run(`fetch = function() { throw new Error('Aborted'); };`);
+      const rt = libRuntime();
       rt.install();
 
-      expect(() => rt.run(`fetch('https://api.test/never')`)).toThrow("Aborted");
+      expect(() =>
+        rt.run(
+          `var c = new AbortController(); c.abort(); fetch('https://api.test/never', { signal: c.signal })`
+        )
+      ).toThrow("Aborted");
       expect(rt.records()).toHaveLength(0);
     });
 
-    it("records one failure for three callers of a wrapper that shares one rejected request", async () => {
-      const { rt } = libRuntime();
-      let reject: (error: unknown) => void = () => {};
-      rt.context.libFetch = () => new Promise((_, r) => (reject = r));
-      rt.run(`var inflight = null;
-        fetch = function(u) {
-          if (!inflight) inflight = libFetch(u).finally(function() { inflight = null; });
-          return inflight;
-        };`);
+    it("keeps no record of a request the module refuses", () => {
+      const rt = libRuntime({ installed: false });
       rt.install();
-      const all = rt.run(
-        `Promise.allSettled([fetch('https://api.test/me'), fetch('https://api.test/me'), fetch('https://api.test/me')])`
-      ) as Promise<unknown>;
-      reject(new TypeError("Network request failed: offline"));
-      await all;
-      await settle();
+      rt.run(`__networking.sendRequest = (function(send) {
+        return function() { if (arguments[2] === 'bad') throw new Error('Invalid URL'); return send.apply(this, arguments); };
+      })(__networking.sendRequest);`);
 
-      expect(rt.records().map((r) => `${r.state} ${r.errorText}`)).toEqual([
-        "failed Network request failed: offline",
-      ]);
-    });
-
-    it("records the body of a blob response, which the app can still read", async () => {
-      const { rt, touched, LibResponse } = libRuntime();
-      // react-native-fetch-api's default Response holds the body as a React Native Blob.
-      class BlobResponse extends LibResponse {
-        _body = { _bodyBlob: new FakeBlob(['{"error":"email taken"}']) };
-      }
-      const response = new BlobResponse("https://api.test/signup", 422);
-      rt.context.fetch = () => Promise.resolve(response);
-      rt.install();
-      await (rt.run(
-        `fetch('https://api.test/signup', { method: 'POST', body: '{}' })`
-      ) as Promise<unknown>);
-      await settle();
-
-      expect(touched).toEqual([]);
-      expect(response._body._bodyBlob.closed).toBe(false);
-      expect(rt.records()[0]).toMatchObject({
-        state: "finished",
-        response: { status: 422 },
-        responseBody: '{"error":"email taken"}',
-        encodedDataLength: 23,
-      });
-    });
-
-    it("records no body of a response that streams text, which shares its stream with the app", async () => {
-      const { rt, touched, LibResponse } = libRuntime();
-      class TextStreamingResponse extends LibResponse {
-        _body = { _bodyReadableStream: {} };
-      }
-      rt.context.fetch = () => Promise.resolve(new TextStreamingResponse("https://api.test/sse"));
-      rt.install();
-      await (rt.run(
-        `fetch('https://api.test/sse', { reactNative: { textStreaming: true } })`
-      ) as Promise<unknown>);
-      await settle();
-
-      expect(touched).toEqual([]);
-      expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 200 } });
-      expect(rt.records()[0]!.responseBody).toBeUndefined();
-    });
-
-    it("records both calls when the app aborts a call and makes it again at once", async () => {
-      const { rt } = libRuntime();
-      // react-native-fetch-api rejects an aborted call inside abort(), before the app's next line.
-      rt.run(`fetch = function(u, init) {
-        return new Promise(function(resolve, reject) {
-          if (init && init.signal) init.signal.addEventListener('abort', function() {
-            var error = new Error('Aborted'); error.name = 'AbortError'; reject(error);
-          });
-          if (!init || !init.signal) setTimeout(function() { resolve(new LibResponse(u)); }, 0);
-        });
-      };`);
-      rt.install();
-      // TanStack Query's refetch: abort the query in flight, then fetch it again.
-      const first = rt.run(
-        `var controller = new AbortController(); fetch('https://api.test/todos', { signal: controller.signal })`
-      ) as Promise<unknown>;
-      const second = rt.run(
-        `controller.abort(); fetch('https://api.test/todos')`
-      ) as Promise<unknown>;
-
-      expect(await rejectionName(first)).toBe("AbortError");
-      await second;
-      await settle();
-      expect(rt.records().map((r) => `${r.state} ${r.errorText ?? r.response?.status}`)).toEqual([
-        "failed Aborted",
-        "finished 200",
-      ]);
-    });
-
-    it("records each of two requests a cache sends at once, and none for a later hit", async () => {
-      const { rt, LibResponse } = libRuntime();
-      const resolves: Array<() => void> = [];
-      let requests = 0;
-      rt.context.libFetch = (url: string) => {
-        requests++;
-        return new Promise((r) => resolves.push(() => r(new LibResponse(url))));
-      };
-      // Two misses at once send two requests; the cache keeps the second Response.
-      rt.run(`var cache = {};
-        fetch = function(u) {
-          if (cache[u]) return Promise.resolve(cache[u]);
-          return libFetch(u).then(function(r) { cache[u] = r; return r; });
-        };`);
-      rt.install();
-      const misses = rt.run(
-        `Promise.all([fetch('https://api.test/config'), fetch('https://api.test/config')])`
-      ) as Promise<unknown>;
-      for (const resolve of resolves) resolve();
-      await misses;
-      await settle();
-      await (rt.run(`fetch('https://api.test/config')`) as Promise<unknown>);
-      await settle();
-
-      expect(requests).toBe(2);
-      expect(rt.records()).toHaveLength(2);
-    });
-
-    it("records both of two calls with the same method, URL and body at the same time", async () => {
-      const { rt, LibResponse } = libRuntime();
-      const resolves: Array<() => void> = [];
-      let requests = 0;
-      rt.context.fetch = (url: string) => {
-        requests++;
-        return new Promise((r) => resolves.push(() => r(new LibResponse(url, 204))));
-      };
-      rt.install();
-      const all = rt.run(
-        `Promise.all([0, 1].map(function() { return fetch('https://api.test/track', { method: 'POST', body: '{"e":"view"}' }); }))`
-      ) as Promise<unknown>;
-      resolves[0]!();
-      await settle();
-      resolves[1]!();
-      await all;
-      await settle();
-
-      expect(requests).toBe(2);
-      expect(rt.records().map((r) => r.response?.status)).toEqual([204, 204]);
-    });
-
-    it("keeps the records of other requests when a call it no longer holds turns out to be no request", async () => {
-      const { rt } = libRuntime();
-      let resolve: (value: unknown) => void = () => {};
-      rt.context.fetch = () => new Promise((r) => (resolve = r));
-      rt.install();
-      rt.run(`fetch('https://api.test/cached')`);
-      // 2000 later requests push the call's record out of the log.
-      rt.run(
-        `for (var i = 0; i < 2000; i++) { var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/x' + i); x.send(); }`
-      );
-      resolve({ ok: true });
-      await settle();
-
-      expect(rt.records()).toHaveLength(2000);
-      expect(rt.records()[1999]!.request.url).toBe("https://api.test/x1999");
-    });
-
-    it("keeps no record of a call that returns no promise", () => {
-      const { rt } = libRuntime();
-      rt.run(`fetch = function() { return 'not a promise'; };`);
-      rt.install();
-
-      expect(rt.run(`fetch('https://api.test/odd')`)).toBe("not a promise");
+      expect(() =>
+        rt.run(
+          `__networking.sendRequest('GET', 'bad', 'bad', {}, null, 'text', false, 0, function() {}, false)`
+        )
+      ).toThrow("Invalid URL");
       expect(rt.records()).toHaveLength(0);
     });
 
-    it.each<{ resolves: string; options: RuntimeOptions; value: string }>([
-      { resolves: "a plain object", options: {}, value: "{ ok: true, status: 200 }" },
-      {
-        resolves: "an app's own class around a Response",
-        options: {},
-        value:
-          "{ raw: new LibResponse('https://api.test/cached'), status: 200, clone: function() {} }",
-      },
-      {
-        resolves: "React Native's Response",
-        options: { polyfillFetch: true },
-        value: "new __WhatwgResponse('cached')",
-      },
-      {
-        resolves: "Expo's Response",
-        options: { expo: { sdk: 57 } },
-        value: "new __expoNative.FetchResponse()",
-      },
-    ])("records no call that resolves $resolves", async ({ options, value }) => {
-      const { rt } = libRuntime(options);
-      // A cache that answers without a request.
-      rt.run(`fetch = function() { return Promise.resolve(${value}); };`);
+    it("finds the module when the app has not loaded it yet", async () => {
+      const rt = libRuntime({ networkModuleLoaded: false });
       rt.install();
-      await (rt.run(`fetch('https://api.test/cached')`) as Promise<unknown>);
+      const pending = rt.run(`fetch('https://api.test/first')`) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200);
+      await pending;
       await settle();
 
-      expect(rt.records()).toHaveLength(0);
+      expectRecordPerRequest(rt, 1);
+    });
+
+    it("records no library request, and each XHR once, without Metro's module list", async () => {
+      const rt = libRuntime({ metro: false });
+      expect(rt.install()).toEqual({ installed: true });
+      const pending = rt.run(`fetch('https://api.test/lib')`) as Promise<unknown>;
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/xhr'); x.send();`);
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200);
+      rt.sends[0]!.respond(200, {}, "");
+      await pending;
+      await settle();
+
+      expect(rt.records().map((r) => r.request.url)).toEqual(["https://api.test/xhr"]);
+    });
+
+    it("leaves the global fetch, Response and the module's events as they are", () => {
+      const rt = libRuntime();
+      const before = rt.run("[fetch, Response, Headers, Request]") as unknown[];
+      rt.install();
+
+      expect(rt.run("[fetch, Response, Headers, Request]")).toEqual(before);
+      expect(rt.network.listeners()).toBe(0);
     });
 
     // Both keep whatwg-fetch's global Response, so the interceptor leaves the global fetch alone.

@@ -1,16 +1,15 @@
 /**
  * Injected via Runtime.evaluate: records the app's HTTP requests for the network tools.
  *
- * Each request is recorded where it leaves JavaScript, so a request of XHR or of React Native's or
- * Expo's `fetch` has one record whatever the app's own wrappers of `fetch` do with it:
+ * Each request is recorded where it leaves JavaScript, so a request has one record whatever the
+ * app's own wrappers of `fetch` do with it:
  * - `XMLHttpRequest.prototype` is patched: axios and every other XHR user, and React Native's
  *   `fetch`, which is a polyfill over XHR.
  * - Expo's native `fetch` (`expo/fetch`, the global `fetch` on Expo SDK 56+) sends each request
  *   through a `NativeRequest` of its native module, which is patched too.
- * - A fetch library that calls React Native's native network module itself (react-native-fetch-api)
- *   sends neither. It also installs its own global Response class, and only then is
- *   `globalThis.fetch` wrapped: each call is recorded, and the record goes again when the call
- *   turns out to be no request of its own.
+ * - A fetch library that calls React Native's network module itself (react-native-fetch-api)
+ *   sends neither. That module's `sendRequest` is patched, found in the module list of Metro's
+ *   development build: requests an XHR does not send there are recorded.
  * - Records stay in `__argent_network_log` / `__argent_network_by_id`, which the read scripts
  *   below serve.
  *
@@ -48,43 +47,15 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   g.__argent_network_by_id = byId;
   var nextId = 1;
   var bufferedChars = 0;
-  // XHRs and Expo requests sent so far. While calls of a fetch library (below) are in flight, the
-  // method, URL and text body of each send are noted too.
-  var transportSends = 0;
-  var lastSends = [];
-  var inFlight = [];
-
-  function noteSend(method, url, body) {
-    transportSends++;
-    if (!inFlight.length) return;
-    lastSends.push({ n: transportSends, method: method, url: url, body: typeof body === 'string' ? bodyKey(body) : undefined });
-    if (lastSends.length > 500) lastSends.shift();
-  }
-
-  // Tells request bodies apart without keeping them: a text up to 4096 characters as it is, a longer
-  // one by its length, its start and end and 128 short pieces spread over it, and an object by a
-  // number of its own.
-  var bodyIds = new WeakMap();
-  var nextBodyId = 1;
-  function bodyKey(body) {
-    if (body == null) return undefined;
-    if (typeof body === 'object' || typeof body === 'function') {
-      var id = bodyIds.get(body);
-      if (!id) { id = nextBodyId++; bodyIds.set(body, id); }
-      return id;
-    }
-    var text = String(body);
-    if (text.length <= 4096) return text;
-    var key = text.length + ':' + text.slice(0, 512) + text.slice(-512);
-    var step = Math.floor((text.length - 1024) / 128);
-    for (var i = 0, at = 512; i < 128; i++, at += step) key += text.substr(at, 8);
-    return key;
-  }
+  // Above zero while an XHR is sent: the request React Native's network module gets then is the
+  // XHR's, which has its record.
+  var xhrSending = 0;
 
   function bodyChars(entry) {
     return (entry.responseBody ? entry.responseBody.length : 0) +
       (entry.request.postData ? entry.request.postData.length : 0) +
-      (entry.bodyBytes ? entry.bodyBytes.byteLength : 0) + (entry.postBytes ? entry.postBytes.byteLength : 0);
+      (entry.bodyBytes ? entry.bodyBytes.byteLength : 0) + (entry.postBytes ? entry.postBytes.byteLength : 0) +
+      (entry.bodyBase64 ? entry.bodyBase64.length : 0);
   }
 
   function evict() {
@@ -184,9 +155,37 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return Uint8Array.prototype.slice.call(bytes, 0, BODY_CAP + 3);
   }
 
+  // The bytes of base64 text, which a response of React Native's network module can come as.
+  var base64Values = null;
+  function base64Bytes(text) {
+    if (!base64Values) {
+      base64Values = {};
+      var digits = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+      for (var d = 0; d < 64; d++) base64Values[digits.charAt(d)] = d;
+    }
+    var out = new Uint8Array(Math.floor(text.length * 3 / 4));
+    var n = 0, bits = 0, acc = 0;
+    for (var i = 0; i < text.length; i++) {
+      var v = base64Values[text.charAt(i)];
+      if (v === undefined) continue;
+      acc = (acc << 6) | v;
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        out[n++] = (acc >> bits) & 0xff;
+        acc &= (1 << bits) - 1;
+      }
+    }
+    return out.subarray(0, n);
+  }
+
   function decodeBodies(entry) {
-    if (!entry.postBytes && !entry.bodyBytes) return;
+    if (!entry.postBytes && !entry.bodyBytes && entry.bodyBase64 === undefined) return;
     var before = bodyChars(entry);
+    if (entry.bodyBase64 !== undefined) {
+      entry.bodyBytes = base64Bytes(entry.bodyBase64);
+      delete entry.bodyBase64;
+    }
     if (entry.postBytes) {
       // Expo hands its native request the body as bytes: they show as text when they are UTF-8.
       var post = utf8Text(entry.postBytes);
@@ -366,24 +365,26 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     // iOS resolves readAsText with null when the cut splits a UTF-8 character, so step back a
     // byte at a time, at most 3 times.
     // The size is read up front: RN's Blob throws on every access once the app closes it.
-    var readBlob = function(rec, blob, size, end) {
+    // cutOf(end), when given, makes the start of the blob that is read instead of a slice.
+    var readBlob = function(rec, blob, size, end, cutOf) {
       if (end === Math.min(size, BODY_CAP) && isBinaryBlob(rec, blob)) {
         rec.entry.bodyOmitted = true;
         return complete(rec, undefined, size, false);
       }
-      var part = end < size ? blob.slice(0, end) : blob;
+      var part = end < size ? (cutOf ? cutOf(end) : blob.slice(0, end)) : blob;
+      // A slice holds its own reference to the native blob: release it, so the app's close() frees it.
+      var release = function() { if (part !== blob && !cutOf) part.close(); };
       var reader = new FileReader();
       reader.onload = function() {
-        // A slice holds its own reference to the native blob: release it, so the app's close() frees it.
-        if (part !== blob) part.close();
+        release();
         if (typeof reader.result === 'string' || part === blob || end <= BODY_CAP - 3) {
           return complete(rec, reader.result, size, part !== blob);
         }
         // The app may have closed the blob since the first read.
-        try { readBlob(rec, blob, size, end - 1); } catch (e) { complete(rec, undefined, size, false); }
+        try { readBlob(rec, blob, size, end - 1, cutOf); } catch (e) { complete(rec, undefined, size, false); }
       };
       reader.onerror = function() {
-        if (part !== blob) part.close();
+        release();
         complete(rec, undefined, size, false);
       };
       reader.readAsText(part);
@@ -483,10 +484,15 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     proto.send = function(body) {
       var slot = slots.get(this);
       var startedAt = Date.now();
-      var result = origSend.apply(this, arguments);
+      var result;
+      xhrSending++;
+      try {
+        result = origSend.apply(this, arguments);
+      } finally {
+        xhrSending--;
+      }
       if (!slot || !slot.headers) return result;
       var rec = createRecord(isFetchXhr(this, slot) ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
-      noteSend(slot.method, slot.url, body);
       slot.headers = null;
       listen(this, rec);
       return result;
@@ -714,7 +720,6 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         try {
           var rec = createRecord('Fetch', String((init && init.method) || 'GET').toUpperCase(), String(url),
             headersObject(init && init.headers), body, startedAt);
-          noteSend(rec.entry.request.method, rec.entry.request.url, body);
           nativeRecords.set(this, rec);
           observeExpoResponse(rec, response, promise);
         } catch (e) {}
@@ -774,158 +779,200 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     }
   }
 
-  // ── Another fetch library ──
-  // react-native-fetch-api (installed by react-native-polyfill-globals) calls React Native's native
-  // network module itself, so it sends neither an XHR nor an Expo request. It replaces the global
-  // Response class too, while React Native and Expo keep whatwg-fetch's (it has _initBody). Only then
-  // is the global fetch wrapped. Each call gets a record when the app makes it. The record goes again
-  // when the call turns out to be no request of its own: it resolves with no Response of that class
-  // (an app's cache, or its own class around the Response of React Native's or Expo's fetch), or it
-  // settles with what another call already got.
-  var LibResponse = g.Response;
-  var origFetch = g.fetch;
-  var libFetch = false;
-  try {
-    libFetch = typeof origFetch === 'function' && typeof LibResponse === 'function' && !!LibResponse.prototype &&
-      !('_initBody' in LibResponse.prototype);
-  } catch (e) {}
-  if (libFetch) {
-    // A Response copied from another shares its body source with it: the blob data of the library's
-    // default Response, or the stream or bytes of its body. A call that resolves with the source of a
-    // recorded call got a copy of that call's Response from the app's wrapper or cache, and gets no
-    // record of its own. Separate requests have sources of their own, so each keeps its record.
-    // A Response without such a source is told apart by what it is: the same Response, or a clone()
-    // of one (below). Calls with the same method, URL and body are not taken as copies of each other:
-    // two such calls at the same time can be two requests (a form sent twice), and a Response the app
-    // builds again for each caller from one request (not with clone()) gives a record per caller.
-    var recorded = new WeakSet();
-    // The library's ArrayBufferResponse (base64 mode) decodes its bytes again for each clone, so a
-    // clone has a body source of its own. Each clone() is noted instead: a copy counts as the Response
-    // it was made from. The library's classes are not global, and an app's wrapper can clone a
-    // Response before it reaches the app, so the clone() of a class is tapped when its first Response
-    // is built: the library's Response constructor sets _body, through a setter put on its prototype,
-    // which leaves the value as an ordinary property of the Response.
-    var cloneOf = new WeakMap();
-    var tappedClones = new WeakSet();
-    var originOf = function(response) {
-      return cloneOf.get(response) || response;
+  // ── React Native's network module ──
+  // A fetch library can send through React Native's network module (RCTNetworking) itself, not
+  // through an XHR: react-native-fetch-api, which react-native-polyfill-globals installs as the global
+  // fetch. Each request such a library sends there is recorded, so it has one record whatever the
+  // app's wrappers do, and whenever the library was installed. The module is not global: it is found
+  // in the module list of Metro's development build (__r.getModules()). A request that an XHR sends
+  // (xhrSending) has its record from the XHR.
+  // The native module answers by request id, with events of the module: the response, its data
+  // (text, base64 text or a native blob, as the sender asked) or the parts of a text it streams, and
+  // the end of the request. An aborted request gets no end event on iOS.
+  var NETWORKING_PATH = /(^|[\\\\/])Libraries[\\\\/]Network[\\\\/]RCTNetworking(\\.[a-z]+)?\\.js$/;
+  function findNetworking() {
+    var modules;
+    try { modules = typeof g.__r === 'function' && typeof g.__r.getModules === 'function' ? g.__r.getModules() : null; } catch (e) {}
+    if (!modules || typeof modules !== 'object') return null;
+    var matches = [];
+    var check = function(mod, id) {
+      if (mod && typeof mod.verboseName === 'string' && NETWORKING_PATH.test(mod.verboseName)) matches.push({ mod: mod, id: Number(id) });
     };
-    var tapClone = function(response) {
-      var proto = response;
-      while (proto && !hasOwn.call(proto, 'clone')) proto = Object.getPrototypeOf(proto);
-      if (!proto || tappedClones.has(proto) || typeof proto.clone !== 'function') return;
-      tappedClones.add(proto);
-      var clone = proto.clone;
-      proto.clone = function clone_() {
-        var copy = clone.apply(this, arguments);
-        try { if (copy && typeof copy === 'object' && copy !== this) cloneOf.set(copy, originOf(this)); } catch (e) {}
-        return copy;
-      };
-    };
-    var sourceOf = function(response) {
-      var source = response._blobData || (response._body && response._body._bodyInit);
-      return source && typeof source === 'object' ? source : null;
-    };
-    tapClone(LibResponse.prototype);
-    try {
-      if (!hasOwn.call(LibResponse.prototype, '_body')) {
-        Object.defineProperty(LibResponse.prototype, '_body', {
-          configurable: true,
-          get: function() { return undefined; },
-          set: function(value) {
-            Object.defineProperty(this, '_body', { value: value, writable: true, enumerable: true, configurable: true });
-            try { tapClone(this); } catch (e) {}
-          }
-        });
-      }
-    } catch (e) {}
-    var settled = function(call) {
-      var at = inFlight.indexOf(call);
-      if (at !== -1) inFlight.splice(at, 1);
-      var firstSent = inFlight.length ? inFlight[0].sentBefore : transportSends;
-      while (lastSends.length && lastSends[0].n <= firstSent) lastSends.shift();
-    };
-    var dropRecord = function(entry) {
-      var at = log.lastIndexOf(entry);
-      if (at === -1) return;
-      log.splice(at, 1);
-      delete byId[entry.requestId];
-      bufferedChars -= bodyChars(entry);
-    };
-    g.fetch = function fetch(input, init) {
-      var call, rec, promise;
+    if (typeof modules.forEach === 'function') modules.forEach(check);
+    else for (var key in modules) if (hasOwn.call(modules, key)) check(modules[key], key);
+    // A module the app has not loaded yet is loaded here, as its first request would.
+    matches.sort(function(a, b) { return (b.mod.isInitialized ? 1 : 0) - (a.mod.isInitialized ? 1 : 0); });
+    for (var i = 0; i < matches.length; i++) {
+      var exports;
       try {
-        var method = String((init && init.method) || (input && typeof input === 'object' && input.method) || 'GET').toUpperCase();
-        var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
-        // A Request the app passes holds its own body.
-        var body = init && init.body !== undefined ? init.body : input && typeof input === 'object' && input._body ? input._body._bodyInit : undefined;
-        call = { startedAt: Date.now(), sentBefore: transportSends, method: method, url: url, body: bodyKey(body) };
-        rec = createRecord('Fetch', method, url, headersObject(init && init.headers !== undefined ? init.headers : input && input.headers),
-          body, call.startedAt);
-        // In flight before the library runs: a wrapper over React Native's fetch sends its XHR at once,
-        // inside the call.
-        inFlight.push(call);
+        exports = matches[i].mod.isInitialized ? matches[i].mod.publicModule && matches[i].mod.publicModule.exports : g.__r(matches[i].id);
       } catch (e) {}
-      try {
-        promise = origFetch.apply(g, arguments);
-      } catch (e) {
-        // A call that throws (an aborted signal) sent nothing.
-        if (rec) {
-          dropRecord(rec.entry);
-          settled(call);
+      var api = exports && typeof exports === 'object' && exports.default ? exports.default : exports;
+      if (api && typeof api.sendRequest === 'function' && typeof api.abortRequest === 'function' &&
+        typeof api.addListener === 'function') return api;
+    }
+    return null;
+  }
+
+  function lowerCaseHeaders(source) {
+    var headers = headersObject(source);
+    var out = {};
+    for (var name in headers) {
+      if (!hasOwn.call(headers, name)) continue;
+      var lower = name.toLowerCase();
+      out[lower] = hasOwn.call(out, lower) ? out[lower] + ', ' + headers[name] : headers[name];
+    }
+    return out;
+  }
+
+  // A Blob of the native blob a response came as, for FileReader only: it does not count as a
+  // reference to the native blob, so the app's own Blob of it still frees it, and nothing here closes it.
+  function blobOf(data, size) {
+    var copy = {};
+    for (var key in data) if (hasOwn.call(data, key)) copy[key] = data[key];
+    copy.size = size;
+    var blob = Object.create(Blob.prototype);
+    blob.data = copy;
+    return blob;
+  }
+
+  // Records one request sent through the module. Returns the request's watcher, which gets the
+  // request id once the module hands it back.
+  function watchRequest(networking, method, url, headers, data, responseType) {
+    var rec = createRecord('Fetch', String(method || 'GET').toUpperCase(), String(url), lowerCaseHeaders(headers), data, Date.now());
+    var requestId;
+    var subscriptions = [];
+    var received;
+    // The text received so far of a response streamed in parts, up to one character past the cut.
+    var streamed = '';
+    var streamedChars = 0;
+    var streamedBytes = 0;
+    var stop = function() {
+      for (var i = 0; i < subscriptions.length; i++) {
+        try { subscriptions[i].remove(); } catch (e) {}
+      }
+      subscriptions = [];
+      if (requestId !== undefined && watched[requestId] === watcher) delete watched[requestId];
+    };
+    var storeStreamed = function() {
+      if (!streamedChars) return;
+      var cut = streamedChars > BODY_CAP;
+      storeBody(rec, streamed, cut ? undefined : streamedBytes, false);
+      if (cut) rec.entry.bodyLength = streamedChars;
+    };
+    var handlers = {
+      didReceiveNetworkResponse: function(args) {
+        setResponse(rec, args[3], args[1], '', lowerCaseHeaders(args[2]));
+      },
+      didReceiveNetworkData: function(args) { received = args[1]; },
+      didReceiveNetworkIncrementalData: function(args) {
+        var text = args[1];
+        if (typeof text !== 'string' || !text) return;
+        streamedChars += text.length;
+        if (streamedChars <= BODY_CAP) streamedBytes += utf8Length(text);
+        if (streamed.length <= BODY_CAP) streamed += text.slice(0, BODY_CAP + 1 - streamed.length);
+      },
+      didCompleteNetworkResponse: function(args) {
+        stop();
+        if (rec.entry.state !== 'pending') return;
+        if (args[2]) return fail(rec, 'timeout');
+        if (args[1]) {
+          storeStreamed();
+          return fail(rec, String(args[1]));
         }
+        rec.entry.durationMs = Date.now() - rec.startedAt;
+        if (typeof received === 'string') {
+          if (responseType !== 'base64') return complete(rec, received, textSize(received), false);
+          var n = received.length;
+          var padding = received.charAt(n - 1) === '=' ? (received.charAt(n - 2) === '=' ? 2 : 1) : 0;
+          var size = Math.max(0, Math.floor(n * 3 / 4) - padding);
+          // Decoded when the agent reads the record, as bytes are.
+          rec.entry.bodyBase64 = received.slice(0, Math.ceil((BODY_CAP + 3) / 3) * 4);
+          if (byId[rec.entry.requestId] === rec.entry) { bufferedChars += rec.entry.bodyBase64.length; evict(); }
+          return complete(rec, undefined, size, false);
+        }
+        if (received && typeof received === 'object' && typeof received.blobId === 'string') {
+          var blobSize = Number(received.size) || 0;
+          if (typeof Blob === 'function' && typeof FileReader === 'function' && typeof readBlob === 'function') {
+            try {
+              return readBlob(rec, blobOf(received, blobSize), blobSize, Math.min(blobSize, BODY_CAP), function(end) { return blobOf(received, end); });
+            } catch (e) {}
+          }
+          return complete(rec, undefined, blobSize, false);
+        }
+        storeStreamed();
+        complete(rec, undefined, undefined, false);
+      }
+    };
+    var watcher = {
+      sent: function(id) {
+        requestId = id;
+        watched[id] = watcher;
+      },
+      // The app aborted the request: what it streamed so far stays with the failed record.
+      abort: function() {
+        stop();
+        if (rec.entry.state !== 'pending') return;
+        storeStreamed();
+        fail(rec, 'aborted');
+      },
+      // The module did not take the request: its send threw before it handed back an id.
+      drop: function() {
+        if (requestId !== undefined) return;
+        stop();
+        var at = log.lastIndexOf(rec.entry);
+        if (at === -1) return;
+        log.splice(at, 1);
+        delete byId[rec.entry.requestId];
+        bufferedChars -= bodyChars(rec.entry);
+      }
+    };
+    // Each event carries the request id, which the module hands back only after the request starts.
+    try {
+      for (var event in handlers) {
+        (function(handler) {
+          subscriptions.push(networking.addListener(event, function(args) {
+            if (requestId === undefined || !args || args[0] !== requestId) return;
+            try { handler(args); } catch (e) {}
+          }));
+        })(handlers[event]);
+      }
+    } catch (e) {
+      watcher.drop();
+      return null;
+    }
+    return watcher;
+  }
+
+  // The watcher of each request in flight, by request id.
+  var watched = {};
+  var networking = findNetworking();
+  if (networking) {
+    var origSendRequest = networking.sendRequest;
+    var origAbortRequest = networking.abortRequest;
+    networking.sendRequest = function(method, trackingName, url, headers, data, responseType, incrementalUpdates, timeout, callback) {
+      if (xhrSending || typeof callback !== 'function') return origSendRequest.apply(this, arguments);
+      var watcher = null;
+      try { watcher = watchRequest(networking, method, url, headers, data, responseType); } catch (e) {}
+      if (!watcher) return origSendRequest.apply(this, arguments);
+      var args = Array.prototype.slice.call(arguments);
+      args[8] = function(requestId) {
+        try { if (typeof requestId === 'number' || typeof requestId === 'string') watcher.sent(requestId); } catch (e) {}
+        return callback.apply(this, arguments);
+      };
+      try {
+        return origSendRequest.apply(this, args);
+      } catch (e) {
+        watcher.drop();
         throw e;
       }
-      if (!rec || !promise || typeof promise.then !== 'function') {
-        if (rec) {
-          dropRecord(rec.entry);
-          settled(call);
-        }
-        return promise;
-      }
-      // The app gets a promise that settles like the original, so a rejection it never handles is
-      // still reported as unhandled.
-      return promise.then(function(response) {
-        try { settleLibFetch(call, rec, response, false); } catch (e) {}
-        settled(call);
-        return response;
-      }, function(error) {
-        try { settleLibFetch(call, rec, error, true); } catch (e) {}
-        settled(call);
-        throw error;
-      });
     };
-    var settleLibFetch = function(call, rec, outcome, failed) {
-      if (!failed && !(outcome instanceof LibResponse)) return dropRecord(rec.entry);
-      var shared = !!outcome && typeof outcome === 'object';
-      var origin = shared ? originOf(outcome) : null;
-      var source = failed ? null : sourceOf(origin);
-      if (!failed) tapClone(outcome);
-      if ((shared && recorded.has(origin)) || (source && recorded.has(source))) return dropRecord(rec.entry);
-      if (shared) recorded.add(origin);
-      if (source) recorded.add(source);
-      // An XHR or Expo request with the same method and URL, sent during the call, may be the request
-      // of the call (an app wrapper that builds this Response from React Native's fetch), and that
-      // request has its record. Text bodies that differ tell two requests apart. Other requests the
-      // app sends meanwhile do not matter.
-      for (var j = lastSends.length - 1; j >= 0 && lastSends[j].n > call.sentBefore; j--) {
-        var send = lastSends[j];
-        if (send.method === call.method && send.url === call.url &&
-          !(typeof send.body === 'string' && typeof call.body === 'string' && send.body !== call.body)) return dropRecord(rec.entry);
+    networking.abortRequest = function(requestId) {
+      var watcher = hasOwn.call(watched, requestId) ? watched[requestId] : null;
+      if (watcher) {
+        try { watcher.abort(); } catch (e) {}
       }
-      // A failure is its own: callers that share one failure got the same error, above.
-      if (failed) return fail(rec, outcome && outcome.message ? String(outcome.message) : String(outcome));
-      setResponse(rec, outcome.url, outcome.status, outcome.statusText, headersObject(outcome.headers));
-      rec.entry.durationMs = Date.now() - call.startedAt;
-      // The library's default Response holds the body as a blob, which a read leaves to the app as
-      // well. A Response that streams text shares its stream with every clone, and a read would take
-      // it from the app: that body is not read.
-      var blob = outcome._body && outcome._body._bodyBlob;
-      if (typeof Blob === 'function' && blob instanceof Blob && typeof readBlob === 'function' && typeof FileReader === 'function') {
-        var size = blob.size;
-        return readBlob(rec, blob, size, Math.min(size, BODY_CAP));
-      }
-      complete(rec, undefined, undefined, false);
+      return origAbortRequest.apply(this, arguments);
     };
   }
 
