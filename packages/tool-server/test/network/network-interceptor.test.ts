@@ -3982,7 +3982,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       ]);
     });
 
-    it("records one request when a cache hands out the Response of a call that shared its record", async () => {
+    it("records each of two requests a cache sends at once, and none for a later hit", async () => {
       const { rt, LibResponse } = libRuntime();
       const resolves: Array<() => void> = [];
       let requests = 0;
@@ -4007,7 +4007,29 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       await settle();
 
       expect(requests).toBe(2);
-      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()).toHaveLength(2);
+    });
+
+    it("records both of two calls with the same method, URL and body at the same time", async () => {
+      const { rt, LibResponse } = libRuntime();
+      const resolves: Array<() => void> = [];
+      let requests = 0;
+      rt.context.fetch = (url: string) => {
+        requests++;
+        return new Promise((r) => resolves.push(() => r(new LibResponse(url, 204))));
+      };
+      rt.install();
+      const all = rt.run(
+        `Promise.all([0, 1].map(function() { return fetch('https://api.test/track', { method: 'POST', body: '{"e":"view"}' }); }))`
+      ) as Promise<unknown>;
+      resolves[0]!();
+      await settle();
+      resolves[1]!();
+      await all;
+      await settle();
+
+      expect(requests).toBe(2);
+      expect(rt.records().map((r) => r.response?.status)).toEqual([204, 204]);
     });
 
     it("keeps the records of other requests when a call it no longer holds turns out to be no request", async () => {

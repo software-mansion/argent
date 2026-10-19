@@ -781,14 +781,11 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     // default Response, or the stream or bytes of its body. A call that resolves with the source of a
     // recorded call got a copy of that call's Response from the app's wrapper or cache, and gets no
     // record of its own. Separate requests have sources of their own, so each keeps its record.
-    // A Response without such a source falls back on the calls recorded: a call with the same method,
-    // URL and body that was in flight with one of them is taken as such a copy. Calls are ordered by a
-    // counter, not the clock: a call the app sends from the handler of a response (a retry, a poll)
-    // starts after that response, in the same millisecond. A recorded call leaves that list once no
-    // call in flight started before it ended.
-    var libCalls = [];
+    // A Response without such a source is told apart by what it is: the same Response, or a clone()
+    // of one (below). Calls with the same method, URL and body are not taken as copies of each other:
+    // two such calls at the same time can be two requests (a form sent twice), and a Response the app
+    // builds again for each caller from one request (not with clone()) gives a record per caller.
     var recorded = new WeakSet();
-    var libSteps = 0;
     // The library's ArrayBufferResponse (base64 mode) decodes its bytes again for each clone, so a
     // clone has a body source of its own. Each clone() is noted instead: a copy counts as the Response
     // it was made from. The library's classes are not global, and an app's wrapper can clone a
@@ -832,8 +829,6 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var settled = function(call) {
       var at = inFlight.indexOf(call);
       if (at !== -1) inFlight.splice(at, 1);
-      var first = inFlight.length ? inFlight[0].start : libSteps + 1;
-      while (libCalls.length && libCalls[0].end < first) libCalls.shift();
       var firstSent = inFlight.length ? inFlight[0].sentBefore : transportSends;
       while (lastSends.length && lastSends[0].n <= firstSent) lastSends.shift();
     };
@@ -851,7 +846,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         var url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : String(input));
         // A Request the app passes holds its own body.
         var body = init && init.body !== undefined ? init.body : input && typeof input === 'object' && input._body ? input._body._bodyInit : undefined;
-        call = { startedAt: Date.now(), start: ++libSteps, sentBefore: transportSends, method: method, url: url, body: bodyKey(body) };
+        call = { startedAt: Date.now(), sentBefore: transportSends, method: method, url: url, body: bodyKey(body) };
         rec = createRecord('Fetch', method, url, headersObject(init && init.headers !== undefined ? init.headers : input && input.headers),
           body, call.startedAt);
         // In flight before the library runs: a wrapper over React Native's fetch sends its XHR at once,
@@ -905,24 +900,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         if (send.method === call.method && send.url === call.url &&
           !(typeof send.body === 'string' && typeof call.body === 'string' && send.body !== call.body)) return dropRecord(rec.entry);
       }
-      call.endedAt = Date.now();
-      call.end = ++libSteps;
-      // A failure is its own: callers that share one failure got the same error, above. It does not
-      // take the place of a call that starts after it, such as the call an app makes again right after
-      // it aborted one.
+      // A failure is its own: callers that share one failure got the same error, above.
       if (failed) return fail(rec, outcome && outcome.message ? String(outcome.message) : String(outcome));
-      if (!source) {
-        for (var i = libCalls.length - 1; i >= 0; i--) {
-          var other = libCalls[i];
-          if (other.method === call.method && other.url === call.url && other.body === call.body && other.start < call.end && call.start < other.end) {
-            return dropRecord(rec.entry);
-          }
-        }
-        libCalls.push(call);
-        if (libCalls.length > 50) libCalls.shift();
-      }
       setResponse(rec, outcome.url, outcome.status, outcome.statusText, headersObject(outcome.headers));
-      rec.entry.durationMs = call.endedAt - call.startedAt;
+      rec.entry.durationMs = Date.now() - call.startedAt;
       // The library's default Response holds the body as a blob, which a read leaves to the app as
       // well. A Response that streams text shares its stream with every clone, and a read would take
       // it from the app: that body is not read.
