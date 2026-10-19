@@ -111,12 +111,14 @@ if (process.platform === "darwin") {
   console.log(`⊘ Skipping native devtools dylibs build (macOS-only on ${process.platform})\n`);
 }
 
-console.log("Building dispatcher TypeScript...");
-execSync("npm run build:dispatcher -w @swmansion/argent", {
+// The dispatcher imports other workspace packages through their dist/ entry
+// points. Build the project references first so a fresh clone has those files.
+console.log("Building workspace TypeScript...");
+execSync("npm run build", {
   cwd: ROOT,
   stdio: "inherit",
 });
-console.log("✓ Dispatcher TypeScript built\n");
+console.log("✓ Workspace TypeScript built\n");
 
 // Only the current host's key, unlike bundle-tools.cjs which copies every
 // supported host's binary. Mirrors hostPlatformKey() in
@@ -280,8 +282,11 @@ function restoreCliRecord() {
 }
 
 let toolServerPid = null;
+let cleanedUp = false;
 
 function cleanup() {
+  if (cleanedUp) return;
+  cleanedUp = true;
   console.log("\nCleaning up...");
 
   if (toolServerPid && isProcessAlive(toolServerPid)) {
@@ -331,10 +336,10 @@ async function main() {
 
   console.log(`Starting dev tool-server on port ${PORT}...`);
 
-  const toolServer = spawn("npx", ["ts-node", "src/index.ts"], {
+  const toolServer = spawn("npx", ["ts-node", "src/index.ts", "start"], {
     cwd: TOOL_SERVER_PKG,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: String(PORT) },
+    env: { ...process.env, ARGENT_PORT: String(PORT) },
   });
 
   toolServerPid = toolServer.pid;

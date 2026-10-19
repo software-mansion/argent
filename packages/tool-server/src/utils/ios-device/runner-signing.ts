@@ -108,7 +108,14 @@ export function resolveSigningHint(output: string): string | null {
     );
   }
 
-  if (lower.includes("no profiles for") || lower.includes("provisioning profile")) {
+  // Real signing errors only. Every signed build log prints "Provisioning
+  // Profile:" lines, so the bare phrase proves nothing.
+  if (
+    lower.includes("no profiles for") ||
+    lower.includes("requires a provisioning profile") ||
+    lower.includes("no provisioning profile") ||
+    /error:[^\n]*provisioning profile/.test(lower)
+  ) {
     return (
       "Provisioning failed. Check that this team's Apple ID is signed into Xcode " +
       "(Xcode > Settings > Accounts), then retry."

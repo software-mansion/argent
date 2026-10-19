@@ -75,6 +75,13 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   "open-url",
   // The keyboard backend's XCTest typeText: Delete presses, then the text.
   "fill",
+  // Build and launch through xcodebuild / xctrace --device, which target hardware directly.
+  "ios-launch-time-measure",
+  "ios-launch-time-profile",
+  // Host-side readers of the xctrace session ios-launch-time-profile writes; the
+  // native-profiler capture tools stay simulator-only.
+  "profiler-load",
+  "profiler-stack-query",
 ];
 
 describe("apple.device capability ratchet", () => {
