@@ -26,9 +26,21 @@ interface FakeEmulator {
   pending: string;
   angle: number;
   keyguard: boolean;
-  /** `mScreenOnFully`; a fold to open wakes an asleep device, `darkens` turns it off. */
+  /** `mScreenOnFully`; `darkens` turns it off for good at the fold. */
   screenOn: boolean;
   darkens: boolean;
+  /** `mWakefulness`. An unfold wakes an asleep device `wakeAfter` reads later. */
+  awake: boolean;
+  wakeAfter: number;
+  /** A fold to closed puts the device to sleep. */
+  sleepsOnClose: boolean;
+  /** After the fold, an awake screen stays dark for this many reads. */
+  screenLag: number;
+  /** Every read flips between awake and lit and asleep and dark. */
+  flaps: boolean;
+  /** Countdowns the reads drive. */
+  wakeIn: number | null;
+  darkFor: number;
   /** The fold to closed raises the lock screen; `stuck` keeps it up. */
   raisesKeyguard: boolean;
   stuck: boolean;
@@ -55,6 +67,13 @@ function fresh(overrides: Partial<FakeEmulator> = {}): FakeEmulator {
     keyguard: false,
     screenOn: true,
     darkens: false,
+    awake: true,
+    wakeAfter: 0,
+    sleepsOnClose: false,
+    screenLag: 0,
+    flaps: false,
+    wakeIn: null,
+    darkFor: 0,
     raisesKeyguard: false,
     stuck: false,
     ignoresPosture: false,
@@ -62,6 +81,36 @@ function fresh(overrides: Partial<FakeEmulator> = {}): FakeEmulator {
     consoleRefuses: false,
     ...overrides,
   };
+}
+
+/** What a fold to `state` does to the screen and the wakefulness. */
+function afterFold(state: string): void {
+  if (state === "0" && emu.sleepsOnClose) {
+    emu.awake = false;
+    emu.screenOn = false;
+  } else if (!emu.awake && state !== "0") {
+    emu.wakeIn = emu.wakeAfter;
+  } else if (emu.awake && emu.screenLag > 0) {
+    emu.screenOn = false;
+    emu.darkFor = emu.screenLag;
+  }
+  if (emu.darkens) emu.screenOn = false;
+}
+
+/** One snapshot read moves the guest a step on. */
+function advance(): void {
+  emu.state = emu.pending;
+  if (emu.flaps) {
+    emu.awake = !emu.awake;
+    emu.screenOn = emu.awake;
+  } else if (emu.wakeIn !== null) {
+    if (emu.wakeIn-- > 0) return;
+    emu.wakeIn = null;
+    emu.awake = true;
+    emu.screenOn = true;
+  } else if (emu.darkFor > 0 && --emu.darkFor === 0) {
+    emu.screenOn = true;
+  }
 }
 
 const runAdbMock = vi.fn(async (args: string[]) => {
@@ -73,13 +122,13 @@ const runAdbMock = vi.fn(async (args: string[]) => {
       if (!emu.ignoresPosture) emu.pending = target.state;
       emu.angle = target.angle;
       if (target.state === "0" && emu.raisesKeyguard) emu.keyguard = true;
-      if (target.state === "2") emu.screenOn = true;
-      if (emu.darkens) emu.screenOn = false;
+      afterFold(target.state);
       return { stdout: "OK\n", stderr: "" };
     }
     if (rest[0] === "sensor" && rest[1] === "set") {
       emu.angle = Number(rest[3]);
       emu.pending = emu.angle < 30 ? "0" : emu.angle < 150 ? "1" : "2";
+      afterFold(emu.pending);
       return { stdout: "OK\n", stderr: "" };
     }
     if (rest[0] === "sensor" && rest[1] === "get") {
@@ -90,8 +139,9 @@ const runAdbMock = vi.fn(async (args: string[]) => {
     const command = rest.join(" ");
     if (command === "cmd device_state print-states") return { stdout: emu.states, stderr: "" };
     if (command.startsWith("cmd device_state print-state;")) {
-      const read = `${emu.state}\nmScreenOnFully=${emu.screenOn}\nisKeyguardShowing=${emu.keyguard}\n`;
-      emu.state = emu.pending;
+      const wakefulness = emu.awake ? "Awake" : "Asleep";
+      const read = `${emu.state}\nmScreenOnFully=${emu.screenOn}\nmWakefulness=${wakefulness}\nisKeyguardShowing=${emu.keyguard}\n`;
+      advance();
       return { stdout: read, stderr: "" };
     }
     if (command === "wm dismiss-keyguard") {
@@ -132,8 +182,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function fold(params: Record<string, unknown>) {
-  const pending = foldTool.execute!({}, { udid: SERIAL, ...params } as never);
+async function fold(params: Record<string, unknown>, signal?: AbortSignal) {
+  const pending = foldTool.execute!(
+    {},
+    { udid: SERIAL, ...params } as never,
+    {
+      signal,
+    } as never
+  );
   // Swallow here so a rejection is not reported before the test awaits it.
   pending.catch(() => {});
   await vi.runAllTimersAsync();
@@ -151,12 +207,19 @@ describe("fold on Android — parsing", () => {
   });
 
   it("reads one snapshot, taking a missing screen flag as on", () => {
-    expect(parseSnapshot("1\nmScreenOnFully=false\nisKeyguardShowing=true\n")).toEqual({
-      state: "1",
+    expect(
+      parseSnapshot("1\nmScreenOnFully=false\nmWakefulness=Dozing\nisKeyguardShowing=true\n")
+    ).toEqual({ state: "1", screenOn: false, awake: false, keyguard: true });
+    expect(parseSnapshot("1\nmScreenOnFully=false\nmWakefulness=Awake\n")).toMatchObject({
       screenOn: false,
-      keyguard: true,
+      awake: true,
     });
-    expect(parseSnapshot("3\n")).toEqual({ state: "3", screenOn: true, keyguard: false });
+    expect(parseSnapshot("3\n")).toEqual({
+      state: "3",
+      screenOn: true,
+      awake: true,
+      keyguard: false,
+    });
   });
 
   it("reads the hinge angle", () => {
@@ -224,13 +287,62 @@ describe("fold on Android — execute", () => {
   });
 
   it("folds an asleep device to closed without waiting for the screen", async () => {
-    emu = fresh({ screenOn: false, keyguard: true });
+    emu = fresh({ screenOn: false, awake: false, keyguard: true });
     const started = Date.now();
     const result = await fold({ posture: "closed" });
 
     expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(emu.screenOn).toBe(false);
+    // Both warnings survive.
+    expect(result.warning).toMatch(/screen is off after the fold/);
+    expect(result.warning).toMatch(/lock screen is showing/);
+  });
+
+  it("waits for an asleep device that wakes on unfold", async () => {
+    emu = fresh({
+      state: "0",
+      pending: "0",
+      angle: 0,
+      screenOn: false,
+      awake: false,
+      wakeAfter: 2,
+    });
+    const result = await fold({ posture: "open" });
+
+    expect(result).toEqual({ posture: "open", deviceState: "OPENED", hingeAngle: 180 });
+    expect(emu.awake).toBe(true);
+  });
+
+  it("waits for a screen that comes on only after several reads", async () => {
+    emu = fresh({ screenLag: 6 });
+    const result = await fold({ posture: "closed" });
+
+    expect(result).toEqual({ posture: "closed", deviceState: "CLOSED", hingeAngle: 0 });
+    const reads = runAdbMock.mock.calls.filter(([args]) =>
+      args[3]?.startsWith("cmd device_state print-state;")
+    );
+    // One read before the fold, six dark ones, three that agree.
+    expect(reads.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("does not fail a fold whose screen keeps flipping", async () => {
+    emu = fresh({ flaps: true });
+    const result = await fold({ posture: "half-open" });
+
+    expect(result).toMatchObject({ posture: "half-open", deviceState: "HALF_OPENED" });
+  });
+
+  it("settles an angle fold that puts the device to sleep, and warns", async () => {
+    emu = fresh({ sleepsOnClose: true });
+    const started = Date.now();
+    const result = await fold({ angle: 10 });
+
+    expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED", hingeAngle: 10 });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result.warning).toBe(
+      "The screen is off after the fold; wake the device before the next action."
+    );
   });
 
   it("says the state was reached when only the screen stays off", async () => {
@@ -238,8 +350,30 @@ describe("fold on Android — execute", () => {
     const err = await fold({ posture: "closed" }).catch((e: unknown) => e);
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_FAILED);
-    expect(String(err)).toMatch(/reached device state CLOSED.*screen did not turn on/);
+    expect(String(err)).toMatch(/reached device state CLOSED.*screen did not come on/);
     expect(String(err)).not.toMatch(/did not reach/);
+  });
+
+  it("does not move the hinge for a fold cancelled while it waited", async () => {
+    const first = foldTool.execute!({}, { udid: SERIAL, posture: "closed" } as never);
+    const controller = new AbortController();
+    controller.abort();
+    const second = foldTool.execute!(
+      {},
+      { udid: SERIAL, posture: "open" } as never,
+      {
+        signal: controller.signal,
+      } as never
+    );
+    second.catch(() => {});
+    await vi.runAllTimersAsync();
+
+    expect(await first).toMatchObject({ posture: "closed" });
+    await expect(second).rejects.toBeDefined();
+    expect(runAdbMock).not.toHaveBeenCalledWith(["-s", SERIAL, "emu", "posture", "3"]);
+
+    // The lock is free again.
+    expect(await fold({ posture: "open" })).toMatchObject({ posture: "open" });
   });
 
   it("runs two overlapping folds on one device one after the other", async () => {

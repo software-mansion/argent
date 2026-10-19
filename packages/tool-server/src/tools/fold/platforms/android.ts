@@ -37,9 +37,10 @@ const SETTLE_TIMEOUT_MS = 15_000;
  * the screen fully on. A Pixel fold turns one panel off and the other on,
  * which takes 0.3-0.5 s after the state commits; until then the guest takes
  * no input. An angle has no state to wait for, so the agreement is also what
- * tells a committed state from one the guest has not left yet. A device that
- * was asleep before the fold need not wake (a fold to closed leaves it dark),
- * so there the screen only has to hold still.
+ * tells a committed state from one the guest has not left yet. An asleep
+ * device has a dark screen by right (a fold to closed leaves it asleep, and
+ * not every image wakes on unfold), so the screen must be on only while the
+ * device is awake.
  */
 const STABLE_READS = 3;
 
@@ -116,18 +117,24 @@ export function parseDeviceStates(stdout: string): Map<string, string> {
 interface Snapshot {
   state: string | undefined;
   screenOn: boolean;
+  /** `mWakefulness` is `Awake` (or `Dreaming`), not `Asleep` or `Dozing`. */
+  awake: boolean;
   keyguard: boolean;
 }
 
 /**
- * One read of the state, the screen and the lock screen. `mScreenOnFully` is
- * absent on an image that does not report it, which counts as on: a missing
- * signal must not stall every fold for the whole budget.
+ * One read of the state, the screen, the wakefulness and the lock screen.
+ * `mScreenOnFully` is absent on an image that does not report it, which
+ * counts as on: a missing signal must not stall every fold for the whole
+ * budget. A missing `mWakefulness` follows the screen for the same reason.
  */
 export function parseSnapshot(stdout: string): Snapshot {
+  const screenOn = !/mScreenOnFully=false/.test(stdout);
+  const wakefulness = /mWakefulness=([A-Za-z]+)/.exec(stdout)?.[1];
   return {
     state: /^\s*(\d+)\s*$/m.exec(stdout)?.[1],
-    screenOn: !/mScreenOnFully=false/.test(stdout),
+    screenOn,
+    awake: wakefulness ? !/^(Asleep|Dozing)$/.test(wakefulness) : screenOn,
     keyguard: /isKeyguardShowing=true/.test(stdout),
   };
 }
@@ -138,6 +145,7 @@ async function readSnapshot(serial: string): Promise<Snapshot> {
       serial,
       "cmd device_state print-state; " +
         "dumpsys window displays | grep -o 'mScreenOnFully=[a-z]*'; " +
+        "dumpsys power | grep -o 'mWakefulness=[A-Za-z]*'; " +
         "dumpsys window | grep -o 'isKeyguardShowing=[a-z]*'"
     )
   );
@@ -149,16 +157,27 @@ export function parseHingeAngle(stdout: string): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+/** A read the fold can end on: a state (the expected one), lit unless the device is asleep. */
+function isReady(read: Snapshot, expected: string | undefined): boolean {
+  return (
+    read.state !== undefined &&
+    (read.screenOn || !read.awake) &&
+    (expected === undefined || read.state === expected)
+  );
+}
+
 /**
  * Poll until the guest holds one device state (the expected one, when the
- * request names it) and one screen state, fully on when `screenOn` asks for
- * it, for {@link STABLE_READS} reads. The first read waits a poll: the console
+ * request names it) and one wakefulness for {@link STABLE_READS} ready reads.
+ * A device that wakes on unfold restarts the count, so the fold does not end
+ * on the dark screen before the wake. A read still ready at the deadline is
+ * a settled fold too: a wake that keeps resetting the count must not fail a
+ * fold that ended where it should. The first read waits a poll: the console
  * answered before the guest reacted.
  */
 async function awaitSettled(
   serial: string,
   expected: string | undefined,
-  screenOn: boolean,
   signal: AbortSignal | undefined
 ): Promise<{ last: Snapshot | undefined; settled: boolean }> {
   let last: Snapshot | undefined;
@@ -167,17 +186,13 @@ async function awaitSettled(
   while (Date.now() < deadline) {
     await sleep(POLL_MS, signal);
     const read = await readSnapshot(serial);
-    const ready =
-      read.state !== undefined &&
-      (read.screenOn || !screenOn) &&
-      (expected === undefined || read.state === expected);
-    const same = read.state === last?.state && read.screenOn === last?.screenOn;
-    if (!ready) agreeing = 0;
+    const same = read.state === last?.state && read.awake === last?.awake;
+    if (!isReady(read, expected)) agreeing = 0;
     else agreeing = agreeing > 0 && same ? agreeing + 1 : 1;
     last = read;
     if (agreeing >= STABLE_READS) return { last, settled: true };
   }
-  return { last, settled: false };
+  return { last, settled: last !== undefined && isReady(last, expected) };
 }
 
 /**
@@ -236,6 +251,8 @@ async function fold(
   device: DeviceInfo,
   signal: AbortSignal | undefined
 ): Promise<AndroidFoldResult> {
+  // A fold cancelled while it waited for the lock must not move the hinge.
+  signal?.throwIfAborted();
   const states = parseDeviceStates(await shell(serial, "cmd device_state print-states"));
   const byId = new Map([...states].map(([name, id]) => [id, name]));
   const supported = POSTURES.filter((p) => states.has(EMULATOR_POSTURES[p].state));
@@ -254,10 +271,10 @@ async function fold(
     );
   }
 
-  // The screen and the lock screen before the fold decide what the fold must
-  // leave: a lit screen stays lit, and a lock screen already up stays up.
+  // A lock screen already up before the fold is not the fold's to clear.
   const before = await readSnapshot(serial);
 
+  signal?.throwIfAborted();
   try {
     if (params.posture) {
       await runEmuConsole(serial, ["posture", EMULATOR_POSTURES[params.posture].id]);
@@ -272,30 +289,40 @@ async function fold(
     );
   }
 
-  const { last, settled } = await awaitSettled(serial, expected, before.screenOn, signal);
+  const { last, settled } = await awaitSettled(serial, expected, signal);
   const stateName = last?.state !== undefined ? (byId.get(last.state) ?? last.state) : "unknown";
+  // Not ready with a state means the device is awake and its screen stayed dark.
+  const darkAwake = last?.state !== undefined && last.awake && !last.screenOn;
   if (!settled && expected !== undefined) {
     throw failed(
       last?.state === expected
-        ? `${serial} reached device state ${stateName} for the ${params.posture} posture, but ` +
-            (last.screenOn ? "the state did not hold" : "the screen did not turn on") +
-            ` within ${SETTLE_TIMEOUT_MS / 1000} s. Take a screenshot before the next action.`
+        ? `${serial} reached device state ${stateName} for the ${params.posture} posture, but the device is awake ` +
+            `and the screen did not come on within ${SETTLE_TIMEOUT_MS / 1000} s. Take a screenshot before the next action.`
         : `${serial} did not reach the ${params.posture} posture: the guest still reports device state ${stateName}. ` +
             "Fold again; a screenshot shows what the device renders.",
       "android_fold_unverified"
     );
   }
 
-  let warning: string | undefined;
+  const warnings: string[] = [];
   if (!settled) {
-    warning = `The device state did not settle within ${SETTLE_TIMEOUT_MS / 1000} s; it last read ${stateName}. Take a screenshot before the next action.`;
-  } else if (stateName === "CLOSED" && !before.keyguard) {
-    warning = await dismissFoldLockScreen(serial, signal);
+    warnings.push(
+      darkAwake
+        ? `The device state is ${stateName}, but the screen did not come on within ${SETTLE_TIMEOUT_MS / 1000} s. Take a screenshot before the next action.`
+        : `The device state did not settle within ${SETTLE_TIMEOUT_MS / 1000} s; it last read ${stateName}. Take a screenshot before the next action.`
+    );
+  } else if (last && !last.screenOn) {
+    warnings.push("The screen is off after the fold; wake the device before the next action.");
+  }
+  if (stateName === "CLOSED" && !before.keyguard) {
+    const warning = await dismissFoldLockScreen(serial, signal);
+    if (warning) warnings.push(warning);
   } else if (last?.keyguard) {
     // A lock screen that was up before the fold is not the fold's to clear,
     // but every later tap lands on it.
-    warning =
-      "The lock screen is showing after the fold. Unlock or dismiss it before the next action.";
+    warnings.push(
+      "The lock screen is showing after the fold. Unlock or dismiss it before the next action."
+    );
   }
 
   let hingeAngle: number | undefined;
@@ -310,7 +337,7 @@ async function fold(
     ...(posture ? { posture } : {}),
     deviceState: stateName,
     ...(hingeAngle !== undefined ? { hingeAngle } : {}),
-    ...(warning ? { warning } : {}),
+    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
   };
 }
 
