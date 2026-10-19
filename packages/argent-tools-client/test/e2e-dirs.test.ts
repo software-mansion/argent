@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { flowMemberKey } from "@argent/registry";
 import {
   prepareFileInputs,
   applyClientFileDirectives,
@@ -101,7 +102,7 @@ describe("a recorded test written by the client", () => {
 });
 
 /** A `GET /tools` listing and the POSTs a client sent to it. */
-function stubServer(tools: ToolMeta[], remote = false) {
+function stubServer(tools: ToolMeta[], remote = false, data: unknown = { ok: true }) {
   const posts: Array<{ url: string; body: Record<string, unknown> }> = [];
   const diagnostics: string[] = [];
   const client = createToolsClient({
@@ -110,7 +111,7 @@ function stubServer(tools: ToolMeta[], remote = false) {
     fetchImpl: async (url, init) => {
       if (url.endsWith("/tools")) return Response.json({ tools });
       posts.push({ url, body: JSON.parse(String(init.body)) });
-      return Response.json({ data: { ok: true } });
+      return Response.json({ data });
     },
   });
   return { client, posts, diagnostics };
@@ -126,21 +127,32 @@ const flowPathSpec: FileInputSpec & { unwrapWhenSet: string } = {
   unwrapWhenSet: "name",
 };
 
+/** flow-add-step's probe, which sends the files of the step it records. */
+const stepSpec: FileInputSpec = {
+  target: "project_root",
+  path: "${project_root}",
+  kind: "probe",
+  collect: "step",
+};
+
 /** The flow-* tools as a 0.29.0 tool-server lists them: no e2e-* ids, no `paths`. */
-const olderTools: ToolMeta[] = ["flow-execute", "flow-read-prerequisite"].map((name) => ({
-  name,
-  description: "",
-  inputSchema: {},
-  fileInputs: [flowPathSpec, olderFlowFileSpec],
-}));
+const olderTools: ToolMeta[] = [
+  ...["flow-execute", "flow-read-prerequisite"].map((name) => ({
+    name,
+    description: "",
+    inputSchema: {},
+    fileInputs: [flowPathSpec, olderFlowFileSpec],
+  })),
+  { name: "flow-add-step", description: "", inputSchema: {}, fileInputs: [stepSpec] },
+];
 
 /** The same tools as this tool-server lists them: e2e-* ids with `paths`, flow-* as aliases. */
-const newerTools: ToolMeta[] = ["execute", "read-prerequisite"].flatMap((tool) => {
+const newerTools: ToolMeta[] = ["execute", "read-prerequisite", "add-step"].flatMap((tool) => {
   const entry = {
     name: `e2e-${tool}`,
     description: "",
     inputSchema: {},
-    fileInputs: [flowPathSpec, flowFileSpec],
+    fileInputs: tool === "add-step" ? [stepSpec] : [flowPathSpec, flowFileSpec],
   };
   return [entry, { ...entry, name: `flow-${tool}`, hideFromMcp: true, aliasOf: entry.name }];
 });
@@ -175,12 +187,15 @@ describe("a call by name to a tool-server that predates .argent/e2e", () => {
   it("names the .argent/e2e test when both directories hold the name, and says so", async () => {
     await write(e2e("both.yaml"));
     await write(legacy("both.yaml"));
-    const { client, posts, diagnostics } = stubServer(olderTools);
+    const { client, posts } = stubServer(olderTools);
 
-    await client.callTool("flow-execute", { name: "both", project_root: root });
+    const { data } = await client.callTool("flow-execute", { name: "both", project_root: root });
     expect(posts[0]!.url).toBe("http://stub/tools/flow-execute");
     expect(named(posts[0]!.body.flow_path)).toBe(e2e("both.yaml"));
-    expect(diagnostics.some((line) => line.includes(legacy("both.yaml")))).toBe(true);
+    expect(data).toEqual({
+      ok: true,
+      warning: `${legacy("both.yaml")} is not used: ${e2e("both.yaml")} has the same name and is read first.`,
+    });
   });
 
   it.each([
@@ -207,5 +222,95 @@ describe("a call by name to a tool-server that lists both ids", () => {
     expect(posts[0]!.body.name).toBe("new");
     expect(named(posts[0]!.body.flow_file)).toBe(e2e("new.yaml"));
     expect((await client.fetchTool("e2e-execute"))?.name).toBe("e2e-execute");
+  });
+});
+
+describe("a recorded step on a tool-server that predates .argent/e2e", () => {
+  const step = (command: string, name: string) => ({
+    name: "rec",
+    project_root: root,
+    command,
+    args: JSON.stringify({ name, project_root: root }),
+  });
+
+  it.each(["e2e-execute", "flow-execute"])(
+    "names a nested %s by the id the tool-server lists",
+    async (command) => {
+      await write(legacy("old.yaml"));
+      const { client, posts } = stubServer(olderTools);
+
+      await client.callTool("e2e-add-step", step(command, "old"));
+      expect(posts[0]!.url).toBe("http://stub/tools/flow-add-step");
+      expect(posts[0]!.body.command).toBe("flow-execute");
+    }
+  );
+
+  it.each([
+    ["only in .argent/e2e", ["e2e"]],
+    ["in both directories", ["e2e", "flows"]],
+  ])("refuses a nested test %s before sending anything", async (_where, dirs) => {
+    for (const dir of dirs) await write(path.join(root, ".argent", dir, "new.yaml"));
+    const { client, posts } = stubServer(olderTools, true);
+
+    await expect(client.callTool("e2e-add-step", step("e2e-execute", "new"))).rejects.toThrow(
+      `"new" is ${e2e("new.yaml")}`
+    );
+    expect(posts).toEqual([]);
+  });
+
+  it("sends the recording beside its nested test in .argent/flows over a link", async () => {
+    await write(legacy("old.yaml"));
+    await write(legacy("rec.yaml"));
+    const { client, posts } = stubServer(olderTools, true);
+
+    await client.callTool("e2e-add-step", step("e2e-execute", "old"));
+    const members = (posts[0]!.body.project_root as FileInputWire).members ?? [];
+    const keys = members.map((m) => m.key);
+    expect(keys).toContain(flowMemberKey(path.dirname(legacy("rec.yaml")), "rec.yaml"));
+    expect(keys).toContain(flowMemberKey(path.dirname(legacy("old.yaml")), "old.yaml"));
+    expect(keys.some((key) => key.includes(path.join(".argent", "e2e")))).toBe(false);
+  });
+
+  it("keeps the command a tool-server that lists both ids knows", async () => {
+    await write(e2e("new.yaml"));
+    const { client, posts } = stubServer(newerTools, true);
+
+    await client.callTool("e2e-add-step", step("e2e-execute", "new"));
+    expect(posts[0]!.url).toBe("http://stub/tools/e2e-add-step");
+    expect(posts[0]!.body.command).toBe("e2e-execute");
+  });
+});
+
+describe("a call by name whose test hides a legacy test of the same name", () => {
+  const warning = () =>
+    `${legacy("both.yaml")} is not used: ${e2e("both.yaml")} has the same name and is read first.`;
+
+  it.each(["e2e-execute", "e2e-read-prerequisite"])(
+    "says so in the result of %s over a link",
+    async (id) => {
+      await write(e2e("both.yaml"));
+      await write(legacy("both.yaml"));
+      const { client } = stubServer(newerTools, true);
+
+      const { data } = await client.callTool(id, { name: "both", project_root: root });
+      expect(data).toEqual({ ok: true, warning: warning() });
+    }
+  );
+
+  it("keeps the warning a tool-server returns", async () => {
+    await write(e2e("both.yaml"));
+    await write(legacy("both.yaml"));
+    const { client } = stubServer(newerTools, false, { ok: true, warning: "said by the server" });
+
+    const { data } = await client.callTool("e2e-execute", { name: "both", project_root: root });
+    expect(data).toEqual({ ok: true, warning: "said by the server" });
+  });
+
+  it("adds nothing for a test with no legacy twin", async () => {
+    await write(e2e("both.yaml"));
+    const { client } = stubServer(newerTools, true);
+
+    const { data } = await client.callTool("e2e-execute", { name: "both", project_root: root });
+    expect(data).toEqual({ ok: true });
   });
 });

@@ -2,6 +2,7 @@ import * as path from "node:path";
 
 import {
   E2E_DIR_CLIENT_HEADER,
+  LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
   canonicalToolId,
   describeParamIssues,
@@ -18,8 +19,10 @@ import {
 import {
   collectFlowMembers,
   collectStepMembers,
+  e2eShadowWarningFor,
   filesLogEnabled,
   nameToE2ePathForOlderServer,
+  stepForOlderServer,
 } from "./flow-files.js";
 import { ToolInvocationError } from "./errors.js";
 
@@ -376,10 +379,17 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     let finalArgs = args;
     const tools = await fetchTools({ signal: opts?.signal });
     const meta = findTool(tools, name);
-    // An older tool-server reads saved tests only from `.argent/flows/`.
+    // An older tool-server reads saved tests only from `.argent/flows/`, and
+    // lists its tools by their `flow-*` ids only.
+    const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
     if (meta) {
-      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, args, diagnose);
+      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, args);
     }
+    if (olderServer && canonicalToolId(meta.name) === "e2e-add-step") {
+      finalArgs = await stepForOlderServer(finalArgs, (tool) => findTool(tools, tool)?.name);
+    }
+    // Picked here when the tool-server does not read the test in place.
+    const shadowWarning = await e2eShadowWarningFor(name, args);
     // Where a baseline the result returns may be written (see file-inputs.ts).
     const baselineDirs: string[] = [];
     if (meta?.fileInputs?.length) {
@@ -390,7 +400,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         log: diagnose,
         baselineDirs,
         collectMembers: collectFlowMembers,
-        collectStepMembers,
+        collectStepMembers: olderServer
+          ? (record, o) =>
+              collectStepMembers(record, o, (root) => path.join(root, LEGACY_E2E_DIRS[0]!))
+          : collectStepMembers,
         toolFileInputs: (tool) => findTool(tools, tool)?.fileInputs,
         signal: opts?.signal,
       });
@@ -398,7 +411,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // File boundary, inbound: persist client-write directives (recorded flow
     // YAMLs, a run's new baselines) and rewrite them to the written paths. A
     // baseline that could not be written is said here, and stays in the
-    // result as `{ path, error }`.
+    // result as `{ path, error }`. A shadowed legacy test the tool-server did
+    // not see is said in the result's `warning`, as it says one it sees.
     const settle = async (data: unknown): Promise<unknown> => {
       const applied = await applyClientFileDirectives(data, { allowedDirs: baselineDirs });
       for (const { path: file, error } of applied.failed) {
@@ -412,7 +426,17 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           }
         }
       }
-      return applied.result;
+      const result = applied.result;
+      if (
+        shadowWarning === undefined ||
+        typeof result !== "object" ||
+        result === null ||
+        Array.isArray(result) ||
+        typeof (result as { warning?: unknown }).warning === "string"
+      ) {
+        return result;
+      }
+      return { ...result, warning: shadowWarning };
     };
 
     // A call that sends a flow's closure runs that flow over a link, and its

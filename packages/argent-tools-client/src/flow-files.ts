@@ -691,11 +691,13 @@ function recordedStep(
  * directory) is sent under its own spelling too, for the recorder's on-disk
  * spelling check, and its run as the name the recorder runs it by. Nothing
  * for a call without a valid `name` and absolute `project_root`, or whose
- * step does not parse.
+ * step does not parse. `recordingDirFor` is where the tool-server records:
+ * `.argent/flows/` for one that predates `.argent/e2e/`.
  */
 export async function collectStepMembers(
   args: Record<string, unknown>,
-  opts: PrepareFileInputsOptions
+  opts: PrepareFileInputsOptions,
+  recordingDirFor: (projectRoot: string) => string = e2eDirFor
 ): Promise<FileInputMember[]> {
   const { name, project_root: projectRoot } = args;
   const step = recordedStep(args);
@@ -708,7 +710,7 @@ export async function collectStepMembers(
   ) {
     return [];
   }
-  const recording = path.join(e2eDirFor(projectRoot), `${name}.yaml`);
+  const recording = path.join(recordingDirFor(projectRoot), `${name}.yaml`);
   const collector = memberCollector(
     await closureRoots(recording, (await landing(recording)).canonical, projectRoot),
     opts
@@ -752,8 +754,7 @@ export async function collectStepMembers(
 export async function nameToE2ePathForOlderServer(
   tool: string,
   fileInputs: readonly FileInputSpec[] | undefined,
-  args: unknown,
-  log?: (line: string) => void
+  args: unknown
 ): Promise<unknown> {
   const id = canonicalToolId(tool);
   if (id !== "e2e-execute" && id !== "e2e-read-prerequisite") return args;
@@ -763,7 +764,59 @@ export async function nameToE2ePathForOlderServer(
   if (target?.kind !== "name") return args;
   const picked = await pickE2eFile(target.paths);
   if (!picked.exists || picked.legacy) return args;
-  if (picked.shadowed !== undefined) log?.(e2eShadowWarning(picked.path, picked.shadowed));
   const { name: _name, ...rest } = args as Record<string, unknown>;
   return { ...rest, flow_path: picked.path };
+}
+
+/**
+ * The args of an `e2e-add-step` call for a tool-server that predates the
+ * rename, which lists the tool as `flow-add-step` (`listedId` is the id it
+ * lists a tool under): `command` by that id, so `e2e-execute` reaches its
+ * `flow-execute`. Such a tool-server records into, and runs a nested test
+ * from, `.argent/flows/` only, so a nested test named by `name` that is in
+ * `.argent/e2e/` is refused here, before anything runs. Any other call is
+ * returned unchanged.
+ */
+export async function stepForOlderServer(
+  args: unknown,
+  listedId: (tool: string) => string | undefined
+): Promise<unknown> {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+  const record = args as Record<string, unknown>;
+  if (typeof record.command !== "string") return args;
+  const command = listedId(record.command) ?? record.command;
+  const step = recordedStep({ ...record, command });
+  const target =
+    step && canonicalToolId(step.tool) === "e2e-execute" && nestedFlowTarget(step.args);
+  if (target && target.kind === "name") {
+    const picked = await pickE2eFile(target.paths);
+    if (picked.exists && !picked.legacy) {
+      throw new Error(
+        `Cannot record a nested ${record.command} of "${target.name}": the tool-server runs an ` +
+          `older argent that records and runs nested e2e tests only from .argent/flows/, and ` +
+          `"${target.name}" is ${picked.path}. Upgrade the tool-server to record it, or run it ` +
+          `with e2e-execute outside the recording.`
+      );
+    }
+  }
+  return command === record.command ? args : { ...record, command };
+}
+
+/**
+ * The warning an `e2e-execute` or `e2e-read-prerequisite` call by `name` owes
+ * when the test it runs hides a legacy test of the same name
+ * ({@link e2eShadowWarning}). A tool-server that reads the test in place
+ * returns it; over a link, or to a tool-server that predates `.argent/e2e/`,
+ * the client picks the file and owes it instead.
+ */
+export async function e2eShadowWarningFor(
+  tool: string,
+  args: unknown
+): Promise<string | undefined> {
+  const id = canonicalToolId(tool);
+  if (id !== "e2e-execute" && id !== "e2e-read-prerequisite") return undefined;
+  const target = nestedFlowTarget(args);
+  if (target?.kind !== "name") return undefined;
+  const picked = await pickE2eFile(target.paths);
+  return picked.shadowed === undefined ? undefined : e2eShadowWarning(picked.path, picked.shadowed);
 }
