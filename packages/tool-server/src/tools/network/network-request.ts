@@ -142,7 +142,7 @@ export const networkRequestTool: ToolDefinition<
   },
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
-Request and response bodies over 1000 chars are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
+Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is replaced by "[body omitted: binary <mime>, N bytes]". Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found: use view-network-logs to get valid requestId values.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
