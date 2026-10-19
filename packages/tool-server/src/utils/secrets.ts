@@ -1,4 +1,4 @@
-import { FAILURE_CODES } from "@argent/registry";
+import { CLIENT_FILE_MARKER, FAILURE_CODES } from "@argent/registry";
 import { InvalidToolInputError } from "./capability";
 import {
   describeSecretSources,
@@ -254,4 +254,59 @@ export function redactSecretsFromError(
   }
   if (typeof err === "string") return scrub(err);
   return err;
+}
+
+/**
+ * Shorter values are left alone: a value like `1` or `abc` also occurs in
+ * unrelated text — labels, dates, frame numbers — and replacing it there would
+ * garble what the agent reads.
+ */
+const MIN_SCRUBBED_VALUE_LENGTH = 4;
+
+/**
+ * Every secret exposed to argent, from every source, read fresh. A value typed
+ * into a field that is not a password field comes back in the UI tree that
+ * describe, ui-tree and await-ui-element read. Scrubbing all exposed values,
+ * not only the typed ones, also covers a secret that reached the screen
+ * another way (autofill, a prefilled form, a value typed by an earlier server).
+ */
+export function exposedSecrets(
+  options: SecretSourceOptions = {}
+): Array<{ name: string; value: string }> {
+  const out: Array<{ name: string; value: string }> = [];
+  for (const source of secretSources(options)) {
+    for (const [name, value] of source.values) {
+      if (value.length < MIN_SCRUBBED_VALUE_LENGTH) continue;
+      if (!out.some((s) => s.name === name && s.value === value)) out.push({ name, value });
+    }
+  }
+  return out;
+}
+
+/**
+ * Copy of a JSON tool response with every secret value replaced by its
+ * `{{secret:NAME}}` placeholder. Client-file directives pass through untouched:
+ * the client writes them to disk, so they never reach the agent, and their
+ * base64 content would be corrupted by a replacement.
+ */
+export function scrubSecretsDeep<T>(
+  payload: T,
+  secrets: ReadonlyArray<{ name: string; value: string }>
+): T {
+  if (secrets.length === 0) return payload;
+  const walk = (node: unknown): unknown => {
+    if (typeof node === "string") {
+      return secrets.some((s) => node.includes(s.value)) ? scrubSecretValues(node, secrets) : node;
+    }
+    if (Array.isArray(node)) return node.map(walk);
+    if (node === null || typeof node !== "object") return node;
+    // Plain objects only: a Date or Buffer serializes through its toJSON.
+    const proto = Object.getPrototypeOf(node);
+    if (proto !== Object.prototype && proto !== null) return node;
+    if ((node as Record<string, unknown>)[CLIENT_FILE_MARKER] === true) return node;
+    return Object.fromEntries(
+      Object.entries(node).map(([key, value]) => [walk(key) as string, walk(value)])
+    );
+  };
+  return walk(payload) as T;
 }

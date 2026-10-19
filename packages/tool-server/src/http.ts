@@ -26,6 +26,7 @@ import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
+import { exposedSecrets, scrubSecretsDeep } from "./utils/secrets";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import {
@@ -701,6 +702,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     },
     async (req: Request, res: Response) => {
       const name = req.params.name as string;
+      // A secret typed into a field that is not a password field comes back in
+      // UI-tree text: describe, ui-tree, an await-ui-element note. Every body
+      // this route sends, results and errors alike, goes out with each exposed
+      // secret value replaced by its `{{secret:NAME}}` placeholder.
+      const sendJson = res.json.bind(res);
+      res.json = (body: unknown) => sendJson(scrubSecretsDeep(body, exposedSecrets()));
       const requestStartedAt = performance.now();
       const aiMeta = extractAiTelemetryMeta(req);
       // "close" fires once. A caller that hangs up during the awaits below
@@ -969,7 +976,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // plain-JSON status codes — streaming is committed to only once they pass.
       const wantsStream = Boolean(req.headers.accept?.includes("application/x-ndjson"));
       const writeLine = (payload: unknown): void => {
-        res.write(`${JSON.stringify(payload)}\n`);
+        res.write(`${JSON.stringify(scrubSecretsDeep(payload, exposedSecrets()))}\n`);
       };
       if (wantsStream) {
         // Every line must reach the client as soon as it is written.

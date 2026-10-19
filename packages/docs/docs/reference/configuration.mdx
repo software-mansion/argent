@@ -163,6 +163,10 @@ A change in a secrets file applies to the next tool call. An environment variabl
 
 A name that no source defines fails the step at run time. Argent redacts each resolved value in the reports and logs. Thus do not use a placeholder for content that a report must show.
 
+The tool-server also removes secret values from every tool result and every error. Each value of 4 or more characters from any source becomes its placeholder. Thus `describe`, `ui-tree` and `await-ui-element` show `{{secret:APP_PASSWORD}}`, not the value, when the screen contains it. This applies to secrets that Argent did not type too.
+
+Argent cannot remove a value from a screenshot. A password field shows dots, but a plain text field shows the characters. Type secrets only into password fields.
+
 ### Commands
 
 | Command                 | Description                                                      |
