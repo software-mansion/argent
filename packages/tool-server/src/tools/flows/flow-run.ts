@@ -3393,8 +3393,17 @@ export async function resolveFlowSource(
   // first candidate that exists here, `.argent/e2e` before `.argent/flows`.
   const picked = await pickE2eFile(candidates);
   const filePath = params.flow_file || picked.path;
-  const spelling = await classifyOnDiskSpelling(path.dirname(filePath), `${flowName}.yaml`);
-  if (spelling.state === "case_folded") throw flowNameCasingError(flowName, spelling);
+  // When no candidate exists byte-for-byte (always the case on a case-sensitive
+  // filesystem for a mis-cased name), list every candidate directory, or a
+  // case-folded entry in `.argent/flows` would go unseen.
+  const spellingDirs =
+    params.flow_file || picked.exists
+      ? [path.dirname(filePath)]
+      : candidates.map((candidate) => path.dirname(candidate));
+  for (const dir of spellingDirs) {
+    const spelling = await classifyOnDiskSpelling(dir, `${flowName}.yaml`);
+    if (spelling.state === "case_folded") throw flowNameCasingError(flowName, spelling);
+  }
 
   // A legacy test of the same name is hidden by this one: say so.
   const shadowed =
