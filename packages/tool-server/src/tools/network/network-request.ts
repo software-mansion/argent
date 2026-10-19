@@ -43,14 +43,18 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
 /** Body chars kept, of a request or a response; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
 
+/** Heads a body cut to MAX_BODY_SIZE chars; `fullSize` is the size of the whole body, with its unit. */
+function cutMarker(fullSize: string, mimeType?: string): string {
+  const mime = mimeType !== undefined ? `, MIME: ${mimeType}` : "";
+  return `[TRUNCATED: first ${MAX_BODY_SIZE} chars shown, full size: ${fullSize}${mime}]`;
+}
+
 /** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
 function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
   // A body the interceptor cut is always longer than MAX_BODY_SIZE.
   if (postData == null || postData.length <= MAX_BODY_SIZE) return postData;
-  const originalSize = truncated
-    ? `more than ${postData.length} chars`
-    : `${postData.length} chars`;
-  return `[TRUNCATED — original size: ${originalSize}]\n${postData.slice(0, MAX_BODY_SIZE)}...`;
+  const fullSize = truncated ? `more than ${postData.length} chars` : `${postData.length} chars`;
+  return `${cutMarker(fullSize)}\n${postData.slice(0, MAX_BODY_SIZE)}...`;
 }
 
 const zodSchema = z.object({
@@ -193,7 +197,7 @@ Returns an error message string if the requestId is not found: use view-network-
                 : out.body;
               resp.body =
                 body.length > MAX_BODY_SIZE
-                  ? `[TRUNCATED — original size: ${body.length} chars, MIME: ${resp.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`
+                  ? `${cutMarker(`${body.length} chars`, resp.mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`
                   : body;
             }
           } catch {
@@ -207,7 +211,7 @@ Returns an error message string if the requestId is not found: use view-network-
 
     const api = services.inspector as NetworkInspectorApi;
 
-    // Idempotent — the script no-ops if already installed.
+    // Idempotent: the script no-ops if already installed.
     await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
 
     const script = makeNetworkDetailReadScript(params.requestId);
@@ -255,14 +259,14 @@ Returns an error message string if the requestId is not found: use view-network-
       } else if (params.includeBody && entry.responseBody != null) {
         const body = entry.responseBody;
         if (body.length > MAX_BODY_SIZE) {
-          const originalSize = !entry.bodyTruncated
+          const fullSize = !entry.bodyTruncated
             ? `${body.length} chars`
             : entry.encodedDataLength != null
               ? `${entry.encodedDataLength} bytes`
               : entry.bodyLength != null
                 ? `${entry.bodyLength} chars`
                 : `more than ${body.length} chars`;
-          resp.body = `[TRUNCATED — original size: ${originalSize}, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
+          resp.body = `${cutMarker(fullSize, entry.response.mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`;
         } else {
           resp.body = body;
         }

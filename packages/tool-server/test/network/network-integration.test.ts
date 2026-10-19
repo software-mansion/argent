@@ -469,6 +469,7 @@ describe("NetworkInspector integration (mock server)", () => {
       })) as string;
 
       expect(result).toContain("No network traffic captured");
+      expect(result).not.toContain("\u2014");
     } finally {
       // Restore the log
       networkLog.push(...savedLog);
@@ -610,6 +611,7 @@ describe("NetworkInspector integration (mock server)", () => {
 
       expect(result).toContain("Network interceptor not installed");
       expect(result).toContain("Call view-network-logs again");
+      expect(result).not.toContain("\u2014");
       expect(result).not.toContain("No network traffic captured");
     } finally {
       reloadAfterInstall = false;
@@ -833,8 +835,9 @@ describe("NetworkInspector integration (mock server)", () => {
       const resp = result.response as Record<string, unknown>;
       expect(resp.body).toBeDefined();
       const body = resp.body as string;
-      expect(body).toContain("TRUNCATED");
-      expect(body).toContain("2000 chars");
+      expect(body).toBe(
+        `[TRUNCATED: first 1000 chars shown, full size: 2000 chars, MIME: text/plain]\n${"x".repeat(1000)}...`
+      );
       // Body should be shorter than original
       expect(body.length).toBeLessThan(2000);
     } finally {
@@ -874,7 +877,7 @@ describe("NetworkInspector integration (mock server)", () => {
       })) as Record<string, unknown>;
 
       const body = (result.response as Record<string, unknown>).body as string;
-      expect(body).toContain("original size: 1500000 bytes");
+      expect(body).toContain("full size: 1500000 bytes");
     } finally {
       const idx = networkLog.findIndex((e) => e.requestId === "rn-net-cut");
       if (idx >= 0) networkLog.splice(idx, 1);
@@ -911,7 +914,7 @@ describe("NetworkInspector integration (mock server)", () => {
       })) as Record<string, unknown>;
 
       const body = (result.response as Record<string, unknown>).body as string;
-      expect(body).toContain("original size: more than 1048576 chars");
+      expect(body).toContain("full size: more than 1048576 chars");
     } finally {
       const idx = networkLog.findIndex((e) => e.requestId === "rn-net-cut-json");
       if (idx >= 0) networkLog.splice(idx, 1);
@@ -924,7 +927,7 @@ describe("NetworkInspector integration (mock server)", () => {
       mimeType: "text/plain",
       fields: { responseBody: "x".repeat(1_048_576), bodyTruncated: true, bodyLength: 9_000_000 },
       says: "the full length of a cut text body",
-      message: "original size: 9000000 chars",
+      message: "full size: 9000000 chars",
     },
     {
       requestId: "rn-net-png",
@@ -975,13 +978,13 @@ describe("NetworkInspector integration (mock server)", () => {
       size: 1500,
       truncated: false,
       says: "gives its size",
-      message: "original size: 1500 chars",
+      message: "full size: 1500 chars",
     },
     {
       size: 1_048_576,
       truncated: true,
       says: "says the interceptor had already cut it at 1 MiB",
-      message: "original size: more than 1048576 chars",
+      message: "full size: more than 1048576 chars",
     },
   ])(
     "view-network-request-details shortens a request body of $size chars and $says",

@@ -21,7 +21,7 @@ const ITEMS_PER_PAGE = 50;
 function notInstalled(installError: string | undefined): string {
   return installError
     ? `Network interceptor could not be installed in the app's JS runtime: ${installError}`
-    : "Network interceptor not installed — the app's JS runtime reloaded, which clears captured requests. Call view-network-logs again to reinstall it, then repeat the action that sends the requests.";
+    : "Network interceptor not installed: the app's JS runtime reloaded, which clears captured requests. Call view-network-logs again to reinstall it, then repeat the action that sends the requests.";
 }
 
 // Auto-scaled base-1024 units: a big download reads `1.4 GB`, not `1433.6 MB`.
@@ -144,7 +144,7 @@ function renderChromiumPage(
 ): string {
   const total = records.length;
   if (total === 0) {
-    return "No network traffic captured. Recording is active on the active tab — navigate or reload the page to populate it (requests made before the device was attached are not captured).";
+    return "No network traffic captured. Recording is active on the active tab. Navigate or reload the page to populate it (requests made before the device was attached are not captured).";
   }
   const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
   const pageIndex = pageIndexParam === "latest" ? pageCount - 1 : pageIndexParam;
@@ -222,7 +222,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     if (!interceptorInstalled) return notInstalled(installError);
 
     if (total === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that replaces the global fetch and Response, but not requests sent before capture started (at the first network-tool call).";
+      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active. It records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that replaces the global fetch and Response, but not requests sent before capture started (at the first network-tool call).";
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);

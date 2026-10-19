@@ -219,6 +219,7 @@ describe("view-network-logs (chromium branch)", () => {
       pageIndex: "latest",
     })) as string;
     expect(out).toMatch(/No network traffic captured/);
+    expect(out).not.toContain("\u2014");
   });
 });
 
@@ -275,7 +276,7 @@ describe("view-network-request-details (chromium branch)", () => {
 
     if (cut) {
       expect(details.request.postData).toBe(
-        `[TRUNCATED — original size: ${size} chars]\n${"p".repeat(1000)}...`
+        `[TRUNCATED: first 1000 chars shown, full size: ${size} chars]\n${"p".repeat(1000)}...`
       );
     } else {
       expect(details.request.postData).toBe(postData);
