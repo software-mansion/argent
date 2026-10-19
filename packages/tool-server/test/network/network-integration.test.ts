@@ -66,6 +66,7 @@ const networkLog: Array<{
   responseBody?: string;
   bodyTruncated?: boolean;
   bodyLength?: number;
+  bodyOmitted?: boolean;
 }> = [];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
@@ -767,6 +768,13 @@ describe("NetworkInspector integration (mock server)", () => {
       fields: { responseBody: "x".repeat(1_048_576), bodyTruncated: true, bodyLength: 9_000_000 },
       says: "the full length of a cut text body",
       message: "original size: 9000000 chars",
+    },
+    {
+      requestId: "rn-net-png",
+      mimeType: "image/png",
+      fields: { encodedDataLength: 300_000, bodyOmitted: true },
+      says: "that it did not read a binary body",
+      message: "[body omitted: binary image/png, 300000 bytes]",
     },
   ])(
     "view-network-request-details gives $says",

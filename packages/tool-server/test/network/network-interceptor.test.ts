@@ -552,6 +552,7 @@ interface CapturedRecord {
   responseBody?: string;
   bodyTruncated?: boolean;
   bodyLength?: number;
+  bodyOmitted?: boolean;
 }
 
 /** A request Expo's native module started, answered by the test as the native side. */
@@ -3845,6 +3846,52 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
   });
 
   describe("limits", () => {
+    it.each([
+      { mimeType: "image/png", omitted: true },
+      { mimeType: "application/octet-stream", omitted: true },
+      { mimeType: "font/woff2", omitted: true },
+      { mimeType: "image/svg+xml", omitted: false },
+      { mimeType: "text/plain", omitted: false },
+    ])(
+      "skips the text read of a $mimeType blob body as binary: $omitted",
+      async ({ mimeType, omitted }) => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://img.test/a').then(function(r) { return r.blob(); })`
+        ) as Promise<unknown>;
+        const bytes = Buffer.alloc(3000, 0x41);
+        rt.last().respond(200, { "content-type": mimeType }, bytes);
+        await pending;
+        await settle();
+
+        const [record] = rt.records();
+        expect(rt.reads).toHaveLength(omitted ? 0 : 1);
+        expect(record).toMatchObject({ state: "finished", encodedDataLength: 3000 });
+        expect(record!.bodyOmitted).toBe(omitted ? true : undefined);
+        expect(record!.responseBody).toBe(omitted ? undefined : "A".repeat(3000));
+      }
+    );
+
+    it("reads no text of a blob response whose own type is binary", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://img.test/b'); x.responseType = 'blob'; x.send();`
+      );
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, {});
+      // Native hands the blob over with the type it read from the response.
+      Object.defineProperty(xhr, "response", {
+        value: new FakeBlob([Buffer.alloc(10)], { type: "video/mp4" }),
+      });
+      xhr.respond(200, {}, Buffer.alloc(10));
+      await settle();
+
+      expect(rt.reads).toHaveLength(0);
+      expect(rt.records()[0]).toMatchObject({ bodyOmitted: true, encodedDataLength: 10 });
+    });
+
     it("caps a text body and a request body at 1 MiB", () => {
       const rt = createRuntime();
       rt.install();

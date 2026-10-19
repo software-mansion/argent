@@ -298,10 +298,22 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         typeof xhr.onabort === 'function' && typeof xhr.ontimeout === 'function';
     };
 
+    // A body of one of these types is not text: its size is recorded and it is not read.
+    var BINARY_TYPES = /^(image\\/(?!svg)|audio\\/|video\\/|font\\/|application\\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
+    var isBinaryBlob = function(rec, blob) {
+      var mime = rec.entry.response && rec.entry.response.mimeType;
+      try { if (!mime) mime = blob.type; } catch (e) {}
+      return typeof mime === 'string' && BINARY_TYPES.test(mime.toLowerCase());
+    };
+
     // iOS resolves readAsText with null when the cut splits a UTF-8 character, so step back a
     // byte at a time, at most 3 times.
     // The size is read up front: RN's Blob throws on every access once the app closes it.
     var readBlob = function(rec, blob, size, end) {
+      if (end === Math.min(size, BODY_CAP) && isBinaryBlob(rec, blob)) {
+        rec.entry.bodyOmitted = true;
+        return complete(rec, undefined, size, false);
+      }
       var part = end < size ? blob.slice(0, end) : blob;
       var reader = new FileReader();
       reader.onload = function() {
@@ -896,7 +908,8 @@ export function makeNetworkDetailReadScript(requestId: string): string {
     errorText: entry.errorText,
     responseBody: entry.responseBody,
     bodyTruncated: entry.bodyTruncated,
-    bodyLength: entry.bodyLength
+    bodyLength: entry.bodyLength,
+    bodyOmitted: entry.bodyOmitted
   });
 })()`;
 }

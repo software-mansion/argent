@@ -84,6 +84,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - An `XMLHttpRequest` or Expo request can have the same method and URL as a call, and start during the call. Argent then records only that request, unless the two requests send different text bodies.
   - A function of the app can wrap `fetch()` and fail before the library sends the request. The call then has a failed record.
 - The network log keeps the most recent records only. The limits are 2000 records for the JS runtime layer and 1000 records for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native log holds fewer than 1000 requests.
+- The JS runtime layer does not read a binary response body, for example an image, a font, a PDF file or an `application/octet-stream` body. The record gives the type and the size of the body only.
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
 - The `NSURLProtocol` layer is available on iOS only. On Android, use the JS runtime layer.
