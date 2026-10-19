@@ -781,6 +781,23 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
 }
 
 /**
+ * True iff the AVD's profile has a hinge (`hw.sensor.hinge` in its
+ * `config.ini`): the Pixel folds and the generic foldables. Read from disk, so
+ * it answers for a stopped AVD and costs a running one no `adb` round-trip.
+ */
+export async function isFoldableAvd(avdName: string): Promise<boolean> {
+  const { readFile } = await import("node:fs/promises");
+  const avdPath = await resolveAvdPath(avdName);
+  if (!avdPath) return false;
+  try {
+    const hinge = parseIni(await readFile(`${avdPath}/config.ini`, "utf-8"))["hw.sensor.hinge"];
+    return hinge === true || hinge === "yes" || hinge === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True iff a usable `default_boot` snapshot exists on disk for this AVD. Cheap
  * pre-filter — `-snapshot-list` would spawn the emulator, the very hang we're
  * trying to avoid.

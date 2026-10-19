@@ -106,7 +106,7 @@ export interface ScreencastSession {
   stop(): Promise<void>;
 }
 
-export interface FpsReport {
+interface FpsReport {
   /** Frames received in the last window. */
   fps: number;
   windowMs: number;

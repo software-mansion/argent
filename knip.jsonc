@@ -4,38 +4,18 @@
   // `npm run knip`; .github/workflows/knip.yml enforces it.
   //
   // Every issue type knip reports is an error by default, so this file sets no
-  // `rules`. There is no parked backlog either: `--max-issues 0` means both
-  // passes must come back empty, and one new unused export fails the job.
+  // `rules`. There is no parked backlog either: `--max-issues 0` means the run
+  // must come back empty, and one new unused export fails the job.
   //
-  // Empty is not the same as exhaustive. Two shapes get past both passes, and
-  // it is the invocation below that hides them, not knip. A dead member of a
-  // referenced `enum` needs `enumMembers` and `nsTypes` in the SAME run
-  // (`knip/dist/graph/analyze.js:72`); pass 1 has the first without the second,
-  // pass 2 the reverse. A dead specifier on a same-workspace `export … from`
-  // line is unreportable in pass 2, because naming `classMembers` turns
-  // `isSkipLibs` off and that enables the `hasExternalReferences` guard, for
-  // which the declaration in the re-exported module is itself a reference; pass
-  // 1 excludes `exports` and `types` outright. Both measured on a dist-free
-  // tree: a dead `ServiceState` member, and a dead `Cookie` type plus a dead
-  // `createTabsManager` value re-export, each leave `npm run knip` at exit 0,
-  // while a plain dead `export const` in the same tree fails it. So treat a
-  // green run as "the shape almost everyone writes is clean", not as proof the
-  // symbol you just orphaned still has a reader.
-  //
-  // `npm run knip` still runs knip twice because the two flags partition the
-  // issue types rather than layering. `--include` is restrictive, so the pass
-  // that names `classMembers`, `nsExports` and `nsTypes` — which it must, since
-  // they sit in knip's own `defaultExcludedIssueTypes` and are otherwise gated
-  // by neither pass — reports nothing else, and the first pass covers the rest.
-  // Naming `classMembers` also turns knip's `isSkipLibs` off, which moves the
-  // export and type counts, so a run that names it is not comparable to one
-  // that does not.
+  // `--include nsExports,nsTypes` adds two types knip leaves out by default.
+  // Naming only those add-on types keeps every default type too, so one run
+  // covers them all.
   //
   // Run it the way CI does, against a tree with no build output: whether a
   // workspace resolves `main`/`types` to a file that exists changes what knip
   // reaches, so a run after a local `tsc --build` is no evidence the job will
   // pass.
-  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "$schema": "https://unpkg.com/knip@6/schema.json",
 
   // Makes a stale exemption here fail the job instead of printing a hint below
   // the backlog — an `ignoreDependencies` name that suppresses nothing, an
@@ -55,6 +35,21 @@
   // same way. It becomes a workspace the moment `git submodule update --init`
   // puts a package.json where the root `packages/*` glob matches it.
   "ignoreWorkspaces": ["packages/argent-private"],
+
+  // Host tools spawned by name, never npm packages. `skills` is the npm CLI
+  // that `npx` fetches on demand, deliberately not a dependency.
+  "ignoreBinaries": [
+    "ffmpeg",
+    "ffprobe",
+    "locale",
+    "netstat",
+    "pgrep",
+    "pkill",
+    "plutil",
+    "skills",
+    "tail",
+    "xctrace",
+  ],
 
   "workspaces": {
     // Knip finds the root scripts on its own — via package.json `scripts`, the
@@ -104,31 +99,6 @@
       ],
     },
 
-    // Three members in `packages/registry` are reported unused even though
-    // tool-server calls all three. The cause is the unbuilt tree, the same one
-    // the note at the top of this file describes: every workspace resolves
-    // `main`/`types` to a `dist/` that is not there, so `@argent/registry`
-    // resolves to nothing and the edge from tool-server never forms. Build the
-    // tree first and all three findings go away on their own — which is why the
-    // exemption is needed at all, since CI never builds.
-    //
-    // Nothing about this is specific to class members. Every cross-workspace
-    // reference is invisible the same way; the other issue types simply have no
-    // finding to raise here. They are exempted at the declaration with a
-    // `@public` JSDoc tag rather than by name here, for one reason: scope.
-    // `ignoreMembers` matches a NAME across the whole workspace, so it would
-    // also hide a future dead `register`/`list`/`off` on any other class in
-    // `packages/registry`. `@public` binds to the one member it is written on.
-    //
-    // What it does NOT buy is a stale check. `treatConfigHintsAsErrors` cannot
-    // report either form: knip emits no hint for an `ignoreMembers` name that
-    // suppresses nothing, and it emits a tag hint only for tags in the exclude
-    // half of the `tags` option, which this repo does not set. Both were
-    // measured — a bogus `ignoreMembers` name and a redundant `@public` each
-    // leave the run at exit 0, while a bogus `ignoreDependencies` name fails it.
-    // So when one of these three stops being earned, nothing says so, and the
-    // JSDoc at each member is the only record a re-audit has.
-    //
     // tool-server reaches a few packages in ways knip can't trace statically.
     // `ignoreDependencies` works in both directions, so this one list silences
     // two different issue classes; they are kept apart below so each entry's
@@ -192,6 +162,7 @@
   //
   // Reachability has a wider hole still: whatever a workspace's entry re-exports
   // is reached, so one `export { x } from "./dead-module";` in a src/index.ts
-  // takes that module out of `files` altogether. A clean run means nothing knip
-  // can see is dead — not that nothing is.
+  // takes that module out of `files` altogether. The entry's own exports count
+  // as public API, members included, so a dead `ServiceState` member passes
+  // too. A clean run means nothing knip can see is dead — not that nothing is.
 }
