@@ -101,6 +101,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return n;
   }
 
+  // The UTF-8 size of a text body the interceptor keeps whole. A longer body is cut, and its size
+  // is recorded in characters (bodyLength) instead: counting its bytes would take the app's JS
+  // thread a time that grows with the body.
+  function textSize(text) {
+    return text.length > BODY_CAP ? undefined : utf8Length(text);
+  }
+
   function mimeTypeOf(headers) {
     return hasOwn.call(headers, 'content-type') ? String(headers['content-type']).split(';')[0].trim() : '';
   }
@@ -235,6 +242,19 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     e.response = { url: url || e.request.url, status: status, statusText: statusText || '', headers: headers, mimeType: mimeTypeOf(headers) };
   }
 
+  // The Content-Length of a response, when it gives one.
+  function contentLength(response) {
+    var headers = response && response.headers;
+    if (!headers) return undefined;
+    for (var name in headers) {
+      if (hasOwn.call(headers, name) && name.toLowerCase() === 'content-length') {
+        var n = Number(headers[name]);
+        return headers[name] !== '' && n >= 0 && Math.floor(n) === n ? n : undefined;
+      }
+    }
+    return undefined;
+  }
+
   // Stores the body of a response, once: text, or bytes that keepBytes cut.
   function storeBody(rec, body, byteLength, truncated) {
     var e = rec.entry;
@@ -244,7 +264,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       e.bodyBytes = body;
       if (byId[e.requestId] === e) { bufferedChars += body.byteLength; evict(); }
     } else if (typeof body === 'string') {
-      if (body.length > BODY_CAP) { body = body.slice(0, BODY_CAP); truncated = true; }
+      if (body.length > BODY_CAP) {
+        // A cut body is not counted (see textSize): its size is the one the server gave, if any.
+        e.bodyLength = body.length;
+        if (e.encodedDataLength === undefined) e.encodedDataLength = contentLength(e.response);
+        body = body.slice(0, BODY_CAP);
+        truncated = true;
+      }
       e.responseBody = body;
       if (truncated) e.bodyTruncated = true;
       if (byId[e.requestId] === e) { bufferedChars += body.length; evict(); }
@@ -291,10 +317,22 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         typeof xhr.onabort === 'function' && typeof xhr.ontimeout === 'function';
     };
 
+    // A body of one of these types is not text: its size is recorded and it is not read.
+    var BINARY_TYPES = /^(image\\/(?!svg)|audio\\/|video\\/|font\\/|application\\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
+    var isBinaryBlob = function(rec, blob) {
+      var mime = rec.entry.response && rec.entry.response.mimeType;
+      try { if (!mime) mime = blob.type; } catch (e) {}
+      return typeof mime === 'string' && BINARY_TYPES.test(mime.toLowerCase());
+    };
+
     // iOS resolves readAsText with null when the cut splits a UTF-8 character, so step back a
     // byte at a time, at most 3 times.
     // The size is read up front: RN's Blob throws on every access once the app closes it.
     var readBlob = function(rec, blob, size, end) {
+      if (end === Math.min(size, BODY_CAP) && isBinaryBlob(rec, blob)) {
+        rec.entry.bodyOmitted = true;
+        return complete(rec, undefined, size, false);
+      }
       var part = end < size ? blob.slice(0, end) : blob;
       var reader = new FileReader();
       reader.onload = function() {
@@ -317,8 +355,11 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var type = xhr.responseType || '';
       if (type === '' || type === 'text') {
         var text = xhr.responseText;
-        if (typeof text === 'string') return complete(rec, text, utf8Length(text), false);
+        if (typeof text === 'string') return complete(rec, text, textSize(text), false);
       } else if (type === 'json') {
+        // React Native keeps the text it received, which spares a serialization of the whole object.
+        var raw = xhr._response;
+        if (typeof raw === 'string') return complete(rec, raw, textSize(raw), false);
         var json = xhr.response == null ? undefined : JSON.stringify(xhr.response);
         // Re-serialized, so its length is not the size received: record no size.
         if (typeof json === 'string') return complete(rec, json, undefined, false);
@@ -590,7 +631,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       bodyEnded();
     }, track);
     tapMethod(response, 'text', function(text) {
-      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, utf8Length(text), false);
+      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, textSize(text), false);
       bodyEnded();
     }, track);
     started.then(function() {
@@ -865,6 +906,7 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
       response: s.response ? { status: s.response.status, statusText: s.response.statusText, mimeType: s.response.mimeType } : undefined,
       resourceType: s.resourceType,
       encodedDataLength: s.encodedDataLength,
+      bodyLength: s.bodyLength,
       timestamp: s.timestamp,
       durationMs: s.durationMs,
       errorText: s.errorText
@@ -896,7 +938,9 @@ export function makeNetworkDetailReadScript(requestId: string): string {
     durationMs: entry.durationMs,
     errorText: entry.errorText,
     responseBody: entry.responseBody,
-    bodyTruncated: entry.bodyTruncated
+    bodyTruncated: entry.bodyTruncated,
+    bodyLength: entry.bodyLength,
+    bodyOmitted: entry.bodyOmitted
   });
 })()`;
 }

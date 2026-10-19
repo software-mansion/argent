@@ -551,6 +551,8 @@ interface CapturedRecord {
   errorText?: string;
   responseBody?: string;
   bodyTruncated?: boolean;
+  bodyLength?: number;
+  bodyOmitted?: boolean;
 }
 
 /** A request Expo's native module started, answered by the test as the native side. */
@@ -829,6 +831,11 @@ function createRuntime({
       } catch {
         return null;
       }
+    }
+
+    /** React Native keeps the text it received here, also for a json responseType. */
+    get _response(): unknown {
+      return this.raw;
     }
 
     get responseText(): string {
@@ -1111,8 +1118,8 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       {
         responseType: "json",
         body: '{ "a": [1, 2] }',
-        responseBody: '{"a":[1,2]}',
-        encodedDataLength: undefined,
+        responseBody: '{ "a": [1, 2] }',
+        encodedDataLength: 15,
       },
     ])(
       "reads a $responseType response body",
@@ -3901,6 +3908,52 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
   });
 
   describe("limits", () => {
+    it.each([
+      { mimeType: "image/png", omitted: true },
+      { mimeType: "application/octet-stream", omitted: true },
+      { mimeType: "font/woff2", omitted: true },
+      { mimeType: "image/svg+xml", omitted: false },
+      { mimeType: "text/plain", omitted: false },
+    ])(
+      "skips the text read of a $mimeType blob body as binary: $omitted",
+      async ({ mimeType, omitted }) => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://img.test/a').then(function(r) { return r.blob(); })`
+        ) as Promise<unknown>;
+        const bytes = Buffer.alloc(3000, 0x41);
+        rt.last().respond(200, { "content-type": mimeType }, bytes);
+        await pending;
+        await settle();
+
+        const [record] = rt.records();
+        expect(rt.reads).toHaveLength(omitted ? 0 : 1);
+        expect(record).toMatchObject({ state: "finished", encodedDataLength: 3000 });
+        expect(record!.bodyOmitted).toBe(omitted ? true : undefined);
+        expect(record!.responseBody).toBe(omitted ? undefined : "A".repeat(3000));
+      }
+    );
+
+    it("reads no text of a blob response whose own type is binary", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://img.test/b'); x.responseType = 'blob'; x.send();`
+      );
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, {});
+      // Native hands the blob over with the type it read from the response.
+      Object.defineProperty(xhr, "response", {
+        value: new FakeBlob([Buffer.alloc(10)], { type: "video/mp4" }),
+      });
+      xhr.respond(200, {}, Buffer.alloc(10));
+      await settle();
+
+      expect(rt.reads).toHaveLength(0);
+      expect(rt.records()[0]).toMatchObject({ bodyOmitted: true, encodedDataLength: 10 });
+    });
+
     it("caps a text body and a request body at 1 MiB", () => {
       const rt = createRuntime();
       rt.install();
@@ -3911,9 +3964,94 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       const [record] = rt.records();
 
       expect(record!.responseBody).toHaveLength(BODY_CAP);
-      expect(record).toMatchObject({ bodyTruncated: true, encodedDataLength: BODY_CAP + 10 });
+      expect(record).toMatchObject({ bodyTruncated: true, bodyLength: BODY_CAP + 10 });
+      expect(record!.encodedDataLength).toBeUndefined();
       expect(record!.request.postData).toHaveLength(BODY_CAP);
       expect(record!.request.postDataTruncated).toBe(true);
+    });
+
+    it.each([
+      { headers: { "content-length": String(2 * BODY_CAP) }, size: 2 * BODY_CAP },
+      { headers: {} as Record<string, string>, size: undefined },
+    ])(
+      "gives a cut text body the Content-Length $size as its size, and its length in the list",
+      ({ headers, size }) => {
+        const rt = createRuntime();
+        rt.install();
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.send();`);
+        rt.last().respond(200, headers, "b".repeat(2 * BODY_CAP));
+        const list = JSON.parse(rt.run(makeNetworkLogReadScript(0, 50, 8081)) as string) as {
+          entries: Array<{ encodedDataLength?: number; bodyLength?: number }>;
+        };
+
+        expect(rt.records()[0]!.encodedDataLength).toBe(size);
+        expect(list.entries[0]).toMatchObject({ bodyLength: 2 * BODY_CAP });
+        expect(list.entries[0]!.encodedDataLength).toBe(size);
+      }
+    );
+
+    it("counts the bytes of at most 1 MiB of a large text body", () => {
+      const rt = createRuntime();
+      const encoded: number[] = [];
+      rt.context.TextEncoder = function () {
+        return {
+          encode: (text: string) => {
+            encoded.push(text.length);
+            return new TextEncoder().encode(text);
+          },
+        };
+      };
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.send();`);
+      const body = "é" + "x".repeat(8 * BODY_CAP);
+      rt.last().respond(200, {}, body);
+
+      expect(Math.max(0, ...encoded)).toBeLessThanOrEqual(BODY_CAP);
+      expect(rt.records()[0]).toMatchObject({ bodyTruncated: true, bodyLength: body.length });
+    });
+
+    it("walks at most 1 MiB of a large text body without TextEncoder", () => {
+      const rt = createRuntime();
+      rt.install();
+      // Counts the characters the fallback loop reads.
+      rt.run(`var __reads = 0, __charCodeAt = String.prototype.charCodeAt;
+        String.prototype.charCodeAt = function(i) { __reads++; return __charCodeAt.call(this, i); };`);
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.send();`);
+      const body = "é".repeat(4 * BODY_CAP);
+      rt.last().respond(200, {}, body);
+
+      expect(rt.run("__reads")).toBeLessThanOrEqual(BODY_CAP);
+      expect(rt.records()[0]).toMatchObject({ bodyTruncated: true, bodyLength: body.length });
+    });
+
+    it("keeps the received text of a json response instead of serializing the parsed object", () => {
+      const rt = createRuntime();
+      rt.install();
+      const serialized: number[] = [];
+      rt.context.__noteStringify = (length: number) => serialized.push(length);
+      rt.run(`var __stringify = JSON.stringify;
+        JSON.stringify = function() { var out = __stringify.apply(JSON, arguments); __noteStringify(out.length); return out; };`);
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.responseType = 'json'; x.send();`
+      );
+      const body = JSON.stringify({ a: "x".repeat(5 * BODY_CAP) });
+      rt.last().respond(200, {}, body);
+      const [entry] = rt.context.__argent_network_log as CapturedRecord[];
+
+      expect(serialized).toEqual([]);
+      expect(entry).toMatchObject({ bodyTruncated: true, bodyLength: body.length });
+      expect(entry!.responseBody).toBe(body.slice(0, BODY_CAP));
+    });
+
+    it("serializes a json response whose received text React Native does not keep", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/j'); x.responseType = 'json';
+        Object.defineProperty(x, '_response', { value: undefined }); x.send();`);
+      rt.last().respond(200, {}, '{ "a": [1, 2] }');
+
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: '{"a":[1,2]}' });
+      expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
     });
 
     it("reads at most 1 MiB of a blob body and leaves the app's own read whole", async () => {

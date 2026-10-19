@@ -93,6 +93,10 @@ interface RawEntry {
   responseBody?: string;
   /** The interceptor kept only the start of the body; encodedDataLength is its full size. */
   bodyTruncated?: boolean;
+  /** The full length, in characters, of a text body the interceptor cut. */
+  bodyLength?: number;
+  /** A binary body the interceptor did not read; encodedDataLength is its size. */
+  bodyOmitted?: boolean;
 }
 
 interface NetworkRequestDetails {
@@ -239,14 +243,19 @@ Returns an error message string if the requestId is not found: use view-network-
         mimeType: entry.response.mimeType,
       };
 
-      if (params.includeBody && entry.responseBody != null) {
+      if (params.includeBody && entry.bodyOmitted) {
+        const size = entry.encodedDataLength != null ? `, ${entry.encodedDataLength} bytes` : "";
+        resp.body = `[body omitted: binary ${entry.response.mimeType || "data"}${size}]`;
+      } else if (params.includeBody && entry.responseBody != null) {
         const body = entry.responseBody;
         if (body.length > MAX_BODY_SIZE) {
           const originalSize = !entry.bodyTruncated
             ? `${body.length} chars`
             : entry.encodedDataLength != null
               ? `${entry.encodedDataLength} bytes`
-              : `more than ${body.length} chars`;
+              : entry.bodyLength != null
+                ? `${entry.bodyLength} chars`
+                : `more than ${body.length} chars`;
           resp.body = `[TRUNCATED — original size: ${originalSize}, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
         } else {
           resp.body = body;
