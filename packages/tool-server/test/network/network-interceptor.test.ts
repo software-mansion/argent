@@ -3908,6 +3908,26 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(record!.request.postDataTruncated).toBe(true);
     });
 
+    it.each([
+      { headers: { "content-length": String(2 * BODY_CAP) }, size: 2 * BODY_CAP },
+      { headers: {} as Record<string, string>, size: undefined },
+    ])(
+      "gives a cut text body the Content-Length $size as its size, and its length in the list",
+      ({ headers, size }) => {
+        const rt = createRuntime();
+        rt.install();
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.send();`);
+        rt.last().respond(200, headers, "b".repeat(2 * BODY_CAP));
+        const list = JSON.parse(rt.run(makeNetworkLogReadScript(0, 50, 8081)) as string) as {
+          entries: Array<{ encodedDataLength?: number; bodyLength?: number }>;
+        };
+
+        expect(rt.records()[0]!.encodedDataLength).toBe(size);
+        expect(list.entries[0]).toMatchObject({ bodyLength: 2 * BODY_CAP });
+        expect(list.entries[0]!.encodedDataLength).toBe(size);
+      }
+    );
+
     it("counts the bytes of at most 1 MiB of a large text body", () => {
       const rt = createRuntime();
       const encoded: number[] = [];

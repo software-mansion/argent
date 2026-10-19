@@ -242,6 +242,19 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     e.response = { url: url || e.request.url, status: status, statusText: statusText || '', headers: headers, mimeType: mimeTypeOf(headers) };
   }
 
+  // The Content-Length of a response, when it gives one.
+  function contentLength(response) {
+    var headers = response && response.headers;
+    if (!headers) return undefined;
+    for (var name in headers) {
+      if (hasOwn.call(headers, name) && name.toLowerCase() === 'content-length') {
+        var n = Number(headers[name]);
+        return headers[name] !== '' && n >= 0 && Math.floor(n) === n ? n : undefined;
+      }
+    }
+    return undefined;
+  }
+
   // Stores the body of a response, once: text, or bytes that keepBytes cut.
   function storeBody(rec, body, byteLength, truncated) {
     var e = rec.entry;
@@ -251,7 +264,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       e.bodyBytes = body;
       if (byId[e.requestId] === e) { bufferedChars += body.byteLength; evict(); }
     } else if (typeof body === 'string') {
-      if (body.length > BODY_CAP) { e.bodyLength = body.length; body = body.slice(0, BODY_CAP); truncated = true; }
+      if (body.length > BODY_CAP) {
+        // A cut body is not counted (see textSize): its size is the one the server gave, if any.
+        e.bodyLength = body.length;
+        if (e.encodedDataLength === undefined) e.encodedDataLength = contentLength(e.response);
+        body = body.slice(0, BODY_CAP);
+        truncated = true;
+      }
       e.responseBody = body;
       if (truncated) e.bodyTruncated = true;
       if (byId[e.requestId] === e) { bufferedChars += body.length; evict(); }
@@ -876,6 +895,7 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
       response: s.response ? { status: s.response.status, statusText: s.response.statusText, mimeType: s.response.mimeType } : undefined,
       resourceType: s.resourceType,
       encodedDataLength: s.encodedDataLength,
+      bodyLength: s.bodyLength,
       timestamp: s.timestamp,
       durationMs: s.durationMs,
       errorText: s.errorText

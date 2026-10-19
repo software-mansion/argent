@@ -36,6 +36,8 @@ interface LogEntry {
   response?: { status: number; statusText: string; mimeType: string };
   resourceType?: string;
   encodedDataLength?: number;
+  /** The full length, in characters, of a text body the interceptor cut without a byte size. */
+  bodyLength?: number;
   timestamp?: number;
   durationMs?: number;
   errorText?: string;
@@ -64,7 +66,13 @@ function formatEntry(entry: LogEntry): string {
   }
 
   const type = entry.resourceType ?? "";
-  const size = entry.encodedDataLength != null ? formatBytes(entry.encodedDataLength) : "";
+  // A length in characters is close to the size in bytes, and never more than it.
+  const size =
+    entry.encodedDataLength != null
+      ? formatBytes(entry.encodedDataLength)
+      : entry.bodyLength != null
+        ? `~${formatBytes(entry.bodyLength)}`
+        : "";
   const duration = entry.durationMs != null ? `${entry.durationMs} ms` : "";
 
   return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();

@@ -268,6 +268,7 @@ function handleLogReadScript(ws: WebSocket, id: number, expr: string) {
       : undefined,
     resourceType: e.resourceType,
     encodedDataLength: e.encodedDataLength,
+    bodyLength: e.bodyLength,
     timestamp: e.timestamp,
     durationMs: e.durationMs,
   }));
@@ -421,6 +422,40 @@ describe("NetworkInspector integration (mock server)", () => {
     expect(result).toContain("/users");
     expect(result).toContain("200 OK");
     expect(result).toContain("rn-net-2");
+  });
+
+  it("view-network-logs gives the length of a cut body without a byte size as an approximate size", async () => {
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-cut-list",
+      state: "finished" as const,
+      request: { url: "https://api.example.com/cut-list", method: "GET", headers: {} },
+      response: {
+        url: "https://api.example.com/cut-list",
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        mimeType: "text/plain",
+      },
+      resourceType: "XHR",
+      timestamp: Date.now() / 1000,
+      durationMs: 100,
+      responseBody: "x".repeat(1_048_576),
+      bodyTruncated: true,
+      bodyLength: 2_097_152,
+    });
+
+    try {
+      const result = (await registry.invokeTool("view-network-logs", {
+        port: mockPort,
+        device_id: "mock-device",
+      })) as string;
+
+      expect(result).toMatch(/\{id: rn-net-cut-list\} "GET \/cut-list" 200 OK XHR ~2 MB 100 ms/);
+    } finally {
+      const idx = networkLog.findIndex((e) => e.requestId === "rn-net-cut-list");
+      if (idx >= 0) networkLog.splice(idx, 1);
+    }
   });
 
   it("view-network-logs returns 'no traffic' for empty log", async () => {
