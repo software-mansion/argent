@@ -4,7 +4,7 @@ import * as http from "node:http";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../../src/blueprints/network-inspector";
-import { networkLogsTool } from "../../src/tools/network/network-logs";
+import { isRedirect, networkLogsTool } from "../../src/tools/network/network-logs";
 import { networkRequestTool } from "../../src/tools/network/network-request";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -499,6 +499,37 @@ describe("NetworkInspector integration (mock server)", () => {
     expect(respHeaders["content-type"]).toBe("application/json");
   });
 
+  it("redacts a header that whatwg-fetch sent as a numbered [name, value] pair", async () => {
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-pairs",
+      state: "finished",
+      request: {
+        url: "https://api.example.com/me",
+        method: "GET",
+        headers: { "0": "Authorization,Bearer tok", "1": "Accept,application/json" },
+      },
+      resourceType: "Fetch",
+      timestamp: Date.now() / 1000,
+    });
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-pairs",
+      })) as { request: { headers: Record<string, string> } };
+      expect(result.request.headers).toEqual({
+        "0": "[REDACTED]",
+        "1": "Accept,application/json",
+      });
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "rn-net-pairs"),
+        1
+      );
+    }
+  });
+
   it("view-network-request-details returns response body when includeBody is true", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
@@ -933,6 +964,13 @@ describe("NetworkInspector integration (mock server)", () => {
       says: "that it did not read a binary body",
       message: "[body omitted: binary image/png, 300000 bytes]",
     },
+    {
+      requestId: "rn-net-png-text",
+      mimeType: "image/png",
+      fields: { bodyLength: 4096, bodyOmitted: true },
+      says: "the estimated size of a binary body read as text",
+      message: "[body omitted: binary image/png, ~4096 bytes]",
+    },
   ])(
     "view-network-request-details gives $says",
     async ({ requestId, mimeType, fields, message }) => {
@@ -1026,5 +1064,37 @@ describe("NetworkInspector integration (mock server)", () => {
 
     expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}:mock-device`)).toBe("IDLE");
     expect(registry.getServiceState(`NetworkInspector:${mockPort}:mock-device`)).toBe("IDLE");
+  });
+});
+
+describe("isRedirect", () => {
+  it.each([
+    ["the same URL", "https://api.test/a?q=1", "https://api.test/a?q=1"],
+    [
+      "a space the native layer encoded",
+      "https://api.test/a b?q=x y",
+      "https://api.test/a%20b?q=x%20y",
+    ],
+    ["a URL iOS encoded again", "https://api.test/a b?q=%20", "https://api.test/a%20b?q=%2520"],
+    ["an app that encoded twice", "https://api.test/q=%2520", "https://api.test/q=%20"],
+    ["+ for a space in a query", "https://api.test/s?q=a%20b", "https://api.test/s?q=a+b"],
+    ["escapes OkHttp adds", "https://api.test/a|b^c", "https://api.test/a%7Cb%5Ec"],
+    ["lower-case escapes", "https://api.test/a%2fb", "https://api.test/a%2Fb"],
+    ["a fragment, which is never sent", "https://api.test/a#top", "https://api.test/a"],
+    ["an empty query", "https://api.test/a?", "https://api.test/a"],
+    ["a trailing slash on the root", "https://API.test", "https://api.test/"],
+  ])("is false for %s", (_, requestUrl, finalUrl) => {
+    expect(isRedirect(requestUrl, finalUrl)).toBe(false);
+  });
+
+  it.each([
+    ["another path", "https://api.test/old", "https://api.test/new"],
+    ["another host", "https://api.test/f", "https://cdn.test/f"],
+    ["http to https", "http://api.test/a", "https://api.test/a"],
+    ["an escaped slash decoded", "https://api.test/a%2Fb", "https://api.test/a/b"],
+    ["an escaped & decoded", "https://api.test/s?q=a%26b", "https://api.test/s?q=a&b"],
+    ["another query", "https://api.test/s?q=1", "https://api.test/s?q=2"],
+  ])("is true for %s", (_, requestUrl, finalUrl) => {
+    expect(isRedirect(requestUrl, finalUrl)).toBe(true);
   });
 });

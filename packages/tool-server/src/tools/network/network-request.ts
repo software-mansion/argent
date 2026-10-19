@@ -26,16 +26,20 @@ const SENSITIVE_HEADER_PATTERNS = [
   "x-api-key",
 ];
 
-function isSensitiveHeader(name: string): boolean {
+function isSensitiveHeader(name: string, value?: string): boolean {
   const lower = name.toLowerCase();
-  return SENSITIVE_HEADER_PATTERNS.some((p) => lower.includes(p));
+  if (SENSITIVE_HEADER_PATTERNS.some((p) => lower.includes(p))) return true;
+  // whatwg-fetch sends a [name, value] pair given as headers as "0: name,value".
+  return (
+    /^\d+$/.test(name) && value != null && isSensitiveHeader(String(value).split(",")[0]!.trim())
+  );
 }
 
 function redactHeaders(headers: Record<string, string> | undefined): Record<string, string> {
   if (!headers) return {};
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    result[key] = isSensitiveHeader(key) ? "[REDACTED]" : value;
+    result[key] = isSensitiveHeader(key, value) ? "[REDACTED]" : value;
   }
   return result;
 }
@@ -250,7 +254,13 @@ Returns an error message string if the requestId is not found: use view-network-
       }
 
       if (params.includeBody && entry.bodyOmitted) {
-        const size = entry.encodedDataLength != null ? `, ${entry.encodedDataLength} bytes` : "";
+        // A length in characters, of a binary body read as text, is close to its size in bytes.
+        const size =
+          entry.encodedDataLength != null
+            ? `, ${entry.encodedDataLength} bytes`
+            : entry.bodyLength != null
+              ? `, ~${entry.bodyLength} bytes`
+              : "";
         resp.body = `[body omitted: binary ${entry.response.mimeType || "data"}${size}]`;
       } else if (params.includeBody && entry.responseBody != null) {
         const body = entry.responseBody;

@@ -121,20 +121,36 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return text.length > BODY_CAP ? undefined : utf8Length(text);
   }
 
+  // A body of one of these types is not text: its size is recorded and it is not read as text.
+  var BINARY_TYPES = /^(image\\/(?!svg)|audio\\/|video\\/|font\\/|application\\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
+  function isBinaryType(mime) {
+    return typeof mime === 'string' && BINARY_TYPES.test(mime.toLowerCase());
+  }
+
   function mimeTypeOf(headers) {
     return hasOwn.call(headers, 'content-type') ? String(headers['content-type']).split(';')[0].trim() : '';
   }
 
+  // The headers of every HeadersInit form: [name, value] pairs (an array or another iterable), a
+  // Headers or Map, or a plain object. A name given twice keeps both values.
   function headersObject(source) {
     var out = {};
     if (!source || typeof source !== 'object') return out;
+    var add = function(name, value) {
+      name = String(name);
+      out[name] = hasOwn.call(out, name) ? out[name] + ', ' + String(value) : String(value);
+    };
     try {
-      if (Array.isArray(source)) {
-        for (var i = 0; i < source.length; i++) out[String(source[i][0])] = String(source[i][1]);
+      // A Headers and a Map iterate as pairs too.
+      if (Array.isArray(source) || (typeof Symbol === 'function' && typeof source[Symbol.iterator] === 'function')) {
+        var pairs = Array.from(source);
+        for (var i = 0; i < pairs.length; i++) {
+          if (pairs[i] && typeof pairs[i] === 'object' && pairs[i].length === 2) add(pairs[i][0], pairs[i][1]);
+        }
       } else if (typeof source.forEach === 'function') {
-        source.forEach(function(value, name) { out[name] = String(value); });
+        source.forEach(function(value, name) { add(name, value); });
       } else {
-        for (var k in source) if (hasOwn.call(source, k)) out[k] = String(source[k]);
+        for (var k in source) if (hasOwn.call(source, k)) add(k, source[k]);
       }
     } catch (e) {}
     return out;
@@ -200,6 +216,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       if (body !== undefined) {
         entry.responseBody = body;
         if (entry.encodedDataLength > BODY_CAP) entry.bodyTruncated = true;
+      } else if (typeof TextDecoder === 'function') {
+        // Bytes that are not UTF-8.
+        entry.bodyOmitted = true;
       }
       delete entry.bodyBytes;
     }
@@ -255,23 +274,57 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     e.response = { url: url || e.request.url, status: status, statusText: statusText || '', headers: headers, mimeType: mimeTypeOf(headers) };
   }
 
-  // The Content-Length of a response, when it gives one.
-  function contentLength(response) {
+  // A response header, by its name in lower case.
+  function headerValue(response, wanted) {
     var headers = response && response.headers;
     if (!headers) return undefined;
     for (var name in headers) {
-      if (hasOwn.call(headers, name) && name.toLowerCase() === 'content-length') {
-        var n = Number(headers[name]);
-        return headers[name] !== '' && n >= 0 && Math.floor(n) === n ? n : undefined;
-      }
+      if (hasOwn.call(headers, name) && name.toLowerCase() === wanted) return String(headers[name]);
     }
     return undefined;
+  }
+
+  // The Content-Length of a response, when it gives the size of the body the app gets. With a
+  // Content-Encoding (gzip, br) it is the compressed size, which iOS keeps on the decoded response.
+  function contentLength(response) {
+    var encoding = headerValue(response, 'content-encoding');
+    if (encoding !== undefined && encoding.trim().toLowerCase() !== 'identity' && encoding.trim() !== '') return undefined;
+    var value = headerValue(response, 'content-length');
+    var n = Number(value);
+    return value !== undefined && value !== '' && n >= 0 && Math.floor(n) === n ? n : undefined;
+  }
+
+  function isBinaryResponse(rec) {
+    return !!rec.entry.response && isBinaryType(rec.entry.response.mimeType);
+  }
+
+  // The size of a text body, unless the body is binary: its text is then not stored (see storeBody).
+  function textSizeOf(rec, text) {
+    return isBinaryResponse(rec) ? undefined : textSize(text);
+  }
+
+  // Records a body that is not kept, once: the details show its size instead.
+  function omitBody(rec, byteLength) {
+    var e = rec.entry;
+    if (e.responseBody !== undefined || e.encodedDataLength !== undefined || e.bodyOmitted) return;
+    e.bodyOmitted = true;
+    if (typeof byteLength === 'number') e.encodedDataLength = byteLength;
   }
 
   // Stores the body of a response, once: text, or bytes that keepBytes cut.
   function storeBody(rec, body, byteLength, truncated) {
     var e = rec.entry;
-    if (e.responseBody !== undefined || e.encodedDataLength !== undefined) return;
+    if (e.responseBody !== undefined || e.encodedDataLength !== undefined || e.bodyOmitted) return;
+    if (typeof body === 'string' && isBinaryResponse(rec)) {
+      // A binary body read as text (an XHR's default responseType, Expo's text()) is not that text.
+      // Its size is the one the server gave, else the length of the text, close to it: a byte that is
+      // not UTF-8 reads as one character.
+      var declared = e.state === 'failed' ? undefined : contentLength(e.response);
+      omitBody(rec, declared);
+      if (declared === undefined) e.bodyLength = body.length;
+      return;
+    }
+    if (body instanceof Uint8Array && isBinaryResponse(rec)) return omitBody(rec, byteLength);
     if (typeof byteLength === 'number') e.encodedDataLength = byteLength;
     if (body instanceof Uint8Array) {
       e.bodyBytes = body;
@@ -355,12 +408,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         typeof xhr.onabort === 'function' && typeof xhr.ontimeout === 'function';
     };
 
-    // A body of one of these types is not text: its size is recorded and it is not read.
-    var BINARY_TYPES = /^(image\\/(?!svg)|audio\\/|video\\/|font\\/|application\\/(octet-stream|pdf|zip|gzip|wasm|x-protobuf)$)/;
     var isBinaryBlob = function(rec, blob) {
       var mime = rec.entry.response && rec.entry.response.mimeType;
       try { if (!mime) mime = blob.type; } catch (e) {}
-      return typeof mime === 'string' && BINARY_TYPES.test(mime.toLowerCase());
+      return isBinaryType(mime);
     };
 
     // iOS resolves readAsText with null when the cut splits a UTF-8 character, so step back a
@@ -368,7 +419,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     // The size is read up front: RN's Blob throws on every access once the app closes it.
     var readBlob = function(rec, blob, size, end) {
       if (end === Math.min(size, BODY_CAP) && isBinaryBlob(rec, blob)) {
-        rec.entry.bodyOmitted = true;
+        omitBody(rec, size);
         return complete(rec, undefined, size, false);
       }
       var part = end < size ? blob.slice(0, end) : blob;
@@ -393,7 +444,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var type = xhr.responseType || '';
       if (type === '' || type === 'text') {
         var text = xhr.responseText;
-        if (typeof text === 'string') return complete(rec, text, textSize(text), false);
+        if (typeof text === 'string') return complete(rec, text, textSizeOf(rec, text), false);
       } else if (type === 'json') {
         // React Native keeps the text it received, which spares a serialization of the whole object.
         var raw = xhr._response;
@@ -402,8 +453,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         // Re-serialized, so its length is not the size received: record no size.
         if (typeof json === 'string') return complete(rec, json, undefined, false);
       } else if (type === 'arraybuffer') {
+        // Kept as bytes like Expo's bodies, and decoded when the agent reads the record.
         var buffer = xhr.response;
-        return complete(rec, undefined, buffer ? buffer.byteLength : undefined, false);
+        if (buffer && typeof buffer.byteLength === 'number') return complete(rec, keepBytes(new Uint8Array(buffer)), buffer.byteLength);
       } else if (type === 'blob') {
         var blob = xhr.response;
         if (blob) return readBlob(rec, blob, blob.size, Math.min(blob.size, BODY_CAP));
@@ -476,7 +528,22 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var slot = slots.get(this);
       // React Native sends one value per lowercased name, the last one set. RN still accepts a
       // header after send, but it never reaches the wire, so it is not recorded.
-      if (slot && slot.headers) slot.headers[String(name).toLowerCase()] = String(value);
+      if (slot && slot.headers) {
+        name = String(name).toLowerCase();
+        value = String(value);
+        // whatwg-fetch sets headers given as [name, value] pairs as if they were an object: each pair
+        // as '0': 'name,value' and so on, then 'length', then each pair again under its own name. The
+        // pair is recorded under its own name, so a redacted header stays redacted.
+        var comma = value.indexOf(',');
+        if (/^\\d+$/.test(name) && comma > 0) {
+          slot.pairs = true;
+          name = value.slice(0, comma).trim().toLowerCase();
+          value = value.slice(comma + 1);
+        } else if (name === 'length' && slot.pairs) {
+          return result;
+        }
+        slot.headers[name] = value;
+      }
       return result;
     };
 
@@ -512,7 +579,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       }
       var result = origAbort.apply(this, arguments);
       if (typeof partial === 'string' && partial && request.rec.entry.state === 'failed') {
-        storeBody(request.rec, partial, utf8Length(partial), false);
+        storeBody(request.rec, partial, textSizeOf(request.rec, partial), false);
       }
       return result;
     };
@@ -674,7 +741,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       bodyEnded();
     }, track);
     tapMethod(response, 'text', function(text) {
-      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, textSize(text), false);
+      if (typeof text === 'string' && rec.entry.state !== 'failed') storeBody(rec, text, textSizeOf(rec, text), false);
       bodyEnded();
     }, track);
     started.then(function() {
