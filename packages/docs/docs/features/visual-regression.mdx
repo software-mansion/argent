@@ -36,6 +36,8 @@ Argent writes a diff image. The image marks the pixels that became brighter, the
 
 Argent removes the status bar from the comparison. Thus the clock and the battery indicator do not make the comparison fail.
 
+<a id="baselines-in-flows" />
+
 ## Baselines in e2e tests
 
 An [e2e test](/docs/features/e2e) can contain a snapshot step. The step fails when no baseline exists yet. Run the e2e test with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.

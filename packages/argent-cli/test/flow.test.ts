@@ -51,7 +51,7 @@ interface StepFixture {
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   artifacts?: Record<string, unknown>;
-  /** Wire-only tool-step payload; the CLI StepReport type has no such field. */
+  /** Tool-step payload; a nested run's report for e2e-execute. */
   result?: unknown;
 }
 
@@ -638,6 +638,60 @@ describe("argent e2e run", () => {
         },
       ]);
       expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: true });
+    });
+
+    // A nested `e2e-execute name:` resolves on the tool-server, which reports
+    // its own shadow warning only in that step's result, at any depth.
+    const shadowedNested =
+      ".argent/flows/frag.yaml is not used: .argent/e2e/frag.yaml is read first.";
+    const nestedRun = (): Record<string, unknown> =>
+      report({
+        steps: [
+          {
+            index: 0,
+            kind: "tool",
+            status: "pass",
+            tool: "flow-execute",
+            result: report({
+              steps: [
+                {
+                  index: 0,
+                  kind: "tool",
+                  status: "pass",
+                  tool: "e2e-execute",
+                  result: report({ warning: shadowedNested }),
+                },
+              ],
+              warning: shadowedNested,
+            }),
+          },
+        ],
+      });
+
+    it("prints a nested step's shadow warning once on stderr", async () => {
+      toolsClientMock.callTool.mockResolvedValue({ data: nestedRun() });
+      await runIn(["run", "fresh"]);
+      expect(errs).toEqual([`warning: ${shadowedNested}`]);
+    });
+
+    it("gives a nested step's warning as a JSON record under --json", async () => {
+      toolsClientMock.callTool.mockResolvedValue({ data: nestedRun() });
+      await runIn(["run", "fresh", "--json"]);
+      expect(errs.map((line) => JSON.parse(line))).toEqual([
+        { event: "warning", warning: shadowedNested },
+      ]);
+    });
+
+    it("prints nested step warnings for each test of a directory run", async () => {
+      toolsClientMock.callTool.mockResolvedValue({ data: nestedRun() });
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(project);
+        await expect(flow(["run", ".argent/e2e"], opts)).rejects.toThrow("process.exit:0");
+      } finally {
+        process.chdir(previousCwd);
+      }
+      expect(errs).toEqual([`warning: ${shadowedNested}`, `warning: ${shadowedNested}`]);
     });
   });
 

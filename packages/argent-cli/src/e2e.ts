@@ -37,6 +37,8 @@ export interface StepReport {
   /** Set by the tool-server on a step that PASSED in a way that weakens it as proof. */
   warning?: string;
   tool?: string;
+  /** Tool result for `tool` steps; a nested run's report for `e2e-execute`. */
+  result?: unknown;
   flow?: string;
   message?: string;
   /** Human-readable step target (selector / snapshot name). */
@@ -1284,6 +1286,29 @@ function rejectionVerdict(code: string | undefined): string {
  * exits 0 over steps no renderer can read: renderReport prints a line of
  * `undefined` fields for each, and the batch's renderFailedSteps prints none.
  */
+/**
+ * The warnings carried in `tool:` step results, at any depth: a nested
+ * `e2e-execute name: X` that read .argent/e2e over a shadowed .argent/flows
+ * file says so only in its result. No renderer reads results, so the run
+ * prints these the way it prints its own shadow warning (see printWarnings).
+ */
+function nestedStepWarnings(steps: readonly StepReport[], into = new Set<string>()): string[] {
+  for (const s of steps) {
+    if (!s || typeof s.result !== "object" || s.result === null) continue;
+    const { warning, steps: inner } = s.result as { warning?: unknown; steps?: unknown };
+    if (typeof warning === "string" && warning !== s.warning) into.add(warning);
+    if (Array.isArray(inner)) nestedStepWarnings(inner as StepReport[], into);
+  }
+  return [...into];
+}
+
+/** Stderr warning lines: a JSON record each under --json, prose otherwise. */
+function printWarnings(warnings: readonly string[], json: boolean): void {
+  for (const warning of warnings) {
+    console.error(json ? JSON.stringify({ event: "warning", warning }) : `warning: ${warning}`);
+  }
+}
+
 function isFlowReport(data: unknown): data is FlowReport {
   const steps = (data as FlowReport | undefined)?.steps;
   return Array.isArray(steps) && steps.every((step) => !!step && typeof step === "object");
@@ -1420,6 +1445,7 @@ async function runFlowDirectory(
       stopped = true;
       continue;
     }
+    printWarnings(nestedStepWarnings(report.steps), args.json);
     // Key exports by the flow's subdirectory so recursive same-stem flows
     // cannot clobber each other (exportFailureArtifacts keys by stem only).
     await exportAndResolveArtifacts(
@@ -1473,7 +1499,7 @@ export async function e2e(argv: string[], options: FlowCommandOptions): Promise<
 
   if (sub === "list") {
     // Every e2e test directory in lookup order. Stdout stays bare paths, one
-    // per line, so `list | xargs run` keeps working; notes on legacy and
+    // per line, so `list | xargs -n1 run` keeps working; notes on legacy and
     // shadowed entries go to stderr.
     const lines: string[] = [];
     const notes: string[] = [];
@@ -1581,10 +1607,7 @@ export async function e2e(argv: string[], options: FlowCommandOptions): Promise<
   // somewhere the user never spelled out.
   const { suppliedPath, fromName, shadowed } = await resolveFlowRef(args.flowRef, projectRoot);
   if (shadowed !== undefined) {
-    const warning = e2eShadowWarning(suppliedPath, shadowed);
-    console.error(
-      args.json ? JSON.stringify({ event: "warning", warning }) : `warning: ${warning}`
-    );
+    printWarnings([e2eShadowWarning(suppliedPath, shadowed)], args.json);
   }
   // path.resolve collapses ".." lexically, without consulting symlinks, so a
   // ".." following a symlinked directory would make the CLI stat and run a
@@ -1856,6 +1879,7 @@ export async function e2e(argv: string[], options: FlowCommandOptions): Promise<
     }
     return fail(`"${flowName}" did not produce a run report.`, 2);
   }
+  printWarnings(nestedStepWarnings(report.steps), args.json);
 
   try {
     await exportAndResolveArtifacts(

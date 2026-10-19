@@ -58,6 +58,8 @@ The `project_root` input of `e2e-add-step` carries `"collect": "step"`:
 
 `GET /tools` also lists each old `flow-*` name as an entry with `"hideFromMcp": true` and `aliasOf`, the new name. A call to the old name runs the new tool.
 
+<a id="the-flow-file-input" />
+
 ## The e2e test file input
 
 Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. For an input with `collect`, the object has three more fields:
