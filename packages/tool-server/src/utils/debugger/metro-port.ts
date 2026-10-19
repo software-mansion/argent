@@ -35,7 +35,7 @@ export const metroPortField = z.coerce
    * 8081, which counts as explicit and beats a provider's port.
    */
   .describe(
-    "Metro server port. Optional — omit it to use this device's port, 8081 by default. " +
+    "Metro server port. Optional: omit it to use this device's port, 8081 by default. " +
       "Ignored for Chromium, whose CDP port is encoded in device_id."
   );
 

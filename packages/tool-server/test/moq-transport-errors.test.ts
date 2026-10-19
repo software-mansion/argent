@@ -147,7 +147,7 @@ describe("sendCommand over a MoQ transport", () => {
       { pasteText: () => Promise.resolve() }
     );
 
-    await expect(sendCommand(apiWith(transport), { ...TOUCH })).resolves.toBeUndefined();
+    await expect(sendCommand(apiWith(transport), { ...TOUCH })).resolves.toEqual({});
     expect(sent).toHaveLength(1);
   });
 
@@ -167,10 +167,10 @@ describe("sendCommand over a MoQ transport", () => {
       screenshot: () => Promise.resolve({ url: "file:///x.png", path: "/x.png" }),
     };
 
-    await expect(sendCommand(apiWith(sync), { ...TOUCH })).resolves.toBeUndefined();
+    await expect(sendCommand(apiWith(sync), { ...TOUCH })).resolves.toEqual({});
     await expect(
       sendCommand(apiWith(sync), { cmd: "key", direction: "Down", code: 0x19 })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({});
     expect(calls).toEqual(["touch", "pressKey"]);
   });
 
@@ -181,7 +181,7 @@ describe("sendCommand over a MoQ transport", () => {
    */
   it("rejects a command the transport does not implement, unclassified", async () => {
     const transport = createMoqTransport(closedMoqClient(), { pasteText: () => Promise.resolve() });
-    let sent: Promise<void> | undefined;
+    let sent: Promise<unknown> | undefined;
     expect(() => {
       sent = sendCommand(apiWith(transport), { cmd: "wiggle" });
     }).not.toThrow();

@@ -91,7 +91,7 @@ afterEach(() => {
 describe("sendCommand — command acknowledgement", () => {
   it("resolves once the server acks, and tags the command with the id it echoes", async () => {
     const server = await startServer();
-    await expect(sendCommand(server.api, { ...TOUCH })).resolves.toBeUndefined();
+    await expect(sendCommand(server.api, { ...TOUCH })).resolves.toEqual({});
     expect(server.received).toHaveLength(1);
     expect(server.received[0]).toMatchObject({ cmd: "touch", type: "Down" });
     expect(typeof server.received[0]!.id).toBe("string");

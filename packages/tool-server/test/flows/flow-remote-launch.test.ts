@@ -21,12 +21,17 @@ const LOCAL = "00000000-0000-0000-0000-0000000000ab"; // → platform "ios"
 let tmpDir: string;
 
 /** Records every `restart-app` the run issued — the tool `runLaunch` starts an app with. */
-function mockRegistry(launched: string[], resolveService?: Registry["resolveService"]): Registry {
+function mockRegistry(
+  launched: string[],
+  resolveService?: Registry["resolveService"],
+  restartArgs: Record<string, unknown>[] = []
+): Registry {
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
       if (id === "restart-app") {
         launched.push(args.bundleId as string);
+        restartArgs.push(args);
         return { restarted: true };
       }
       return { ok: true };
@@ -52,15 +57,15 @@ async function run(
   name: string,
   device: string,
   resolveService?: Registry["resolveService"]
-): Promise<FlowRunResult & { launched: string[] }> {
+): Promise<FlowRunResult & { launched: string[]; restartArgs: Record<string, unknown>[] }> {
   const launched: string[] = [];
-  const result = await createRunFlowTool(mockRegistry(launched, resolveService)).execute(
-    {},
-    { name, project_root: tmpDir, device }
-  );
+  const restartArgs: Record<string, unknown>[] = [];
+  const result = await createRunFlowTool(
+    mockRegistry(launched, resolveService, restartArgs)
+  ).execute({}, { name, project_root: tmpDir, device });
   if (!("steps" in result))
     throw new Error(`expected a run result, got: ${JSON.stringify(result)}`);
-  return Object.assign(result as FlowRunResult, { launched });
+  return Object.assign(result as FlowRunResult, { launched, restartArgs });
 }
 
 const CROSS_PLATFORM: FlowFile = {
@@ -110,6 +115,51 @@ describe("launch on a remote simulator", () => {
     expect(result.steps[0].reason).toContain('no app id declared for platform "ios"');
     expect(result.steps[0].reason).not.toContain("ios-remote");
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("launch args from an ios { app, args } entry", () => {
+  const WITH_ARGS: FlowFile = {
+    executionPrerequisite: "",
+    steps: [
+      {
+        kind: "launch",
+        app: { ios: { app: "com.acme.app", args: ["-Flag", "YES"] }, android: "com.acme.app" },
+      },
+    ],
+  };
+
+  it.each([
+    ["a local simulator", LOCAL],
+    ["a remote simulator", REMOTE],
+  ])("forwards them as launchArgs on %s", async (_label, device) => {
+    await writeFlow("with-args", WITH_ARGS);
+
+    const result = await run("with-args", device);
+
+    expect(result.restartArgs).toEqual([
+      expect.objectContaining({ bundleId: "com.acme.app", launchArgs: ["-Flag", "YES"] }),
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not forward them on Android", async () => {
+    await writeFlow("with-args", WITH_ARGS);
+
+    const result = await run("with-args", "emulator-5554");
+
+    expect(result.restartArgs).toHaveLength(1);
+    expect(result.restartArgs[0]).toMatchObject({ bundleId: "com.acme.app" });
+    expect(result.restartArgs[0]).not.toHaveProperty("launchArgs");
+  });
+
+  it("sends no launchArgs for a bare ios id", async () => {
+    await writeFlow("cross", CROSS_PLATFORM);
+
+    const result = await run("cross", LOCAL);
+
+    expect(result.restartArgs).toHaveLength(1);
+    expect(result.restartArgs[0]).not.toHaveProperty("launchArgs");
   });
 });
 

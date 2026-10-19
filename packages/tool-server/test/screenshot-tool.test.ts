@@ -11,7 +11,16 @@ vi.mock("node:child_process", async () => {
   return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
 });
 
+import type { LivePanel } from "../src/utils/foldable";
+
+const resolveLivePanelMock = vi.fn<(udid: string) => Promise<LivePanel>>();
+vi.mock("../src/utils/foldable", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/foldable")>()),
+  resolveLivePanel: (udid: string) => resolveLivePanelMock(udid),
+}));
+
 import { createScreenshotTool, downscalePngInPlace } from "../src/tools/screenshot";
+import { RESULT_NOTE_KEY } from "../src/tools/screenshot/dropped-geometry";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../src/blueprints/ios-device-runner";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 
@@ -101,6 +110,76 @@ describe("screenshot tool", () => {
     });
     expect(result).not.toHaveProperty("includeImageInContext");
     expect(result).not.toHaveProperty("url");
+  });
+});
+
+describe("screenshot tool on a foldable", () => {
+  const DUO = "B6C52FD4-5408-402B-9369-EF7C66B98E6F";
+  const PANELS = [
+    { screenId: 1, width: 1398, height: 2034 },
+    { screenId: 3, width: 2007, height: 2853 },
+  ];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resolveLivePanelMock.mockReset();
+  });
+
+  async function shoot(api: Record<string, unknown>) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ url: "http://localhost/screenshot.png", path: "/tmp/screenshot.png" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const registry = {
+      resolveService: vi.fn().mockResolvedValue(api),
+    } as unknown as import("@argent/registry").Registry;
+    const tool = createScreenshotTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: DUO, includeImageInContext: false },
+      { artifacts: new ArtifactStore() }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    return { result, body };
+  }
+
+  it("captures the resolved panel and notes it, with no warning", async () => {
+    resolveLivePanelMock.mockResolvedValue({ screen: 3, source: "ax-service" });
+    const { result, body } = await shoot({
+      apiUrl: "http://localhost:4949",
+      deviceId: DUO,
+      display: { foldable: true, panels: PANELS, hingeAngle: null },
+    });
+    expect(body.screen).toBe(3);
+    expect(result[RESULT_NOTE_KEY]).toContain("renders to screen 3 (inner panel, 2007x2853)");
+    expect(result).not.toHaveProperty("warning");
+  });
+
+  it("warns, and notes, when nothing resolved the panel", async () => {
+    resolveLivePanelMock.mockResolvedValue({
+      screen: 1,
+      source: "unknown",
+      reason: "the accessibility service failed (no); CoreDevice failed (no)",
+    });
+    const { result, body } = await shoot({
+      apiUrl: "http://localhost:4949",
+      deviceId: DUO,
+      display: { foldable: true, panels: PANELS, hingeAngle: null },
+    });
+    expect(body.screen).toBe(1);
+    expect(result.warning).toContain("could not be resolved (the accessibility service failed");
+    expect(result.warning).toContain("this capture is of screen 1 (cover panel, 1398x2034)");
+    expect(result[RESULT_NOTE_KEY]).toBe(result.warning);
+  });
+
+  it("adds nothing for a device that is not foldable", async () => {
+    const { result, body } = await shoot({ apiUrl: "http://localhost:4949", deviceId: DUO });
+    expect(body).not.toHaveProperty("screen");
+    expect(result).not.toHaveProperty("warning");
+    expect(result).not.toHaveProperty(RESULT_NOTE_KEY);
+    expect(resolveLivePanelMock).not.toHaveBeenCalled();
   });
 });
 

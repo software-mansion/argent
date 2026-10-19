@@ -8,7 +8,7 @@ A Chromium device may have several tabs / BrowserWindows. Use `chromium-tabs` to
 
 Every other tool (`describe`, `gesture-tap`, `screenshot`, `debugger-evaluate`, `open-url`, …) acts on the **active** tab, so `chromium-tabs action=select` before driving a different tab.
 
-Note: a cross-process navigation (some redirects) can swap a tab's underlying CDP target — re-run `chromium-tabs action=list` to pick it up under a fresh id.
+Note: a cross-process navigation (some redirects) can swap a tab's underlying CDP target; re-run `chromium-tabs action=list` to pick it up under a fresh id.
 
 ## Cookies & storage
 

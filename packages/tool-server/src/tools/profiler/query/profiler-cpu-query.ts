@@ -28,12 +28,12 @@ const timeWindowSchema = z.object({
   start: z.coerce
     .number()
     .describe(
-      "Start of window in ms since profiling started — the same clock profiler-commit-query prints"
+      "Start of window in ms since profiling started, the same clock profiler-commit-query prints"
     ),
   end: z.coerce
     .number()
     .describe(
-      "End of window in ms since profiling started — the same clock profiler-commit-query prints"
+      "End of window in ms since profiling started, the same clock profiler-commit-query prints"
     ),
 });
 
@@ -51,7 +51,7 @@ const zodSchema = z.object({
   time_window_ms: timeWindowSchema
     .optional()
     .describe(
-      "Time window filter for time_window mode (ms since profiling started — the same clock profiler-commit-query prints)"
+      "Time window filter for time_window mode (ms since profiling started, the same clock profiler-commit-query prints)"
     ),
   component_name: z.string().optional().describe("Component name for component_cpu mode"),
   function_name: z.string().optional().describe("Function name for call_tree mode"),
@@ -448,7 +448,7 @@ Every table states how many samples it covers and how much of that was idle.
 - component_cpu: For a given component_name, aggregate CPU activity across all its commits.
 Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
-Fails if no CPU profile is stored — run react-profiler-stop first.`,
+Fails if no CPU profile is stored; run react-profiler-stop first.`,
   zodSchema,
   // RN-only: reads Hermes-format CPU profiles; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,

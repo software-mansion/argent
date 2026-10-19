@@ -1,8 +1,8 @@
 # Gesture Examples
 
-Detailed sequences and parameters for the gesture tool family. All coordinates, distances, and radii are **normalized 0.0–1.0** (fractions of screen width/height, not pixels) — same coordinate space across all gesture tools.
+Detailed sequences and parameters for the gesture tool family. All coordinates, distances, and radii are **normalized 0.0–1.0** (fractions of screen width/height, not pixels); same coordinate space across all gesture tools.
 
-## gesture-pinch — Two-finger pinch
+## gesture-pinch: Two-finger pinch
 
 Pinch out (zoom in):
 
@@ -29,7 +29,7 @@ Vertical pinch (angle = 90):
 }
 ```
 
-## gesture-rotate — Two-finger rotation
+## gesture-rotate: Two-finger rotation
 
 Clockwise 90 degrees:
 
@@ -57,7 +57,7 @@ Counter-clockwise 45 degrees:
 }
 ```
 
-## gesture-custom — Custom touch sequences
+## gesture-custom: Custom touch sequences
 
 ### Long Press (800ms hold)
 
@@ -71,7 +71,7 @@ Counter-clockwise 45 degrees:
 }
 ```
 
-### Pinch Out (zoom in) — manual events
+### Pinch Out (zoom in): manual events
 
 ```json
 {
@@ -84,7 +84,7 @@ Counter-clockwise 45 degrees:
 }
 ```
 
-### Pinch Out with interpolation — smooth version
+### Pinch Out with interpolation: smooth version
 
 ```json
 {
@@ -111,4 +111,4 @@ Counter-clockwise 45 degrees:
 }
 ```
 
-Add a `delayMs` on the first `Move` to simulate a hold before dragging — this is required for some drag-and-drop implementations that only activate after a sustained press.
+Add a `delayMs` on the first `Move` to simulate a hold before dragging; this is required for some drag-and-drop implementations that only activate after a sustained press.

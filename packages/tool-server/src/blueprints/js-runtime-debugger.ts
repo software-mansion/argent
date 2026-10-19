@@ -272,8 +272,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * exception breakpoints a user set, from a tool they did not run. The client
      * that owns the session owns its global state.
      *
-     * The rest are unconditional. Enables are idempotent, and a binding only
-     * adds one. Other clients can ignore it by name.
+     * The remaining setup only affects Argent's client. Enables are idempotent,
+     * and a binding only adds one. Other clients can ignore it by name.
      */
     if (!proxied) {
       await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
@@ -281,11 +281,21 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
     await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
     await cdp.send("Runtime.enable");
-    await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
+    // Metro can inline a full source map on Debugger.enable. Only skip it for
+    // targets advertising the modern inspector: legacy Hermes (RN <= 0.72,
+    // including Vega) requires it for evaluation. A reactNative block alone
+    // does not prove the runtime uses the modern inspector.
+    const enableDebugger =
+      !!proxied || selected.target.reactNative?.capabilities?.prefersFuseboxFrontend !== true;
+    if (enableDebugger) {
+      await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
+    }
 
     if (!proxied) {
-      await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
-      await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+      if (enableDebugger) {
+        await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
+        await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+      }
       await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
     }
 
@@ -369,26 +379,31 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     return {
       api,
       dispose: async () => {
-        // `logWriter.close()` below unlinks the log file, and this dispose is
-        // routinely another agent's `stop-all-simulator-servers`. Breadcrumb so
-        // `debugger-log-registry`'s bare `totalEntries: 0` can explain the lost
-        // history — only when there was history to lose, and under both ids,
-        // since `forgetDeviceAlias` below drops the only join between them.
+        // `logWriter.close()` below unlinks the log file unless the socket
+        // dropped (likely an app crash, so the log is evidence), and this
+        // dispose is routinely another agent's `stop-all-simulator-servers`.
+        // Breadcrumb so `debugger-log-registry` can say where the history went
+        // — only when there was history, and under both ids, since
+        // `forgetDeviceAlias` below drops the only join between them.
         const captured = logWriter.getStats().totalEntries;
+        const keepFile = captured > 0 && !cdp.isConnected();
         if (captured > 0) {
-          const salvage =
-            `The ${captured} captured console ${captured === 1 ? "entry" : "entries"} went with ` +
-            `it — the log file is deleted on teardown, so this registry starts empty rather ` +
-            `than the app having logged nothing.`;
-          recordReapedSession("js-runtime-debugger", deviceId, salvage);
-          if (api.logicalDeviceId && api.logicalDeviceId !== deviceId) {
-            recordReapedSession("js-runtime-debugger", api.logicalDeviceId, salvage);
-          }
+          const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
+          const salvage = keepFile
+            ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
+            : `The ${entries} went with it — the log file is deleted on teardown, so this ` +
+              `registry starts empty rather than the app having logged nothing.`;
+          recordReapedSession(
+            "js-runtime-debugger",
+            [deviceId, api.logicalDeviceId],
+            salvage,
+            keepFile
+          );
         }
         forgetDeviceAlias(api.logicalDeviceId);
         forgetLogicalKeyedDevice(deviceId);
         await consoleServer.close();
-        logWriter.close();
+        logWriter.close({ keepFile });
         await cdp.disconnect();
       },
       events,

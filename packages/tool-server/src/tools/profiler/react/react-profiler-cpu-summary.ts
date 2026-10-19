@@ -125,7 +125,7 @@ export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchem
       `Failed to summarize React CPU profile: ${failureSignal.error_code}`,
   },
   description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
-FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call this as part of a normal profiling session.
+FOR DEDICATED CPU INVESTIGATION ONLY: do NOT call this as part of a normal profiling session.
 Use react-profiler-analyze instead; it covers all React rendering performance analysis.
 Use when you specifically need to investigate JS CPU hotspots that are NOT tied to React rendering (e.g. regex slowness, cryptography, heavy computations).
 Call react-profiler-stop first. Reads directly from the stored cpuProfile.

@@ -18,6 +18,8 @@ import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeTreeData,
+  type UiOrientation,
+  asUiOrientation,
   parseDescribeResult,
 } from "../describe/contract";
 
@@ -30,6 +32,14 @@ import {
  * `accessible` container into a single leaf (VoiceOver semantics), while every
  * view here carries its `accessibilityIdentifier` (React Native `testID`), so
  * a flow can address a container and its children independently.
+ *
+ * Frames come out in the screen's fixed (portrait-native) space, the space the
+ * simulator takes touches in: each view's `screenFrame`, normalized by the
+ * payload's `screen` size. With a portrait UI that is the window's space too;
+ * with a landscape UI — a rotated device, or a foldable unfolded, whose UI is
+ * landscape on a portrait-native panel — a window-space frame would be the
+ * transposed one, and a tap at it would miss. An injected framework that
+ * predates `screenFrame` still serves `windowFrame`, which is used in its place.
  *
  * Physical devices (`queryIosDeviceFlowTree`): the XCUITest runner accessibility
  * snapshot, the same tree `describe` serves, reshaped into the flow contract.
@@ -55,6 +65,8 @@ interface RawViewNode {
   label?: string;
   frame?: RawRect;
   windowFrame?: RawRect;
+  /** The view in the screen's fixed (portrait-native) point space. */
+  screenFrame?: RawRect;
   hidden?: boolean;
   alpha?: number;
   firstResponder?: boolean;
@@ -102,6 +114,7 @@ function asViewNode(v: unknown): RawViewNode | null {
     label: nonEmptyString(r.label),
     frame: asRect(r.frame),
     windowFrame: asRect(r.windowFrame),
+    screenFrame: asRect(r.screenFrame),
     hidden: typeof r.hidden === "boolean" ? r.hidden : undefined,
     alpha: finiteNumber(r.alpha),
     firstResponder: r.firstResponder === true ? true : undefined,
@@ -155,17 +168,17 @@ function projectIosNode(
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
   const role = roleFromClassName(node.className);
 
-  // Scroll-clip inputs (see `flattenHoisting`). Window space only: `frame` is
-  // parent-local, so falling back to it (as the leaf frame does) would compare
-  // rects across coordinate spaces and mis-prune; without a `windowFrame` the
-  // node is never scroll-pruned and, if a scroller, imposes no clip.
-  const win = node.windowFrame;
+  // Scroll-clip inputs (see `flattenHoisting`). Screen (or window) space only:
+  // `frame` is parent-local, so falling back to it (as the leaf frame does)
+  // would compare rects across coordinate spaces and mis-prune; without either
+  // the node is never scroll-pruned and, if a scroller, imposes no clip.
+  const win = node.screenFrame ?? node.windowFrame;
   const rect = win ? { x: win.x, y: win.y, w: win.width, h: win.height } : null;
 
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
   if (!skip && (node.identifier || node.label || role !== "AXGroup" || node.firstResponder)) {
-    const leafRect = node.windowFrame ?? node.frame;
+    const leafRect = node.screenFrame ?? node.windowFrame ?? node.frame;
     frame = leafRect ? normalizeFrame(leafRect, screenW, screenH) : null;
     if (frame) {
       leaf = {
@@ -208,28 +221,48 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
 /**
  * Like {@link adaptFullHierarchyToDescribeResult}, but also reports the screen
  * size (points) the frames were normalized against — the rotate directive needs
- * the aspect ratio for its physical-circle geometry.
+ * the aspect ratio for its physical-circle geometry — and how the UI lies on
+ * that space, for the directives that turn a UI-space direction into it.
+ *
+ * The orientation is the one the framework reports next to the screen size
+ * (`screen.interfaceOrientation`, as UIKit names interface orientations), not
+ * one told from the frames: a UI made only of full-screen or centred views (a
+ * game, a canvas) frames the same way in both landscape orientations. A
+ * framework that predates `screenFrame` reports neither, and its frames are in
+ * the window's space, where a direction needs no turning.
  */
 function adaptFullHierarchy(raw: unknown): {
   tree: DescribeNode;
   screen?: { width: number; height: number };
+  uiOrientation?: UiOrientation;
 } {
-  const windows =
-    typeof raw === "object" && raw !== null && Array.isArray((raw as { windows?: unknown }).windows)
-      ? (raw as { windows: unknown[] }).windows
-          .map(asViewNode)
-          .filter((n): n is RawViewNode => n !== null)
-      : [];
+  const payload =
+    typeof raw === "object" && raw !== null ? (raw as { windows?: unknown; screen?: unknown }) : {};
+  const reportedScreen =
+    typeof payload.screen === "object" && payload.screen !== null
+      ? (payload.screen as Record<string, unknown>)
+      : undefined;
+  const windows = Array.isArray(payload.windows)
+    ? payload.windows.map(asViewNode).filter((n): n is RawViewNode => n !== null)
+    : [];
 
-  // Screen size is the largest window frame: the key window spans the screen,
-  // so its width/height are the normalization denominators.
+  // The normalization denominators: the screen's fixed (portrait-native) size
+  // when the framework reports it, next to the `screenFrame`s it is for. An
+  // older framework reports neither, and there the largest window frame stands
+  // in: the key window spans the screen.
   let screenW = 0;
   let screenH = 0;
-  for (const win of windows) {
-    const rect = win.frame ?? win.windowFrame;
-    if (rect) {
-      screenW = Math.max(screenW, rect.width);
-      screenH = Math.max(screenH, rect.height);
+  const reported = reportedScreen ? asRect({ ...reportedScreen, x: 0, y: 0 }) : undefined;
+  if (reported && reported.width > 0 && reported.height > 0) {
+    screenW = reported.width;
+    screenH = reported.height;
+  } else {
+    for (const win of windows) {
+      const rect = win.screenFrame ?? win.frame ?? win.windowFrame;
+      if (rect) {
+        screenW = Math.max(screenW, rect.width);
+        screenH = Math.max(screenH, rect.height);
+      }
     }
   }
 
@@ -245,9 +278,13 @@ function adaptFullHierarchy(raw: unknown): {
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
-  return screenW > 0 && screenH > 0
-    ? { tree, screen: { width: screenW, height: screenH } }
-    : { tree };
+  if (!(screenW > 0 && screenH > 0)) return { tree };
+  const uiOrientation = asUiOrientation(reportedScreen?.interfaceOrientation);
+  return {
+    tree,
+    screen: { width: screenW, height: screenH },
+    ...(uiOrientation ? { uiOrientation } : {}),
+  };
 }
 
 /**
@@ -266,6 +303,7 @@ const FULL_HIERARCHY_FIELDS = [
   "label",
   "frame",
   "windowFrame",
+  "screenFrame",
   "hidden",
   "alpha",
   // Read by the type directive's focus wait; an injected framework that omits
@@ -559,8 +597,13 @@ export async function queryFullHierarchyTree(
     );
   }
 
-  const { tree, screen } = adaptFullHierarchy(rawResult);
-  return { tree, source: "native-devtools", ...(screen ? { screen } : {}) };
+  const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
+  return {
+    tree,
+    source: "native-devtools",
+    ...(screen ? { screen } : {}),
+    ...(uiOrientation ? { uiOrientation } : {}),
+  };
 }
 
 function errMsg(err: unknown): string {

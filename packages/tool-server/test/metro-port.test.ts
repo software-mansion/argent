@@ -1,10 +1,10 @@
-import type { ServiceRef, ToolDefinition } from "@argent/registry";
+import { Registry, type ServiceRef, type ToolDefinition } from "@argent/registry";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { debuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
 import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
 import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
 import { debuggerReloadMetroTool } from "../src/tools/debugger/debugger-reload-metro";
@@ -157,7 +157,11 @@ const URN_TOOLS: {
   params: Record<string, unknown>;
   tool: ToolDefinition<any, any>;
 }[] = [
-  { name: "debugger-component-tree", params: {}, tool: debuggerComponentTreeTool },
+  {
+    name: "debugger-component-tree",
+    params: {},
+    tool: createDebuggerComponentTreeTool(new Registry()),
+  },
   { name: "debugger-connect", params: {}, tool: debuggerConnectTool },
   { name: "debugger-inspect-element", params: { x: 1, y: 1 }, tool: debuggerInspectElementTool },
   { name: "debugger-reload-metro", params: {}, tool: debuggerReloadMetroTool },

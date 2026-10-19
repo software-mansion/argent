@@ -31,7 +31,7 @@ const zodSchema = z.object({
     .describe(
       "View fields to include. Defaults: className, frame, hidden, alpha, " +
         "identifier, label, nativeID, userInteractionEnabled, depth. " +
-        "Additional: pointer, tag, windowFrame, bounds, center, opaque, " +
+        "Additional: pointer, tag, windowFrame, screenFrame, bounds, center, opaque, " +
         "clipsToBounds, transform, contentMode, backgroundColor, tintColor, layerName"
     ),
 });
@@ -55,8 +55,8 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
 Use when you need to locate a specific view by its properties without dumping the entire hierarchy.
 Returns { status: "ok", matches } with matching views including their frames, properties, optional ancestors, and optional children. Much more targeted than native-full-hierarchy.
 At least one of className, identifier, label, tag, or nativeID must be provided.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised — follow the message (re-boot the simulator) rather than retrying this tool.
-A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal — never retry it), and the hierarchy query itself can error or time out.`,
+If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
+A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), and the hierarchy query itself can error or time out.`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),

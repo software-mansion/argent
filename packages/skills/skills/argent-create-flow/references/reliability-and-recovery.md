@@ -24,7 +24,7 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 ### Run the gate when capture warns
 
-Work this gate as soon as capture warns that it kept a raw point — and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
+Work this gate as soon as capture warns that it kept a raw point, and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
 
 1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no flow selector exists.
 2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
@@ -53,9 +53,9 @@ Use the same explicit UDID throughout. Multiple booted simulators are not an inj
 
 This fallback applies only to `com.apple.*` system apps. A connection failure in another app never authorizes it.
 
-Argent refuses `com.apple.*` bundle ids at every native-devtools read that names one, because a system app is never the app under test. The instrumentation has been seen both loading and not loading into one, depending on the simulator runtime — either way it is no basis for a selector. `restart-app`, `launch-app`, and `describe` still work on one; it just never gets a flow tree.
+Argent refuses `com.apple.*` bundle ids at every native-devtools read that names one, because a system app is never the app under test. The instrumentation has been seen both loading and not loading into one, depending on the simulator runtime; either way it is no basis for a selector. `restart-app`, `launch-app`, and `describe` still work on one; it just never gets a flow tree.
 
-Give the flow a `launch:` step as usual. On iOS the launch waits the full devtools budget out, then passes for one of these bundle ids: starting the app is all that step is for, and a coordinate-driven flow needs nothing more. The flow stays e2e; it just pays roughly sixteen seconds at the launch. Where the refusal bites is selector resolution, and the first selector step reports it there — terminally, naming the coordinate remedy — rather than as a launch failure. The rest of the tree-free form:
+Give the flow a `launch:` step as usual. On iOS the launch waits the full devtools budget out, then passes for one of these bundle ids: starting the app is all that step is for, and a coordinate-driven flow needs nothing more. The flow stays e2e; it just pays roughly sixteen seconds at the launch. Where the refusal bites is selector resolution, and the first selector step reports it there (terminally, naming the coordinate remedy) rather than as a launch failure. The rest of the tree-free form:
 
 - Raw `tool: await-ui-element` accessibility checks.
 - Point taps or long-presses derived from `describe`, each named by an echo.
@@ -68,7 +68,7 @@ A recorded wait carries a different warning: it adds about one second and report
 
 Report that the flow has no flow tree and its coordinates are not portable. It cannot satisfy the QA contract. Report the artifact and platform blocker instead.
 
-A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id argent refuses outright. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment** — its first step that is neither `echo:` nor `script:` is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
+A normally injectable app that is broken in the environment gets the same coordinate-only treatment, but not the same launch: there the `launch:` step fails, since the gate withholds its verdict only for a bundle id argent refuses outright. Start such a flow with a raw `tool: restart-app`, which terminates and relaunches without the readiness gate, and accept that the result is a **fragment**: its first step that is neither `echo:` nor `script:` is not `launch:`, so the runner never classifies it as e2e, and it cannot complete `argent-qa-flows`, which requires a leading `launch:`. Report the blocker rather than labeling that fallback a completed QA test.
 
 ## Tree source recovery on Android, Chromium, and Vega
 
@@ -107,15 +107,15 @@ Keep a dismissal swipe only when the UI supports it. Pass it through the coordin
 
 Classify before editing:
 
-| Outcome            | Meaning                                        | Response                                                                                                                                                |
-| ------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hard failure       | A step fails and later steps skip              | Inspect that step and actual state                                                                                                                      |
-| Environment error  | The reason says the check could not run        | Repair the environment and rerun; it is no verdict about the app. A failed `launch:` is `errored` too but **is** a verdict — treat it as a hard failure |
-| Silent misfire     | The run passes but final state is wrong        | Restore the first wrong screen and record a stronger gate                                                                                               |
-| Partial divergence | An intermediate result disagrees with its echo | Find the first divergent transition                                                                                                                     |
-| Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                             |
-| Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                      |
-| Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source, usually by relaunching the app; the green says [only that the gesture was sent](flow-yaml.md#directives)                       |
+| Outcome            | Meaning                                        | Response                                                                                                                                               |
+| ------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hard failure       | A step fails and later steps skip              | Inspect that step and actual state                                                                                                                     |
+| Environment error  | The reason says the check could not run        | Repair the environment and rerun; it is no verdict about the app. A failed `launch:` is `errored` too but **is** a verdict; treat it as a hard failure |
+| Silent misfire     | The run passes but final state is wrong        | Restore the first wrong screen and record a stronger gate                                                                                              |
+| Partial divergence | An intermediate result disagrees with its echo | Find the first divergent transition                                                                                                                    |
+| Acceptance failure | Actions pass but a requested check fails       | Preserve the check and investigate behavior                                                                                                            |
+| Idle warning       | A readiness step passes without settling       | Read [which of the six warnings](flow-yaml.md#idle-readiness) it is, then gate the next action on a stable element                                     |
+| Unsettled gesture  | A selector-less gesture passes unsettled       | Restore the tree source, usually by relaunching the app; the green says [only that the gesture was sent](flow-yaml.md#directives)                      |
 
 Then:
 

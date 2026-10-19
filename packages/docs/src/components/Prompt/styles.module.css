@@ -1,0 +1,95 @@
+/*
+ * The panel takes the shape language of the code blocks: a flat surface on the
+ * secondary background with the large radius, no border and no shadow. The
+ * header carries the highlight color the way the sidebar icons do.
+ */
+.panel {
+  margin: 24px 0;
+  border-radius: var(--swm-radius);
+  background-color: var(--swm-off-background);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px 0;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--swm-body-font);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--swm-purple-light-100);
+}
+
+:root[data-theme="dark"] .label {
+  color: var(--swm-purple-dark-100);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: var(--swm-body-font);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ifm-font-color-base);
+  background-color: var(--swm-background);
+  border: 1px solid var(--swm-border);
+  border-radius: var(--swm-radius);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.button:hover {
+  border-color: var(--swm-purple-light-100);
+}
+
+:root[data-theme="dark"] .button:hover {
+  border-color: var(--swm-purple-dark-100);
+}
+
+.bodyWrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+/* The fade tells the reader that the panel holds more than it shows. */
+.collapsed::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 64px;
+  background: linear-gradient(to bottom, transparent, var(--swm-off-background));
+  pointer-events: none;
+}
+
+.body {
+  margin: 0;
+  padding: 12px 20px 16px;
+  font-family: var(--swm-code-font);
+  font-size: var(--ifm-code-font-size);
+  line-height: 1.6;
+  color: var(--ifm-font-color-base);
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.footer {
+  display: flex;
+  justify-content: center;
+  padding: 0 20px 14px;
+}

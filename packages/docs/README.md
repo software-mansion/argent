@@ -22,7 +22,9 @@ npm run serve    # serve the production build
 
 | Path              | Contents                                                              |
 | ----------------- | --------------------------------------------------------------------- |
-| `docs/`           | Documentation pages (MDX), grouped into sidebar categories            |
+| `products.js`     | The products the site documents, one docs instance and sidebar each   |
+| `docs/`           | Argent pages (MDX), grouped into sidebar categories                   |
+| `docs/cloud/`     | Argent Cloud pages, same layout, served at `/docs/cloud/`             |
 | `src/pages/`      | The root route, which redirects into the docs                         |
 | `src/css/`        | Argent color palette, typography and theme overrides                  |
 | `src/components/` | Components used from MDX, registered in `src/theme/MDXComponents.tsx` |

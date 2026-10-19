@@ -225,6 +225,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     case "scroll-to":
     case "pinch":
     case "rotate":
+    case "fold":
     case "snapshot":
       return true;
     default: {

@@ -805,8 +805,10 @@ describe("a recording this server cannot reach", () => {
 
     expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
     expect(signal?.failure_stage).toBe("flow_add_script_client_mode");
-    expect(message).toContain('Cannot access the script for flow "remote"');
-    expect(message).toContain("add the `script:` step to the YAML");
+    expect(message).toContain(
+      'Cannot add a script step to flow "remote": the recording is over a link'
+    );
+    expect(message).toContain("Nothing ran and no step was recorded.");
     await expect(fs.stat(marker)).rejects.toThrow();
     await expect(fs.stat(CLIENT_ROOT)).rejects.toThrow();
     expect((await getRecordingSession(CLIENT_ROOT, "remote"))?.flow.steps).toEqual([]);

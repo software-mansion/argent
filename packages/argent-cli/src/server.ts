@@ -83,8 +83,13 @@ async function stopCmd(paths?: ToolsServerPaths): Promise<void> {
     if (foreign) console.log(`${foreign}\nStop one with: kill <pid>`);
     return;
   }
-  await killToolServer(paths?.bundlePath);
-  console.log(`tool-server stopped (pid ${state.pid}).`);
+  if (await killToolServer(paths?.bundlePath)) {
+    console.log(`tool-server stopped (pid ${state.pid}).`);
+  } else {
+    console.log(
+      `tool-server: not running (pid ${state.pid} is gone or not an argent tool-server).`
+    );
+  }
 }
 
 function logsCmd(follow: boolean): void {
@@ -459,6 +464,15 @@ function signalNumber(signal: NodeJS.Signals): number | null {
   return map[signal] ?? null;
 }
 
+function printServerHelp(): void {
+  console.log(`Usage:
+  argent server start [flags]     Spawn a long-lived tool-server (see --help)
+  argent server status [--json]   Show tool-server pid, port, and health
+  argent server stop              Terminate the running tool-server
+  argent server logs [-f]         Print (or follow) the tool-server log
+`);
+}
+
 export async function server(
   argv: string[],
   options?: { paths?: ToolsServerPaths }
@@ -468,18 +482,22 @@ export async function server(
   const follow = argv.includes("-f") || argv.includes("--follow");
 
   if (!sub || sub === "--help" || sub === "-h") {
-    console.log(`Usage:
-  argent server start [flags]     Spawn a long-lived tool-server (see --help)
-  argent server status [--json]   Show tool-server pid, port, and health
-  argent server stop              Terminate the running tool-server
-  argent server logs [-f]         Print (or follow) the tool-server log
-`);
+    printServerHelp();
+    return;
+  }
+
+  // `start` has its own flags and help. The rest act on a live server, so
+  // `--help` must short-circuit before `stop` kills it or `logs` dumps the file.
+  const rest = argv.slice(1);
+  const actsOnServer = sub === "status" || sub === "stop" || sub === "logs";
+  if (actsOnServer && (rest.includes("--help") || rest.includes("-h"))) {
+    printServerHelp();
     return;
   }
 
   switch (sub) {
     case "start":
-      await startCmd(argv.slice(1), options?.paths);
+      await startCmd(rest, options?.paths);
       return;
     case "status":
       await statusCmd(json, options?.paths);

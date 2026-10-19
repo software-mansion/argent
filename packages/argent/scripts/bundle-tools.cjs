@@ -39,6 +39,10 @@ const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
+// Bundled over tsc's emit of src/client.ts, which imports private workspace
+// packages; tsc's client.d.ts is kept as the public types.
+const CLIENT_ENTRY = path.resolve(__dirname, "../src/client.ts");
+const CLIENT_OUT_FILE = path.resolve(__dirname, "../dist/client.js");
 const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/main.cjs");
 
 // Resolve workspace deps from source rather than each package's compiled dist/,
@@ -558,6 +562,13 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // back to a literal and then chokes on dtrace-provider's own dynamic native
 // binding require. External restores bunyan's intent: the published package
 // never declares it, so the require misses and bunyan nulls it out.
+//
+// `sharp` is the optional Chromium screenshot post-processor: the tool-server
+// `require("sharp")`s it inside a try/catch and skips scale / rotation when it
+// is absent. It is never declared here, so in CI esbuild leaves the require
+// alone — but a developer with sharp in node_modules (e.g. installed to test
+// that path) would have the bundle inline its native addon and fail. External
+// keeps the runtime require resolving against whatever the user installed.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -570,6 +581,7 @@ buildBundle({
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
     "dtrace-provider",
+    "sharp",
   ],
 });
 
@@ -584,9 +596,17 @@ const ESM_BUNDLES = [
   // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
   // null → lens falls back to a new terminal window.
   { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
+  // `@swmansion/argent/client`, the programmatic tool-server client.
+  { entry: CLIENT_ENTRY, out: CLIENT_OUT_FILE, label: "client" },
 ];
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });
+}
+// tsc's map describes its own client.js, which the bundle above replaced. The
+// generated tool args are types only, so only their .d.ts ships.
+fs.rmSync(`${CLIENT_OUT_FILE}.map`, { force: true });
+for (const ext of [".js", ".js.map"]) {
+  fs.rmSync(path.join(path.dirname(CLIENT_OUT_FILE), `tool-args.generated${ext}`), { force: true });
 }
 
 for (const a of ASSETS) {

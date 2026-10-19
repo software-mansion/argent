@@ -60,8 +60,7 @@ export async function resolveLauncherActivity(
   bundleId: string,
   isTv = false
 ): Promise<string> {
-  // Surfaced in the failure message: distinguishes empty output (app not
-  // installed) from a wrong component shape (only the system resolver matched).
+  // Surfaced in the failure message, e.g. to show only the system resolver matched.
   let lastRaw = "";
   const resolveFor = async (category?: string): Promise<string | null> => {
     const intent = category ? ` -c ${shellQuote(category)}` : "";
@@ -81,9 +80,12 @@ export async function resolveLauncherActivity(
   const launcher = await resolveFor();
   if (launcher) return launcher;
 
+  const pmPath = await adbShell(udid, `pm path ${shellQuote(bundleId)}; true`);
   throw new FailureError(
     `Could not resolve a ${isTv ? "LEANBACK_LAUNCHER or LAUNCHER" : "LAUNCHER"} activity for ${bundleId}. ` +
-      `Install the app first, or pass an explicit \`activity\`. ` +
+      (pmPath.includes("package:")
+        ? `It is installed but declares no such activity: pass an explicit \`activity\`. `
+        : `It is not installed on ${udid}: install it with \`reinstall-app\`. `) +
       `(resolve-activity output: ${lastRaw.trim() || "empty"})`,
     {
       error_code: FAILURE_CODES.ANDROID_LAUNCH_ACTIVITY_RESOLVE_FAILED,

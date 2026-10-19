@@ -5,11 +5,11 @@ import { requireRecordingSession, appendStepToFlow, type FlowSavedTo } from "./f
 const zodSchema = z.object({
   name: z
     .string()
-    .describe("Name of the flow being recorded — the one passed to flow-start-recording."),
+    .describe("Name of the flow being recorded: the one passed to flow-start-recording."),
   project_root: z
     .string()
     .describe(
-      "Absolute path to the project root of the flow being recorded — the same value passed to flow-start-recording. Together with `name` it identifies which recording this echo belongs to."
+      "Absolute path to the project root of the flow being recorded: the same value passed to flow-start-recording. Together with `name` it identifies which recording this echo belongs to."
     ),
   message: z.string().describe("Message to echo when the flow is replayed"),
 });
@@ -26,7 +26,7 @@ export const flowInsertEchoTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add note to flow ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Record an echo step in the flow named by \`name\` + \`project_root\`. Echo steps print a message when the flow is replayed — useful as labels between tool calls.
+  description: `Record an echo step in the flow named by \`name\` + \`project_root\`. Echo steps print a message when the flow is replayed, useful as labels between tool calls.
 Use when you want to annotate a recorded flow with a human-readable label or checkpoint message.
 Returns { message, stepCount, savedTo }. Fails if that flow has no recording in progress.`,
   zodSchema,

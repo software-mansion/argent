@@ -113,7 +113,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial) — the same id used with debugger-connect."
+      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
     ),
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])
@@ -134,7 +134,7 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) interception is injected into the JS runtime — it records each request once: XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that replaces the global fetch and Response, such as react-native-fetch-api (callers that get copies of one response keep one record; a text-streaming body is not recorded). Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+On React Native (iOS / Android / Vega) interception is injected into the JS runtime: it records each request once: XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that replaces the global fetch and Response, such as react-native-fetch-api (callers that get copies of one response keep one record; a text-streaming body is not recorded). Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,

@@ -11,7 +11,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Max seconds to block this call before returning a re-awaitable { status: 'pending' } " +
-        "result (default 1800). The user's proposals stay live across timeouts — on 'pending' " +
+        "result (default 1800). The user's proposals stay live across timeouts; on 'pending' " +
         "just call await_user_selection again. Lower this if your MCP client enforces a short " +
         "request timeout."
     ),
@@ -42,15 +42,15 @@ that opens automatically on the user's screen), then returns their choices and a
 Returns one of:
   • { status: "completed", round, selections: [{ element, chosenVariant, comment? }], unselected,
       annotations: [{ target, match, comment }], globalComment, morePending? }
-        — the user finished this round; apply chosenVariant for each element (skip ones in
+        The user finished this round; apply chosenVariant for each element (skip ones in
         \`unselected\`). \`annotations\` are free-form comments the user pinned to specific on-screen
-        elements via the inspector — treat each as a change request for that element.
+        elements via the inspector; treat each as a change request for that element.
         If \`morePending\` is true, another already-decided round or a freshly-staged round is
-        still waiting — call await_user_selection AGAIN (repeat until you get a completed result
+        still waiting. Call await_user_selection AGAIN (repeat until you get a completed result
         without \`morePending\`, a \`pending\`, or \`no_proposals\`); do not stop on this result alone.
-  • { status: "pending", message, proposedElements } — timeoutSeconds elapsed with no submission.
+  • { status: "pending", message, proposedElements }: timeoutSeconds elapsed with no submission.
         Expected, not an error: the proposals are still live; call await_user_selection AGAIN.
-  • { status: "no_proposals" } — you called this before propose_variant.
+  • { status: "no_proposals" }: you called this before propose_variant.
 
 This tool is long-running; it intentionally holds the request open. It honors client
 disconnects (aborts cleanly).`,

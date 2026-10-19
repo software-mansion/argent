@@ -88,6 +88,11 @@ interface Result {
    * side effect. Set only when true.
    */
   reactivated?: true;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the swipe went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
 }
 
 // Touch platforms only: on a desktop renderer a mouse drag selects text instead
@@ -112,7 +117,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
-Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
+Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium; use gesture-scroll there instead.
 Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.
 Pass momentum:false for a momentum-free swipe that lands where the finger lifts (little to no fling at the 300 default), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. At 150 it lands short of the lift point instead, and 2 of 47 runs still flung backwards. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
@@ -167,6 +172,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
     // here. Flooring the count would only turn durationMs into a lie.
     const steps = Math.max(1, Math.round(duration / 16));
     // Last dispatched sample, so an abort can lift from where the finger is.
+    let warning: string | undefined;
     let lastX = 0;
     let lastY = 0;
     // Neither touch backend delivers the Up's coordinates: on both, the finger
@@ -225,7 +231,7 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
           second_y: null,
         });
       }
-      await sendCommand(api, {
+      const sent = await sendCommand(api, {
         cmd: "touch",
         type,
         x,
@@ -233,11 +239,13 @@ Pass momentum:false for a momentum-free swipe that lands where the finger lifts 
         second_x: null,
         second_y: null,
       });
+      // Only the Down resolves the panel; the rest of the sequence keeps it.
+      if (type === "Down") warning = sent.warning;
       lastX = x;
       lastY = y;
       if (i < steps) await sleep(16);
     }
 
-    return { swiped: true, timestampMs };
+    return { swiped: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
   },
 };

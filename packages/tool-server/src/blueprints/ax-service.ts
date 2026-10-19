@@ -5,6 +5,7 @@ import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-
 import {
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   TypedEventEmitter,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -63,13 +64,100 @@ export interface AXDescribeResponse {
   elements: AXDescribeElement[];
 }
 
+/** A `tree` node, in document order; `parentIndex` names its accessibility parent. */
+export interface AXTreeNode extends AXDescribeElement {
+  index: number;
+  parentIndex?: number;
+  roleDescription?: string;
+  covered?: boolean;
+  /** An XCUIElementType value. */
+  elementType?: number;
+  placeholder?: string;
+  /** The input shows its placeholder: it holds no text, and `value` is the placeholder. */
+  hintShowing?: boolean;
+  /** Roots only. */
+  bundleId?: string;
+}
+
+export interface AXTreeResponse {
+  alertVisible: boolean;
+  screenFrame?: { width: number; height: number };
+  nodes: AXTreeNode[];
+  truncated: boolean;
+  foregroundApp?: string;
+  /** 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId. */
+  treeVersion?: number;
+}
+
+export interface AXForegroundAppResponse {
+  alertVisible: boolean;
+  bundleId?: string;
+  name?: string;
+}
+
+/** The `fill` command's answer. Never carries text: only whether it matched. */
+export interface AXFillResponse {
+  /** False when nothing holds keyboard focus. */
+  focused: boolean;
+  /** The focused input now holds the requested text (a secure field: as many bullets). */
+  verified: boolean;
+  /** A clear the field ignored with its text still selected; one backspace removes it. */
+  needsBackspace?: boolean;
+  /**
+   * A native secure field, which drops inserted text. The daemon cleared it
+   * (`cleared` says whether that read back) for the caller to type into, or
+   * left it untouched when the caller said it cannot type the text.
+   */
+  secure?: boolean;
+  cleared?: boolean;
+  /** The focused element is no text input: a web date or time input. Nothing was changed. */
+  unsupported?: boolean;
+  /** The text has a line break and the field holds one line. Nothing was changed. */
+  singleLine?: boolean;
+  /** The daemon or the app did not answer in time: the field may have changed. */
+  timedOut?: boolean;
+  /** The selection never covered the text, so nothing was changed. */
+  untouched?: boolean;
+}
+
 export interface AXServiceApi {
   /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
   degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
+  /** The front app's full hierarchy; while a system alert shows, the system app first and the app under it second. */
+  tree(): Promise<AXTreeResponse>;
+  /** Which app is in front, without a tree walk. */
+  foregroundApp(): Promise<AXForegroundAppResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
+  /**
+   * Set the focused input's text ("" clears it) through the AX text
+   * operations, then read it back; with `check`, only read it back. Fails when
+   * the daemon predates the command.
+   */
+  fill(text: string, options?: { check?: boolean; typeable?: boolean }): Promise<AXFillResponse>;
+  /**
+   * The display id of the panel the guest renders to (1 the cover panel, 3
+   * the inner one on the iPhone Duo): the panel `describe` reads its tree on.
+   * Null when the daemon names none, as on a device with one panel. Answered
+   * in a few milliseconds; every touch of a foldable asks it
+   * (`utils/foldable.ts`), so its budget is short. A daemon build that
+   * predates the command answers an error.
+   */
+  livePanel(): Promise<number | null>;
 }
+
+/**
+ * How long `live_panel` gets: a healthy daemon answers in a few milliseconds,
+ * and a caller that asks before every touch must not wait on one that hangs.
+ */
+const LIVE_PANEL_TIMEOUT_MS = 2_000;
+
+/**
+ * The daemon answers `fill` within its own 3 s budget; this only catches a
+ * daemon whose main thread is held by another command against a hung app.
+ */
+const FILL_TIMEOUT_MS = 6_000;
 
 function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
@@ -386,7 +474,11 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       throw err;
     }
 
-    function query(command: string, timeoutMs = 5000): Promise<unknown> {
+    function query(
+      command: string,
+      timeoutMs = 5000,
+      params?: Record<string, unknown>
+    ): Promise<unknown> {
       return new Promise((resolve, reject) => {
         if (!daemonSocket || daemonSocket.destroyed) {
           reject(
@@ -414,7 +506,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           }
         }, timeoutMs);
         pendingRpc.set(id, { resolve, reject, timer });
-        daemonSocket.write(JSON.stringify({ id, command }) + "\n");
+        daemonSocket.write(
+          JSON.stringify(params === undefined ? { id, command } : { id, command, params }) + "\n"
+        );
       });
     }
 
@@ -437,6 +531,112 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
+        };
+      },
+
+      async tree(): Promise<AXTreeResponse> {
+        let result: Partial<AXTreeResponse>;
+        try {
+          result = (await query("tree", 10_000)) as Partial<AXTreeResponse>;
+        } catch (err) {
+          // A daemon that predates `tree` answers an envelope-level error.
+          if (!(err instanceof Error) || err.message !== "unknown_command") throw err;
+          throw new FailureError("ax-service predates `tree`; update argent", {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_tree",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return {
+          alertVisible: result.alertVisible ?? false,
+          screenFrame: result.screenFrame,
+          nodes: result.nodes ?? [],
+          truncated: result.truncated === true,
+          foregroundApp: result.foregroundApp,
+          treeVersion: result.treeVersion,
+        };
+      },
+
+      async foregroundApp(): Promise<AXForegroundAppResponse> {
+        return (await query("foreground_app")) as AXForegroundAppResponse;
+      },
+
+      async livePanel(): Promise<number | null> {
+        const result = (await query("live_panel", LIVE_PANEL_TIMEOUT_MS)) as {
+          displayId?: number | null;
+          error?: string;
+        };
+        if (result.error) {
+          throw new FailureError(`ax-service live_panel error: ${result.error}`, {
+            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            failure_stage: "ax_service_live_panel",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        return typeof result.displayId === "number" && result.displayId > 0
+          ? result.displayId
+          : null;
+      },
+
+      async fill(
+        text: string,
+        options: { check?: boolean; typeable?: boolean } = {}
+      ): Promise<AXFillResponse> {
+        let result: {
+          verified?: boolean;
+          needsBackspace?: boolean;
+          secure?: boolean;
+          cleared?: boolean;
+          untouched?: boolean;
+        };
+        try {
+          result = (await query("fill", FILL_TIMEOUT_MS, {
+            text,
+            ...(options.check ? { check: true } : {}),
+            ...(options.typeable === false ? { typeable: false } : {}),
+          })) as typeof result;
+        } catch (err) {
+          // Envelope-level errors carry only the daemon's code, never text.
+          const code = err instanceof Error ? err.message : "";
+          if (code === "unknown_command") {
+            throw new FailureError("ax-service predates `fill`; update argent", {
+              error_code: FAILURE_CODES.AX_QUERY_FAILED,
+              failure_stage: "ax_service_fill",
+              failure_area: "tool_server",
+              error_kind: "unknown",
+            });
+          }
+          // A focused element that takes no text is no field to fill either.
+          if (code === "no_focused_field" || code === "not_editable") {
+            return { focused: false, verified: false };
+          }
+          if (code === "unsupported_field") {
+            return { focused: true, verified: false, unsupported: true };
+          }
+          if (code === "single_line") return { focused: true, verified: false, singleLine: true };
+          // The edit threw, ran out of its budget, or overlapped one that did:
+          // the field's state is unknown. A daemon that did not answer at all
+          // is the same verdict.
+          if (code === "select_failed") return { focused: true, verified: false, untouched: true };
+          if (code === "fill_failed") return { focused: true, verified: false };
+          if (
+            code === "fill_timeout" ||
+            code === "fill_busy" ||
+            getFailureSignal(err)?.error_code === FAILURE_CODES.AX_QUERY_TIMEOUT
+          ) {
+            return { focused: true, verified: false, timedOut: true };
+          }
+          throw err;
+        }
+        return {
+          focused: true,
+          verified: result.verified === true,
+          ...(result.needsBackspace === true ? { needsBackspace: true } : {}),
+          ...(result.secure === true ? { secure: true } : {}),
+          ...(typeof result.cleared === "boolean" ? { cleared: result.cleared } : {}),
+          ...(result.untouched === true ? { untouched: true } : {}),
         };
       },
 

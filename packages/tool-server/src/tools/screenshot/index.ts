@@ -7,7 +7,22 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
-import { getScreenshotScale } from "../../utils/simulator-client";
+import {
+  RESULT_NOTE_KEY,
+  requestedGeometry,
+  chromiumDropNote,
+  unsupportedDropNote,
+} from "./dropped-geometry";
+import {
+  getScreenshotScale,
+  getScreenshotScaleOverride,
+  httpScreenshot,
+  resolveCapturePanel,
+  TV_DEFAULT_LONG_SIDE,
+  tvDefaultScale,
+} from "../../utils/simulator-client";
+import { isAndroidTv } from "../../utils/adb";
+import { getAndroidScreenSize } from "../../utils/android-screen";
 import { captureScreenshotUpright } from "../../utils/rotation-aware-capture";
 import { androidDevtoolsRotationPeek } from "../../utils/android-devtools-rotation-peek";
 import { isTvOsSimulator } from "../../utils/ios-devices";
@@ -41,6 +56,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android. " +
+        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture); an Android TV whose form factor or display size cannot be read in time keeps 0.25. " +
         "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
@@ -48,7 +64,7 @@ const zodSchema = z.object({
     .optional()
     .default(true)
     .describe(
-      "Default true. Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff — the file is still written, but the image bytes are not attached to the agent context."
+      "Default true. Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff. The file is still written, but the image bytes are not attached to the agent context."
     ),
   downscaler: z
     .enum(["lanczos3", "box", "bilinear", "nearest"])
@@ -62,11 +78,24 @@ type Params = z.infer<typeof zodSchema>;
 
 interface Result {
   /**
-   * Captured PNG as an artifact handle: the MCP client materializes it locally
-   * rather than fetching the simulator server's `127.0.0.1` media URL, which is
-   * unreachable when the tool-server is remote.
+   * Set only when the caller asked for geometry the backend could not apply.
+   * `http.ts` hoists this reserved key into the response envelope's `note`,
+   * which every client already renders — the result body itself is discarded
+   * for image-output tools.
    */
-  image: ArtifactHandle;
+  [RESULT_NOTE_KEY]?: string;
+  /**
+   * The captured PNG as an artifact handle. The MCP client materializes it to
+   * a local file and renders it inline — no second fetch of the simulator
+   * server's `127.0.0.1` media URL, which is unreachable when the tool-server
+   * is remote.
+   */
+  image: ArtifactHandle; /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the capture is of the cover panel. The note above says
+   * the same; this rides the field the flow `snapshot` step reports.
+   */
+  warning?: string;
 }
 
 const capability: ToolCapability = {
@@ -102,15 +131,15 @@ async function iosPhysicalScreenshot(
 
 /**
  * tvOS screenshot path: simulator-server has no tvOS backend, so capture with
- * `xcrun simctl io <udid> screenshot` and downscale via `sips` to match the
- * iOS/Android scale behaviour.
+ * `xcrun simctl io <udid> screenshot` and downscale via `sips`. An undefined
+ * `scale` downscales to {@link TV_DEFAULT_LONG_SIDE}.
  *
  * Exported for the flow settle, which captures for motion detection rather than
  * for an artifact and so cannot go through the tool.
  */
 export async function tvScreenshot(
   udid: string,
-  scale: number,
+  scale: number | undefined,
   signal: AbortSignal | undefined
 ): Promise<string> {
   const file = path.join(
@@ -125,7 +154,7 @@ export async function tvScreenshot(
   // `sips -Z` caps the longest *actual* side, and capture size isn't fixed (4K
   // sim is 3840 wide, non-4K is 1920), so scale against the real dimensions — a
   // hardcoded 3840 would double the scale on a 1920 capture.
-  if (scale < 1.0) {
+  if (scale === undefined || scale < 1.0) {
     await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
       signal,
     }).catch(() => {
@@ -136,9 +165,10 @@ export async function tvScreenshot(
   return file;
 }
 
-// Longest actual side × scale, falling back to the 4K long side if the
-// dimension probe fails.
-export async function tvTargetLongSide(file: string, scale: number): Promise<number> {
+// Longest actual side × scale (or TV_DEFAULT_LONG_SIDE, never upscaling, when
+// scale is undefined), falling back to the 4K long side if the dimension probe
+// fails.
+export async function tvTargetLongSide(file: string, scale: number | undefined): Promise<number> {
   let longSide = 3840;
 
   try {
@@ -153,7 +183,43 @@ export async function tvTargetLongSide(file: string, scale: number): Promise<num
     /* probe failed — keep the 4K fallback */
   }
 
-  return Math.round(longSide * scale);
+  return scale === undefined
+    ? Math.min(TV_DEFAULT_LONG_SIDE, longSide)
+    : Math.round(longSide * scale);
+}
+
+// The probes' own adb timeouts sum to ~45 s (`adb devices` alone may wait 30 s),
+// so uncapped, a wedged adb would stall a capture that needs no probe.
+export const ANDROID_TV_PROBE_BUDGET_MS = 2_000;
+
+/**
+ * The default scale of an Android TV capture, or undefined for any other Android
+ * target or when `ARGENT_SCREENSHOT_SCALE` is set. Undefined too when a probe
+ * fails, or is still running once both {@link ANDROID_TV_PROBE_BUDGET_MS} and
+ * `notBefore` (the capture's own setup, which it cannot start sooner than) have
+ * passed. That leaves the capture at the general default rather than failing it.
+ */
+async function androidTvDefaultScale(
+  serial: string,
+  notBefore: Promise<unknown>
+): Promise<number | undefined> {
+  if (getScreenshotScaleOverride() !== undefined) return undefined;
+  const probe = Promise.all([
+    isAndroidTv(serial).catch(() => false),
+    getAndroidScreenSize(serial).catch(() => undefined),
+  ]).then(([isTv, size]) => (isTv && size ? tvDefaultScale(size.width, size.height) : undefined));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ANDROID_TV_PROBE_BUDGET_MS);
+  });
+  try {
+    return await Promise.race([
+      probe,
+      Promise.all([budget, notBefore.catch(() => {})]).then(() => undefined),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -204,17 +270,22 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       if (device.platform === "chromium") {
         const ref = chromiumCdpRef(device);
         const chromium = (await registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
-        const { path: capturedPath } = await chromium.captureScreenshot({
+        const captured = await chromium.captureScreenshot({
           rotation: params.rotation,
           scale: params.scale,
           downscaler: params.downscaler,
         });
         const image = await requireArtifacts(ctx).register({
-          hostPath: capturedPath,
+          hostPath: captured.path,
           kind: "screenshot",
           mimeType: "image/png",
         });
-        return { image };
+        // Only report what the caller asked for AND the backend dropped: a
+        // visual snapshot passes scale 1, which is a no-op, not a loss.
+        const requested = requestedGeometry(params);
+        const dropped = (captured.droppedFeatures ?? []).filter((f) => requested.includes(f));
+        const note = chromiumDropNote(dropped, captured.dropReason);
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       // Physical devices use the runner. Probe tvOS only after this. simctl does not list hardware UDIDs.
@@ -225,19 +296,34 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           kind: "screenshot",
           mimeType: "image/png",
         });
-        return { image };
+        // The runner capture is downscaled but never rotated.
+        const note = unsupportedDropNote(
+          requestedGeometry(params).filter((f) => f === "rotation"),
+          "physical iPhone"
+        );
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       // Shape alone can't tell tvOS from iOS, and tvOS has no simulator-server
       // backend.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
-        const pngPath = await tvScreenshot(params.udid, scale, signal);
+        const pngPath = await tvScreenshot(
+          params.udid,
+          params.scale ?? getScreenshotScaleOverride(),
+          signal
+        );
         const image = await requireArtifacts(ctx).register({
           hostPath: pngPath,
           kind: "screenshot",
           mimeType: "image/png",
         });
-        return { image };
+        // tvScreenshot has no rotation step at all, so an explicit rotation is
+        // dropped before any capture happens.
+        const note = unsupportedDropNote(
+          requestedGeometry(params).filter((f) => f === "rotation"),
+          "Apple TV"
+        );
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       // Vega captures host-side via the Android emulator console (`adb emu`);
@@ -249,18 +335,32 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           kind: "screenshot",
           mimeType: "image/png",
         });
-        return { image };
+        const note = unsupportedDropNote(
+          requestedGeometry(params).filter((f) => f === "rotation"),
+          "Vega (Fire TV)"
+        );
+        return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
       }
 
       const ref = simulatorServerRef(device);
-      const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
+      const apiReady = registry.resolveService(ref.urn, ref.options) as Promise<SimulatorServerApi>;
+      const [api, androidTvScale] = await Promise.all([
+        apiReady,
+        params.scale === undefined && device.platform === "android"
+          ? androidTvDefaultScale(device.id, apiReady)
+          : undefined,
+      ]);
+      // On a foldable the panel is resolved now, whoever moved the hinge, and
+      // handed to the capture. The server cannot say which panel a frame is
+      // from, so the result names it.
+      const panel = await resolveCapturePanel(api);
       const { path: capturedPath } = await captureScreenshotUpright(
         api,
         device,
         params.rotation,
         signal,
-        params.scale,
-        undefined,
+        params.scale ?? androidTvScale,
+        panel ? (a, r, s, sc) => httpScreenshot(a, r, s, sc, panel.screen) : undefined,
         androidDevtoolsRotationPeek(registry, device)
       );
       const image = await requireArtifacts(ctx).register({
@@ -268,7 +368,11 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         kind: "screenshot",
         mimeType: "image/png",
       });
-      return { image };
+      return {
+        image,
+        ...(panel ? { [RESULT_NOTE_KEY]: panel.note } : {}),
+        ...(panel?.warning !== undefined ? { warning: panel.warning } : {}),
+      };
     },
   };
 }

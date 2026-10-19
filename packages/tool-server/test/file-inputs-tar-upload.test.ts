@@ -1,12 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { FILE_INPUT_MARKER, type FileInputSpec } from "@argent/registry";
+import { FILE_INPUT_MARKER, flowMemberKey, type FileInputSpec } from "@argent/registry";
 import { resolveFileInputs, type UploadEntry } from "../src/file-inputs";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -328,5 +334,210 @@ describe("resolveFileInputs — tar-upload kind", () => {
     ).rejects.toThrow();
 
     await expect(fs.stat(corruptTar)).rejects.toThrow(); // removed despite the failure
+  });
+});
+
+describe("resolveFileInputs — flow members sent through POST /upload", () => {
+  const FLOWS = "/client/proj/.argent/flows";
+  const FLOW_SPEC: FileInputSpec[] = [
+    { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+  ];
+
+  /** Hands each entry over once, as the upload store of the HTTP layer does. */
+  function uploadStore(entries: Record<string, UploadEntry>) {
+    const pending = new Map(Object.entries(entries));
+    const lookup = (id: string): UploadEntry | undefined => {
+      const entry = pending.get(id);
+      pending.delete(id);
+      return entry;
+    };
+    return { pending, lookup };
+  }
+
+  /** The client's tar of one fragment, as POST /upload stores it. */
+  async function fragmentUpload(name: string, write: (file: string) => Promise<void>) {
+    const dir = await fs.mkdtemp(path.join(tmpDir, "fragment-"));
+    await write(path.join(dir, name));
+    const tarPath = path.join(dir, `${name}.tar.gz`);
+    await execFileAsync("tar", ["-czf", tarPath, "-C", dir, name]);
+    return uploadEntry(tarPath);
+  }
+
+  function member(name: string, uploadId: string, entry: UploadEntry, extra = {}) {
+    return {
+      role: "flow",
+      key: flowMemberKey(FLOWS, name),
+      path: `${FLOWS}/${name}`,
+      canonical: `${FLOWS}/${name}`,
+      spelling: { state: "listed" },
+      uploadId,
+      contentHash: entry.sha256,
+      ...extra,
+    };
+  }
+
+  function flowWire(members: unknown[]) {
+    const yaml = "steps:\n  - run: a.yaml\n";
+    return wire({
+      path: `${FLOWS}/root.yaml`,
+      size: Buffer.byteLength(yaml),
+      content: Buffer.from(yaml).toString("base64"),
+      canonical: `${FLOWS}/root.yaml`,
+      spelling: { state: "listed" },
+      members,
+    });
+  }
+
+  const FRAGMENT = "steps:\n  - echo: fragment\n";
+
+  it("keeps the text of an uploaded member and removes its upload", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+    const store = uploadStore({ a });
+
+    const { fileInputs, cleanup } = await resolveFileInputs(
+      { fileInputs: FLOW_SPEC },
+      { flow_path: flowWire([member("a.yaml", "a", a, { size: Buffer.byteLength(FRAGMENT) })]) },
+      store.lookup
+    );
+    cleanups.push(cleanup);
+
+    expect(fileInputs!.flow_path!.members).toEqual({
+      [flowMemberKey(FLOWS, "a.yaml")]: {
+        role: "flow",
+        state: "present",
+        canonical: `${FLOWS}/a.yaml`,
+        spelling: { state: "listed" },
+        text: FRAGMENT,
+      },
+    });
+    await expect(fs.stat(a.tarPath)).rejects.toThrow();
+  });
+
+  it("fails when the uploaded member disagrees with the size the client recorded", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        { flow_path: flowWire([member("a.yaml", "a", a, { size: 5 })]) },
+        uploadStore({ a }).lookup
+      )
+    ).rejects.toThrow(`is ${Buffer.byteLength(FRAGMENT)} bytes but the client recorded 5`);
+  });
+
+  it("fails on an uploaded member over the limit without reading it", async () => {
+    // Sparse, so the tar stays small while the file it holds is over the limit.
+    const big = await fragmentUpload("big.yaml", async (file) => {
+      await fs.writeFile(file, "");
+      await fs.truncate(file, 32 * 1024 * 1024 + 1);
+    });
+    vi.mocked(fs.readFile).mockClear();
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        { flow_path: flowWire([member("big.yaml", "big", big)]) },
+        uploadStore({ big }).lookup
+      )
+    ).rejects.toThrow("exceeds the 33554432-byte file-input limit");
+    const read = vi.mocked(fs.readFile).mock.calls.map(([file]) => String(file));
+    expect(read.filter((file) => file.endsWith("big.yaml"))).toEqual([]);
+  });
+
+  it("fails once the uploaded members pass the limit together, without reading the rest", async () => {
+    // Sparse, so each tar stays small while the members together pass the limit.
+    const sparse = (bytes: number) => async (file: string) => {
+      await fs.writeFile(file, "");
+      await fs.truncate(file, bytes);
+    };
+    const [a, b, c] = await Promise.all([
+      fragmentUpload("a.yaml", sparse(20 * 1024 * 1024)),
+      fragmentUpload("b.yaml", sparse(20 * 1024 * 1024)),
+      fragmentUpload("c.yaml", (file) => fs.writeFile(file, FRAGMENT)),
+    ]);
+    const store = uploadStore({ a: a!, b: b!, c: c! });
+    // Extract dirs go to os.tmpdir(), so one that stays shows here.
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-tar-upload-scan-"));
+    const restoreTmpdir = redirectTmpdir(scratch);
+    vi.mocked(fs.readFile).mockClear();
+
+    try {
+      await expect(
+        resolveFileInputs(
+          { fileInputs: FLOW_SPEC },
+          {
+            flow_path: flowWire([
+              member("a.yaml", "a", a!),
+              member("b.yaml", "b", b!),
+              member("c.yaml", "c", c!),
+            ]),
+          },
+          store.lookup
+        )
+      ).rejects.toThrow("exceeds the 33554432-byte limit for the members of one call");
+
+      const read = vi.mocked(fs.readFile).mock.calls.map(([file]) => path.basename(String(file)));
+      expect(read).toEqual(["a.yaml"]);
+      expect(await fs.readdir(scratch)).toEqual([]);
+      expect([...store.pending.keys()]).toEqual([]);
+      for (const entry of [a!, b!, c!]) await expect(fs.stat(entry.tarPath)).rejects.toThrow();
+    } finally {
+      restoreTmpdir();
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the upload of a member is not on the tool-server", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        { flow_path: flowWire([member("a.yaml", "expired", a)]) },
+        uploadStore({}).lookup
+      )
+    ).rejects.toThrow(/Upload "expired" was not found on the tool-server/);
+  });
+
+  it("removes the uploads of the later members when one member fails", async () => {
+    const write = (file: string) => fs.writeFile(file, FRAGMENT);
+    const [a, b, c] = await Promise.all(
+      ["a.yaml", "b.yaml", "c.yaml"].map((name) => fragmentUpload(name, write))
+    );
+    const store = uploadStore({ a: a!, b: b!, c: c! });
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        {
+          flow_path: flowWire([
+            member("a.yaml", "a", a!, { contentHash: "0".repeat(64) }),
+            member("b.yaml", "b", b!),
+            member("c.yaml", "c", c!),
+          ]),
+        },
+        store.lookup
+      )
+    ).rejects.toThrow(/content hash mismatch/i);
+
+    expect([...store.pending.keys()]).toEqual([]);
+    for (const entry of [a!, b!, c!]) await expect(fs.stat(entry.tarPath)).rejects.toThrow();
+  });
+
+  it("removes the uploads of a wire that the call does not resolve", async () => {
+    // name + flow_path: the tool reports the two sources, so the closure that
+    // came with flow_path is never read.
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+    const store = uploadStore({ a });
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: [{ ...FLOW_SPEC[0]!, unwrapWhenSet: "name" }] },
+      { name: "saved", flow_path: flowWire([member("a.yaml", "a", a)]) },
+      store.lookup
+    );
+
+    expect(args.flow_path).toBe(`${FLOWS}/root.yaml`);
+    expect([...store.pending.keys()]).toEqual([]);
+    await expect(fs.stat(a.tarPath)).rejects.toThrow();
   });
 });

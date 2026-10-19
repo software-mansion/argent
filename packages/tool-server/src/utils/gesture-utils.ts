@@ -1,5 +1,5 @@
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
-import { sendCommand } from "./simulator-client";
+import { sendCommand, type SendCommandOutcome } from "./simulator-client";
 
 interface TouchPoint {
   x: number;
@@ -68,7 +68,7 @@ export function sendTouchEvent(
   y: number,
   x2?: number,
   y2?: number
-): Promise<void> {
+): Promise<SendCommandOutcome> {
   return sendCommand(api, {
     cmd: "touch",
     type,

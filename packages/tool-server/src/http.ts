@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  LINKED_CALL_HEADER,
   describeParamIssues,
   getFailureSignal,
   type FailureSignal,
@@ -62,6 +63,7 @@ import {
   createChromiumServerRouter,
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
+import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -405,6 +407,21 @@ const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 // Bounds the total of unconsumed uploads, so many small ones can't do the same.
 const MAX_PENDING_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
 
+/**
+ * Pull a tool's per-call note off its result so it can ride the response
+ * envelope. Mutates `data` so the reserved key never reaches the client, where
+ * it would otherwise surface in `--json` output and in non-image results. The
+ * key is stripped whatever its value; only a non-empty string becomes a note.
+ */
+function takeToolNote(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const bag = data as Record<string, unknown>;
+  if (!(RESULT_NOTE_KEY in bag)) return undefined;
+  const note = bag[RESULT_NOTE_KEY];
+  delete bag[RESULT_NOTE_KEY];
+  return typeof note === "string" && note.length > 0 ? note : undefined;
+}
+
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   // 48mb: file-input wrappers may inline base64 file content when the client is
@@ -659,6 +676,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           alwaysLoad?: boolean;
           searchHint?: string;
           longRunning?: boolean;
+          hideFromMcp?: boolean;
         } = {
           name: def.id,
           description: def.description ?? "",
@@ -669,6 +687,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (def.alwaysLoad) entry.alwaysLoad = true;
         if (def.searchHint) entry.searchHint = def.searchHint;
         if (def.longRunning) entry.longRunning = true;
+        if (def.hideFromMcp) entry.hideFromMcp = true;
         return entry;
       });
     res.json({ tools });
@@ -684,6 +703,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const name = req.params.name as string;
       const requestStartedAt = performance.now();
       const aiMeta = extractAiTelemetryMeta(req);
+      // "close" fires once. A caller that hangs up during the awaits below
+      // (file inputs, the device grant, the dependency preflight) is gone
+      // before the listeners further down exist, so it is noted from here.
+      let callerGone = false;
+      res.once("close", () => {
+        if (!res.writableFinished) callerGone = true;
+      });
 
       const emitHttpFailure = (
         signal: FailureSignal,
@@ -745,7 +771,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         derivedTargets = resolved.derivedTargets;
         // Materialized uploads are call-scoped: remove them once the response
         // settles, however it ends.
-        res.once("close", () => void resolved.cleanup());
+        if (callerGone) void resolved.cleanup();
+        else res.once("close", () => void resolved.cleanup());
       } catch (err) {
         if (err instanceof FileInputError) {
           res.status(422).json({ error: err.message });
@@ -896,6 +923,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
+      // Nobody is left to read the result.
+      if (callerGone) return;
+
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -942,9 +972,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         res.write(`${JSON.stringify(payload)}\n`);
       };
       if (wantsStream) {
+        // Every line must reach the client as soon as it is written.
+        // `no-transform` asks intermediaries not to compress the stream, and
+        // `X-Accel-Buffering: no` makes nginx pass each chunk through instead
+        // of holding it in its buffers.
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
-          "Cache-Control": "no-cache",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
         });
       }
 
@@ -952,6 +987,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
+          // The argent client marks every call it sends over a link. A false
+          // mark makes the recorder stricter for that caller and keeps its
+          // recording in memory, sent back in client-file directives.
+          ...(firstHeader(req.headers[LINKED_CALL_HEADER]) === "1" ? { linked: true } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream
@@ -991,6 +1030,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (signingNote) {
           notes.push(signingNote);
         }
+        // A tool can raise a per-call note by returning this reserved key. It
+        // rides the envelope rather than the result body because clients render
+        // image results as image blocks plus a "Saved:" line and drop every
+        // other field — a note inside `data` would never be seen.
+        const toolNote = takeToolNote(data);
+        if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
         if (wantsStream) {
           writeLine({ event: "result", data, ...notePayload });

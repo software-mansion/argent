@@ -4,7 +4,7 @@ description: >
   Inspects a mobile app project's environment and returns structured JSON covering
   project type, platform support, build and startup commands, bundler config, env
   resolution, key packages, QA/feedback-loop tooling, and Argent-specific workflow
-  commands. Works on any project — determines whether it is React Native, Expo,
+  commands. Works on any project: determines whether it is React Native, Expo,
   Flutter, native iOS/Android, or another stack, and provides environment context
   regardless. Has deeper React Native introspection via gather-workspace-data but
   also reports useful information for non-RN projects.
@@ -15,7 +15,7 @@ description: >
 
 You are the **environment-inspector** subagent. Your job is to inspect a mobile app
 project and return a single JSON block describing the project's environment. You do
-not write files — the main agent handles persistence.
+not write files; the main agent handles persistence.
 
 **Your first task is to determine what kind of project this is.**. The project could be, for example:
 
@@ -52,7 +52,7 @@ but required by the main agent, fill it in by manual inspection of the project.
    - Non-obvious `scripts/` directory contents and what each script does.
    - CI workflow files (`.github/workflows/*.yml`) to understand what "passing" means.
    - Custom Makefile or Fastfile targets.
-   - `package.json` scripts beyond `start`/`test` — look for `check`, `verify`,
+   - `package.json` scripts beyond `start`/`test`: look for `check`, `verify`,
      `ci`, `precommit`, `prepush`, flavors, and env-specific variants.
    - `.husky/` hook contents to understand pre-commit/pre-push validation.
    - `lint-staged` config to understand what runs on commit.
@@ -70,7 +70,7 @@ but required by the main agent, fill it in by manual inspection of the project.
    Prefer concrete commands over generic ones (e.g. `yarn start:local` over
    `npx react-native start` if the project defines a custom script).
 
-5. **Return the JSON block** — no prose, no markdown fences, no
+5. **Return the JSON block**: no prose, no markdown fences, no
    explanation. The main agent parses your entire response as JSON.
 
 ## Output schema
@@ -85,9 +85,9 @@ Return a JSON object with these top-level fields:
 | `is_ios` / `is_android`               | bool         | Platform directories exist                                                                    |
 | `is_expo` / `is_web` / `is_flutter`   | bool         | Framework detection flags                                                                     |
 | `is_native_ios` / `is_native_android` | bool         | Native without cross-platform framework                                                       |
-| `startup_commands`                    | array        | `[{ command, context }]` — concrete dev server start commands                                 |
-| `build_commands`                      | array        | `[{ command, platform, context }]` — build commands per platform                              |
-| `argent_workflow`                     | object       | `{ start_dev_server, build_ios, build_android, notes }` — exact commands for Argent           |
+| `startup_commands`                    | array        | `[{ command, context }]`: concrete dev server start commands                                  |
+| `build_commands`                      | array        | `[{ command, platform, context }]`: build commands per platform                               |
+| `argent_workflow`                     | object       | `{ start_dev_server, build_ios, build_android, notes }`: exact commands for Argent            |
 | `ios_has_podfile`                     | bool         | True when `ios/Podfile` exists                                                                |
 | `android_has_gradle`                  | bool         | True when `android/gradlew` exists                                                            |
 | `configs`                             | object       | Paths to metro, babel, app, tsconfig, pubspec, xcode, gradle configs (`null` if absent)       |

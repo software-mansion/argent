@@ -24,7 +24,7 @@ const zodSchema = z
       .describe(
         "Distance from center to each finger: normalized 0.0–1.0 (fraction of screen, not pixels). " +
           "E.g. 0.15 = fingers placed 15% of screen away from center. One value for both axes, so on " +
-          "a non-square screen the orbit is a physical ellipse — pass radiusX+radiusY instead for a " +
+          "a non-square screen the orbit is a physical ellipse; pass radiusX+radiusY instead for a " +
           "true circle. Required unless radiusX and radiusY are given."
       ),
     radiusX: z
@@ -33,7 +33,7 @@ const zodSchema = z
       .describe(
         "Per-axis finger distance, horizontal: normalized 0.0–1.0 fraction of screen WIDTH. Give " +
           "both radiusX and radiusY (they override radius) with radiusX·screenWidth = " +
-          "radiusY·screenHeight for a physically circular orbit — constant finger separation, no " +
+          "radiusY·screenHeight for a physically circular orbit: constant finger separation, no " +
           "pinch coupled into the turn."
       ),
     radiusY: z
@@ -41,7 +41,7 @@ const zodSchema = z
       .optional()
       .describe(
         "Per-axis finger distance, vertical: normalized 0.0–1.0 fraction of screen HEIGHT. " +
-          "Always paired with radiusX — see radiusX."
+          "Always paired with radiusX; see radiusX."
       ),
     startAngle: z.number().describe("Starting angle in degrees (0 = right, 90 = down)"),
     endAngle: z.number().describe("Ending angle in degrees. endAngle > startAngle = clockwise."),
@@ -62,6 +62,11 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   rotated: boolean;
   timestampMs: number;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the gesture went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
 }
 
 const capability: ToolCapability = {
@@ -85,7 +90,7 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
     },
     failedMsg: ({ failureSignal }) => `Failed to rotate gesture: ${failureSignal.error_code}`,
   },
-  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees. All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
+  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees. All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe.
 endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn. A single radius applies to both axes, so on a non-square screen it traces a physical ellipse (finger separation varies through the turn); pass radiusX+radiusY (fractions of width/height with radiusX·width = radiusY·height) for a physically circular orbit instead.
 Auto-generates interpolated frames at ~60fps.
 Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
@@ -105,6 +110,7 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
     const radiusY = params.radiusY ?? params.radius!;
 
     let timestampMs = 0;
+    let warning: string | undefined;
     // Last dispatched positions, so an abort lifts from where the fingers are.
     let lastX1 = 0;
     let lastY1 = 0;
@@ -142,7 +148,9 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      await sendTouchEvent(api, type, x1, y1, x2, y2);
+      const sent = await sendTouchEvent(api, type, x1, y1, x2, y2);
+      // Only the Down resolves the panel; the rest of the sequence keeps it.
+      if (type === "Down") warning = sent.warning;
       lastX1 = x1;
       lastY1 = y1;
       lastX2 = x2;
@@ -150,6 +158,6 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
       if (i < steps) await sleep(16);
     }
 
-    return { rotated: true, timestampMs };
+    return { rotated: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
   },
 };

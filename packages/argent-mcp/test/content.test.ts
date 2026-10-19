@@ -349,6 +349,19 @@ describe("flowRunToMcpContent", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("names each baseline a run over a link returned but could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks).toContainEqual({
+      type: "text",
+      text: "✗ baseline not written: /p/b.png: EACCES: permission denied",
+    });
+  });
+
   it("produces header and footer text blocks", async () => {
     const input: FlowExecuteResult = { flow: "test", steps: [] };
     const blocks = await flowRunToMcpContent(input);
@@ -571,6 +584,47 @@ describe("flowRunToMcpContent", () => {
     expect(texts[texts.length - 1]).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
     // No invalid (text: undefined) blocks even though directive steps carry no result.
     expect(blocks.every((b) => b.type !== "text" || typeof b.text === "string")).toBe(true);
+  });
+
+  it("puts each step's time before its reason and the run time on the verdict", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      device: "SIM",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      errored: 0,
+      skipped: 1,
+      durationMs: 92_400,
+      steps: [
+        { index: 0, kind: "echo", status: "pass", message: "opening", durationMs: 0 },
+        { index: 1, kind: "launch", status: "pass", target: "com.acme.shop", durationMs: 3100 },
+        {
+          index: 2,
+          kind: "tap",
+          status: "fail",
+          target: '"Checkout"',
+          reason: "no match",
+          warning: "moving",
+          depth: 1,
+          durationMs: 5002,
+        },
+        { index: 3, kind: "await", status: "skip", target: 'visible "Done"' },
+        { index: 4, kind: "tap", status: "pass", durationMs: -1 },
+      ],
+    };
+    const texts = (await flowRunToMcpContent(input))
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts.slice(1)).toEqual([
+      "[1] ✓ opening",
+      "[2] ✓ launch com.acme.shop (3.1s)",
+      '[3] ✗   tap "Checkout" (5.0s) — no match ⚠ moving',
+      '[4] · await visible "Done"',
+      "[5] ✓ tap",
+      "FAIL — 1 passed, 1 failed, 0 errored, 1 skipped (1m 32s)",
+    ]);
   });
 
   it("surfaces a legacy passed step's warning on its status line (older tool-servers adopted missing baselines)", async () => {

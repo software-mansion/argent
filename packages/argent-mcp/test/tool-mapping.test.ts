@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toMcpTool } from "../src/tool-mapping.js";
+import { toMcpTool, toMcpToolList } from "../src/tool-mapping.js";
 
 describe("toMcpTool — MCP _meta forwarding", () => {
   const base = {
@@ -45,11 +45,47 @@ describe("toMcpTool — MCP _meta forwarding", () => {
     expect(result).not.toHaveProperty("_meta");
   });
 
+  it("leaves retired params (untyped `not: {}`) out of the advertised schema", () => {
+    const result = toMcpTool({
+      ...base,
+      inputSchema: {
+        properties: { foo: { type: "string" }, settle: { description: "Retired", not: {} } },
+        additionalProperties: false,
+      },
+    });
+    expect(result.inputSchema).toEqual({
+      type: "object",
+      properties: { foo: { type: "string" } },
+      additionalProperties: false,
+    });
+  });
+
+  it("keeps a param whose `not` is a real constraint", () => {
+    const schema = { properties: { foo: { type: "string", not: { const: "" } } } };
+    expect(toMcpTool({ ...base, inputSchema: schema }).inputSchema).toEqual({
+      type: "object",
+      ...schema,
+    });
+  });
+
   it("always forces inputSchema.type to 'object' and preserves other keys", () => {
     const result = toMcpTool(base);
     expect(result.inputSchema).toEqual({
       type: "object",
       properties: { foo: { type: "string" } },
     });
+  });
+});
+
+describe("toMcpToolList", () => {
+  it("drops tools marked hideFromMcp and maps the rest", () => {
+    const schema = { properties: {} };
+    const list = toMcpToolList([
+      { name: "shown", description: "", inputSchema: schema },
+      { name: "sdk-only", description: "", inputSchema: schema, hideFromMcp: true },
+      { name: "also-shown", description: "", inputSchema: schema, hideFromMcp: false },
+    ]);
+    expect(list.map((t) => t.name)).toEqual(["shown", "also-shown"]);
+    expect(list[0]).toEqual(toMcpTool({ name: "shown", description: "", inputSchema: schema }));
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.25.0",
+  "version": "0.29.0",
   "mcpName": "io.github.software-mansion/argent",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
@@ -9,13 +9,39 @@
     "url": "git+https://github.com/software-mansion/argent.git"
   },
   "type": "module",
+  "exports": {
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./assets/manifest": "./assets/manifest.json",
+    "./assets/trace-processor/engine": "./assets/trace-processor/engine.mjs",
+    "./assets/trace-processor/engine_bundle.node": "./assets/trace-processor/engine_bundle.node.js",
+    "./bin/argent-simulator-server": "./bin/argent-simulator-server.cjs",
+    "./dist/bundled-paths": "./dist/bundled-paths.js",
+    "./dist/cli": "./dist/cli.js",
+    "./dist/cli-cmds": "./dist/cli-cmds.mjs",
+    "./dist/fatal-handlers": "./dist/fatal-handlers.js",
+    "./dist/flow-script-runner": "./dist/flow-script-runner.mjs",
+    "./dist/flow-script-watchdog-deadline": "./dist/flow-script-watchdog-deadline.mjs",
+    "./dist/flow-script-watchdog-lifeline": "./dist/flow-script-watchdog-lifeline.mjs",
+    "./dist/installer": "./dist/installer.mjs",
+    "./dist/installer-help": "./dist/installer-help.js",
+    "./dist/mcp-server": "./dist/mcp-server.mjs",
+    "./dist/preview-ui/theme": "./dist/preview-ui/theme.css",
+    "./dist/preview-window/main": "./dist/preview-window/main.cjs",
+    "./dist/tool-server": "./dist/tool-server.cjs",
+    "./package": "./package.json",
+    "./*": "./*"
+  },
   "bin": {
     "argent": "dist/cli.js",
     "argent-simulator-server": "bin/argent-simulator-server.cjs"
   },
   "scripts": {
     "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
-    "build:dispatcher": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build:dispatcher": "npm run build:tool-args && rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build:tool-args": "tsc --build ../tool-server && node ../tool-server/dist/sdk-tool-args.js src/tool-args.generated.ts",
     "build:bundles": "node scripts/bundle-tools.cjs",
     "sync-readme": "node scripts/sync-readme.cjs",
     "prepack": "node scripts/sync-readme.cjs",
@@ -42,9 +68,9 @@
     "assets/"
   ],
   "dependencies": {
-    "@fails-components/webtransport": "^1.6.3",
-    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
-    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@fails-components/webtransport": "^1.6.8",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.8",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2"
   },
@@ -54,22 +80,23 @@
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",
+    "@argent/configuration-core": "file:../configuration-core",
     "@argent/installer": "file:../argent-installer",
     "@argent/mcp": "file:../argent-mcp",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@clack/prompts": "^1.6.0",
+    "@clack/prompts": "^1.8.1",
     "@opentelemetry/api": "1.9.1",
-    "@opentelemetry/api-logs": "0.221.0",
-    "@opentelemetry/exporter-logs-otlp-http": "0.221.0",
-    "@opentelemetry/resources": "2.10.0",
-    "@opentelemetry/sdk-logs": "0.221.0",
-    "@types/node": "^26.0.1",
-    "esbuild": "^0.28.1",
+    "@opentelemetry/api-logs": "0.222.0",
+    "@opentelemetry/exporter-logs-otlp-http": "0.222.0",
+    "@opentelemetry/resources": "2.11.0",
+    "@opentelemetry/sdk-logs": "0.222.0",
+    "@types/node": "^26.6.2",
+    "esbuild": "^0.28.2",
     "picocolors": "^1.1.1",
     "semver": "^7.8.5",
-    "smol-toml": "^1.7.0",
+    "smol-toml": "^1.9.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
-    "yaml": "^2.8.3"
+    "yaml": "^2.9.1"
   }
 }

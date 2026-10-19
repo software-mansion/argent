@@ -10,8 +10,9 @@ interface TouchCmd {
 }
 const sent: TouchCmd[] = [];
 vi.mock("../../src/utils/simulator-client", () => ({
-  sendCommand: (_api: unknown, cmd: TouchCmd) => {
+  sendCommand: async (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);
+    return {};
   },
 }));
 

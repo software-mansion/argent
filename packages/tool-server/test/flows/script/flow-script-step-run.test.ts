@@ -662,7 +662,7 @@ describe("a script step in an uploaded flow", () => {
           },
         }
       )
-    ).rejects.toThrow(/script is not on this host/i);
+    ).rejects.toThrow("step 1: script: { path: seed.mjs }");
   });
 
   it("is rejected from inside a when: block that would not fire", async () => {
@@ -687,7 +687,7 @@ describe("a script step in an uploaded flow", () => {
           },
         }
       )
-    ).rejects.toThrow(/script is not on this host/i);
+    ).rejects.toThrow("step 1 of the when: block at step 1: script: { path: seed.mjs }");
   });
 });
 

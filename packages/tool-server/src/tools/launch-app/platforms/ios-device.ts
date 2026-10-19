@@ -1,4 +1,5 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { InvalidToolInputError } from "../../../utils/capability";
 import { ensureDeviceReady, launchApp } from "../../../utils/ios-device/devicectl";
 import { resolveRunnerSigningConfig } from "../../../utils/ios-device/runner-build";
 import {
@@ -51,11 +52,24 @@ export const iosDeviceImpl: PlatformImpl<
 > = {
   requires: ["xcrun"],
   handler: async (_services, params) => {
+    const launchArgs = params.launchArgs?.length ? params.launchArgs : undefined;
+    const systemUi = isSessionOnlySystemUi(params.bundleId);
+
+    if (systemUi && launchArgs) {
+      throw new InvalidToolInputError(
+        `${params.bundleId} is system UI: it is always running and cannot take launch arguments.`
+      );
+    }
+
     await ensureDeviceReady(params.udid);
 
     // System UI is always running. Register the session only. Do not launch.
-    if (!isSessionOnlySystemUi(params.bundleId)) {
-      await launchApp(params.udid, params.bundleId);
+    // A plain launch only foregrounds an app that is already running, so the
+    // arguments would be dropped. Terminate first to apply them.
+    if (!systemUi) {
+      await (launchArgs
+        ? launchApp(params.udid, params.bundleId, { terminateExisting: true, args: launchArgs })
+        : launchApp(params.udid, params.bundleId));
     }
 
     setCurrentIosDeviceApp(params.udid, params.bundleId);

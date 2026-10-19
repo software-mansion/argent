@@ -48,6 +48,10 @@ function makeSequencedAXService(
     degraded: opts.degraded ?? false,
     describe: async () => responses[Math.min(i++, responses.length - 1)],
     alertCheck: async () => false,
+    livePanel: async () => null,
+    foregroundApp: async () => ({ alertVisible: false }),
+    fill: async () => ({ focused: false, verified: false }),
+    tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => true,
   };
   return { api, calls: () => i };
@@ -62,6 +66,10 @@ function makeFailingAXService(): AXServiceApi {
       throw new Error("ax service unreachable");
     },
     alertCheck: async () => false,
+    livePanel: async () => null,
+    foregroundApp: async () => ({ alertVisible: false }),
+    fill: async () => ({ focused: false, verified: false }),
+    tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => false,
   };
 }
@@ -909,6 +917,10 @@ describe("await-ui-element tool", () => {
           ? Promise.resolve(axResponse([{ label: "Header", frame: FRAME, traits: [] }]))
           : new Promise(() => {}),
       alertCheck: async () => false,
+      livePanel: async () => null,
+      foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => ({ focused: false, verified: false }),
+      tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };
   }
@@ -1120,6 +1132,10 @@ describe("await-ui-element tool", () => {
       degraded: false,
       describe: () => new Promise(() => {}), // never resolves
       alertCheck: async () => false,
+      livePanel: async () => null,
+      foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => ({ focused: false, verified: false }),
+      tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };
     const tool = createAwaitUiElementTool(iosRegistry(slowApi));
@@ -1155,6 +1171,10 @@ describe("await-ui-element tool", () => {
           ? Promise.resolve(axResponse([{ label: "Header", frame: FRAME, traits: [] }]))
           : new Promise(() => {}),
       alertCheck: async () => false,
+      livePanel: async () => null,
+      foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => ({ focused: false, verified: false }),
+      tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };
     const tool = createAwaitUiElementTool(iosRegistry(api));
@@ -1183,6 +1203,10 @@ describe("await-ui-element tool", () => {
       degraded: false,
       describe: () => new Promise(() => {}), // never resolves
       alertCheck: async () => false,
+      livePanel: async () => null,
+      foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => ({ focused: false, verified: false }),
+      tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
       ping: async () => true,
     };
     const tool = createAwaitUiElementTool(iosRegistry(slowApi));
@@ -1341,6 +1365,38 @@ describe("await-ui-element tool", () => {
           })
         );
       }
+    });
+
+    it.each(["textMatches", "text_match", "TextMatch", "frobnicate"])(
+      "rejects the top-level key %s instead of silently falling back to `contains`",
+      (key) => {
+        const result = schema.safeParse({
+          condition: "text",
+          udid: IOS_UDID,
+          selector: { identifier: "cgj" },
+          expectedText: "Save",
+          [key]: "equals",
+        });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues).toContainEqual(
+            expect.objectContaining({ code: "unrecognized_keys", keys: [key] })
+          );
+        }
+      }
+    );
+
+    it("accepts the correctly spelled textMatch", () => {
+      expect(
+        schema.safeParse({
+          condition: "text",
+          udid: IOS_UDID,
+          selector: { identifier: "cgj" },
+          expectedText: "Save",
+          textMatch: "equals",
+        }).success
+      ).toBe(true);
     });
 
     it.each([

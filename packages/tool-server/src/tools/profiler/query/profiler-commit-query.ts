@@ -20,12 +20,12 @@ const timeRangeSchema = z.object({
   start: z.coerce
     .number()
     .describe(
-      "Start of range in ms since profiling started — the same clock profiler-commit-query prints"
+      "Start of range in ms since profiling started, the same clock profiler-commit-query prints"
     ),
   end: z.coerce
     .number()
     .describe(
-      "End of range in ms since profiling started — the same clock profiler-commit-query prints"
+      "End of range in ms since profiling started, the same clock profiler-commit-query prints"
     ),
 });
 
@@ -55,7 +55,7 @@ const zodSchema = z.object({
     .describe(
       "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
         "commits. by_index counts individual fibers and returns all of them unless this is set, " +
-        "because one commit's fibers collapse to far fewer distinct components — a small cap there " +
+        "because one commit's fibers collapse to far fewer distinct components, and a small cap there " +
         "can show less than the analyze report it is meant to expand on."
     ),
 });

@@ -27,7 +27,6 @@ export {
 export {
   createToolsClient,
   errorBodyMessage,
-  ToolInvocationError,
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
@@ -35,12 +34,13 @@ export {
   type CreateToolsClientOptions,
 } from "./tools-client.js";
 
+export { ToolInvocationError } from "./errors.js";
+
 export {
   readLinkConfig,
   writeLinkConfig,
   clearLinkConfig,
   getResolvedToolsUrl,
-  isRemoteRouted,
   formatLinkUrl,
   parseLinkUrl,
   parseLinkTarget,
