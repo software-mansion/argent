@@ -185,7 +185,7 @@ export async function screenshotDiffToMcpContent(
   return blocks;
 }
 
-export type FlowStepResult = {
+type FlowStepResult = {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";

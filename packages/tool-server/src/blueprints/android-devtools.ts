@@ -46,7 +46,7 @@ export interface GetHierarchyOptions {
   clearCache?: boolean;
 }
 
-export interface HierarchyResult {
+interface HierarchyResult {
   xml: string;
   captureMode: string;
   windowCount: number;

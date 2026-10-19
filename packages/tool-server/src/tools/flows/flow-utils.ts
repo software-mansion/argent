@@ -216,7 +216,7 @@ const keyResolutions = new Map<string, Promise<string>>();
  *                {@link ClientFileDirective} so the *client* writes the YAML
  *                into the agent's project.
  */
-export type FlowPersistMode = "host" | "client";
+type FlowPersistMode = "host" | "client";
 
 /**
  * The refusal of a flow passed by `name` whose file a case-insensitive
@@ -590,14 +590,14 @@ export function __flowFileLockCountForTesting(): number {
  * so it must exist on the tool-server host; a relative path resolves against
  * the ROOT flow file's canonical (symlink-resolved) directory.
  */
-export type ChromiumLaunch = string | { path: string; args?: string[] };
+type ChromiumLaunch = string | { path: string; args?: string[] };
 
 /**
  * An ios `launch` target: a bundle id (bare string) or a bundle id plus the
  * arguments passed to the app process at launch, on a simulator or a physical
  * iPhone.
  */
-export type IosLaunch = string | { app: string; args?: string[] };
+type IosLaunch = string | { app: string; args?: string[] };
 
 /**
  * The app a `launch` step starts from scratch. A bare string applies to every
@@ -689,7 +689,7 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
  * drift. Narrower than {@link SelectablePlatform}, which a RUN is selected
  * with: a guard is authored text, and `ios-remote` is not writable.
  */
-export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
+type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
 
 /**
  * The guard of a `when:` block: either a UI condition — the await/assert
@@ -763,7 +763,7 @@ export type FlowStep =
   | { kind: "script"; path: string; timeout?: number };
 
 const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
-export type FoldPosture = (typeof FOLD_POSTURES)[number];
+type FoldPosture = (typeof FOLD_POSTURES)[number];
 
 function isFoldPosture(value: unknown): value is FoldPosture {
   return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
