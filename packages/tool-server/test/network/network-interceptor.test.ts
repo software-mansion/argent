@@ -3641,6 +3641,78 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       );
     });
 
+    describe("with the library's base64 Response, which decodes its bytes again for each copy", () => {
+      // As react-native-fetch-api 3.0.0's ArrayBufferResponse: the bytes come from toByteArray(base64),
+      // and clone() builds a new ArrayBufferResponse from the base64 text, so it decodes them again.
+      function base64Runtime() {
+        const lib = libRuntime();
+        // _body is set by assignment, as the library's Response constructor does.
+        class ArrayBufferResponse extends lib.LibResponse {
+          declare _body: { _bodyInit: Uint8Array };
+          declare _base64: string;
+          constructor(base64: string, url: string, status = 200) {
+            super(url, status);
+            this._body = { _bodyInit: new Uint8Array(Buffer.from(base64, "base64")) };
+            this._base64 = base64;
+          }
+          clone(): ArrayBufferResponse {
+            return new ArrayBufferResponse(this._base64, this.url, this.status);
+          }
+        }
+        return { ...lib, ArrayBufferResponse };
+      }
+
+      it.each([
+        {
+          hands: "a wrapper that shares one request between callers",
+          wrapper: `var inflight = {};
+            fetch = function(u) {
+              if (!inflight[u]) inflight[u] = libFetch(u).finally(function() { delete inflight[u]; });
+              return inflight[u].then(function(r) { return r.clone(); });
+            };`,
+          calls: `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me'), fetch('https://api.test/me')])`,
+        },
+        {
+          hands: "a cache",
+          wrapper: `var cache = {};
+            fetch = function(u) {
+              if (cache[u]) return Promise.resolve(cache[u].clone());
+              return libFetch(u).then(function(r) { cache[u] = r; return r.clone(); });
+            };`,
+          calls: `fetch('https://api.test/me').then(function() { return fetch('https://api.test/me'); })`,
+        },
+      ])(
+        "records one request when $hands hands out copies of its Response",
+        async ({ wrapper, calls }) => {
+          const { rt, ArrayBufferResponse } = base64Runtime();
+          let requests = 0;
+          rt.context.libFetch = (url: string) => {
+            requests++;
+            return Promise.resolve(new ArrayBufferResponse("aGk=", url));
+          };
+          rt.run(wrapper);
+          rt.install();
+          await (rt.run(calls) as Promise<unknown>);
+          await settle();
+
+          expect(requests).toBe(1);
+          expect(rt.records()).toHaveLength(1);
+        }
+      );
+
+      it("records both of two requests whose responses have the same bytes", async () => {
+        const { rt, ArrayBufferResponse } = base64Runtime();
+        rt.context.fetch = (url: string) => Promise.resolve(new ArrayBufferResponse("aGk=", url));
+        rt.install();
+        await (rt.run(
+          `fetch('https://api.test/poll').then(function() { return fetch('https://api.test/poll'); })`
+        ) as Promise<unknown>);
+        await settle();
+
+        expect(rt.records()).toHaveLength(2);
+      });
+    });
+
     it.each<{ transport: string; options: RuntimeOptions; send: string }>([
       {
         transport: "an XHR",

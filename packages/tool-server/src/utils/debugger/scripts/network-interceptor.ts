@@ -789,10 +789,46 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var libCalls = [];
     var recorded = new WeakSet();
     var libSteps = 0;
+    // The library's ArrayBufferResponse (base64 mode) decodes its bytes again for each clone, so a
+    // clone has a body source of its own. Each clone() is noted instead: a copy counts as the Response
+    // it was made from. The library's classes are not global, and an app's wrapper can clone a
+    // Response before it reaches the app, so the clone() of a class is tapped when its first Response
+    // is built: the library's Response constructor sets _body, through a setter put on its prototype,
+    // which leaves the value as an ordinary property of the Response.
+    var cloneOf = new WeakMap();
+    var tappedClones = new WeakSet();
+    var originOf = function(response) {
+      return cloneOf.get(response) || response;
+    };
+    var tapClone = function(response) {
+      var proto = response;
+      while (proto && !hasOwn.call(proto, 'clone')) proto = Object.getPrototypeOf(proto);
+      if (!proto || tappedClones.has(proto) || typeof proto.clone !== 'function') return;
+      tappedClones.add(proto);
+      var clone = proto.clone;
+      proto.clone = function clone_() {
+        var copy = clone.apply(this, arguments);
+        try { if (copy && typeof copy === 'object' && copy !== this) cloneOf.set(copy, originOf(this)); } catch (e) {}
+        return copy;
+      };
+    };
     var sourceOf = function(response) {
       var source = response._blobData || (response._body && response._body._bodyInit);
       return source && typeof source === 'object' ? source : null;
     };
+    tapClone(LibResponse.prototype);
+    try {
+      if (!hasOwn.call(LibResponse.prototype, '_body')) {
+        Object.defineProperty(LibResponse.prototype, '_body', {
+          configurable: true,
+          get: function() { return undefined; },
+          set: function(value) {
+            Object.defineProperty(this, '_body', { value: value, writable: true, enumerable: true, configurable: true });
+            try { tapClone(this); } catch (e) {}
+          }
+        });
+      }
+    } catch (e) {}
     var settled = function(call) {
       var at = inFlight.indexOf(call);
       if (at !== -1) inFlight.splice(at, 1);
@@ -854,9 +890,11 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var settleLibFetch = function(call, rec, outcome, failed) {
       if (!failed && !(outcome instanceof LibResponse)) return dropRecord(rec.entry);
       var shared = !!outcome && typeof outcome === 'object';
-      var source = failed ? null : sourceOf(outcome);
-      if ((shared && recorded.has(outcome)) || (source && recorded.has(source))) return dropRecord(rec.entry);
-      if (shared) recorded.add(outcome);
+      var origin = shared ? originOf(outcome) : null;
+      var source = failed ? null : sourceOf(origin);
+      if (!failed) tapClone(outcome);
+      if ((shared && recorded.has(origin)) || (source && recorded.has(source))) return dropRecord(rec.entry);
+      if (shared) recorded.add(origin);
       if (source) recorded.add(source);
       // An XHR or Expo request with the same method and URL, sent during the call, may be the request
       // of the call (an app wrapper that builds this Response from React Native's fetch), and that
