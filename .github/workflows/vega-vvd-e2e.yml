@@ -81,6 +81,13 @@ jobs:
           npm ci
           npm run build
 
+      # The container's own Node 20.18.1 overflows the stack loading @moq/net
+      # through --experimental-require-module; vega-vvd-test.sh runs this one.
+      - name: Stage Node for the container
+        run: |
+          mkdir -p .ci-node
+          cp "$(command -v node)" .ci-node/node
+
       - name: Enable KVM
         # The VVD's QEMU needs /dev/kvm; ubuntu runners expose it but the runner
         # user isn't in the kvm group until this rule lands.

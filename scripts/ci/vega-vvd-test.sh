@@ -93,6 +93,8 @@ sys.exit(0 if frac > float(sys.argv[2]) else 1)
 PY
 }
 
+if [ -x .ci-node/node ]; then export PATH="$PWD/.ci-node:$PATH"; fi
+
 group "Environment"
 echo "node $(node -v 2>/dev/null || echo '<none>')"
 adb version 2>/dev/null | head -1 || echo "adb <none>"
