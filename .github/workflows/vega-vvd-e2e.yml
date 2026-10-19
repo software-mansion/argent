@@ -74,19 +74,23 @@ jobs:
         with:
           node-version: "20"
 
-      # Build this branch's tool-server. The action runs it (node dist/index.js)
-      # inside the container against this bind-mounted node_modules + dist.
+      # The package bundle copies these in and fails without them.
+      - name: Download bundled binaries and assets
+        run: |
+          bash scripts/download-simulator-server.sh
+          bash scripts/download-native-binaries.sh
+          bash scripts/download-trace-processor.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build this branch's package bundle. The action runs its tool-server
+      # (packages/argent/dist/tool-server.cjs) inside the container against this
+      # bind-mounted workspace.
       - name: Build tool-server
         run: |
           npm ci
           npm run build
-
-      # The container's own Node 20.18.1 overflows the stack loading @moq/net
-      # through --experimental-require-module; vega-vvd-test.sh runs this one.
-      - name: Stage Node for the container
-        run: |
-          mkdir -p .ci-node
-          cp "$(command -v node)" .ci-node/node
+          npm run build -w @swmansion/argent
 
       - name: Enable KVM
         # The VVD's QEMU needs /dev/kvm; ubuntu runners expose it but the runner
