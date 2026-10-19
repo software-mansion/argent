@@ -28,6 +28,7 @@ import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recor
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+import { resolveRunTarget, type ProjectAccess } from "../../src/tools/flows/project-access";
 
 let root: string;
 
@@ -275,11 +276,62 @@ describe("recording", () => {
 
       const { message, yaml } = await recordNested(result);
 
-      expect(parseFlow(yaml).steps).toEqual([{ kind: "run", flow: "frag.yaml" }]);
+      expect(parseFlow(yaml).steps).toEqual([{ kind: "run", flow: "../flows/frag.yaml" }]);
       expect(message).not.toContain("ENOENT");
       expect(lines(await runColocated({ name: "rec" }))).toEqual(["run pass", "echo pass hi"]);
     }
   );
+
+  it("keeps replaying the .argent/flows fragment it recorded after a same-named test is saved in .argent/e2e", async () => {
+    await write(legacy("frag.yaml"), echoes("from flows"));
+    await recordNested({ ok: true, steps: [] });
+    await write(e2e("frag.yaml"), echoes("from e2e"));
+
+    expect(lines(await runColocated({ name: "rec" }))).toEqual([
+      "run pass",
+      "echo pass from flows",
+    ]);
+  });
+
+  it("records a nested flow_path in .argent/flows as run: of its path from the recording", async () => {
+    await write(legacy("frag.yaml"), echoes("hi"));
+    const invokeTool = vi.fn(async () => ({ ok: true, steps: [] }));
+    const registry = { invokeTool, getTool: vi.fn(() => ({})) } as unknown as Registry;
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+
+    await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "rec",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ flow_path: legacy("frag.yaml"), project_root: root }),
+      }
+    );
+
+    expect(invokeTool).toHaveBeenCalledWith("e2e-execute", { name: "frag", project_root: root });
+    const yaml = await fs.readFile(e2e("rec.yaml"), "utf8");
+    expect(parseFlow(yaml).steps).toEqual([{ kind: "run", flow: "../flows/frag.yaml" }]);
+  });
+
+  it("refuses a nested flow_path in .argent/flows that a same-named .argent/e2e test hides", async () => {
+    await write(legacy("frag.yaml"), echoes("old"));
+    await write(e2e("frag.yaml"), echoes("new"));
+    const registry = { invokeTool: vi.fn(), getTool: vi.fn(() => ({})) } as unknown as Registry;
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+
+    await expect(
+      createFlowAddStepTool(registry).execute(
+        {},
+        {
+          name: "rec",
+          project_root: root,
+          command: "e2e-execute",
+          args: JSON.stringify({ flow_path: legacy("frag.yaml"), project_root: root }),
+        }
+      )
+    ).rejects.toThrow(`resolves "frag" to "${e2e("frag.yaml")}" instead`);
+  });
 
   it("records run: for a fragment saved in both directories and replays the .argent/e2e copy", async () => {
     await write(e2e("frag.yaml"), echoes("from e2e"));
@@ -366,6 +418,34 @@ describe("run: across the two directories", () => {
             ]
       );
     }
+  });
+
+  it("reports a mis-cased fragment in the other directory as mis-cased, also on a case-sensitive filesystem", async () => {
+    // Stands in for a case-sensitive filesystem: beside the file nothing
+    // matches, and in .argent/flows only a case-folded entry, whose canonical
+    // path does not exist.
+    const project: ProjectAccess = {
+      mode: "host",
+      resolveFlowFile: async (anchorDir, target) => ({
+        canonical: path.join(anchorDir, target),
+        spelling:
+          anchorDir === path.dirname(legacy("x.yaml"))
+            ? { state: "case_folded", actual: "legacy_frag.yaml", addressable: true }
+            : { state: "absent" },
+        read: async () => null,
+      }),
+      readFile: async () => null,
+      writeBaseline: async () => ({ replaced: false }),
+    };
+
+    const hop = await resolveRunTarget(project, path.dirname(e2e("main.yaml")), "Legacy_Frag.yaml");
+
+    expect(hop.spelling).toEqual({
+      state: "case_folded",
+      actual: "legacy_frag.yaml",
+      addressable: true,
+    });
+    expect(hop.anchorDir).toBe(path.dirname(legacy("x.yaml")));
   });
 
   it("over a link, fails a missing fragment as the co-located run does", async () => {

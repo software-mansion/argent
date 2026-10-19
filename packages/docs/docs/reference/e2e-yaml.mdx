@@ -285,7 +285,7 @@ The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ p
 - run: ../shared/login.yaml
 ```
 
-A `run:` path resolves against the directory of the e2e test file that contains the step. When nothing is there, the e2e test file is in `.argent/e2e/` or `.argent/flows/`, and the path has no `/`, Argent looks in the other of these directories. The `.yaml` suffix is optional.
+A `run:` path resolves against the directory of the e2e test file that contains the step. When nothing is there, the e2e test file is in `.argent/e2e/` or `.argent/flows/`, and the path has no `/`, Argent looks in the other of these directories. The `.yaml` suffix is optional. When you record a nested `e2e-execute` of an e2e test that is only in the other directory, the recorder writes its path from the recording, for example `run: ../flows/login.yaml`.
 
 | Platform     | Behavior                                                                                                                                                                                    |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

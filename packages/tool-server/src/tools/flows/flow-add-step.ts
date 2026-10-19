@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
   canonicalToolId,
   e2eFileCandidates,
+  e2eRunFallbackDirs,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
@@ -12,6 +13,7 @@ import {
   wrapFailure,
   type ClientFileDirective,
   type FileInputSpec,
+  type OnDiskSpelling,
   type Registry,
   type ToolDefinition,
 } from "@argent/registry";
@@ -915,10 +917,11 @@ const RUN_TARGET_COMMAND = "e2e-execute";
  *
  * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
  * `flow_path` inside them never crosses flow-execute's file-input boundary and
- * `resolveFlowSource` would reject it outright. A sibling of the recording is
- * the one target with a boundary-verified equivalent: the same file the `name` +
- * `project_root` pair already resolves to, in a directory flow-start-recording
- * established through its own boundary. Every other flow_path is refused here —
+ * `resolveFlowSource` would reject it outright. A sibling of the recording, or
+ * a test in the project's other e2e test directory, is the one target with a
+ * boundary-verified equivalent: the same file the `name` + `project_root` pair
+ * already resolves to, beside a directory flow-start-recording established
+ * through its own boundary. Every other flow_path is refused here —
  * a raw `tool:` step has no boundary to resolve a path through at replay either.
  * The on-disk spelling is the answer of `project`, on the client over a link;
  * a linked call whose client sent no files has no answer to give, and is
@@ -976,11 +979,19 @@ async function rewriteSiblingFlowPath(
   }
   // The recording's own dir, not getFlowsDir(): only a sibling of the flow
   // being recorded composes as `run:`.
+  // The project's other e2e test directory is accepted too: `name` reaches a
+  // test there as well, and the recorder composes it by its path from the
+  // recording (captureRunTarget).
   const flowsDir = path.dirname(session.filePath);
-  if (path.resolve(path.dirname(flowPath)) !== path.resolve(flowsDir)) {
+  const flowDir = path.dirname(flowPath);
+  const otherDirs = e2eRunFallbackDirs(flowsDir, path.basename(flowPath));
+  if (
+    path.resolve(flowDir) !== path.resolve(flowsDir) &&
+    !otherDirs.some((dir) => path.resolve(dir) === path.resolve(flowDir))
+  ) {
     throw invalid(
-      `it is not in the recording's e2e test directory ("${flowsDir}"), and a raw tool: step has ` +
-        `no boundary to resolve a path through at replay`
+      `it is not in the recording's e2e test directory ("${flowsDir}") or the project's other ` +
+        `e2e test directory, and a raw tool: step has no boundary to resolve a path through at replay`
     );
   }
   // basename leaves a suffix in place when stripping it would leave nothing, and
@@ -1036,7 +1047,17 @@ async function rewriteSiblingFlowPath(
       }
     );
   }
-  const { spelling } = await project.resolveFlowFile(flowsDir, suppliedBase);
+  let spelling: OnDiskSpelling;
+  try {
+    ({ spelling } = await project.resolveFlowFile(flowDir, suppliedBase));
+  } catch (err) {
+    if (path.resolve(flowDir) === path.resolve(flowsDir)) throw err;
+    // The argent client sends a flow_path for this check only beside the recording.
+    throw invalid(
+      `over a link, only an e2e test beside the recording can be named by flow_path ` +
+        `(${err instanceof Error ? err.message : String(err)})`
+    );
+  }
   if (spelling.state !== "listed") {
     // Hint the real spelling only when this same ladder would accept it (a
     // stem-case slip like Sibling.yaml); an invalid real name (sibling.YAML)
@@ -1080,7 +1101,9 @@ async function rewriteSiblingFlowPath(
  * in flow-run.ts). The RECORDER deliberately emits only the sibling subset:
  * `<name>.yaml` beside the recording's REAL file is the one target shape it can
  * validate here and identity-check against the file the live sub-invoke
- * executed; a cross-directory composition is authored by editing the YAML. The
+ * executed, plus `../<dir>/<name>.yaml` for a test found only in the project's
+ * other e2e test directory; any other cross-directory composition is authored
+ * by editing the YAML. The
  * anchor is the realpath'd containing-file dir because the runner's is
  * (scopeFlowDir in flow-run.ts), so a recording made through a symlink
  * validates its sibling in the canonical directory. So the raw step is kept
@@ -1213,6 +1236,15 @@ async function captureRunTarget(
           `beside the recording's real file is not the file the live e2e-execute ran and a ` +
           `run: ${name} step would replay a different e2e test than the one that just ran`,
       };
+    }
+    // A fragment found only in the project's other e2e test directory is
+    // recorded by its path from the recording, not by the bare name the
+    // runner's fallback also finds: a runner without that fallback resolves
+    // it too, and a same-named test saved beside the recording later does not
+    // silently take its place.
+    if (path.resolve(sibling.anchorDir) !== path.resolve(flowsDir)) {
+      const dir = path.relative(flowsDir, sibling.anchorDir).split(path.sep).join("/");
+      return { flow: `${dir}/${name}.yaml` };
     }
     return { flow: `${name}.yaml` };
   } catch (err) {

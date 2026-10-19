@@ -60,19 +60,24 @@ export interface ProjectAccess {
  * file is in an e2e test dir, the first of the project's other e2e test dirs
  * that has the target ({@link e2eRunFallbackDirs}) is used instead, so a test
  * in `.argent/e2e` can `run:` a fragment still in `.argent/flows`. A fallback
- * the client did not send, or cannot read, is skipped.
+ * the client did not send, or cannot read, is skipped. `anchorDir` in the
+ * result is the directory the target resolved against.
  */
 export async function resolveRunTarget(
   project: ProjectAccess,
   anchorDir: string,
   target: string
-): Promise<ResolvedFlowFile> {
+): Promise<ResolvedFlowFile & { anchorDir: string }> {
   const hop = await project.resolveFlowFile(anchorDir, target);
-  if (hop.spelling.state !== "absent") return hop;
+  if (hop.spelling.state !== "absent") return { ...hop, anchorDir };
   for (const dir of e2eRunFallbackDirs(anchorDir, target)) {
     try {
       const other = await project.resolveFlowFile(dir, target);
       if (other.spelling.state === "absent") continue;
+      // A mis-cased target there is reported as one, as it is beside the file:
+      // on a case-sensitive filesystem nothing is at its canonical path, so the
+      // check below would drop it for the missing hop's ENOENT.
+      if (other.spelling.state === "case_folded") return { ...other, anchorDir: dir };
       const found =
         project.mode === "host"
           ? await fs.stat(other.canonical).then(
@@ -80,12 +85,12 @@ export async function resolveRunTarget(
               () => false
             )
           : (await other.read()) !== null;
-      if (found) return other;
+      if (found) return { ...other, anchorDir: dir };
     } catch {
       // Not sent by an older client, or unreadable: the target stays missing.
     }
   }
-  return hop;
+  return { ...hop, anchorDir };
 }
 
 /**

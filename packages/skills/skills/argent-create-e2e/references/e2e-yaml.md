@@ -230,7 +230,7 @@ The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ 
 
 ## Composition and platform limits
 
-A `run:` target is a YAML path resolved against the directory of the test file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the test.
+A `run:` target is a YAML path resolved against the directory of the test file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the test. A bare name that is missing beside a test in `.argent/e2e/` is also looked up in `.argent/flows/`, and the reverse. The recorder writes a nested test that is only in the other directory by its path, for example `run: ../flows/login.yaml`.
 
 `run:` steps and `tool: e2e-execute` steps make one chain of tests. A step that closes a cycle in that chain, such as a test that runs itself through `tool: e2e-execute`, fails with a reason that contains `cyclic e2e test reference:`. A step that makes the chain longer than 20 tests fails with a reason that contains `max run depth exceeded`.
 
