@@ -1617,6 +1617,26 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       });
     });
 
+    it("records headers given as [name, value] pairs under their own names", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/me', {
+        headers: [['Authorization', 'Bearer tok'], ['X-List', 'a,b']]
+      })`) as Promise<unknown>;
+      // whatwg-fetch sets the pairs as if the array were an object, then each pair by its name.
+      expect(rt.last().requestHeaders).toMatchObject({
+        "0": "Authorization,Bearer tok",
+        "length": "2",
+      });
+      rt.last().respond(200, {}, "");
+      await pending;
+      await settle();
+
+      const headers = rt.records()[0]!.request.headers;
+      expect(headers).toEqual({ "authorization": "Bearer tok", "x-list": "a,b" });
+      expect(JSON.stringify(headers)).not.toMatch(/"\d+"|"length"/);
+    });
+
     it.each([
       {
         outcome: "fails",
@@ -3471,6 +3491,41 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         "GET https://api.test/items",
         "POST https://api.test/items",
       ]);
+    });
+
+    it.each([
+      {
+        form: "an array of pairs",
+        headers: "[['Authorization', 'tok'], ['Cookie', 'a'], ['Cookie', 'b']]",
+      },
+      {
+        form: "a Headers",
+        headers:
+          "(function() { var h = new Headers(); h.append('Authorization', 'tok'); h.append('Cookie', 'a'); h.append('Cookie', 'b'); return h; })()",
+      },
+      { form: "a Map", headers: "new Map([['Authorization', 'tok'], ['Cookie', 'a, b']])" },
+      {
+        form: "an iterable of pairs",
+        headers: "new Set([['Authorization', 'tok'], ['Cookie', 'a, b']]).values()",
+      },
+      { form: "a plain object", headers: "{ Authorization: 'tok', Cookie: 'a, b' }" },
+    ])("records headers given as $form by their names", async ({ headers }) => {
+      const { rt, LibResponse } = libRuntime({ polyfillFetch: true });
+      let resolve: (response: unknown) => void = () => {};
+      rt.context.fetch = () => new Promise((r) => (resolve = r));
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/me', { headers: ${headers} })`
+      ) as Promise<unknown>;
+      resolve(new LibResponse("https://api.test/me"));
+      await pending;
+      await settle();
+
+      const recorded = rt.records()[0]!.request.headers;
+      const byName = Object.fromEntries(
+        Object.entries(recorded).map(([k, v]) => [k.toLowerCase(), v])
+      );
+      expect(byName).toEqual({ authorization: "tok", cookie: "a, b" });
     });
 
     it("records the method, URL and headers of a Request the app passes", async () => {

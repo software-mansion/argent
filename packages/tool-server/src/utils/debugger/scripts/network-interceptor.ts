@@ -125,16 +125,26 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     return hasOwn.call(headers, 'content-type') ? String(headers['content-type']).split(';')[0].trim() : '';
   }
 
+  // The headers of every HeadersInit form: [name, value] pairs (an array or another iterable), a
+  // Headers or Map, or a plain object. A name given twice keeps both values.
   function headersObject(source) {
     var out = {};
     if (!source || typeof source !== 'object') return out;
+    var add = function(name, value) {
+      name = String(name);
+      out[name] = hasOwn.call(out, name) ? out[name] + ', ' + String(value) : String(value);
+    };
     try {
-      if (Array.isArray(source)) {
-        for (var i = 0; i < source.length; i++) out[String(source[i][0])] = String(source[i][1]);
+      // A Headers and a Map iterate as pairs too.
+      if (Array.isArray(source) || (typeof Symbol === 'function' && typeof source[Symbol.iterator] === 'function')) {
+        var pairs = Array.from(source);
+        for (var i = 0; i < pairs.length; i++) {
+          if (pairs[i] && typeof pairs[i] === 'object' && pairs[i].length === 2) add(pairs[i][0], pairs[i][1]);
+        }
       } else if (typeof source.forEach === 'function') {
-        source.forEach(function(value, name) { out[name] = String(value); });
+        source.forEach(function(value, name) { add(name, value); });
       } else {
-        for (var k in source) if (hasOwn.call(source, k)) out[k] = String(source[k]);
+        for (var k in source) if (hasOwn.call(source, k)) add(k, source[k]);
       }
     } catch (e) {}
     return out;
@@ -476,7 +486,22 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       var slot = slots.get(this);
       // React Native sends one value per lowercased name, the last one set. RN still accepts a
       // header after send, but it never reaches the wire, so it is not recorded.
-      if (slot && slot.headers) slot.headers[String(name).toLowerCase()] = String(value);
+      if (slot && slot.headers) {
+        name = String(name).toLowerCase();
+        value = String(value);
+        // whatwg-fetch sets headers given as [name, value] pairs as if they were an object: each pair
+        // as '0': 'name,value' and so on, then 'length', then each pair again under its own name. The
+        // pair is recorded under its own name, so a redacted header stays redacted.
+        var comma = value.indexOf(',');
+        if (/^\\d+$/.test(name) && comma > 0) {
+          slot.pairs = true;
+          name = value.slice(0, comma).trim().toLowerCase();
+          value = value.slice(comma + 1);
+        } else if (name === 'length' && slot.pairs) {
+          return result;
+        }
+        slot.headers[name] = value;
+      }
       return result;
     };
 

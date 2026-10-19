@@ -499,6 +499,37 @@ describe("NetworkInspector integration (mock server)", () => {
     expect(respHeaders["content-type"]).toBe("application/json");
   });
 
+  it("redacts a header that whatwg-fetch sent as a numbered [name, value] pair", async () => {
+    networkLog.push({
+      id: networkLog.length,
+      requestId: "rn-net-pairs",
+      state: "finished",
+      request: {
+        url: "https://api.example.com/me",
+        method: "GET",
+        headers: { "0": "Authorization,Bearer tok", "1": "Accept,application/json" },
+      },
+      resourceType: "Fetch",
+      timestamp: Date.now() / 1000,
+    });
+    try {
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        device_id: "mock-device",
+        requestId: "rn-net-pairs",
+      })) as { request: { headers: Record<string, string> } };
+      expect(result.request.headers).toEqual({
+        "0": "[REDACTED]",
+        "1": "Accept,application/json",
+      });
+    } finally {
+      networkLog.splice(
+        networkLog.findIndex((e) => e.requestId === "rn-net-pairs"),
+        1
+      );
+    }
+  });
+
   it("view-network-request-details returns response body when includeBody is true", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
