@@ -216,6 +216,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       if (body !== undefined) {
         entry.responseBody = body;
         if (entry.encodedDataLength > BODY_CAP) entry.bodyTruncated = true;
+      } else if (typeof TextDecoder === 'function') {
+        // Bytes that are not UTF-8.
+        entry.bodyOmitted = true;
       }
       delete entry.bodyBytes;
     }
@@ -321,6 +324,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       if (declared === undefined) e.bodyLength = body.length;
       return;
     }
+    if (body instanceof Uint8Array && isBinaryResponse(rec)) return omitBody(rec, byteLength);
     if (typeof byteLength === 'number') e.encodedDataLength = byteLength;
     if (body instanceof Uint8Array) {
       e.bodyBytes = body;
@@ -449,8 +453,9 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         // Re-serialized, so its length is not the size received: record no size.
         if (typeof json === 'string') return complete(rec, json, undefined, false);
       } else if (type === 'arraybuffer') {
+        // Kept as bytes like Expo's bodies, and decoded when the agent reads the record.
         var buffer = xhr.response;
-        return complete(rec, undefined, buffer ? buffer.byteLength : undefined, false);
+        if (buffer && typeof buffer.byteLength === 'number') return complete(rec, keepBytes(new Uint8Array(buffer)), buffer.byteLength);
       } else if (type === 'blob') {
         var blob = xhr.response;
         if (blob) return readBlob(rec, blob, blob.size, Math.min(blob.size, BODY_CAP));

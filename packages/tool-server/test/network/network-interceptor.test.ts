@@ -1168,16 +1168,84 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(rt.records()[0]!.request.postData).toBe("{}");
     });
 
-    it("records only the byte length of an arraybuffer response", () => {
+    it.each([
+      {
+        case: "a binary type",
+        type: "image/png",
+        bytes: [0x89, 0x50],
+        decoder: true,
+        body: undefined,
+        omitted: true,
+      },
+      {
+        case: "a binary type, without a decoder",
+        type: "image/png",
+        bytes: [0x89, 0x50],
+        decoder: false,
+        body: undefined,
+        omitted: true,
+      },
+      {
+        case: "UTF-8 text",
+        type: "application/json",
+        bytes: [0x7b, 0x7d],
+        decoder: true,
+        body: "{}",
+        omitted: undefined,
+      },
+      {
+        case: "bytes that are not UTF-8",
+        type: "text/plain",
+        bytes: [0xff, 0xfe],
+        decoder: true,
+        body: undefined,
+        omitted: true,
+      },
+      // React Native has no TextDecoder: the text cannot be told from binary.
+      {
+        case: "text, without a decoder",
+        type: "application/json",
+        bytes: [0x7b, 0x7d],
+        decoder: false,
+        body: undefined,
+        omitted: undefined,
+      },
+    ])(
+      "records an arraybuffer response of $case as a blob one",
+      ({ type, bytes, decoder, body, omitted }) => {
+        const rt = createRuntime();
+        if (decoder) rt.context.TextDecoder = TextDecoder;
+        rt.install();
+        rt.run(
+          `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/bin'); x.responseType = 'arraybuffer'; x.send();`
+        );
+        rt.last().respond(200, { "content-type": type }, new Uint8Array(bytes).buffer);
+        const [record] = rt.records();
+
+        expect(record).toMatchObject({ state: "finished", encodedDataLength: bytes.length });
+        expect(record!.responseBody).toBe(body);
+        expect(record!.bodyOmitted).toBe(omitted);
+      }
+    );
+
+    it("keeps at most 1 MiB of a large arraybuffer response", () => {
       const rt = createRuntime();
+      rt.context.TextDecoder = TextDecoder;
       rt.install();
       rt.run(
-        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/bin'); x.responseType = 'arraybuffer'; x.send();`
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.responseType = 'arraybuffer'; x.send();`
       );
-      rt.last().respond(200, {}, new ArrayBuffer(16));
+      rt.last().respond(
+        200,
+        { "content-type": "text/plain" },
+        new Uint8Array(3 * BODY_CAP).fill(0x61).buffer
+      );
+      const log = rt.context.__argent_network_log as Array<{ bodyBytes?: Uint8Array }>;
+      expect(log[0]!.bodyBytes!.byteLength).toBeLessThanOrEqual(BODY_CAP + 3);
+      const [record] = rt.records();
 
-      expect(rt.records()[0]).toMatchObject({ state: "finished", encodedDataLength: 16 });
-      expect(rt.records()[0].responseBody).toBeUndefined();
+      expect(record).toMatchObject({ encodedDataLength: 3 * BODY_CAP, bodyTruncated: true });
+      expect(record!.responseBody).toHaveLength(BODY_CAP);
     });
 
     it.each([
@@ -2182,10 +2250,33 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         expect(rt.records()[0]).toMatchObject({
           state: "finished",
           encodedDataLength: NOT_UTF8.byteLength,
+          bodyOmitted: true,
         });
         expect(rt.records()[0]!.responseBody).toBeUndefined();
       }
     );
+
+    it("keeps no bytes of a binary body the app reads with arrayBuffer()", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const pending = rt.run(
+        `expoFetch('https://img.test/a.png').then(function(r) { return r.arrayBuffer(); })`
+      ) as Promise<ArrayBuffer>;
+      for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+      // UTF-8 bytes, which a decode would show as text.
+      rt.native[0]!.respond(200, { "Content-Type": "image/png" }, "PNG");
+      expect((await pending).byteLength).toBe(3);
+      await settle();
+
+      const log = rt.context.__argent_network_log as Array<{ bodyBytes?: Uint8Array }>;
+      expect(log[0]!.bodyBytes).toBeUndefined();
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        encodedDataLength: 3,
+        bodyOmitted: true,
+      });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+    });
 
     it("records no body and no size when the app never reads the body, and ends the record with the request", async () => {
       const { rt, value, calls } = await appReads("r.status", TEXT_BODY);
