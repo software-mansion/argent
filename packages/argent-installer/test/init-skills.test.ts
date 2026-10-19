@@ -123,6 +123,52 @@ describe("runSkillsStep", () => {
     expect(lockNames(lockPath)).toEqual(["argent-create-e2e"]);
   });
 
+  it("runs `skills remove` on tracked legacy names so every agent dir drops them", async () => {
+    const home = process.env.HOME!;
+    mkdirs(path.join(home, ".agents", "skills", "argent-create-flow"));
+    writeLock(path.join(home, "xdg", "skills", ".skill-lock.json"), [
+      "argent-create-flow",
+      "argent-create-e2e",
+    ]);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const [, args] = spawnMock.mock.calls[1]! as [string, string[]];
+    expect(args).toEqual(expect.arrayContaining(["skills", "remove", "-y", "-g"]));
+    expect(args).toContain("argent-create-flow");
+    expect(args).not.toContain("argent-create-e2e");
+  });
+
+  it("keeps legacy skills installed from another version's tag", async () => {
+    // A project pinned to an older local install gets that version's skills,
+    // which may still be the legacy names.
+    const project = path.join(tmpDir, "project");
+    vi.spyOn(process, "cwd").mockReturnValue(project);
+    const legacy = path.join(project, ".agents", "skills", "argent-create-flow");
+    mkdirs(legacy);
+    const lockPath = path.join(project, "skills-lock.json");
+    writeLock(lockPath, ["argent-create-flow"]);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "0.0.1-older",
+      scope: "local",
+    });
+
+    const [, args] = spawnMock.mock.calls[0]! as [string, string[]];
+    expect(args.some((arg) => arg.endsWith("#v0.0.1-older"))).toBe(true);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(legacy)).toBe(true);
+    expect(lockNames(lockPath)).toEqual(["argent-create-flow"]);
+  });
+
   it("removes legacy skills from the project only, leaving the global scope alone", async () => {
     const project = path.join(tmpDir, "project");
     vi.spyOn(process, "cwd").mockReturnValue(project);

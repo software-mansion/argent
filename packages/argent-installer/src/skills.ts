@@ -179,6 +179,22 @@ export function pruneLegacySkillDirs(
   return [...removed].sort();
 }
 
+// Legacy names the scope's lock still tracks. `skills remove` them before
+// pruneLegacySkillDirs drops their lock entries: only the skills CLI knows
+// every agent dir it linked them into (Kiro, Hermes, Windsurf, ...).
+export function listTrackedLegacySkills(
+  projectRoot: string,
+  scope: SkillScope,
+  bundled: ReadonlySet<string> = new Set(listBundledSkills())
+): string[] {
+  if (bundled.size === 0) return [];
+  const lockPath =
+    scope === "global" ? getGlobalSkillLockPath() : getProjectSkillLockPath(projectRoot);
+  return listArgentSkillsInLock(lockPath).filter(
+    (name) => LEGACY_ARGENT_SKILL_NAMES.includes(name) && !bundled.has(name)
+  );
+}
+
 // Drops `names` from a skills lockfile so a committed lock cannot restore them.
 function removeLockEntries(lockPath: string, names: readonly string[]): string[] {
   try {

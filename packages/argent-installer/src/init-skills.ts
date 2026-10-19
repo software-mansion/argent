@@ -6,13 +6,14 @@ import { track } from "@argent/telemetry";
 import {
   SKILLS_DIR,
   buildArgentSkillsSource,
+  getInstalledVersion,
   isOnline,
   isSkillsCliAvailable,
   npxChildEnv,
   withNpmForce,
 } from "./utils.js";
 import { InitCancelled } from "./init-args.js";
-import { pruneLegacySkillDirs } from "./skills.js";
+import { listTrackedLegacySkills, pruneLegacySkillDirs } from "./skills.js";
 import type { Scope } from "./init-scope.js";
 
 export type SkillsMethod = "default" | "interactive" | "manual";
@@ -134,13 +135,35 @@ export async function runSkillsStep(args: {
       // `skills add` never removes anything, so skills renamed since the last
       // install would sit next to their new names. Interactive installs may
       // have skipped the new names, so only the install-everything path prunes.
-      if (skillsMethod === "default") {
-        const removed = pruneLegacySkillDirs(
-          scope === "global" ? os.homedir() : (skillsCwd ?? process.cwd()),
-          scope === "global" ? "global" : "project"
-        );
-        if (removed.length > 0) {
-          p.log.info(pc.dim(`Removed legacy skills: ${removed.join(", ")}`));
+      // The legacy names come from this package's bundled set, so skip the
+      // prune when the source was another version's tag (an older local
+      // install), which may still ship them.
+      const sourceIsBundled = skillsSource === SKILLS_DIR || version === getInstalledVersion();
+      if (skillsMethod === "default" && sourceIsBundled) {
+        const pruneRoot = scope === "global" ? os.homedir() : (skillsCwd ?? process.cwd());
+        const pruneScope = scope === "global" ? "global" : "project";
+        const tracked = listTrackedLegacySkills(pruneRoot, pruneScope);
+        const removed = new Set<string>();
+        if (tracked.length > 0) {
+          const removeArgs = ["skills", "remove", "-y", ...(scope === "global" ? ["-g"] : [])];
+          try {
+            await runNpxSkills(
+              withNpmForce([
+                ...(offlineWithCache ? ["--no-install"] : []),
+                ...removeArgs,
+                ...tracked,
+              ]),
+              false,
+              skillsCwd
+            );
+            for (const name of tracked) removed.add(name);
+          } catch {
+            // non-fatal: the dir prune below still removes the managed dirs
+          }
+        }
+        for (const name of pruneLegacySkillDirs(pruneRoot, pruneScope)) removed.add(name);
+        if (removed.size > 0) {
+          p.log.info(pc.dim(`Removed legacy skills: ${[...removed].sort().join(", ")}`));
         }
       }
     } catch (err) {
