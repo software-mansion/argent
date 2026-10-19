@@ -48,6 +48,8 @@ interface FakeEmulator {
   ignoresPosture: boolean;
   dismissals: number;
   consoleRefuses: boolean;
+  /** `cmd device_state` fails: the image has no such service, or adb lost the device. */
+  deviceStateFails?: "no-service" | "no-device";
 }
 
 const POSTURE_TO_STATE: Record<string, { state: string; angle: number }> = {
@@ -141,7 +143,15 @@ const runAdbMock = vi.fn(async (args: string[]) => {
   }
   if (kind === "shell") {
     const command = rest.join(" ");
-    if (command === "cmd device_state print-states") return { stdout: emu.states, stderr: "" };
+    if (command === "cmd device_state print-states") {
+      if (emu.deviceStateFails === "no-service") {
+        throw new Error(`adb ${args.join(" ")} failed: cmd: Can't find service: device_state`);
+      }
+      if (emu.deviceStateFails === "no-device") {
+        throw new Error(`adb ${args.join(" ")} failed: adb: device '${args[1]}' not found`);
+      }
+      return { stdout: emu.states, stderr: "" };
+    }
     if (command.startsWith("cmd device_state print-state;")) {
       const wakefulness = emu.awake ? "Awake" : "Asleep";
       const read = `${emu.state}\nmScreenOnFully=${emu.screenOn}\nmWakefulness=${wakefulness}\nisKeyguardShowing=${emu.keyguard}\n`;
@@ -168,6 +178,7 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
 
 import { foldTool } from "../src/tools/fold";
 import {
+  androidImpl,
   parseDeviceStates,
   parseHingeAngle,
   parseSnapshot,
@@ -266,10 +277,14 @@ describe("fold on Android — execute", () => {
 
   it("warns, without failing the fold, when the lock screen stays up", async () => {
     emu = fresh({ raisesKeyguard: true, stuck: true });
+    const started = Date.now();
     const result = await fold({ posture: "closed" });
 
     expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
-    expect(result.warning).toMatch(/lock screen/);
+    expect(result.warning).toMatch(/could not dismiss it/);
+    expect(emu.dismissals).toBeLessThanOrEqual(3);
+    // Settling takes about a second; the dismissal gives up two seconds later.
+    expect(Date.now() - started).toBeLessThan(4_000);
   });
 
   it("leaves a lock screen that was up before the fold alone, and warns about it", async () => {
@@ -439,6 +454,40 @@ describe("fold on Android — execute", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_FAILED);
   });
 
+  it("rejects a loopback serial, which `adb emu` cannot address", async () => {
+    const udid = "127.0.0.1:5581";
+    // Through the tool, the capability reads it as a device.
+    const gated = await foldTool.execute!({}, { udid, posture: "open" } as never).catch(
+      (e: unknown) => e
+    );
+    expect(getFailureSignal(gated)?.error_code).toBe(
+      FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION
+    );
+    // Past the gate, as an `unknown` serial, the handler rejects it.
+    const err = await androidImpl
+      .handler({}, { udid, posture: "open" }, { id: udid, platform: "android", kind: "unknown" })
+      .catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_UNSUPPORTED);
+    expect(String(err)).toMatch(/only an Android emulator's hinge can be moved/);
+    expect(runAdbMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an image without device states as not foldable", async () => {
+    emu = fresh({ deviceStateFails: "no-service" });
+    const err = await fold({ posture: "open" }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_UNSUPPORTED);
+    expect(String(err)).toMatch(/not a foldable emulator/);
+  });
+
+  it("keeps adb's error for a device adb cannot find", async () => {
+    emu = fresh({ deviceStateFails: "no-device" });
+    const err = await fold({ posture: "open" }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).not.toBe(FAILURE_CODES.ANDROID_FOLD_UNSUPPORTED);
+    expect(String(err)).toMatch(/device 'emulator-5580' not found/);
+  });
+
   it("rejects a phone profile as unsupported", async () => {
     emu = fresh({ states: PHONE_STATES });
     const err = await fold({ posture: "open" }).catch((e: unknown) => e);
@@ -490,6 +539,8 @@ describe("isFoldableAvd", () => {
   it("is true for a profile with a hinge", async () => {
     avd("Fold", "hw.device.name = pixel_9_pro_fold\nhw.sensor.hinge = yes\n");
     expect(await isFoldableAvd("Fold")).toBe(true);
+    avd("Generic", "hw.device.name = 7.6in Foldable\nhw.sensor.hinge = true\n");
+    expect(await isFoldableAvd("Generic")).toBe(true);
   });
 
   it("is false for a phone, and for an AVD it cannot find", async () => {

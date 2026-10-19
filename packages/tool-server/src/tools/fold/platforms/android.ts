@@ -1,6 +1,6 @@
-import { FAILURE_CODES, FailureError, type DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { consolePortFromAdbSerial, runAdb } from "../../../utils/adb";
+import { isTerminalAdbError, runAdb } from "../../../utils/adb";
 import { runEmuConsole } from "../../../utils/emulator-console";
 
 /**
@@ -43,6 +43,13 @@ const SETTLE_TIMEOUT_MS = 15_000;
  * device is awake.
  */
 const STABLE_READS = 3;
+
+/**
+ * `wm dismiss-keyguard` calls, and how long the lock screen may stay up, before
+ * a fold's lock screen counts as one argent cannot dismiss (a PIN keeps it up).
+ */
+const MAX_DISMISS_ATTEMPTS = 3;
+const DISMISS_TIMEOUT_MS = 2_000;
 
 /**
  * Extra reads an asleep result needs when the device was asleep before an
@@ -225,13 +232,15 @@ async function dismissFoldLockScreen(
   signal: AbortSignal | undefined
 ): Promise<string | undefined> {
   let clear = 0;
-  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  let attempts = 0;
+  const deadline = Date.now() + DISMISS_TIMEOUT_MS;
+  for (;;) {
     if (!(await readSnapshot(serial)).keyguard) {
       if (++clear >= STABLE_READS) return undefined;
     } else {
       clear = 0;
-      await shell(serial, "wm dismiss-keyguard");
+      if (Date.now() >= deadline) break;
+      if (attempts++ < MAX_DISMISS_ATTEMPTS) await shell(serial, "wm dismiss-keyguard");
     }
     await sleep(POLL_MS, signal);
   }
@@ -262,6 +271,21 @@ function withDeviceLock<T>(serial: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/**
+ * The device states the guest lists. An image without `cmd device_state`
+ * (before Android 12) has no foldable states either; an adb error about the
+ * device itself stays adb's.
+ */
+async function readDeviceStates(serial: string): Promise<Map<string, string>> {
+  try {
+    return parseDeviceStates(await shell(serial, "cmd device_state print-states"));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (isTerminalAdbError(message) || getFailureSignal(err)?.error_kind === "timeout") throw err;
+    return new Map();
+  }
+}
+
 async function fold(
   serial: string,
   params: AndroidFoldParams,
@@ -270,7 +294,7 @@ async function fold(
 ): Promise<AndroidFoldResult> {
   // A fold cancelled while it waited for the lock must not move the hinge.
   signal?.throwIfAborted();
-  const states = parseDeviceStates(await shell(serial, "cmd device_state print-states"));
+  const states = await readDeviceStates(serial);
   const byId = new Map([...states].map(([name, id]) => [id, name]));
   const supported = POSTURES.filter((p) => states.has(EMULATOR_POSTURES[p].state));
   if (supported.length === 0) {
@@ -388,7 +412,10 @@ export const androidImpl: PlatformImpl<unknown, AndroidFoldParams, AndroidFoldRe
 
     // A physical foldable has no console to drive its hinge; it is folded by
     // hand. The capability lets a serial that resolved as `unknown` through.
-    if (consolePortFromAdbSerial(serial) === null) {
+    // `adb emu` takes only an `emulator-<port>` serial, so a loopback one
+    // (`127.0.0.1:<port>`), which the capability already reads as a device,
+    // is rejected the same way.
+    if (!/^emulator-\d+$/.test(serial)) {
       throw unsupported(
         `Cannot fold ${serial}: only an Android emulator's hinge can be moved; fold a physical device by hand.`,
         "android_fold_not_emulator"

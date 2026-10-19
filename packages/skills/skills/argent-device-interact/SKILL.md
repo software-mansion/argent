@@ -221,7 +221,7 @@ Rules:
 - iOS: a fold between two angles that are not 0 or 180 can keep the current panel. The result names the active panel. To change panels, fold to `closed` or `open`.
 - Fold between gestures, not during a gesture. A gesture stays on the panel where it started.
 - Android: the result gives `deviceState` (`CLOSED`, `HALF_OPENED`, `OPENED`). A lock screen that the fold to closed shows is dismissed; a `warning` says when it cannot be, or when a lock screen is up after the fold. Unlock the device before the next action.
-- Android: only a Pixel Fold AVD has a cover panel. When a generic foldable AVD is closed, the emulator shows only the left part of the inner display, and `describe` frames in the right part cannot be seen or tapped.
+- Android: only a Pixel Fold AVD has a cover panel. When a generic foldable AVD is closed, the emulator shows only the left part of the display, and `describe` frames do not match tap coordinates. Only elements that span the visible part, such as full-width rows, take a tap reliably. Use a Pixel Fold AVD to test the cover panel.
 - iOS: if argent cannot find the active panel, it uses the cover panel. The tool result then has a `warning`, and a screenshot-diff summary has a `panel:` line. Take a screenshot to see what the device shows, then do the check that the warning gives.
 
 ### await-ui-element: Block until a UI element reaches a state
