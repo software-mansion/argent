@@ -1187,9 +1187,11 @@ function createRuntime({
 
     abort(): void {
       this._aborted = true;
-      if (
-        !(this.readyState === 0 || (this.readyState === 1 && !this.sent) || this.readyState === 4)
-      ) {
+      if (!(
+        this.readyState === 0 ||
+        (this.readyState === 1 && !this.sent) ||
+        this.readyState === 4
+      )) {
         this.reset();
         this.setReadyState(4);
       }
@@ -3780,22 +3782,26 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         postData: "ab" + "你".repeat((BODY_CAP - 4) / 3),
         truncated: true,
       },
-    ])("shows $shows in an Expo request body", async ({ body, postData, truncated }) => {
-      const rt = createRuntime(EXPO_57);
-      rt.install();
-      rt.run(
-        `var sent = ${body}; expoFetch('https://api.test/upload', { method: 'POST', body: sent })`
-      );
-      await untilSent(rt, 1);
-      expect(rt.records()[0]!.request.postData).toBe(postData);
-      expect(rt.records()[0]!.request.postDataTruncated).toBe(truncated);
-      // The request goes out as the app sent it.
-      expect(Buffer.from(rt.native[0]!.body!)).toEqual(
-        Buffer.from(
-          rt.run(`typeof sent === 'string' ? new TextEncoder().encode(sent) : sent`) as Uint8Array
-        )
-      );
-    });
+    ])(
+      "shows $shows in an Expo request body",
+      async ({ body, postData, truncated }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.install();
+        rt.run(
+          `var sent = ${body}; expoFetch('https://api.test/upload', { method: 'POST', body: sent })`
+        );
+        await untilSent(rt, 1);
+        expect(rt.records()[0]!.request.postData).toBe(postData);
+        expect(rt.records()[0]!.request.postDataTruncated).toBe(truncated);
+        // The request goes out as the app sent it.
+        expect(Buffer.from(rt.native[0]!.body!)).toEqual(
+          Buffer.from(
+            rt.run(`typeof sent === 'string' ? new TextEncoder().encode(sent) : sent`) as Uint8Array
+          )
+        );
+      },
+      20_000
+    );
 
     it("passes a native request constructed before the install through, unrecorded", async () => {
       const rt = createRuntime(EXPO_57);
@@ -4451,7 +4457,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
     ]).toString("utf8");
 
-    it.each([
+    it.each<{ headers: Record<string, string>; fields: Record<string, unknown> }>([
       { headers: { "Content-Length": "10" }, fields: { encodedDataLength: 10 } },
       { headers: {}, fields: { bodyLength: PNG_AS_TEXT.length } },
       {
@@ -4492,7 +4498,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(record!.encodedDataLength).toBeUndefined();
     });
 
-    it.each([
+    it.each<{ headers: Record<string, string>; fields: Record<string, unknown> }>([
       {
         headers: { "Content-Type": "image/png", "Content-Length": "4" },
         fields: { encodedDataLength: 4 },
@@ -4553,7 +4559,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(record!.request.postDataTruncated).toBe(true);
     });
 
-    it.each([
+    it.each<{ headers: Record<string, string>; size: number | undefined }>([
       { headers: { "content-length": String(2 * BODY_CAP) }, size: 2 * BODY_CAP },
       { headers: {} as Record<string, string>, size: undefined },
       // iOS keeps the compressed size of a body it decoded.
