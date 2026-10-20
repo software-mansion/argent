@@ -61,7 +61,7 @@ const UTF8_FLAG = 1 << 8;
 export function parseManifestPackage(xml: Buffer): string {
   let strings: string[] = [];
   // Skip the 8-byte RES_XML_TYPE file header, then walk the chunks.
-  for (let p = xml.readUInt16LE(2); p + 8 <= xml.length; ) {
+  for (let p = xml.readUInt16LE(2); p + 8 <= xml.length;) {
     const type = xml.readUInt16LE(p);
     const chunkSize = xml.readUInt32LE(p + 4);
     if (chunkSize < 8) break;

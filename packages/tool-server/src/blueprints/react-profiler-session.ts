@@ -15,7 +15,7 @@ import {
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
-export interface ScriptSourceEntry {
+interface ScriptSourceEntry {
   url: string;
   sourceMapURL: string;
 }

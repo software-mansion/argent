@@ -1662,6 +1662,28 @@ describe("getManagedContentTargets", () => {
     );
     expect(targets.agentTargets.map((t) => t.label)).toEqual(["~/.config/opencode/agents"]);
   });
+
+  it("lists .kiro/skills as a Kiro skill target (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Kiro");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([".agents/skills", ".kiro/skills"]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists ~/.kiro/skills as a Kiro skill target (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Kiro");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([
+      "~/.agents/skills",
+      "~/.kiro/skills",
+    ]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
 });
 
 describe("copyRulesAndAgents", () => {

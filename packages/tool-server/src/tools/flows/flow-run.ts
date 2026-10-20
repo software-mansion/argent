@@ -2755,6 +2755,7 @@ async function runFold(
     const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
       activeScreen?: number;
       screen?: { panel?: string; width?: number; height?: number };
+      deviceState?: string;
       warning?: string;
     };
     const size =
@@ -2764,9 +2765,14 @@ async function runFold(
     // The step's own target, not the result's posture: that is set only at a
     // preset angle, and a mid angle can leave either panel live.
     const target = step.posture ?? `${step.angle}°`;
+    // Android names the device state the guest committed, not a panel.
+    const landed =
+      result.deviceState !== undefined
+        ? `device state ${result.deviceState}`
+        : `screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`;
     return {
       ok: true,
-      reason: `${target}: screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`,
+      reason: `${target}: ${landed}`,
       ...(result.warning !== undefined ? { warning: result.warning } : {}),
     };
   } catch (err) {

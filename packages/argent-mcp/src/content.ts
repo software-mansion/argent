@@ -8,8 +8,7 @@ import {
 } from "@argent/tools-client";
 
 export type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
 /**
  * Context for resolving artifact handles. Omitted ⇒ rendering falls back to the
@@ -186,7 +185,7 @@ export async function screenshotDiffToMcpContent(
   return blocks;
 }
 
-export type FlowStepResult = {
+type FlowStepResult = {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";

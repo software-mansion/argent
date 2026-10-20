@@ -14,11 +14,7 @@ export const USBMUX_MAX_PACKET_BYTES = 4 * 1024 * 1024;
  * `device-unattached` and `runner-not-listening` are pre-send failures.
  */
 export type IosDeviceTransportErrorKind =
-  | "device-unattached"
-  | "runner-not-listening"
-  | "protocol"
-  | "timeout"
-  | "http";
+  "device-unattached" | "runner-not-listening" | "protocol" | "timeout" | "http";
 
 /**
  * Append a recovery hint to an error message if it is not already present.

@@ -65,9 +65,7 @@ function servedToolInput(file: ToolStepFile, withFiles: boolean): boolean {
  * missing, `relative` when the path is relative, `extension` when its name is
  * not one the client sends.
  */
-export function refusedToolInputFix(
-  file: ToolStepFile
-): "update" | "relative" | "extension" | undefined {
+function refusedToolInputFix(file: ToolStepFile): "update" | "relative" | "extension" | undefined {
   if (isClientFileArgument(file)) return "update";
   if (!isFileArgument(file)) return undefined;
   return path.posix.isAbsolute(file.path) ? "extension" : "relative";

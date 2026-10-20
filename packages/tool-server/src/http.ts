@@ -962,8 +962,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // through the registry inherit the same ai_client / platform instead of being
       // recorded as anonymous.
       let recordChildInvocation:
-        | ((childInvocationId: string, childArgs?: unknown) => () => void)
-        | undefined;
+        ((childInvocationId: string, childArgs?: unknown) => () => void) | undefined;
       const recordInvocation = options?.recordInvocation;
       if (recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);

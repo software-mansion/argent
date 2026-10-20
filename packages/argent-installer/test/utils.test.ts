@@ -849,8 +849,7 @@ describe("isSkillsCliAvailable", () => {
     isSkillsCliAvailable();
 
     const opts = execSyncMock.mock.calls[0]![1] as
-      | { stdio?: [unknown, unknown, unknown] }
-      | undefined;
+      { stdio?: [unknown, unknown, unknown] } | undefined;
     expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
   });
 

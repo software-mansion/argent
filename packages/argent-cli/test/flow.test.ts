@@ -20,12 +20,10 @@ const materializeArtifactsMock = vi.hoisted(() =>
   vi.fn(async (data: unknown) => ({ result: data, images: [] }))
 );
 const getResolvedToolsUrlMock = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<ResolvedToolsUrl> => ({
-      url: null,
-      source: "none",
-    })
-  )
+  vi.fn(async (): Promise<ResolvedToolsUrl> => ({
+    url: null,
+    source: "none",
+  }))
 );
 
 vi.mock("@argent/tools-client", async (importOriginal) => ({

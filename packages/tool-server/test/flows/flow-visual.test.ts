@@ -36,9 +36,7 @@ const h = vi.hoisted(() => ({
   diffNormalizeSizes: undefined as boolean | undefined,
   /** What the waitForFrame mock resolves a cropOn selector to. */
   cropFrame: undefined as
-    | undefined
-    | "aborted"
-    | { x: number; y: number; width: number; height: number },
+    undefined | "aborted" | { x: number; y: number; width: number; height: number },
   /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
   cropFrameError: null as null | Error,
   dimensionMismatch: null as null | {

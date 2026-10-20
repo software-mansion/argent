@@ -29,9 +29,9 @@
     "clsx": "2.1.1",
     "lucide-react": "^1.33.0",
     "prism-react-renderer": "2.4.1",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "satori": "^0.33.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "satori": "^0.60.0",
     "webpack": "5.105.4"
   },
   "devDependencies": {
