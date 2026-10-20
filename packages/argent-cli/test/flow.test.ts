@@ -369,7 +369,7 @@ describe("argent e2e run", () => {
     errSpy.mockRestore();
   });
 
-  it("resolves the YAML path and forwards flags to flow-execute", async () => {
+  it("resolves the YAML path and forwards flags to e2e-execute", async () => {
     // Downward-relative from the flow's own directory: a relative spelling
     // that climbs out of cwd would contain ".." segments, which the CLI now
     // rejects. process.cwd() after chdir is fully symlink-resolved (macOS
@@ -389,7 +389,7 @@ describe("argent e2e run", () => {
     }
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-      "flow-execute",
+      "e2e-execute",
       {
         flow_path: path.join(runRoot, "checkout.yaml"),
         project_root: runRoot,
@@ -474,13 +474,13 @@ describe("argent e2e run", () => {
     expect(errs.join("\n")).toContain("--platform requires a value");
   });
 
-  it("forwards --flag=value forms to flow-execute like the space-separated ones", async () => {
+  it("forwards --flag=value forms to e2e-execute like the space-separated ones", async () => {
     await expect(
       flow(["run", checkoutPath, "--platform=ios", "--device=SIM-1"], opts)
     ).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-      "flow-execute",
+      "e2e-execute",
       {
         flow_path: checkoutPath,
         project_root: process.cwd(),
@@ -547,7 +547,7 @@ describe("argent e2e run", () => {
     }
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-      "flow-execute",
+      "e2e-execute",
       {
         // A name is sent as the path it resolves to, never as a `name` source:
         // one identity keys the report, __baselines__/, and --output whichever
@@ -925,7 +925,7 @@ describe("argent e2e run", () => {
   // keying __baselines__/ and --output. These fixtures probe the filesystem
   // rather than assume it: on a case-sensitive one (ext4 CI) the lowercase
   // spelling is simply ENOENT. Both branches assert the contract that
-  // matters — rejected either way, flow-execute never invoked — and the
+  // matters — rejected either way, e2e-execute never invoked — and the
   // case-insensitive branch additionally pins the message, since there the
   // supplied path looks perfectly valid to the operator.
   it("refuses a case-insensitive extension match, telling the operator to rename the file", async () => {
@@ -1169,10 +1169,10 @@ describe("argent e2e run", () => {
     expect(out).not.toContain("E2E test path must not end in a path separator");
   });
 
-  it("exits 2 on an empty directory named like a flow instead of handing it to flow-execute", async () => {
+  it("exits 2 on an empty directory named like a flow instead of handing it to e2e-execute", async () => {
     // A directory — even one named `bundle.yaml` — dispatches to directory
     // mode (the isDirectory() branch runs before any file check), so it is
-    // never handed to flow-execute as a file; empty, it fails discovery
+    // never handed to e2e-execute as a file; empty, it fails discovery
     // before routing is consulted or a client is built.
     await expect(flow(["run", bundleDirPath], opts)).rejects.toThrow("process.exit:2");
 
@@ -1184,7 +1184,7 @@ describe("argent e2e run", () => {
   // Skipped as root / on Windows, where a mode-000 file is still readable —
   // see canDenyRead.
   it.skipIf(!canDenyRead)(
-    "exits 2 on an unreadable flow file rather than letting flow-execute hit EACCES",
+    "exits 2 on an unreadable flow file rather than letting e2e-execute hit EACCES",
     async () => {
       // The exit code is the contract, not just the wording: without the
       // readability probe the EACCES surfaces out of the tool call instead,
@@ -1198,14 +1198,14 @@ describe("argent e2e run", () => {
     }
   );
 
-  it("sends flow_path and project_root to flow-execute", async () => {
+  it("sends flow_path and project_root to e2e-execute", async () => {
     // The tool-server decides what a run can do, local or over a link: an
     // uploaded flow that is self-contained runs, one that reads beside its
     // file is refused there.
     await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
-    expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("flow-execute");
+    expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("e2e-execute");
     expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
       flow_path: checkoutPath,
       project_root: process.cwd(),
@@ -2359,12 +2359,12 @@ describe("argent e2e run <dir>", () => {
     // Only the two safe top-level .yaml files, in lexicographic order, and
     // never with onProgress (batch output is failures-only).
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
-    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(1, "flow-execute", {
+    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(1, "e2e-execute", {
       flow_path: path.join(flowsDir, "a-login.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
-    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(2, "flow-execute", {
+    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(2, "e2e-execute", {
       flow_path: path.join(flowsDir, "b-checkout.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
@@ -3085,7 +3085,7 @@ describe("argent e2e run <dir>", () => {
 
     await expect(flow(["run", dirYaml], opts)).rejects.toThrow("process.exit:0");
 
-    expect(toolsClientMock.callTool).toHaveBeenCalledWith("flow-execute", {
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith("e2e-execute", {
       flow_path: path.join(dirYaml, "one.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
@@ -3173,13 +3173,13 @@ describe("argent e2e run <dir>", () => {
     }
   );
 
-  it("sends every flow in the directory to flow-execute", async () => {
+  it("sends every flow in the directory to e2e-execute", async () => {
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
     expect(toolsClientMock.callTool.mock.calls.map((c) => c[0])).toEqual([
-      "flow-execute",
-      "flow-execute",
+      "e2e-execute",
+      "e2e-execute",
     ]);
     expect(logs.join("\n")).toContain("2 passed");
   });
@@ -3303,7 +3303,7 @@ describe("argent e2e run <dir>", () => {
       // without the top-level "Could not read e2e test directory" abort.
       expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
       expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-        "flow-execute",
+        "e2e-execute",
         expect.objectContaining({ flow_path: path.join(suiteDir, "open.yaml") })
       );
       expect(errs.join("\n")).not.toContain("Could not read e2e test directory");

@@ -1091,11 +1091,11 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
 }
 
 /**
- * One run payload builder so single and batch runs cannot drift. Runs call the
- * former tool id `flow-execute` for one release, so this CLI still works over a
- * link to a tool-server that predates `e2e-execute`.
+ * One run payload builder so single and batch runs cannot drift. A tool-server
+ * that predates `e2e-execute` lists only `flow-execute`; the tools-client sends
+ * the call there, so this CLI still works over a link to it.
  */
-const RUN_TOOL_ID = "flow-execute";
+const RUN_TOOL_ID = "e2e-execute";
 
 function buildRunPayload(
   flowPath: string,

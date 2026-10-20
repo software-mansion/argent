@@ -198,6 +198,15 @@ describe("a call by name to a tool-server that predates .argent/e2e", () => {
     });
   });
 
+  it("sends an e2e-execute call by flow_path, as `argent e2e run` makes it, to flow-execute", async () => {
+    await write(e2e("run.yaml"));
+    const { client, posts } = stubServer(olderTools);
+
+    await client.callTool("e2e-execute", { flow_path: e2e("run.yaml"), project_root: root });
+    expect(posts[0]!.url).toBe("http://stub/tools/flow-execute");
+    expect(named(posts[0]!.body.flow_path)).toBe(e2e("run.yaml"));
+  });
+
   it.each([
     ["only in .argent/flows", "old"],
     ["nowhere", "nowhere"],
