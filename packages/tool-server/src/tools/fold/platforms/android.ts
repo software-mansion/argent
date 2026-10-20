@@ -137,7 +137,8 @@ interface Snapshot {
   screenOn: boolean;
   /** `mWakefulness` is `Awake` (or `Dreaming`), not `Asleep` or `Dozing`. */
   awake: boolean;
-  keyguard: boolean;
+  /** Unknown when `dumpsys window` printed no `isKeyguardShowing=` line, as it can right after a fold. */
+  keyguard: boolean | undefined;
 }
 
 /**
@@ -146,19 +147,26 @@ interface Snapshot {
  * counts as on: a missing signal must not stall every fold for the whole
  * budget. A missing `mWakefulness` follows the screen for the same reason;
  * on such an image a screen that stays dark ends the fold as asleep, with a
- * warning, not as a failure.
+ * warning, not as a failure. A missing `isKeyguardShowing` leaves the lock
+ * screen unknown.
  */
 export function parseSnapshot(stdout: string): Snapshot {
   const screenOn = !/mScreenOnFully=false/.test(stdout);
   const wakefulness = /mWakefulness=([A-Za-z]+)/.exec(stdout)?.[1];
+  const keyguard = /isKeyguardShowing=([a-z]+)/.exec(stdout)?.[1];
   return {
     state: /^\s*(\d+)\s*$/m.exec(stdout)?.[1],
     screenOn,
     awake: wakefulness ? !/^(Asleep|Dozing)$/.test(wakefulness) : screenOn,
-    keyguard: /isKeyguardShowing=true/.test(stdout),
+    keyguard: keyguard === undefined ? undefined : keyguard === "true",
   };
 }
 
+/**
+ * The shell's exit status is the last command's, so a grep that matches
+ * nothing (a line `dumpsys` skips for a moment after a fold) would fail the
+ * read; `; true` leaves a missing line to the parse.
+ */
 async function readSnapshot(serial: string): Promise<Snapshot> {
   return parseSnapshot(
     await shell(
@@ -166,7 +174,7 @@ async function readSnapshot(serial: string): Promise<Snapshot> {
       "cmd device_state print-state; " +
         "dumpsys window displays | grep -o 'mScreenOnFully=[a-z]*'; " +
         "dumpsys power | grep -o 'mWakefulness=[A-Za-z]*'; " +
-        "dumpsys window | grep -o 'isKeyguardShowing=[a-z]*'"
+        "dumpsys window | grep -o 'isKeyguardShowing=[a-z]*'; true"
     )
   );
 }
@@ -228,7 +236,8 @@ async function awaitSettled(
  * capture reads the lock screen instead of the app, so it is dismissed the way
  * the swipe would. A keyguard already up before the fold is not the fold's to
  * clear, and one with a PIN cannot be: that is a warning, the fold itself
- * succeeded.
+ * succeeded. A read that does not say whether the lock screen is up neither
+ * counts as clear nor triggers a dismissal.
  */
 async function dismissFoldLockScreen(
   serial: string,
@@ -239,12 +248,20 @@ async function dismissFoldLockScreen(
   let lastAttempt = -Infinity;
   const deadline = Date.now() + DISMISS_TIMEOUT_MS;
   for (;;) {
-    if (!(await readSnapshot(serial)).keyguard) {
+    const { keyguard } = await readSnapshot(serial);
+    if (keyguard === false) {
       if (++clear >= STABLE_READS) return undefined;
     } else {
       clear = 0;
-      if (Date.now() >= deadline) break;
-      if (attempts < MAX_DISMISS_ATTEMPTS && Date.now() - lastAttempt >= DISMISS_SPACING_MS) {
+      if (Date.now() >= deadline) {
+        if (keyguard) break;
+        return undefined;
+      }
+      if (
+        keyguard &&
+        attempts < MAX_DISMISS_ATTEMPTS &&
+        Date.now() - lastAttempt >= DISMISS_SPACING_MS
+      ) {
         attempts++;
         lastAttempt = Date.now();
         await shell(serial, "wm dismiss-keyguard");
@@ -326,7 +343,8 @@ async function fold(
     );
   }
 
-  // A lock screen already up before the fold is not the fold's to clear.
+  // A lock screen already up before the fold is not the fold's to clear. One
+  // this read cannot see counts as down.
   const before = await readSnapshot(serial);
 
   signal?.throwIfAborted();
@@ -355,11 +373,24 @@ async function fold(
   // at the end: it never came on, or it came on and went off again.
   const darkAwake = last?.state !== undefined && last.awake && !last.screenOn;
   const budget = `${SETTLE_TIMEOUT_MS / 1000} s`;
+
+  // `wm dismiss-keyguard` cannot clear the lock screen of an asleep device;
+  // the screen-off warning covers that case. It runs before a fold whose
+  // screen stayed dark fails, so that failure does not leave the lock screen
+  // the fold raised.
+  let lockScreen = last?.keyguard ?? false;
+  let lockScreenWarning: string | undefined;
+  if (stateName === "CLOSED" && !before.keyguard && last?.awake) {
+    lockScreen = false;
+    lockScreenWarning = await dismissFoldLockScreen(serial, signal);
+  }
+
   if (!settled && expected !== undefined) {
     throw failed(
       last?.state === expected
         ? `${serial} reached device state ${stateName} for the ${params.posture} posture, but the device is awake ` +
-            `and the screen did not stay on within ${budget}. Take a screenshot before the next action.`
+            `and the screen did not stay on within ${budget}. Take a screenshot before the next action.` +
+            (lockScreenWarning ? ` ${lockScreenWarning}` : "")
         : `${serial} did not reach the ${params.posture} posture: the guest still reports device state ${stateName}. ` +
             "Fold again; a screenshot shows what the device renders.",
       "android_fold_unverified"
@@ -379,14 +410,7 @@ async function fold(
     );
   }
 
-  // `wm dismiss-keyguard` cannot clear the lock screen of an asleep device;
-  // the screen-off warning covers that case.
-  let lockScreen = last?.keyguard ?? false;
-  if (stateName === "CLOSED" && !before.keyguard && last?.awake) {
-    lockScreen = false;
-    const warning = await dismissFoldLockScreen(serial, signal);
-    if (warning) warnings.push(warning);
-  }
+  if (lockScreenWarning) warnings.push(lockScreenWarning);
   // A lock screen that was up before the fold is not the fold's to clear, but
   // every later tap lands on it.
   const screenOff = settled && last !== undefined && !last.screenOn;

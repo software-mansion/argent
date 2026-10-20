@@ -53,6 +53,8 @@ interface FakeEmulator {
   /** A stuck lock screen clears this long after the first dismissal. */
   clearsAfterMs?: number;
   clearAt?: number;
+  /** This many reads print no `isKeyguardShowing=` line, as `dumpsys window` can right after a fold. */
+  keyguardLineMissing?: number;
 }
 
 const POSTURE_TO_STATE: Record<string, { state: string; angle: number }> = {
@@ -161,7 +163,13 @@ const runAdbMock = vi.fn(async (args: string[]) => {
     if (command.startsWith("cmd device_state print-state;")) {
       if (emu.clearAt !== undefined && Date.now() >= emu.clearAt) emu.keyguard = false;
       const wakefulness = emu.awake ? "Awake" : "Asleep";
-      const read = `${emu.state}\nmScreenOnFully=${emu.screenOn}\nmWakefulness=${wakefulness}\nisKeyguardShowing=${emu.keyguard}\n`;
+      let read = `${emu.state}\nmScreenOnFully=${emu.screenOn}\nmWakefulness=${wakefulness}\n`;
+      if (emu.keyguardLineMissing && emu.keyguardLineMissing-- > 0) {
+        // The shell exits with the last grep's status, which found nothing.
+        if (!command.endsWith("; true")) throw new Error(`adb ${args.join(" ")} failed: ${read}`);
+      } else {
+        read += `isKeyguardShowing=${emu.keyguard}\n`;
+      }
       advance();
       return { stdout: read, stderr: "" };
     }
@@ -237,12 +245,13 @@ describe("fold on Android — parsing", () => {
       screenOn: false,
       awake: true,
     });
-    expect(parseSnapshot("3\n")).toEqual({
+    expect(parseSnapshot("3\n")).toStrictEqual({
       state: "3",
       screenOn: true,
       awake: true,
-      keyguard: false,
+      keyguard: undefined,
     });
+    expect(parseSnapshot("3\nisKeyguardShowing=false\n").keyguard).toBe(false);
   });
 
   it("reads the hinge angle", () => {
@@ -303,6 +312,25 @@ describe("fold on Android — execute", () => {
     expect(emu.keyguard).toBe(false);
     // One call a second until it clears.
     expect(emu.dismissals).toBe(3);
+  });
+
+  it("takes reads without the lock screen line as unknown, not as a failed fold", async () => {
+    emu = fresh({ raisesKeyguard: true, keyguardLineMissing: 4 });
+    const result = await fold({ posture: "closed" });
+
+    expect(result).toEqual({ posture: "closed", deviceState: "CLOSED", hingeAngle: 0 });
+    expect(emu.dismissals).toBe(1);
+    expect(emu.keyguard).toBe(false);
+  });
+
+  it("does not count reads without the lock screen line as a cleared lock screen", async () => {
+    // The pre-fold read and the four settling reads, then five during the dismissal.
+    emu = fresh({ raisesKeyguard: true, stuck: true, keyguardLineMissing: 10 });
+    const result = await fold({ posture: "closed" });
+
+    expect(result).toMatchObject({ posture: "closed", deviceState: "CLOSED" });
+    expect(result.warning).toMatch(/could not dismiss it/);
+    expect(emu.dismissals).toBeGreaterThan(0);
   });
 
   it("leaves a lock screen that was up before the fold alone, and warns about it", async () => {
@@ -419,6 +447,15 @@ describe("fold on Android — execute", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_FOLD_FAILED);
     expect(String(err)).toMatch(/reached device state CLOSED.*screen did not stay on/);
     expect(String(err)).not.toMatch(/did not reach/);
+  });
+
+  it("dismisses the lock screen a fold to closed raised before failing on a dark screen", async () => {
+    emu = fresh({ darkens: true, raisesKeyguard: true });
+    const err = await fold({ posture: "closed" }).catch((e: unknown) => e);
+
+    expect(String(err)).toMatch(/reached device state CLOSED.*screen did not stay on/);
+    expect(emu.dismissals).toBe(1);
+    expect(emu.keyguard).toBe(false);
   });
 
   it("does not move the hinge for a fold cancelled while it waited", async () => {
