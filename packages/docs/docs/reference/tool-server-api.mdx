@@ -52,7 +52,7 @@ The `project_root` input of `flow-add-step` carries `"collect": "step"`:
 
 ## The flow file input
 
-Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. For an input with `collect`, the object has three more fields:
+Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. `path` is an absolute path on the client. The client resolves a relative path against its working directory. For an input with `collect`, the object has three more fields:
 
 ```json
 {
@@ -239,7 +239,7 @@ The `project_root` input of `flow-add-step` has the kind `probe` and carries `"c
 
 The recording file is `<project_root>/.argent/flows/<name>.yaml`, with the `project_root` and the `name` of the call. The [client policy](#client-policy) applies, with the recording file in place of the flow file.
 
-The run of a recorded `flow-execute` step updates baselines only when the step sets `updateBaselines: true`. The result of `flow-add-step` then has a `baselineWrites` list, as the result of a run. A step that reads no file sends an empty `members` list. The call is still a stream, as [The call](#the-call) describes. A call without a valid `name`, without an absolute `project_root`, or with `args` that are not the JSON text of an object also sends an empty list.
+The run of a recorded `flow-execute` step updates baselines only when the step sets `updateBaselines: true`. The result of `flow-add-step` then has a `baselineWrites` list, as the result of a run. A step that reads no file sends an empty `members` list. The call is still a stream, as [The call](#the-call) describes. A call without a valid `name` or with `args` that are not the JSON text of an object also sends an empty list.
 
 ## The `x-argent-linked` header
 
