@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
-    "electron": "^42.5.0",
+    "electron": "^44.8.0",
     "typescript": "^6.0.3"
   }
 }

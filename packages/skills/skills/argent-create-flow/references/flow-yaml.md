@@ -111,12 +111,12 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 Directives stop the flow on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `fold`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
 
-`fold` folds or unfolds a foldable iOS simulator. Write a posture (`fold: closed`, `fold: half-open`, `fold: open`) or an angle from 0 to 180 (`fold: 120`). The step waits until the device accepts input again. A recorded `fold` tool call becomes a `fold:` step. After a `fold` step:
+`fold` folds or unfolds a foldable iOS simulator or Android emulator. Write a posture (`fold: closed`, `fold: half-open`, `fold: open`) or an angle from 0 to 180 (`fold: 120`). The step waits until the device accepts input again. A recorded `fold` tool call becomes a `fold:` step. After a `fold` step:
 
 - The coordinates change with the panel. Selectors resolve against a new tree.
 - A `snapshot` baseline is valid only for the posture that made it.
-- Unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
-- A fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
+- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
+- iOS: a fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
 Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 

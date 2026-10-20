@@ -46,7 +46,7 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   },
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android, .vpkg for Vega).`,
+Returns { reinstalled, bundleId }. Fails before uninstalling anything if the app path does not exist, is not the platform's package (.app for iOS, .apk for Android, .vpkg for Vega), or bundleId does not match it.`,
   zodSchema,
   capability,
   fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],

@@ -47,10 +47,7 @@ const cookieAction = {
 } as const;
 
 type Result =
-  | { cookies: Cookie[]; count: number }
-  | { set: boolean }
-  | { deleted: true }
-  | { cleared: true };
+  { cookies: Cookie[]; count: number } | { set: boolean } | { deleted: true } | { cleared: true };
 
 const capability: ToolCapability = {
   chromium: { app: true },

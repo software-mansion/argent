@@ -51,7 +51,6 @@ export {
   InstallModeFlagError,
 } from "./install-record.js";
 export type { InstallMode } from "./install-record.js";
-export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 
 // resolvePackageRoot lives in the leaf package-root.ts module: topology.ts
 // needs it too, and importing it from this barrel — which re-exports topology —
@@ -279,8 +278,7 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   if (raw.trim() === "") return {};
   const parsed = parseJsonc(raw, [], { allowTrailingComma: true }) as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   return parsed ?? {};
 }
 

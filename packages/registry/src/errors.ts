@@ -226,13 +226,6 @@ export class ServiceInitializationError extends Error {
 }
 
 export class ToolNotFoundError extends Error {
-  /**
-   * @public
-   * Knip's `classMembers` pass is workspace-local, so it cannot see the caller:
-   * `flow-add-step` keys `isToolNotFound` on this alongside the error identity,
-   * so a tool that ran and reported its own "not found" is not read as the
-   * command being absent.
-   */
   public readonly toolId: string;
   constructor(toolId: string) {
     super(`Tool "${toolId}" not found`);

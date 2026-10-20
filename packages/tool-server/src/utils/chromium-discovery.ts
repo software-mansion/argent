@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { CHROMIUM_ID_PREFIX, chromiumIdFromPort } from "./device-info";
+import { chromiumIdFromPort } from "./device-info";
 import { ensureCdpReachable, discoverPrimaryPage } from "../blueprints/chromium-cdp";
 
 export interface ChromiumDevice {
@@ -146,5 +146,3 @@ export async function discoverChromiumDevices(options?: {
   const probes = await Promise.all(ports.map((p) => probePort(p, timeoutMs)));
   return probes.filter((d): d is ChromiumDevice => d !== null);
 }
-
-export { CHROMIUM_ID_PREFIX, chromiumIdFromPort };

@@ -120,7 +120,7 @@ Each step contains one directive. A failed directive stops the flow.
 | `scroll-to`  | `{ target: <selector>, direction, within }`                        | Scroll until the target is visible. `direction` is `down` (default), `up`, `left` or `right`      |
 | `pinch`      | `{ on: <selector>, scale }`                                        | Pinch around the element, or the screen center when `on` is absent. `scale` > 1 zooms in          |
 | `rotate`     | `{ on: <selector>, by }`                                           | Two-finger rotation in degrees, clockwise positive. This is a gesture, not the device orientation |
-| `fold`       | `<posture>`, `<angle>` or `{ posture }` / `{ angle }`              | Fold or unfold a foldable iOS simulator. See [Foldable simulators](#foldable-simulators)          |
+| `fold`       | `<posture>`, `<angle>` or `{ posture }` / `{ angle }`              | Fold or unfold a foldable device. See [Foldable devices](#foldable-devices)                       |
 | `await`      | `{ <condition>, timeout }` or `{ idle: true, stableFor, timeout }` | Wait for a condition. Default `timeout` 7500 ms                                                   |
 | `assert`     | `{ <condition> }`                                                  | Check a condition now, with a fixed 1000 ms grace. Rejects `timeout`                              |
 | `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                            |
@@ -181,7 +181,7 @@ A step takes exactly one of `direction`, `to` and `by`. Each travel must cover a
 
 On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like the other touch directives.
 
-### Foldable simulators
+### Foldable devices
 
 ```yaml
 - fold: open
@@ -189,14 +189,15 @@ On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like th
 - fold: { posture: closed }
 ```
 
-A `fold` step moves the hinge of a foldable iOS simulator, for example the iPhone Duo. The step takes a posture (`closed`, `half-open` or `open`) or an angle from 0 to 180 degrees. The step waits until the device accepts input again. When you record a flow, Argent saves a call to the `fold` tool as a `fold` step.
+A `fold` step moves the hinge of a foldable iOS simulator, for example the iPhone Duo, or of a foldable Android emulator. The step takes a posture (`closed`, `half-open` or `open`) or an angle from 0 to 180 degrees. The step waits until the device accepts input again. When you record a flow, Argent saves a call to the `fold` tool as a `fold` step.
 
 After a `fold` step:
 
 - The screen size and the coordinates change with the panel. Later selectors resolve against a new UI tree.
 - A `snapshot` baseline is valid only for the posture that made it. Use a different snapshot name for each posture.
-- Unfolded, the UI is landscape. Directions and reading order follow the UI, as on a rotated device.
-- A fold between two angles that are not 0 or 180 can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
+- On iOS, unfolded, the UI is landscape. Directions and reading order follow the UI, as on a rotated device.
+- On iOS, a fold between two angles that are not 0 or 180 can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
+- On Android, the report names the device state that Android committed, for example `CLOSED`.
 
 ## Conditions
 

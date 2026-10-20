@@ -569,9 +569,7 @@ async function readExportMarker(dir: string): Promise<string | null | undefined>
  * a second, atomic step (takeExportDir) and only its verdict is binding.
  */
 type ExportDirClaim =
-  | { state: "free" }
-  | { state: "mine" }
-  | { state: "foreign"; owner: string | null };
+  { state: "free" } | { state: "mine" } | { state: "foreign"; owner: string | null };
 
 async function classifyExportDir(dir: string, flowPath: string): Promise<ExportDirClaim> {
   let owner = await readExportMarker(dir); // null = has content but proves no owner

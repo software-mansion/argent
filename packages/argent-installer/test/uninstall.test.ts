@@ -737,6 +737,69 @@ describe("uninstall — scoped config cleanup", () => {
     expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
   });
 
+  // `npx skills add` links .kiro/skills/<name> -> ../../.agents/skills/<name>
+  // for every Argent skill when it detects Kiro.
+  function stageKiroSkillLinks(base: string): string[] {
+    const names = getBundledSkillNames(path.resolve(__dirname, "..", "..", "skills", "skills"));
+    expect(names.length).toBeGreaterThan(0);
+    fs.mkdirSync(path.join(base, ".kiro", "skills"), { recursive: true });
+    for (const name of names) {
+      writeFile(path.join(base, ".agents", "skills", name, "SKILL.md"), "x");
+      fs.symlinkSync(
+        path.join("..", "..", ".agents", "skills", name),
+        path.join(base, ".kiro", "skills", name)
+      );
+    }
+    return names;
+  }
+
+  it("--yes removes the Argent skill links from .kiro/skills and keeps other entries", async () => {
+    stageKiroSkillLinks(projDir);
+    writeFile(path.join(projDir, ".kiro", "skills", "vendor-skill", "SKILL.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(path.join(projDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
+  });
+
+  it("--yes removes .kiro/ only when it is left empty", async () => {
+    stageKiroSkillLinks(projDir);
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(projDir, ".kiro", "skills"))).toBe(false);
+    expect(fs.existsSync(path.join(projDir, ".kiro"))).toBe(false);
+  });
+
+  it("--yes keeps .kiro/ when it still holds other Kiro files", async () => {
+    stageKiroSkillLinks(projDir);
+    writeFile(path.join(projDir, ".kiro", "steering", "product.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(projDir, ".kiro", "skills"))).toBe(false);
+    expect(fs.readdirSync(path.join(projDir, ".kiro"))).toEqual(["steering"]);
+    expect(fs.existsSync(path.join(projDir, ".kiro", "steering", "product.md"))).toBe(true);
+  });
+
+  it("--global removes the Argent skill links from ~/.kiro/skills and keeps other entries", async () => {
+    stageKiroSkillLinks(tmpDir);
+    writeFile(path.join(tmpDir, ".kiro", "skills", "vendor-skill", "SKILL.md"), "keep");
+    writeFile(path.join(tmpDir, ".kiro", "steering", "user.md"), "keep");
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.readdirSync(path.join(tmpDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
+    expect(fs.existsSync(path.join(tmpDir, ".kiro", "steering", "user.md"))).toBe(true);
+  });
+
   it("--global keeps the committed project entries and the local-mode record", async () => {
     stageProject({ materialized: true });
     const { projectMcp, globalCursor } = stageConfigs();

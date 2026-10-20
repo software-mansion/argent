@@ -128,6 +128,11 @@ export const FAILURE_CODES = {
   // a device that is not foldable, no hinge route, a remote simulator.
   IOS_FOLD_FAILED: "IOS_FOLD_FAILED",
   IOS_FOLD_UNSUPPORTED: "IOS_FOLD_UNSUPPORTED",
+  // The hinge of a foldable Android emulator: the console refused the move or
+  // the guest never committed the state vs. nothing to fold — a phone profile,
+  // a physical device.
+  ANDROID_FOLD_FAILED: "ANDROID_FOLD_FAILED",
+  ANDROID_FOLD_UNSUPPORTED: "ANDROID_FOLD_UNSUPPORTED",
   PASTE_CLIPBOARD_SET_FAILED: "PASTE_CLIPBOARD_SET_FAILED",
   PASTE_CLIPBOARD_UNSUPPORTED: "PASTE_CLIPBOARD_UNSUPPORTED",
   SETTINGS_PERMISSION_UNSUPPORTED: "SETTINGS_PERMISSION_UNSUPPORTED",

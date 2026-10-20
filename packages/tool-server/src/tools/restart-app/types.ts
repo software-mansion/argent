@@ -13,8 +13,7 @@ export interface RestartAppParams {
 }
 
 export type RestartAppResult =
-  | { restarted: boolean; bundleId: string }
-  | NativeDevtoolsInitFailedResult;
+  { restarted: boolean; bundleId: string } | NativeDevtoolsInitFailedResult;
 
 export interface RestartAppIosServices {
   nativeDevtools: NativeDevtoolsApi;

@@ -27,6 +27,14 @@ vi.mock("../src/utils/foldable", async () => {
 });
 
 import { foldTool } from "../src/tools/fold";
+
+type FoldArgs = Parameters<NonNullable<typeof foldTool.execute>>;
+type FoldResult = Awaited<ReturnType<NonNullable<typeof foldTool.execute>>>;
+
+/** These tests drive an iOS simulator, so the result is the iOS shape. */
+function foldIos(...args: FoldArgs) {
+  return foldTool.execute!(...args) as Promise<Extract<FoldResult, { activeScreen: number }>>;
+}
 import {
   HAND_OVER_TIMEOUT_MS,
   INPUT_READY_HOLD_MID_ANGLE_MS,
@@ -144,8 +152,11 @@ describe("fold tool — input", () => {
     expect(foldTool.zodSchema!.safeParse({ udid: DUO, angle: 181 }).success).toBe(false);
   });
 
-  it("is a local-simulator tool only", () => {
-    expect(foldTool.capability).toEqual({ apple: { simulator: true } });
+  it("covers local simulators and Android emulators only", () => {
+    expect(foldTool.capability).toEqual({
+      apple: { simulator: true },
+      android: { emulator: true, unknown: true },
+    });
   });
 });
 
@@ -153,10 +164,7 @@ describe("fold tool — execute", () => {
   it("resolves both ends now, posts the hinge, waits for the implied panel and holds for input", async () => {
     answerDisplay(0);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
-    const result = await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "open" }
-    );
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "open" });
 
     // The live panel is resolved for this fold.
     expect(resolveLivePanelMock).toHaveBeenCalledWith(DUO);
@@ -183,10 +191,7 @@ describe("fold tool — execute", () => {
     answerDisplay(null);
     resolveLivePanelMock.mockResolvedValue(live(3));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
-    const result = await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "open" }
-    );
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "open" });
     expect(hingeBody()).toEqual({ posture: "open", from: "open" });
     expect(result.activeScreen).toBe(3);
     // The hinge moved, so the guest still gets its hold, panel change or not.
@@ -198,10 +203,7 @@ describe("fold tool — execute", () => {
     answerDisplay(180);
     resolveLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
-    const result = await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "closed" }
-    );
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "closed" });
     expect(hingeBody()).toEqual({ posture: "closed", from: "closed" });
     expect(awaitedPanel()).toBe(1);
     expect(result.activeScreen).toBe(1);
@@ -210,7 +212,7 @@ describe("fold tool — execute", () => {
   it("names the preset an angle sits at and waits for the panel the angle implies", async () => {
     answerDisplay(0);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
-    const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 120 });
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, angle: 120 });
     expect(result.posture).toBe("half-open");
     expect(result.hingeAngle).toBe(120);
     expect(hingeBody()).toEqual({ angle: 120 });
@@ -222,14 +224,14 @@ describe("fold tool — execute", () => {
   it("holds the longer time for half-open, and for an angle that stays on the cover panel", async () => {
     answerDisplay(0);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 120 });
-    await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, posture: "half-open" });
+    await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "half-open" });
     expect(heldMs()).toBe(INPUT_READY_HOLD_MID_ANGLE_MS);
 
     holdLivePanelMock.mockClear();
     answerDisplay(0);
     resolveLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 30 });
-    const thirty = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 30 });
+    const thirty = await foldIos({ simulatorServer: api() }, { udid: DUO, angle: 30 });
     expect(heldMs()).toBe(INPUT_READY_HOLD_MID_ANGLE_MS);
     // 30° is no preset: it is not "half-open" (the docs' inner panel) while
     // the cover panel is live; the angle and the panel say where it is.
@@ -242,7 +244,7 @@ describe("fold tool — execute", () => {
     answerDisplay(0);
     awaitLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 80 });
-    const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 80 });
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, angle: 80 });
     const { done, timeoutMs } = awaited();
     expect(done(1)).toBe(false);
     expect(done(3)).toBe(true);
@@ -261,7 +263,7 @@ describe("fold tool — execute", () => {
     resolveLivePanelMock.mockResolvedValue(live(1));
     awaitLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 90 });
-    const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 90 });
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, angle: 90 });
     expect(hingeBody()).toEqual({ angle: 90 });
     const { done, timeoutMs } = awaited();
     expect(done(1)).toBe(false);
@@ -277,7 +279,7 @@ describe("fold tool — execute", () => {
     resolveLivePanelMock.mockResolvedValue(live(3));
     awaitLivePanelMock.mockResolvedValue(live(3));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 75 });
-    const back = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 75 });
+    const back = await foldIos({ simulatorServer: api() }, { udid: DUO, angle: 75 });
     expect(awaited().timeoutMs).toBe(SETTLE_TIMEOUT_MS);
     expect(back.activeScreen).toBe(3);
     expect(back.warning).toBeUndefined();
@@ -291,10 +293,7 @@ describe("fold tool — execute", () => {
     answerDisplay(120);
     resolveLivePanelMock.mockResolvedValue(live(3));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
-    const opened = await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "open" }
-    );
+    const opened = await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "open" });
     // 120° and the inner panel agree, so the sweep starts where the server has the hinge.
     expect(hingeBody()).toEqual({ posture: "open" });
     expect(awaitedPanel()).toBe(3);
@@ -307,10 +306,7 @@ describe("fold tool — execute", () => {
     holdLivePanelMock.mockClear();
     answerDisplay(120);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
-    const closed = await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "closed" }
-    );
+    const closed = await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "closed" });
     expect(awaitedPanel()).toBe(1);
     expect(awaited().timeoutMs).toBe(HAND_OVER_TIMEOUT_MS);
     expect(closed.activeScreen).toBe(1);
@@ -321,10 +317,7 @@ describe("fold tool — execute", () => {
     answerDisplay(0);
     awaitLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
-    const result = await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "open" }
-    );
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "open" });
     expect(result.activeScreen).toBe(1);
     expect(result.screen).toEqual({ id: 1, panel: "cover panel", width: 1398, height: 2034 });
     expect(result.warning).toContain("kept rendering to screen 1 (cover panel, 1398x2034)");
@@ -343,7 +336,7 @@ describe("fold tool — execute", () => {
     awaitLivePanelMock.mockResolvedValue(live(3));
     holdLivePanelMock.mockResolvedValue(live(1));
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 78 });
-    const result = await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, angle: 78 });
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, angle: 78 });
     expect(holdLivePanelMock.mock.calls[0]![1]).toEqual(live(3));
     expect(result.activeScreen).toBe(1);
     expect(result.warning).toBeUndefined();
@@ -362,7 +355,7 @@ describe("fold tool — execute", () => {
     answerHinge({ error: "the hinge can only be moved on a foldable iOS simulator" });
     const flat = api({ deviceId: "AAAAAAAA-0000-0000-0000-000000000000", display: undefined });
     await expect(
-      foldTool.execute!(
+      foldIos(
         { simulatorServer: flat },
         { udid: "AAAAAAAA-0000-0000-0000-000000000000", posture: "open" }
       )
@@ -388,7 +381,7 @@ describe("fold tool — execute", () => {
     answerHinge({ error: "the hinge did not move" });
     let caught: unknown;
     try {
-      await foldTool.execute!({ simulatorServer: api() }, { udid: DUO, posture: "open" });
+      await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "open" });
     } catch (err) {
       caught = err;
     }
@@ -401,7 +394,7 @@ describe("fold tool — execute", () => {
     answerHinge(null, 404);
     let caught: unknown;
     try {
-      await foldTool.execute!(
+      await foldIos(
         { simulatorServer: api({ display: undefined }) },
         { udid: DUO, posture: "closed" }
       );
@@ -420,10 +413,7 @@ describe("fold tool — execute", () => {
     awaitLivePanelMock.mockResolvedValue(null);
     holdLivePanelMock.mockResolvedValue(null);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 0 });
-    const result = await foldTool.execute!(
-      { simulatorServer: api() },
-      { udid: DUO, posture: "closed" }
-    );
+    const result = await foldIos({ simulatorServer: api() }, { udid: DUO, posture: "closed" });
     // With no live panel there is nothing to start the sweep from but the server's angle.
     expect(hingeBody()).toEqual({ posture: "closed" });
     expect(result.activeScreen).toBe(1);
@@ -438,7 +428,7 @@ describe("fold tool — execute", () => {
     answerDisplay(null);
     answerHinge({ foldable: true, panels: PANELS, hingeAngle: 180 });
     const late = api({ display: undefined });
-    await foldTool.execute!({ simulatorServer: late }, { udid: DUO, posture: "open" });
+    await foldIos({ simulatorServer: late }, { udid: DUO, posture: "open" });
     expect(late.display).toEqual({ foldable: true, panels: PANELS, hingeAngle: 180 });
   });
 });

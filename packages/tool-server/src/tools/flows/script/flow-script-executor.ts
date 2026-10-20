@@ -547,9 +547,7 @@ export class FlowScriptExecutor {
     // event loop, which would keep the server alive past its idle shutdown.
     // Never read from or write to it — the runner only watches for its close.
     const lifeline = child.stdio?.[4] as
-      | { unref?: () => void; destroy?: () => void }
-      | null
-      | undefined;
+      { unref?: () => void; destroy?: () => void } | null | undefined;
     lifeline?.unref?.();
 
     let startedSeen = false;
