@@ -1,13 +1,17 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
+  attrIsTrue,
   clipBoundsToScreen,
   deriveUiAutomatorRole,
+  descendantText,
+  isInteractive,
   isNoisyUiAutomatorClass,
   isUiAutomatorLayoutContainer,
   isUiAutomatorScrollable,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
+  rectsEqual,
 } from "../describe/platforms/android/uiautomator-parser";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
@@ -83,6 +87,41 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
   return node.children.filter((c) => c.tag === "node");
 }
 
+interface WrapperValues {
+  label: string;
+  identifier: string;
+}
+
+/**
+ * Describe's duplicate-wrapper collapse, without the collapse: a labelled or
+ * identified clickable wrapper whose only content is a clickable view with the
+ * same bounds (an RN `Pressable accessibilityLabel` around a bare native view)
+ * shows in `describe` as the inner view carrying the wrapper's label and id. The
+ * flow tree keeps both views and copies the values onto the inner one, so a
+ * `{ role, text }` selector read off `describe` resolves here too.
+ */
+function collectWrapperValues(node: ParsedXmlNode, out: Map<ParsedXmlNode, WrapperValues>): void {
+  const attrs = node.attrs;
+  const label = attrs.password === "true" ? "[password]" : labelOf(attrs);
+  const identifier = (attrs["resource-id"] ?? "").trim();
+  const bounds = parseUiAutomatorBounds(attrs.bounds ?? "");
+  if (isInteractive(attrs) && bounds && (label || identifier)) {
+    // Down a chain of single children: the views describe's trim drops between
+    // the wrapper and the tap target.
+    let kids = childNodes(node);
+    while (kids.length === 1) {
+      const c = kids[0]!;
+      const cb = parseUiAutomatorBounds(c.attrs.bounds ?? "");
+      if (attrIsTrue(c.attrs, "clickable")) {
+        if (cb && rectsEqual(cb, bounds)) out.set(c, { label, identifier });
+        break;
+      }
+      kids = childNodes(c);
+    }
+  }
+  for (const c of childNodes(node)) collectWrapperValues(c, out);
+}
+
 /**
  * Project a uiautomator XML node for the shared flatten (`flow-tree-flatten`).
  * A password field never contributes its secret: its text is the `[password]`
@@ -91,7 +130,8 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
 function projectAndroidNode(
   node: ParsedXmlNode,
   screenW: number,
-  screenH: number
+  screenH: number,
+  wrapperValues: Map<ParsedXmlNode, WrapperValues>
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
   // System chrome yields false matches (a system "Back"); SVG implementation
@@ -119,18 +159,25 @@ function projectAndroidNode(
   // needs raw bounds for every node, leaf-eligible or not.
   const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
 
+  // The label and id `describe` shows for this view, so selectors written from
+  // it resolve here. Leaf-only: `ownText` and `shield` keep reading the view's
+  // own attributes, or the borrowed text would hoist twice.
+  const wrapper = wrapperValues.get(node);
+  const leafLabel = label || wrapper?.label || borrowedLabel(node);
+  const leafIdentifier = identifier || wrapper?.identifier;
+
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
   // Keep any view a selector could address — resource-id (RN testID), label or
   // concrete role — plus the focused view, which the type directive's focus
   // wait needs even for an anonymous EditText. Scaffolding is dropped but still
   // walked, so a testID nested under it survives.
-  if (!skip && (identifier || label || hasSemanticRole || isFocused)) {
+  if (!skip && (leafIdentifier || leafLabel || hasSemanticRole || isFocused)) {
     frame = rect ? normalizeRect(rect, screenW, screenH) : null;
     if (frame) {
       leaf = { role, frame, children: [] };
-      if (label) leaf.label = label;
-      if (identifier) leaf.identifier = identifier;
+      if (leafLabel) leaf.label = leafLabel;
+      if (leafIdentifier) leaf.identifier = leafIdentifier;
       if (hasValue) leaf.value = rawText;
       if (attrs.clickable === "true") leaf.clickable = true;
       if (attrs["long-clickable"] === "true") leaf.longClickable = true;
@@ -162,6 +209,16 @@ function projectAndroidNode(
   };
 }
 
+// Describe's compound-clickable rule: a clickable view with no label of its own
+// is labelled with its descendants' text ("Button 'Login'" over a child
+// `<Text>Login</Text>`).
+function borrowedLabel(node: ParsedXmlNode): string {
+  const attrs = node.attrs;
+  if (!attrIsTrue(attrs, "clickable") && !attrIsTrue(attrs, "long-clickable")) return "";
+  if (childNodes(node).length === 0) return "";
+  return descendantText(node);
+}
+
 /**
  * Flatten a full-hierarchy `uiautomator`-schema XML dump into the
  * flat-leaves-under-one-root shape the other describe adapters emit, keeping
@@ -177,8 +234,10 @@ export function adaptFullAndroidHierarchyToDescribeResult(
   if (screenW > 0 && screenH > 0) {
     const root = parseUiAutomatorXml(xml);
     if (root) {
+      const wrapperValues = new Map<ParsedXmlNode, WrapperValues>();
+      collectWrapperValues(root, wrapperValues);
       for (const c of childNodes(root)) {
-        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
+        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH, wrapperValues), children);
       }
     }
   }
