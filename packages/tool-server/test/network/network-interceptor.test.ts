@@ -2113,7 +2113,7 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
         outcome: "fails",
         end: (rt: Runtime) => rt.last().fail("Unable to resolve host"),
         rejection: "TypeError",
-        errorText: "Network error",
+        errorText: "Network request failed",
       },
       {
         outcome: "is aborted",

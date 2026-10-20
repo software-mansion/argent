@@ -484,7 +484,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         if (outcome === 'error') {
           var text = '';
           try { if (xhr.responseType === '' || xhr.responseType === 'text') text = xhr.responseText; } catch (e) {}
-          return fail(rec, text ? String(text) : 'Network error');
+          return fail(rec, text ? String(text) : 'Network request failed');
         }
         // RN sets responseURL only after it announces HEADERS_RECEIVED: this is the final URL.
         if (rec.entry.response && xhr.responseURL) rec.entry.response.url = xhr.responseURL;
