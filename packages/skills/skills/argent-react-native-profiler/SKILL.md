@@ -88,6 +88,8 @@ Mind the react-native and ios-native profiler selection mentioned above when sta
 - if session is marked as "stale", you may overtake it without prompting the user for allowance
 - if session is NOT "stale" - before taking action and terminating the other session, **stop and ask user what you should do**, explaining the situation.
 
+While a profiler records, interaction tools return no automatic screenshot or element tree, so the capture does not load the app. Call `screenshot` or `describe` when you need to see the screen; on Android each screenshot during a profile takes about 100–300 ms and briefly wakes the device screen capture, so take them sparingly.
+
 #### Annotate every interaction
 
 After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction, including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 3.
