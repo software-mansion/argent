@@ -27,6 +27,7 @@ import {
 } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
+import { trackProfilingRun } from "../../../utils/profiling-devices";
 import {
   bootstrapFailureMessage,
   type BootstrapResult,
@@ -370,6 +371,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.profileStartWallMs = startedAtEpochMs;
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
+      trackProfilingRun(api.deviceId, api);
 
       return {
         started_at: new Date(startedAtEpochMs).toISOString(),

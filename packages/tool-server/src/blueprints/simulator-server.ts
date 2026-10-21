@@ -31,6 +31,7 @@ import {
   type ExternalDevice,
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
+import { registerCaptureOnDemandSender } from "../utils/profiling-devices";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -612,6 +613,13 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     // The first command a foldable gets must already name its live panel, so
     // the probe runs before the instance is handed out.
     await attachFoldableDisplay(instance.api, device);
+    // An older server logs the unknown command and ignores it.
+    proc.on(
+      "exit",
+      registerCaptureOnDemandSender(device.id, (onDemand) => {
+        proc.stdin?.write(`capture_on_demand ${onDemand}\n`);
+      })
+    );
 
     return instance;
   },

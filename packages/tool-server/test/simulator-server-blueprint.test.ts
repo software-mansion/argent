@@ -267,6 +267,30 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");
   });
 
+  it("sends capture_on_demand on stdin while a profiler records", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const { trackProfilingRun, isProfiling, __resetProfilingDevicesForTesting } =
+      await import("../src/utils/profiling-devices");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55558);
+    await factoryPromise;
+
+    const run = { profilingActive: true };
+    trackProfilingRun("emulator-5554", run);
+    run.profilingActive = false;
+    isProfiling("emulator-5554");
+
+    expect(fakeProc.stdin.write.mock.calls).toEqual([
+      ["capture_on_demand true\n"],
+      ["capture_on_demand false\n"],
+    ]);
+    __resetProfilingDevicesForTesting();
+  });
+
   it("rejects when the caller forgets to pass DeviceInfo via options", async () => {
     // Defensive: without a device, the factory has no way to decide ios vs
     // android (and that's intentional — the SOT now lives upstream). Surface a
