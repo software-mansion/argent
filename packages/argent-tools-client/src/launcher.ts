@@ -23,6 +23,10 @@ export const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 // own (0 = never).
 const AUTOSPAWN_IDLE_TIMEOUT_MINUTES = 30;
 
+// Passed explicitly: the child inherits this process's env, so an exported
+// ARGENT_HOST would bind it away from the url and state file recorded here.
+const AUTOSPAWN_HOST = "127.0.0.1";
+
 /**
  * Filesystem locations needed to spawn tool-server. Provided by the consuming
  * package (`@swmansion/argent`), which knows where its bundle lives.
@@ -55,9 +59,9 @@ export interface ToolsServerPaths {
 }
 
 export interface BuildToolsServerEnvOptions {
-  /** Bind host. Omit to inherit the tool-server default (127.0.0.1). */
+  /** Bind host. Omit to keep `baseEnv`'s `ARGENT_HOST`. */
   host?: string;
-  /** Idle-timeout minutes (0 disables). Omit to inherit the tool-server default. */
+  /** Idle-timeout minutes (0 disables). Omit to keep `baseEnv`'s value. */
   idleTimeoutMinutes?: number;
   /**
    * Auth token, exported as `ARGENT_AUTH_TOKEN` so the tool-server enforces
@@ -83,7 +87,8 @@ export function buildToolsServerEnv(
   if (options.idleTimeoutMinutes !== undefined) {
     env.ARGENT_IDLE_TIMEOUT_MINUTES = String(options.idleTimeoutMinutes);
   }
-  if (options.token) env[AUTH_TOKEN_ENV] = options.token;
+  // Never inherited: an exported token would authenticate a `--no-auth` server.
+  env[AUTH_TOKEN_ENV] = options.token ?? "";
   if (paths.installKind) env.ARGENT_INSTALL_KIND = paths.installKind;
   if (paths.installProjectRoot) env.ARGENT_PROJECT_ROOT = paths.installProjectRoot;
   return env;
@@ -958,6 +963,7 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
     const port = await findFreePort();
     const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
       token,
+      host: AUTOSPAWN_HOST,
       idleTimeoutMinutes: AUTOSPAWN_IDLE_TIMEOUT_MINUTES,
     });
 
@@ -967,12 +973,12 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<ToolsS
       startedAt: new Date().toISOString(),
       bundlePath: paths.bundlePath,
       version: diskVersion,
-      host: "127.0.0.1",
+      host: AUTOSPAWN_HOST,
       token,
       managed: "autospawn",
     });
 
-    return { url: formatUrl("127.0.0.1", actualPort), token };
+    return { url: formatUrl(AUTOSPAWN_HOST, actualPort), token };
   } finally {
     lock?.release();
   }
