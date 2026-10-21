@@ -47,7 +47,7 @@ export function isProfiling(deviceId: string): boolean {
 }
 
 /**
- * Registers a spawned simulator-server, which starts with capture_on_demand off. Returns
+ * Registers a simulator-server, which starts with capture_on_demand off. Returns
  * the unregister call for its exit.
  */
 export function registerCaptureOnDemandSender(
@@ -60,6 +60,12 @@ export function registerCaptureOnDemandSender(
   return () => {
     if (servers.get(deviceId) === entry) servers.delete(deviceId);
   };
+}
+
+/** The next check sends the mode again, on a new connection. */
+export function captureOnDemandDropped(deviceId: string): void {
+  const server = servers.get(deviceId);
+  if (server) server.onDemand = false;
 }
 
 export function __resetProfilingDevicesForTesting(): void {

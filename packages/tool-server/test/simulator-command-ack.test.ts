@@ -21,11 +21,13 @@ async function startServer(): Promise<{
   /** Release every reply the server withheld, late and out of step. */
   flushWithheld: () => void;
   dropConnections: () => void;
+  connectionCount: () => number;
   close: () => Promise<void>;
 }> {
   const received: Record<string, unknown>[] = [];
   const sockets = new Set<WsSocket>();
   let reply: Reply = "ok";
+  let connectionCount = 0;
 
   const wss = await new Promise<WebSocketServer>((resolve) => {
     const s: WebSocketServer = new WebSocketServer({ port: 0, host: "127.0.0.1" }, () =>
@@ -34,6 +36,7 @@ async function startServer(): Promise<{
   });
   const withheld: (() => void)[] = [];
   wss.on("connection", (sock) => {
+    connectionCount++;
     sockets.add(sock);
     sock.on("close", () => sockets.delete(sock));
     sock.on("message", (raw) => {
@@ -65,6 +68,7 @@ async function startServer(): Promise<{
     dropConnections: () => {
       for (const s of sockets) s.terminate();
     },
+    connectionCount: () => connectionCount,
     // `sendCommand` caches one socket per apiUrl for the life of the process,
     // so the server has to hang up before `close()` can resolve; terminating
     // also evicts the cache entry, keeping each test on its own connection.
@@ -104,6 +108,19 @@ describe("sendCommand — command acknowledgement", () => {
     const err = await sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
     expect(String(err)).toContain("NOT delivered to the device");
+    await server.close();
+  });
+
+  it("rejects capture_on_demand at once on an older server, and keeps the connection", async () => {
+    const server = await startServer();
+    server.setReply("error");
+    const err = await sendCommand(server.api, { cmd: "capture_on_demand", enabled: true }).catch(
+      (e: unknown) => e
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
+    server.setReply("ok");
+    await sendCommand(server.api, { ...TOUCH });
+    expect(server.connectionCount()).toBe(1);
     await server.close();
   });
 

@@ -474,6 +474,27 @@ async function spawnSimulatorServerProcess(
   });
 }
 
+/**
+ * Keeps the server capturing on demand while a profiler records on the device.
+ * A server without the command rejects it at once, which is ignored. Not for
+ * MoQ, whose control track has no such command.
+ */
+function withCaptureOnDemand(
+  deviceId: string,
+  instance: ServiceInstance<SimulatorServerApi>
+): ServiceInstance<SimulatorServerApi> {
+  const unregister = registerCaptureOnDemandSender(deviceId, (enabled) => {
+    sendCommand(instance.api, { cmd: "capture_on_demand", enabled }).catch(() => {});
+  });
+  return {
+    ...instance,
+    dispose: async () => {
+      unregister();
+      await instance.dispose();
+    },
+  };
+}
+
 export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, DeviceInfo> = {
   namespace: SIMULATOR_SERVER_NAMESPACE,
   getURN(device: DeviceInfo) {
@@ -531,7 +552,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     const claim = externalClaimForAnyId(device.id);
 
     if (claim) {
-      return buildAttachedInstance(device, claim);
+      return withCaptureOnDemand(device.id, await buildAttachedInstance(device, claim));
     }
 
     if (device.platform === "ios-remote") {
@@ -613,14 +634,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     // The first command a foldable gets must already name its live panel, so
     // the probe runs before the instance is handed out.
     await attachFoldableDisplay(instance.api, device);
-    // An older server logs the unknown command and ignores it.
-    proc.on(
-      "exit",
-      registerCaptureOnDemandSender(device.id, (onDemand) => {
-        proc.stdin?.write(`capture_on_demand ${onDemand}\n`);
-      })
-    );
-
-    return instance;
+    return withCaptureOnDemand(device.id, instance);
   },
 };
