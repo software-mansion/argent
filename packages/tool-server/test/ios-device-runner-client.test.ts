@@ -12,6 +12,7 @@ import {
 } from "../src/utils/ios-device/runner-client";
 import type { SendRunnerCommandOptions } from "../src/utils/ios-device/runner-route";
 import { IosDeviceTransportError } from "../src/utils/ios-device/usbmux-protocol";
+import { tapElement } from "../src/utils/ios-device/runner-commands";
 
 const UDID = "00008110-000978540290401E";
 const PORT = 8_100;
@@ -375,6 +376,46 @@ describe("createRunnerClient", () => {
   });
 
   describe("status recovery after a lost mutating-command response", () => {
+    it.each(["completed", "failed", "started", "notAccepted", "unknown"])(
+      "never resends tapElement when recovering journal state %s",
+      async (state) => {
+        const original = transportError();
+        const warning = "confirm the native tap effect";
+        const { send, sent } = createFakeSend([
+          original,
+          {
+            ok: true,
+            data: {
+              state,
+              ...(state === "completed"
+                ? { responseJson: JSON.stringify({ ok: true, data: {}, warning }) }
+                : {}),
+              ...(state === "failed"
+                ? { errorCode: "ELEMENT_AMBIGUOUS", errorMessage: "multiple elements matched" }
+                : {}),
+            },
+          },
+        ]);
+        const client = createRunnerClient({ udid: UDID, port: PORT, send });
+        const result = await tapElement({ udid: UDID, run: client.run }, "com.example.app", {
+          label: "Search",
+          role: "AXTextField",
+        }).catch((error: unknown) => error);
+
+        expect(sent.map(({ body }) => body.command)).toEqual(["tapElement", "status"]);
+        expect(sent[0]?.options).toEqual({ timeoutMs: 90_000, readOnly: false });
+        expect(sent[1]?.body.statusCommandId).toBe(sent[0]?.body.commandId);
+        if (state === "completed") {
+          expect(result).toEqual({ reactivated: false, warning });
+        } else if (state === "failed") {
+          expect(result).toBeInstanceOf(RunnerCommandError);
+          expect((result as RunnerCommandError).code).toBe("ELEMENT_AMBIGUOUS");
+        } else {
+          expect(result).toBe(original);
+        }
+      }
+    );
+
     it("returns the retained response when the runner reports the command completed", async () => {
       const { send, sent } = createFakeSend([
         transportError(),

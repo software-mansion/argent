@@ -54,6 +54,14 @@ extension ArgentRunnerSession {
         return .success(MessagePayload(message: "tapped"))
     }
 
+    /// Routes semantic taps through the standalone production helper so fixture
+    /// UI tests can compile and exercise that exact query/action implementation.
+    func performElementTap(_ request: CommandRequest, on app: XCUIApplication)
+        -> Envelope
+    {
+        NativeElementTap.perform(request, on: app)
+    }
+
     /// Presses at the wire coordinates for the requested duration.
     func performLongPress(_ request: CommandRequest, on app: XCUIApplication)
         -> Envelope

@@ -59,6 +59,7 @@ set, so clean replies stay byte-identical on the wire.
 | `statusCommandId`     | `status`            | Journal lookup key.                                                     |
 | `appBundleId`         | app-scoped commands | Target app. Required, never inferred.                                   |
 | `x`, `y`              | `tap`, `longPress`  | Absolute points in the app's space.                                     |
+| `selector`            | `tapElement`        | Exact `{identifier?, label?, role?}`; identifier or label is required.  |
 | `numberOfTaps`        | `tap`               | 1 (default), 2 (native double-tap), or more (separate taps, see below). |
 | `fromX/fromY/toX/toY` | `drag`              | Absolute start/end points.                                              |
 | `durationMs`          | `longPress`, `drag` | Press duration / movement duration.                                     |
@@ -92,6 +93,11 @@ launch, and launching is launch-app's job, never a command side effect):
   `durationMs` implies, and rests `settle`-long before lifting; a long-press
   pickup of a draggable item needs a `holdMs` of about 500 ms or more, since
   a short press never lifts it however slowly the finger then moves.
+- `tapElement` → `{message}`: exactly matches non-empty `identifier` and/or
+  `label`, optionally constrained to `AXButton`, `AXStaticText`, `AXImage`,
+  `AXLink`, `AXTextField`, `AXTabBar`, or `AXAdjustable`. The complete native
+  query must match one enabled, hittable element; it never falls back to a
+  first match or coordinates. This command performs one native tap only.
 - `type` → `{message}`: types into the current first responder. The runner
   probes keyboard focus first and answers `TEXT_INPUT_NOT_FOCUSED` when
   nothing has it. The probe is what makes that code real on hardware: there,
@@ -201,6 +207,7 @@ reasonCode?}`.
 `INVALID_REQUEST`, `APP_BUNDLE_ID_REQUIRED`, `APP_NOT_AVAILABLE`,
 `APP_BACKGROUNDED` (`snapshot` only: the target is alive but backgrounded, and
 observation never re-fronts it), `TEXT_INPUT_NOT_FOCUSED`,
+`ELEMENT_NOT_FOUND`, `ELEMENT_AMBIGUOUS`, `ELEMENT_NOT_INTERACTABLE`,
 `UNSUPPORTED_OPERATION` (hardware or an API the device lacks: an absent
 button), `RUNNER_BUSY` (the one
 retryable code), `RUNNER_WEDGED` (recycle the session),

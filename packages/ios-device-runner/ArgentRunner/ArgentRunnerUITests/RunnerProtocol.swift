@@ -11,6 +11,7 @@ enum CommandKind: String, Codable {
     case status
     case viewport
     case tap
+    case tapElement
     case longPress
     case drag
     case type
@@ -30,8 +31,8 @@ extension CommandKind {
         switch self {
         case .status, .viewport, .snapshot, .screenshot:
             return true
-        case .tap, .longPress, .drag, .type, .keyboardReturn, .keyboardDelete,
-            .button, .shutdown:
+        case .tap, .tapElement, .longPress, .drag, .type, .keyboardReturn,
+            .keyboardDelete, .button, .shutdown:
             return false
         }
     }
@@ -41,8 +42,8 @@ extension CommandKind {
     /// runner's own host app.
     var requiresAppBundleId: Bool {
         switch self {
-        case .viewport, .tap, .longPress, .drag, .type, .keyboardReturn,
-            .keyboardDelete, .snapshot:
+        case .viewport, .tap, .tapElement, .longPress, .drag, .type,
+            .keyboardReturn, .keyboardDelete, .snapshot:
             return true
         case .status, .button, .screenshot, .shutdown:
             return false
@@ -73,7 +74,7 @@ extension CommandKind {
         // never reports quiescent stalls the wait until XCTest gives up and
         // synthesizes the event anyway, and a shorter budget would abandon a
         // command that still completes.
-        case .tap, .longPress, .drag: return 75
+        case .tap, .tapElement, .longPress, .drag: return 75
         default: return 30
         }
     }
@@ -90,6 +91,15 @@ enum DeviceButton: String, Codable {
     case actionButton
 }
 
+/// Exact, non-empty accessibility properties used by `tapElement`. Values are
+/// kept verbatim: selectors are case-sensitive and never trimmed or
+/// interpreted as patterns.
+struct ElementSelector: Codable {
+    let identifier: String?
+    let label: String?
+    let role: String?
+}
+
 struct CommandRequest: Codable {
     let command: CommandKind
     let commandId: String?
@@ -104,6 +114,9 @@ struct CommandRequest: Codable {
     /// Higher counts loop single taps on the device: there is no native N-tap
     /// API, so they land as separate taps, not one multi-tap gesture.
     let numberOfTaps: Int?
+    /// `tapElement`: exact, non-empty live accessibility properties. At least
+    /// identifier or label is required; role only narrows that match.
+    let selector: ElementSelector?
     /// `drag`: absolute start and end points.
     let fromX: Double?
     let fromY: Double?
@@ -154,6 +167,9 @@ enum RunnerErrorCode: String {
     case appBundleIdRequired = "APP_BUNDLE_ID_REQUIRED"
     case appNotAvailable = "APP_NOT_AVAILABLE"
     case appBackgrounded = "APP_BACKGROUNDED"
+    case elementNotFound = "ELEMENT_NOT_FOUND"
+    case elementAmbiguous = "ELEMENT_AMBIGUOUS"
+    case elementNotInteractable = "ELEMENT_NOT_INTERACTABLE"
     case textInputNotFocused = "TEXT_INPUT_NOT_FOCUSED"
     /// Hardware or an API this device lacks: an absent button, a tap count
     /// XCUICoordinate cannot execute as one gesture. An XCTest call that

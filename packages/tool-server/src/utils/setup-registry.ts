@@ -29,6 +29,7 @@ import { settingsPermissionsTool } from "../tools/settings-permissions";
 import { openUrlTool } from "../tools/open-url";
 import { createScreenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
+import { tapElementTool } from "../tools/tap-element";
 import { gestureSwipeTool } from "../tools/gesture-swipe";
 import { gestureScrollTool } from "../tools/gesture-scroll";
 import { gestureDragTool } from "../tools/gesture-drag";
@@ -142,6 +143,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
   registry.registerTool(gestureTapTool);
+  registry.registerTool(tapElementTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);
   registry.registerTool(chromiumStorageTool);

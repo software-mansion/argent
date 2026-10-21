@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { FILE_INPUT_MARKER, Registry, TOOL_ID_ALIASES } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { createHttpApp } from "../../src/http";
 import { createRegistry } from "../../src/utils/setup-registry";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
@@ -102,9 +103,16 @@ describe("the former flow-* tool ids", () => {
       expect(mcpNames).not.toContain(alias);
       expect(mcpNames).toContain(id);
     }
-    expect(tools.filter((t) => t.aliasOf === undefined)).toHaveLength(
-      registry.getSnapshot().tools.length
-    );
+    const exposedIds = registry.getSnapshot().tools.filter((id) => {
+      const def = registry.getTool(id)!;
+      return (!def.featureFlag || isFlagEnabled(def.featureFlag)) && !def.hideWhen?.();
+    });
+    expect(
+      tools
+        .filter((t) => t.aliasOf === undefined)
+        .map((t) => t.name)
+        .sort()
+    ).toEqual(exposedIds.sort());
   });
 
   it("run the same flow with the same result through invokeTool and POST /tools", async () => {

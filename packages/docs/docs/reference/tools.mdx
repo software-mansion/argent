@@ -79,6 +79,7 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | Tool                     | Description                                                     |
 | ------------------------ | --------------------------------------------------------------- |
 | `gesture-tap`            | Tap at normalized coordinates                                   |
+| `tap-element`            | Tap one live native element on a physical iPhone                |
 | `gesture-swipe`          | Smooth swipe or drag between two points                         |
 | `gesture-scroll`         | Scroll a Chromium app by dispatching mouse-wheel events         |
 | `gesture-drag`           | Press, move, and release the mouse in a Chromium app            |
@@ -91,6 +92,26 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `run-sequence`           | Execute several interaction steps in a single call              |
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
+
+### Native element taps
+
+`tap-element` works on physical iPhones only.
+Use it when an embedded Apple view reports incorrect snapshot coordinates.
+The tool queries a live XCTest element and taps it directly.
+After registering the app with `launch-app`, call:
+
+```sh
+argent run tap-element --args '{"udid":"<device-id>","selector":{"label":"Search","role":"AXTextField"}}'
+```
+
+- `selector.identifier` and `selector.label` match exact, case-sensitive accessibility properties. Supply at least one.
+- Optional `selector.role` accepts `AXButton`, `AXStaticText`, `AXImage`, `AXLink`, `AXTextField`, `AXTabBar`, or `AXAdjustable`.
+- All supplied fields must match exactly one enabled, hittable element. Missing or ambiguous targets fail without a coordinate fallback.
+- The tool executes one native tap. Multi-tap is not supported.
+- Success returns `tapped: true` and `timestampMs`. `reactivated: true` means the tool brought a background app forward.
+
+Inspect the screen before retrying an uncertain mutation.
+Existing flows, coordinate gestures, other platforms, and `describe` frames remain unchanged.
 
 ## JavaScript runtime debugging
 

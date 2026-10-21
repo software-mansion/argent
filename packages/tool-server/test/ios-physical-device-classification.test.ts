@@ -54,6 +54,7 @@ const PHYSICAL_IOS_PORTED_TOOLS: readonly string[] = [
   "describe",
   "keyboard",
   "gesture-tap",
+  "tap-element",
   "gesture-swipe",
   // Press-hold / straight drags via the runner's longPress + drag; two-finger
   // trains and Move waypoints are rejected with authoring guidance.

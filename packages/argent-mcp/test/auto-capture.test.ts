@@ -71,6 +71,12 @@ describe("getUdidFromArgs", () => {
 // shouldAutoScreenshot
 // ---------------------------------------------------------------------------
 describe("shouldAutoScreenshot", () => {
+  it("captures fresh evidence after a native element tap", () => {
+    expect(shouldAutoScreenshot("tap-element")).toBe(true);
+    expect(shouldAutoDescribe("mcp__argent__tap-element")).toBe(true);
+    expect(getAutoScreenshotDelayMs("tap-element")).toBe(getAutoScreenshotDelayMs("gesture-tap"));
+  });
+
   it("returns true for every tool in AUTO_SCREENSHOT_TOOLS", () => {
     for (const tool of AUTO_SCREENSHOT_TOOLS) {
       expect(shouldAutoScreenshot(tool)).toBe(true);

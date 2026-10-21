@@ -45,10 +45,15 @@ extension ArgentRunnerSession {
         }
 
         if let exceptionDescription {
+            // XCTest exception text can echo a query predicate. Semantic
+            // selectors are caller data, so keep tapElement errors generic.
+            let message = request.command == .tapElement
+                ? "tapElement failed while resolving or tapping the element"
+                : exceptionDescription
             return stamped(
                 .failure(
                     .commandFailed,
-                    exceptionDescription,
+                    message,
                     hint:
                         "The target UI likely changed mid-command; re-observe the screen and retry."
                 )
@@ -155,6 +160,8 @@ extension ArgentRunnerSession {
             return appViewport(app)
         case .tap:
             return performTap(request, on: app)
+        case .tapElement:
+            return performElementTap(request, on: app)
         case .longPress:
             return performLongPress(request, on: app)
         case .drag:

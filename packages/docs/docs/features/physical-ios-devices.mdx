@@ -56,6 +56,14 @@ A web URL opens in Safari, not in the app that owns the link. The agent names th
 | The runner exits twice for the same app           | The current screen of the app is likely crashing the runner. Restart the app and retry.              |
 | The runner stops launching after about a week     | The free-team signature expired. Retry: the next interaction rebuilds and re-signs the runner.       |
 
+### Taps in embedded system views
+
+Some embedded Apple views report incorrect snapshot positions.
+The agent can use a native element tap instead of a coordinate tap.
+Argent finds the live element and asks XCTest to tap it directly.
+
+See [Native element taps](/docs/reference/tools#native-element-taps) for matching rules and limits.
+
 ## Limits
 
 Each tool that does not exist on hardware fails with a `not supported on ios device` message. The limits on a physical device:

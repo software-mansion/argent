@@ -8,6 +8,7 @@ import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core
 
 export const AUTO_SCREENSHOT_TOOLS = new Set([
   "gesture-tap",
+  "tap-element",
   "gesture-swipe",
   "gesture-scroll",
   "gesture-drag",
@@ -40,6 +41,7 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-drag": 1500,
   "gesture-custom": 1500,
   "gesture-tap": 1500,
+  "tap-element": 1500,
   "gesture-pinch": 1500,
   "gesture-rotate": 1500,
   "run-sequence": 15000,
@@ -69,6 +71,7 @@ export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
  */
 export const AUTO_DESCRIBE_TOOLS = new Set([
   "gesture-tap",
+  "tap-element",
   "gesture-swipe",
   "gesture-scroll",
   "gesture-drag",

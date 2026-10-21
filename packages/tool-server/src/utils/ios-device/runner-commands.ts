@@ -26,6 +26,18 @@ function repliedReactivated(data: unknown): boolean {
 export interface MutationReply {
   /** The runner re-fronted the backgrounded target app to run this command. */
   reactivated: boolean;
+  /** Native element taps retain the runner's suppressed-accessibility advisory. */
+  warning?: string;
+}
+
+/** Exact, case-sensitive selector understood by the runner's live XCUI query. */
+export interface RunnerElementSelector {
+  /** Accessibility identifier, compared case-sensitively for equality. */
+  identifier?: string;
+  /** Accessibility label, compared case-sensitively for equality. */
+  label?: string;
+  /** AX-style role emitted by `describe`, compared case-sensitively. */
+  role?: string;
 }
 
 export interface RunnerViewport {
@@ -131,6 +143,34 @@ export async function tapAt(
   );
 
   return { reactivated: repliedReactivated(data) };
+}
+
+/**
+ * Tap a live XCUIElement selected by exact accessibility fields.
+ *
+ * This is deliberately separate from {@link tapAt}: the runner resolves and
+ * acts on the live element, and an element lookup/action failure must never
+ * fall back to snapshot coordinates.
+ */
+export async function tapElement(
+  api: IosDeviceRunnerApi,
+  bundleId: string,
+  selector: RunnerElementSelector
+): Promise<MutationReply> {
+  const data = await api.run(
+    {
+      command: "tapElement",
+      appBundleId: bundleId,
+      selector,
+    },
+    { timeoutMs: GESTURE_TIMEOUT_MS }
+  );
+
+  const warning = (data as { warning?: unknown } | null | undefined)?.warning;
+  return {
+    reactivated: repliedReactivated(data),
+    ...(typeof warning === "string" && warning.length > 0 ? { warning } : {}),
+  };
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   pressKeyboardDelete,
   pressKeyboardReturn,
   tapAt,
+  tapElement,
   toPoints,
   typeText,
   type RunnerViewport,
@@ -78,6 +79,46 @@ describe("dragBetween wire shape", () => {
       { holdMs: 800, durationMs: 500, settle: true }
     );
     expect(run.mock.calls[1][0]).toMatchObject({ holdMs: 800, durationMs: 500, settle: true });
+  });
+});
+
+describe("tapElement wire shape", () => {
+  it("is a journaled mutation with the native-action timeout and no coordinate fallback", async () => {
+    const run = vi.fn().mockResolvedValue({});
+    const api: IosDeviceRunnerApi = { udid: "00008110-000978540290401E", run };
+
+    await tapElement(api, "com.example.app", {
+      identifier: "SearchField",
+      label: "Search",
+      role: "AXTextField",
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      {
+        command: "tapElement",
+        appBundleId: "com.example.app",
+        selector: { identifier: "SearchField", label: "Search", role: "AXTextField" },
+      },
+      { timeoutMs: 90_000 }
+    );
+    expect(run.mock.calls[0][1]?.readOnly).toBeUndefined();
+    expect(run.mock.calls[0][0]).not.toHaveProperty("x");
+    expect(run.mock.calls[0][0]).not.toHaveProperty("y");
+  });
+
+  it("omits numberOfTaps for one tap and propagates runner failures unchanged", async () => {
+    const failure = new RunnerCommandError("two live elements matched", {
+      code: "ELEMENT_AMBIGUOUS",
+    });
+    const run = vi.fn().mockRejectedValue(failure);
+    const api: IosDeviceRunnerApi = { udid: "00008110-000978540290401E", run };
+
+    const caught = await tapElement(api, "com.example.app", { label: "Search" }).catch(
+      (error: unknown) => error
+    );
+
+    expect(caught).toBe(failure);
+    expect(run.mock.calls[0][0]).not.toHaveProperty("numberOfTaps");
   });
 });
 
@@ -153,9 +194,12 @@ describe("mutating replies surface the runner's reactivated stamp", () => {
   });
   const point = { x: 100, y: 200 };
 
-  it("tapAt, dragBetween, typeText, pressKeyboardReturn and pressKeyboardDelete read it off the reply", async () => {
+  it("tapAt, tapElement, dragBetween, typeText, pressKeyboardReturn and pressKeyboardDelete read it off the reply", async () => {
     const stamped = { message: "ok", reactivated: true };
     expect(await tapAt(api(stamped), "com.example.app", point)).toEqual({ reactivated: true });
+    expect(await tapElement(api(stamped), "com.example.app", { label: "Search" })).toEqual({
+      reactivated: true,
+    });
     expect(await dragBetween(api(stamped), "com.example.app", point, { x: 1, y: 2 })).toEqual({
       reactivated: true,
     });
