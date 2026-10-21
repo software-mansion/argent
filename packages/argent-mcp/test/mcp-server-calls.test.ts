@@ -72,6 +72,7 @@ const LISTING = {
       hideFromMcp: true,
       aliasOf: "e2e-execute",
     },
+    { name: "gesture-tap", description: "Tap", inputSchema: { type: "object", properties: {} } },
   ],
 };
 
@@ -130,6 +131,13 @@ async function startStub({
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      // Both made while a profiler records on the device.
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return json(200, { data: { done: true }, profiling: true });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, { data: { description: "Button 'OK'" }, profiling: true });
       }
       json(404, { error: "not found" });
     });
@@ -202,7 +210,13 @@ describe("startMcpServer tool calls", () => {
 
   it("lists the tools of the tool-server", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(["reinstall-app", "reject", "noted", "e2e-execute"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "reinstall-app",
+      "reject",
+      "noted",
+      "e2e-execute",
+      "gesture-tap",
+    ]);
   });
 
   it("renders a run report the same whether called as flow-execute or e2e-execute", async () => {
@@ -213,6 +227,25 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(byAlias)).toContain('Running e2e test "demo"');
     expect(textOf(byAlias)).not.toContain('"steps"');
     expect(byAlias.content).toEqual(byId.content);
+  });
+
+  it("skips the post-action capture while a profiler records, with a note except on describe", async () => {
+    const tap = await client.callTool({
+      name: "gesture-tap",
+      arguments: { udid: "emulator-5554", x: 0.5, y: 0.5 },
+    });
+    const described = await client.callTool({
+      name: "describe",
+      arguments: { udid: "emulator-5554" },
+    });
+
+    expect(requests.map((r) => r.url).filter((u) => u.startsWith("/tools/"))).toEqual([
+      "/tools/gesture-tap",
+      "/tools/describe",
+    ]);
+    expect(textOf(tap)).toContain("skipped while a profiler is recording");
+    expect(textOf(described)).toContain("Button 'OK'");
+    expect(textOf(described)).not.toContain("profiler");
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {

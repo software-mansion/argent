@@ -68,7 +68,7 @@ interface ToolCaller {
   callTool(
     name: string,
     args: unknown
-  ): Promise<{ result: unknown; outputHint?: string; note?: string }>;
+  ): Promise<{ result: unknown; outputHint?: string; note?: string; profiling?: boolean }>;
 }
 
 // A tool-server URL without `http://` either fails `new URL`, whose error names
@@ -133,8 +133,8 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
   return {
     fetchTools: client.fetchTools,
     async callTool(name, args) {
-      const { data, note, outputHint } = await client.callTool(name, args);
-      return { result: data, outputHint, note };
+      const { data, note, outputHint, profiling } = await client.callTool(name, args);
+      return { result: data, outputHint, note, ...(profiling ? { profiling } : {}) };
     },
   };
 }
