@@ -11,7 +11,8 @@ import type { ToolsServerPaths } from "@argent/tools-client";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
-// the listing, a tool call that must upload, an error answer and the note.
+// the listing, a tool call that must upload, an error answer, the note and
+// the auto-describe block.
 //
 // HOME is redirected before the import: the tools client builds its state and
 // link paths from homedir() at module load, and the local cases write their
@@ -119,6 +120,15 @@ async function startStub(token?: string): Promise<Stub> {
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return json(200, { data: { tapped: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
+        return json(200, { data: {} });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, { data: { description: "ROOT  AXGroup", hint: "call restart-app" } });
       }
       json(404, { error: "not found" });
     });
@@ -250,6 +260,19 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toBe("nope");
     expect(requests.filter((r) => r.url === "/tools/reject")).toHaveLength(1);
+  });
+
+  it("appends describe's hint to the element tree after an action", async () => {
+    const result = await client.callTool({
+      name: "gesture-tap",
+      arguments: { udid: "u", x: 0.5, y: 0.5 },
+    });
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)).toEqual({
+      type: "text",
+      text: "--- Elements after action (describe) ---\nROOT  AXGroup\n\ncall restart-app",
+    });
   });
 
   it("puts the tool-server's note before the result", async () => {

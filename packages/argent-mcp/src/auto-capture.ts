@@ -98,6 +98,15 @@ export function shouldAutoDescribe(toolName: string): boolean {
   return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
 }
 
+export function renderAutoDescribe(result: unknown): string | null {
+  const data = result as { description?: unknown; hint?: unknown } | null | undefined;
+  const desc = typeof data?.description === "string" ? data.description : "";
+  // TV describe already embeds `hint` in `description`.
+  const hint = typeof data?.hint === "string" && !desc.includes(data.hint) ? data.hint : "";
+  const body = [desc, hint].filter(Boolean).join("\n\n");
+  return body ? `${AUTO_DESCRIBE_HEADER}\n${body}` : null;
+}
+
 /**
  * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
  * the tool-server before typing). Copy of SECRET_PLACEHOLDER_MARKER in
