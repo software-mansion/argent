@@ -593,6 +593,189 @@ async function pointerPost(
   }
 }
 
+export interface ServerRecordingResult {
+  /** The mp4 in simulator-server's session directory. */
+  path: string;
+  sizeBytes: number;
+  /** Video length, after static trimming. */
+  durationMs: number;
+  wallClockMs: number | null;
+  trimmedMs: number | null;
+  warning: string | null;
+}
+
+const SERVER_RECORDING_START_HINT =
+  "simulator-server may already be recording for this request, which blocks later starts " +
+  "until simulator-server exits. Call stop-simulator-server for that UDID, then retry.";
+
+/**
+ * Start recording inside simulator-server. Returns the id `stopServerRecording`
+ * must present, or null when this build has no recording route.
+ */
+export async function startServerRecording(
+  api: SimulatorServerApi,
+  opts: { watermark: boolean; trimStatic: boolean; timeLimitSeconds: number },
+  signal?: AbortSignal
+): Promise<string | null> {
+  const body = await recordingPost<{ status?: string; id?: string; error?: string }>(
+    api,
+    "start",
+    {
+      watermark: opts.watermark,
+      trim_static: opts.trimStatic,
+      time_limit_secs: opts.timeLimitSeconds,
+    },
+    signal
+  );
+  if (body === null) return null;
+  if (body.status !== "ok" || typeof body.id !== "string") {
+    // A recording may be running, so falling back would capture twice.
+    throw new FailureError(
+      `screen-recording-start failed: simulator-server answered the recording command with ` +
+        `${JSON.stringify(body).slice(0, 200)} instead of a status. ${SERVER_RECORDING_START_HINT}`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_PROCESS_ERROR,
+        failure_stage: "screen_recording_server_start",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  return body.id;
+}
+
+/** Finalize the recording {@link startServerRecording} began. */
+export async function stopServerRecording(
+  api: SimulatorServerApi,
+  id: string,
+  signal?: AbortSignal
+): Promise<ServerRecordingResult> {
+  const body = await recordingPost<{
+    path?: string;
+    size_bytes?: number;
+    duration_ms?: number;
+    wall_clock_ms?: number;
+    trimmed_ms?: number | null;
+    warning?: string | null;
+    error?: string;
+  }>(api, "stop", { id }, signal);
+  if (body === null) {
+    throw new FailureError(
+      `screen-recording-stop failed: simulator-server no longer exposes a recording endpoint, ` +
+        `so the recording in progress cannot be finalized.`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+        failure_stage: "screen_recording_server_stop",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  if (typeof body.path !== "string" || typeof body.duration_ms !== "number") {
+    throw new FailureError(
+      `screen-recording-stop failed: simulator-server returned a recording result missing its video ` +
+        `path or duration (${JSON.stringify(body).slice(0, 200)}).`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+        failure_stage: "screen_recording_server_stop",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  return {
+    path: body.path,
+    sizeBytes: body.size_bytes ?? 0,
+    durationMs: body.duration_ms,
+    wallClockMs: typeof body.wall_clock_ms === "number" ? body.wall_clock_ms : null,
+    trimmedMs: body.trimmed_ms ?? null,
+    warning: body.warning ?? null,
+  };
+}
+
+/**
+ * POST a recording command, returning null when the route does not exist: the
+ * router answers an unknown route with an empty-bodied 404, while a 404 with a
+ * body is a handler refusing the command.
+ */
+async function recordingPost<T extends { error?: string }>(
+  api: SimulatorServerApi,
+  stage: "start" | "stop",
+  reqBody: unknown,
+  signal?: AbortSignal
+): Promise<T | null> {
+  const toolLabel = `screen-recording-${stage}`;
+  const startHint = stage === "start" ? SERVER_RECORDING_START_HINT : undefined;
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}/api/recording/${stage}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reqBody),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl, startHint);
+  }
+
+  let raw: string;
+  try {
+    raw = await res.text();
+  } catch (err) {
+    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl, startHint);
+  }
+  if (res.status === 404 && raw.trim() === "") return null;
+
+  let body: T | null = null;
+  if (raw.trim() !== "") {
+    try {
+      body = JSON.parse(raw) as T;
+    } catch {
+      throw new FailureError(
+        `${toolLabel} failed: simulator-server returned non-JSON response (HTTP ${res.status}). ` +
+          `The server may be in a bad state. Restart the simulator-server and retry.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_NON_JSON_RESPONSE,
+          failure_stage: "simulator_server_parse_response",
+          failure_area: "tool_server",
+          error_kind: "network",
+          network_failure: "invalid_response",
+        }
+      );
+    }
+  }
+  if (res.ok && body === null) {
+    throw new FailureError(
+      `${toolLabel} failed: simulator-server returned an empty response (HTTP ${res.status}). ` +
+        `The server may be in a bad state. Restart the simulator-server and retry.`,
+      {
+        error_code: FAILURE_CODES.SIMULATOR_NON_JSON_RESPONSE,
+        failure_stage: "simulator_server_parse_response",
+        failure_area: "tool_server",
+        error_kind: "network",
+        network_failure: "invalid_response",
+      }
+    );
+  }
+  if (!res.ok || !body || body.error) {
+    throw new FailureError(
+      `${toolLabel} failed: simulator-server rejected the recording command ` +
+        `(HTTP ${res.status}${body?.error ? `: ${body.error}` : ""}).`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_PROCESS_ERROR,
+        failure_stage: `screen_recording_server_${stage}`,
+        failure_area: "tool_server",
+        error_kind: "unknown",
+        failure_command: "simulator_server",
+      }
+    );
+  }
+  return body;
+}
+
 /** What simulator-server's `{ error }` says when it refuses `sensitive` text. */
 const SENSITIVE_TEXT_REFUSED = "refused to set sensitive text";
 

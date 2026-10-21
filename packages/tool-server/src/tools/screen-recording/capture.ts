@@ -29,8 +29,17 @@ import {
   writeLogoTemp,
   type Dimensions,
 } from "./watermark";
+import { disablePointer, type PointerControl } from "./pointer-control";
+import {
+  startServerCapture,
+  stopServerCapture,
+  type ServerRecordingControl,
+} from "./server-capture";
 
 /**
+ * Host-side capture, used where simulator-server does not record the video
+ * itself (see `server-capture.ts`).
+ *
  * Screen capture off simulator-server's MJPEG stream, paced onto a fixed 30fps
  * timeline and piped into one ffmpeg process that encodes (and optionally
  * watermarks) straight to the final mp4.
@@ -41,18 +50,6 @@ import {
  * the last frame on a wall-clock schedule keeps duration equal to real elapsed
  * time; identical frames cost almost nothing once encoded.
  */
-
-/**
- * simulator-server's touch visualizer, on for the life of a recording. Built by
- * the start tool from the resolved sim-server handle, so capture stays
- * decoupled from the sim-server client.
- */
-export interface PointerControl {
-  /** Enable the overlay; resolves false if the sim-server would not turn it on. */
-  enable(): Promise<boolean>;
-  /** Restore the overlay to off. Best-effort — never throws. */
-  disable(): Promise<void>;
-}
 
 const OUTPUT_FPS = 30;
 const FRAME_INTERVAL_MS = 1000 / OUTPUT_FPS;
@@ -263,13 +260,6 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
   }, FRAME_INTERVAL_MS);
 }
 
-/** Restore the touch visualizer to off. Best-effort, idempotent, never throws. */
-async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
-  const disable = api.pointerDisable;
-  api.pointerDisable = null;
-  if (disable) await disable().catch(() => {});
-}
-
 /**
  * Follow the panel a foldable renders to: resolve it on each tick, and when
  * the answer changes, move the capture onto that panel's stream. A tick that
@@ -361,25 +351,41 @@ function finalizeCapture(api: ScreenRecordingSessionApi): void {
   if (stdin?.writable) stdin.end();
 }
 
+interface StartCaptureParams {
+  streamUrl: string;
+  timeLimitSeconds: number;
+  watermark: boolean;
+  trimStatic: boolean;
+  pointer?: PointerControl;
+  /** Tried first; absent or unsupported, the host pipeline records. */
+  server?: ServerRecordingControl;
+  /** Set for a foldable: the capture then moves with the live panel. */
+  followPanel?: PanelFollow;
+}
+
 export async function startCapture(
   api: ScreenRecordingSessionApi,
-  params: {
-    streamUrl: string;
-    timeLimitSeconds: number;
-    watermark: boolean;
-    trimStatic: boolean;
-    pointer?: PointerControl;
-    /** Set for a foldable: the capture then moves with the live panel. */
-    followPanel?: PanelFollow;
-  }
+  params: StartCaptureParams
 ): Promise<StartRecordingResult> {
   assertNoActiveRecording(api, "screen_recording_start");
   // Set synchronously (no await between the assert and here) so an overlapping
   // start or stop is rejected instead of racing this one through the async
   // connect/spawn window; the finally clears it on every exit.
   api.startPending = true;
+  const outputFile = path.join(
+    os.tmpdir(),
+    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
+  );
   try {
-    return await startCaptureLocked(api, params);
+    if (params.server) {
+      const started = await startServerCapture(api, {
+        ...params,
+        server: params.server,
+        outputFile,
+      });
+      if (started) return started;
+    }
+    return await startCaptureLocked(api, { ...params, outputFile });
   } finally {
     api.startPending = false;
     api.pendingChild = null;
@@ -388,14 +394,7 @@ export async function startCapture(
 
 async function startCaptureLocked(
   api: ScreenRecordingSessionApi,
-  params: {
-    streamUrl: string;
-    timeLimitSeconds: number;
-    watermark: boolean;
-    trimStatic: boolean;
-    pointer?: PointerControl;
-    followPanel?: PanelFollow;
-  }
+  params: StartCaptureParams & { outputFile: string }
 ): Promise<StartRecordingResult> {
   const ffmpeg = await resolveFfmpeg();
   if (!ffmpeg) {
@@ -411,11 +410,7 @@ async function startCaptureLocked(
     );
   }
 
-  const outputFile = path.join(
-    os.tmpdir(),
-    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
-  );
-
+  const outputFile = params.outputFile;
   const stream = await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS);
   let logoFile: string | null = null;
   let watermarkSkipped: string | null = null;
@@ -624,6 +619,8 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   // Set synchronously so a concurrent stop or start is rejected while this one
   // finalizes (see assertStoppableSession / assertNoActiveRecording).
   api.stopPending = true;
+
+  if (api.serverStop) return stopServerCapture(api);
 
   if (api.recordingTimeout) {
     clearTimeout(api.recordingTimeout);
