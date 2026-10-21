@@ -111,6 +111,36 @@ describe("screenshot tool", () => {
     expect(result).not.toHaveProperty("includeImageInContext");
     expect(result).not.toHaveProperty("url");
   });
+
+  it("accepts a trimmed, non-empty `out` and leaves it off the result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ url: "http://localhost/screenshot.png", path: "/tmp/screenshot.png" }),
+      })
+    );
+    const registry = {
+      resolveService: vi.fn().mockResolvedValue({ apiUrl: "http://localhost:4949" }),
+    } as unknown as import("@argent/registry").Registry;
+    const screenshotTool = createScreenshotTool(registry);
+
+    expect(screenshotTool.zodSchema!.parse({ udid: "ABC", out: " shots/base.png " })).toMatchObject(
+      {
+        out: "shots/base.png",
+      }
+    );
+    expect(() => screenshotTool.zodSchema!.parse({ udid: "ABC", out: "   " })).toThrow();
+    expect(() => screenshotTool.zodSchema!.parse({ udid: "ABC", out: "" })).toThrow();
+
+    const result = await screenshotTool.execute(
+      {},
+      { udid: "ABC", includeImageInContext: true, out: "shots/base.png" },
+      { artifacts: new ArtifactStore() }
+    );
+    expect(result).not.toHaveProperty("out");
+  });
 });
 
 describe("screenshot tool on a foldable", () => {

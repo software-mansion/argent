@@ -73,6 +73,20 @@ const gestureTapMeta = {
   },
 };
 
+const screenshotMeta = {
+  name: "screenshot",
+  description: "Capture a screenshot",
+  inputSchema: {
+    type: "object",
+    properties: {
+      udid: { type: "string" },
+      includeImageInContext: { type: "boolean" },
+      out: { type: "string" },
+    },
+    required: ["udid"],
+  },
+};
+
 // Unique text from the two suppressible whole-payload help lines.
 const WHOLE_PAYLOAD_LINE = "Pass the entire payload as JSON";
 const STDIN_SENTINEL_LINE = "Read the entire payload as JSON from stdin";
@@ -118,6 +132,19 @@ describe("argent run --help — whole-payload --args advertisement", () => {
     // removes the whole-payload hatch without hiding the field itself.
     expect(help).toContain("--args <value>");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  it("lists `--out` once when the tool has its own `out` property", async () => {
+    toolsClientMock.fetchTool.mockResolvedValue(screenshotMeta);
+
+    await run(["screenshot", "--help"], { paths: {} as never });
+
+    const help = capturedHelp();
+    const outRows = help.split("\n").filter((l) => /^\s*--out(\s|=|$)/.test(l));
+    expect(outRows).toHaveLength(1);
+    expect(outRows[0]).toContain("For image results, save to");
+    expect(help).toContain("--udid <value>");
+    expect(help).toContain("--includeImageInContext");
   });
 
   it("renders each required flag with the (required) marker and leaves the optionals unmarked", async () => {
