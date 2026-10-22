@@ -411,6 +411,35 @@ describe("resolveProjectRoot", () => {
     expect(resolveProjectRoot(nestedDir)).toBe(nestedDir);
   });
 
+  it("does not treat the home directory's global editor config as a project root", () => {
+    const home = path.join(tmpDir, "home");
+    const projectRoot = path.join(home, "Dev", "argent-test");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".git"), { recursive: true });
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "package.json"), "{}");
+
+    expect(resolveProjectRoot(projectRoot, home)).toBe(projectRoot);
+  });
+
+  it("still finds a project root between the start directory and home", () => {
+    const home = path.join(tmpDir, "home");
+    const projectRoot = path.join(home, "Dev", "app");
+    const nestedDir = path.join(projectRoot, "src");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir, home)).toBe(projectRoot);
+  });
+
+  it("returns the home directory when started there", () => {
+    const home = path.join(tmpDir, "home");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+
+    expect(resolveProjectRoot(home, home)).toBe(home);
+  });
+
   it("recognizes opencode.jsonc as a project root marker", () => {
     const projectRoot = path.join(tmpDir, "project");
     const nestedDir = path.join(projectRoot, "src");
@@ -652,7 +681,7 @@ describe("listArgentSkillsInLock", () => {
       JSON.stringify({
         version: 1,
         skills: {
-          "argent-create-flow": {},
+          "argent-create-e2e": {},
           "argent-old-workflow": {}, // still in lock even if no longer bundled
           "some-other-skill": {},
           "vercel-labs/agent-skills": {},
@@ -660,7 +689,7 @@ describe("listArgentSkillsInLock", () => {
       })
     );
     // Result is sorted so callers can rely on a stable order.
-    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-flow", "argent-old-workflow"]);
+    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-e2e", "argent-old-workflow"]);
   });
 
   it("returns an empty list when the lock has no skills object", () => {
@@ -820,8 +849,7 @@ describe("isSkillsCliAvailable", () => {
     isSkillsCliAvailable();
 
     const opts = execSyncMock.mock.calls[0]![1] as
-      | { stdio?: [unknown, unknown, unknown] }
-      | undefined;
+      { stdio?: [unknown, unknown, unknown] } | undefined;
     expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
   });
 

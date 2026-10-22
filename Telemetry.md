@@ -44,7 +44,7 @@ We do not use telemetry for advertising, marketing, profiling, automated decisio
 
 ### Tool and process usage
 
-- which Argent tools are invoked, and whether they succeeded or returned an error;
+- which Argent tools are invoked, whether a call used a tool's former name, and whether they succeeded or returned an error;
 - which AI coding tool is driving Argent;
 - how long a process ran in the terminal or in CI, and which Argent component emitted the event;
 - start and stop of the Argent tool-server, its uptime, the number of tools used, and the reason it stopped.

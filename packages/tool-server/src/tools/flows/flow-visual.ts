@@ -334,7 +334,7 @@ export async function runSnapshot(
   let keepBaselineCopy = false;
   const hostBaseline = async (bytes: Buffer): Promise<string> => {
     if (opts.clientFlowPath === undefined) return baselinePath;
-    baselineCopyDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-baseline-"));
+    baselineCopyDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-baseline-"));
     const copy = path.join(baselineCopyDir, key);
     await fs.writeFile(copy, bytes);
     return copy;
@@ -346,7 +346,7 @@ export async function runSnapshot(
 
   try {
     if (cropFrame !== undefined) {
-      cropDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-crop-"));
+      cropDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-crop-"));
       const croppedPath = path.join(cropDir, key);
       const cropped = await cropPngFile(shot.image.hostPath, croppedPath, cropFrame);
       if (cropped === null) {
@@ -437,9 +437,9 @@ export async function runSnapshot(
     // Nothing in it may outlive this call except a file registered as an
     // artifact below (its host path is materialized later) — the finally sweeps
     // the rest, or a long-lived tool-server running snapshot flows would
-    // accrete argent-flow-diff-* directories forever.
+    // accrete argent-e2e-diff-* directories forever.
     const localBaseline = await hostBaseline(stored);
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-flow-diff-"));
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-diff-"));
     let keepInOutputDir: string | undefined;
     try {
       const result = await diffPngFiles({

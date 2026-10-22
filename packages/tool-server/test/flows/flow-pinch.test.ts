@@ -11,12 +11,10 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -420,7 +418,7 @@ describe("pinch: gating", () => {
     expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "fail" });
     expect(result.steps[0].reason).toMatch(/pinch is unsupported on a physical iOS device/);
     expect(result.steps[0].reason).toMatch(/no two-finger coordinate API on hardware/);
-    expect(result.steps[0].reason).toMatch(/run this flow on a simulator/);
+    expect(result.steps[0].reason).toMatch(/run this e2e test on a simulator/);
     expect(result.steps[0].reason).not.toMatch(/simulator-server/);
     expect(result.calls).toHaveLength(0);
     expect(reads).toBe(0);

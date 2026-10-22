@@ -36,9 +36,11 @@ Argent writes a diff image. The image marks the pixels that became brighter, the
 
 Argent removes the status bar from the comparison. Thus the clock and the battery indicator do not make the comparison fail.
 
-## Baselines in flows
+<a id="baselines-in-flows" />
 
-A [flow](/docs/features/flows) can contain a snapshot step. The step fails when no baseline exists yet. Run the flow with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
+## Baselines in e2e tests
+
+An [e2e test](/docs/features/e2e) can contain a snapshot step. The step fails when no baseline exists yet. Run the e2e test with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
 
 Thus you can keep visual checks in the repository and run them in CI.
 
@@ -47,7 +49,7 @@ Thus you can keep visual checks in the repository and run them in CI.
 - "Capture a baseline of the settings screen. Then apply my change and compare."
 - "Compare the home screen before and after the tap on the filter button."
 - "I changed the font of the headings. Make sure that nothing else on the screen changed."
-- "Add a snapshot step to the checkout flow for the summary screen."
+- "Add a snapshot step to the checkout e2e test for the summary screen."
 
 ## Limits
 

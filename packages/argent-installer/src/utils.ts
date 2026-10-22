@@ -51,7 +51,6 @@ export {
   InstallModeFlagError,
 } from "./install-record.js";
 export type { InstallMode } from "./install-record.js";
-export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 
 // resolvePackageRoot lives in the leaf package-root.ts module: topology.ts
 // needs it too, and importing it from this barrel — which re-exports topology —
@@ -113,6 +112,16 @@ export function getGlobalSkillLockPath(): string {
 // entries under it count as ours even once they leave the bundled set.
 export const ARGENT_SKILL_PREFIX = "argent-";
 
+// Skills earlier argent versions shipped under names no longer bundled.
+// Init, update and uninstall remove them even when no lockfile tracks them.
+export const LEGACY_ARGENT_SKILL_NAMES: readonly string[] = [
+  "argent-create-flow",
+  "argent-qa-flows",
+  "argent-simulator-interact",
+  "argent-simulator-setup",
+  "argent-ios-profiler",
+];
+
 export function listArgentSkillsInLock(lockPath: string): string[] {
   try {
     const raw = fs.readFileSync(lockPath, "utf8");
@@ -142,11 +151,19 @@ const PROJECT_ROOT_MARKERS = [
   "skills-lock.json",
 ];
 
-export function resolveProjectRoot(startDir: string): string {
+// The walk never climbs into the home directory: `~/.claude`, `~/.cursor`,
+// `~/.codex`, … are the editors' global config dirs, not project markers, so
+// matching them would resolve every markerless project under home to home.
+export function resolveProjectRoot(startDir: string, homeDir: string = os.homedir()): string {
   const initialDir = path.resolve(startDir);
+  const home = path.resolve(homeDir);
   let currentDir = initialDir;
 
   while (true) {
+    if (currentDir === home && currentDir !== initialDir) {
+      return initialDir;
+    }
+
     if (PROJECT_ROOT_MARKERS.some((marker) => fs.existsSync(path.join(currentDir, marker)))) {
       return currentDir;
     }
@@ -271,8 +288,7 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   if (raw.trim() === "") return {};
   const parsed = parseJsonc(raw, [], { allowTrailingComma: true }) as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   return parsed ?? {};
 }
 

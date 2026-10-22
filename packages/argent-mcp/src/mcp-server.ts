@@ -6,6 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
+  canonicalToolId,
   ensureToolsServer,
   getResolvedToolsUrl,
   getDeviceIdFromArgs,
@@ -202,7 +203,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
       let content: ContentBlock[];
       if (
-        params.name === "flow-execute" &&
+        canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
         "flow" in result &&

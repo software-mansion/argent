@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const describeFrameSchema = z.object({
+const describeFrameSchema = z.object({
   x: z.number().finite().min(0).max(1),
   y: z.number().finite().min(0).max(1),
   width: z.number().finite().min(0).max(1),

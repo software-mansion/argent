@@ -73,7 +73,7 @@ async function recordTap(point: { x: number; y: number }) {
 }
 
 async function recordedSteps() {
-  const content = await fs.readFile(path.join(tmpDir, ".argent", "flows", `${FLOW}.yaml`), "utf8");
+  const content = await fs.readFile(path.join(tmpDir, ".argent", "e2e", `${FLOW}.yaml`), "utf8");
   return parseFlow(content).steps;
 }
 
@@ -101,7 +101,7 @@ afterEach(async () => {
 describe("flow-add-step tap capture targets the recorded launch", () => {
   const BUNDLE = "com.example.app";
   // A leading `launch` and an executionPrerequisite are mutually exclusive, so
-  // this block records into an e2e flow of its own rather than the fragment the
+  // this block records into a standalone flow of its own rather than the fragment the
   // outer setup opens.
   const E2E_FLOW = "rec-e2e";
 

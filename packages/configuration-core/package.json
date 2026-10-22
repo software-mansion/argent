@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/configuration-core",
-  "version": "0.28.0",
+  "version": "0.30.0",
   "description": "Source of truth for argent feature flags: registry, JSON storage, and isFlagEnabled",
   "type": "module",
   "main": "dist/index.js",
@@ -12,11 +12,11 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "dotenv": "^17.4.2"
+    "dotenv": "^18.0.8"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.6.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^5.0.5"
   }
 }

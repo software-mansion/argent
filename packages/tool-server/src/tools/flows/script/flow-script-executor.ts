@@ -547,9 +547,7 @@ export class FlowScriptExecutor {
     // event loop, which would keep the server alive past its idle shutdown.
     // Never read from or write to it — the runner only watches for its close.
     const lifeline = child.stdio?.[4] as
-      | { unref?: () => void; destroy?: () => void }
-      | null
-      | undefined;
+      { unref?: () => void; destroy?: () => void } | null | undefined;
     lifeline?.unref?.();
 
     let startedSeen = false;
@@ -998,7 +996,7 @@ function describeExit(exit: { code: number | null; signal: NodeJS.Signals | null
 function resolveWorkingDirectory(request: FlowScriptRequest, notes: string[]): string {
   const candidates: Array<{ label: string; value: string | undefined }> = [
     { label: "project_root", value: request.projectRoot },
-    { label: "the flow file's directory", value: request.flowDir },
+    { label: "the e2e test file's directory", value: request.flowDir },
   ];
   const named = candidates.filter((c) => c.value);
   const problems: string[] = [];
@@ -1015,7 +1013,7 @@ function resolveWorkingDirectory(request: FlowScriptRequest, notes: string[]): s
   throw new ScriptSetupError(
     "invalid",
     named.length === 0
-      ? "No working directory was given for the script (neither project_root nor a flow directory)."
+      ? "No working directory was given for the script (neither project_root nor an e2e test directory)."
       : `No working directory exists on the machine running the tool server: ${problems.join("; ")}.`
   );
 }
@@ -1039,11 +1037,14 @@ function encodeRequestOutput(output: Record<string, unknown> | undefined): strin
   } catch (err) {
     throw new ScriptSetupError(
       "invalid",
-      `The flow output could not be encoded for the script: ${errorMessage(err)}`
+      `The e2e test output could not be encoded for the script: ${errorMessage(err)}`
     );
   }
   if (typeof encoded !== "string") {
-    throw new ScriptSetupError("invalid", "The flow output could not be encoded for the script.");
+    throw new ScriptSetupError(
+      "invalid",
+      "The e2e test output could not be encoded for the script."
+    );
   }
   return encoded;
 }

@@ -106,6 +106,16 @@ export interface ForegroundApp {
   alertVisible?: boolean;
 }
 
+/**
+ * The `fill` result. It never carries the field's text or the text that was
+ * asked for: either may be a credential. A field that does not read back the
+ * text fails with FILL_NOT_VERIFIED instead.
+ */
+export interface FillResult {
+  /** The field was read back and holds the text. False on a physical iPhone, where nothing can read it back. */
+  verified: boolean;
+}
+
 export interface CallToolOptions {
   /** Receive progress events while a long-running tool works. */
   onProgress?: (event: unknown) => void;
@@ -180,7 +190,10 @@ export function createArgentClient(): ArgentClient {
 
   async function listTools(options?: { signal?: AbortSignal }): Promise<ArgentTool[]> {
     const tools = await client.fetchTools({ signal: options?.signal });
-    return tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+    // A former tool id stays callable but is not listed.
+    return tools
+      .filter((tool) => tool.aliasOf === undefined)
+      .map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
   }
 
   async function callTool<T>(

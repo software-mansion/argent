@@ -36,6 +36,8 @@ export {
 
 export { ToolInvocationError } from "./errors.js";
 
+export { canonicalToolId } from "@argent/registry";
+
 export {
   readLinkConfig,
   writeLinkConfig,

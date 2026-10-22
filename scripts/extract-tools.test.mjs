@@ -291,6 +291,14 @@ test("run-sequence and describe (the two originally dropped tools) and gesture-t
   }
 });
 
+test("a renamed tool is extracted once, under its current id, not its aliases", () => {
+  const { tools } = runExtractor();
+  const names = tools.map((t) => t.name);
+  assert.equal(new Set(names).size, names.length, "duplicate tool names in extractor output");
+  assert.ok(names.includes("e2e-execute"), "e2e-execute missing from extractor output");
+  assert.ok(!names.includes("flow-execute"), "the alias flow-execute was extracted as a tool");
+});
+
 // Boundary-parsing rules (pure, fixture-driven)
 
 test("a >4000-char multi-line description is captured in full (the original regression)", () => {

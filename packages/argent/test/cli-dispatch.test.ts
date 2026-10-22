@@ -56,6 +56,7 @@ const FAKE_CLI_BUNDLE =
     "startMcpServer",
     "tools",
     "run",
+    "e2e",
     "server",
     "lens",
     "link",
@@ -279,12 +280,23 @@ describe("cli dispatcher: non-installer commands and top-level arms", () => {
     );
     expect(stdout).toContain("(--global [default] installs on PATH; --local commits a");
     expect(stdout).toContain("Alias for init");
-    // Pin the flow row to the current interface: `argent flow run` takes
-    // either form — a saved flow's name or any YAML file's path.
+    // Pin the e2e row to the current interface: `argent e2e run` takes
+    // either form, a saved test's name or any YAML file's path. `flow` is a
+    // silent alias, so it has no row.
     expect(stdout).toContain(
-      "flow        Run a flow by name or YAML path (use `argent flow --help` for options)"
+      "e2e         Run an e2e test by name or YAML path (use `argent e2e --help` for options)"
     );
+    expect(stdout).not.toMatch(/^ {2}flow /m);
     expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it.each(["e2e", "flow"])("`%s` reaches the e2e bundle with its argv", async (command) => {
+    const marker = freshMarker();
+    const { exitCode, stdout, stderr } = await runCli([command, "run", "checkout"], marker);
+    expect(exitCode).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("e2e:run checkout");
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
   });
 
   it("an unknown command prints help and exits 1", async () => {

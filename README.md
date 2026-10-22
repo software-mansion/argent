@@ -16,10 +16,10 @@ npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest ini
 ## What it does
 
 - **Interact** - tap, swipe, gesture, type, hardware buttons; D-pad on TV; mouse and keyboard on desktop.
-- **Flows** - record a path once, replay it deterministically as a repro or smoke test.
+- **E2E** - record a path once as an e2e test, replay it deterministically as a repro or smoke test.
 - **Visual regression** - diff a baseline against a live capture, OCR- and font-aware.
 - **Profiling** - Hermes, React DevTools, Xcode Instruments, Perfetto: renders, CPU hotspots, hangs.
-- **Debugging** - logs, network (`fetch` and native), JS evaluation, native and React trees.
+- **Debugging** - logs, network (`XMLHttpRequest` incl. axios, `fetch` incl. Expo's, and native), JS evaluation, native and React trees.
 - **React Native** - build, launch and iterate, no extra setup.
 
 Ask your assistant _"What can Argent do?"_ to list every tool.

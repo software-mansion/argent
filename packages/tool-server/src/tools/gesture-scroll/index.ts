@@ -13,10 +13,16 @@ const zodSchema = z
       .describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
     x: z
       .number()
+      .min(0)
+      .max(1)
       .describe(
         "Anchor x: normalized 0.0–1.0 (fraction of window width, not pixels). The wheel events land here; put it over the element you want to scroll."
       ),
-    y: z.number().describe("Anchor y: normalized 0.0–1.0 (fraction of window height, not pixels)."),
+    y: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe("Anchor y: normalized 0.0–1.0 (fraction of window height, not pixels)."),
     deltaX: z
       .number()
       .optional()

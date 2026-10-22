@@ -8,6 +8,21 @@ type McpTool = {
 };
 
 /**
+ * The schema without its retired params (`z.never()`, serialized as an untyped
+ * `not: {}`). Grammar-constrained providers refuse an untyped param, which fails
+ * the whole request (#1250); the tool-server still refuses the key with guidance.
+ */
+function withoutRetiredParams(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = schema.properties as Record<string, { not?: object }> | undefined;
+  if (!properties) return schema;
+  const live = Object.entries(properties).filter(
+    ([, prop]) => !prop.not || Object.keys(prop.not).length > 0
+  );
+  if (live.length === Object.keys(properties).length) return schema;
+  return { ...schema, properties: Object.fromEntries(live) };
+}
+
+/**
  * Maps a tool-server `ToolMeta` to the MCP `tools/list` shape. `alwaysLoad` opts the
  * tool out of Claude Code's progressive tool loading; `searchHint` feeds its ToolSearch
  * BM25 ranker.
@@ -19,7 +34,7 @@ export function toMcpTool(t: ToolMeta): McpTool {
   return {
     name: t.name,
     description: t.description,
-    inputSchema: { type: "object", ...t.inputSchema },
+    inputSchema: { type: "object", ...withoutRetiredParams(t.inputSchema) },
     ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
   };
 }
