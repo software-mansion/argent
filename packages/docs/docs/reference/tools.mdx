@@ -74,6 +74,8 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
+In an Expo development build, a floating Tools button can cover app controls near a side edge of the screen. Its touch area is larger than its icon. On iOS, `describe` adds a note to each element under that area, because a tap there can open the Expo developer menu. Argent does not detect the button on Android yet. To remove the button, turn off **Tools button** in that menu.
+
 ## Interacting
 
 | Tool                     | Description                                                     |
