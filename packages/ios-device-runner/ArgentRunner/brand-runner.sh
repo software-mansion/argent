@@ -7,7 +7,7 @@ runner="$BUILT_PRODUCTS_DIR/ArgentRunnerUITests-Runner.app"
 tests="$runner/PlugIns/ArgentRunnerUITests.xctest"
 
 cp "$tests/Assets.car" "$tests/AppIcon60x60@2x.png" "$runner/"
-plutil -replace CFBundleDisplayName -string "Argent Tester" "$runner/Info.plist"
+plutil -replace CFBundleDisplayName -string "Argent Runner" "$runner/Info.plist"
 plutil -replace CFBundleIcons -json "$(plutil -extract CFBundleIcons json -o - "$tests/Info.plist")" "$runner/Info.plist"
 
 # Only a bundle Xcode signed has a seal; the template executable carries

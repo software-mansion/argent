@@ -13,7 +13,7 @@ ArgentRunner/
   ArgentRunner.xcodeproj      Three targets: ArgentRunner (placeholder host app),
                               ArgentRunnerUITests (the runner itself) and
                               BrandRunner (runs brand-runner.sh).
-  brand-runner.sh             Names the runner app "Argent Tester", gives it
+  brand-runner.sh             Names the runner app "Argent Runner", gives it
                               the icon and re-seals its signature.
   ArgentRunner/               Host app: a single black "Argent Runner" screen.
   ArgentRunnerUITests/
