@@ -603,3 +603,158 @@ describe("formatDescribeTree", () => {
     expect(out).toMatch(/Button\s+"Like"/);
   });
 });
+
+describe("formatDescribeTree — overlapping elements", () => {
+  const node = (role: string, label: string, x: number, y: number, w: number, h: number) => ({
+    role,
+    label,
+    frame: { x, y, width: w, height: h },
+    children: [],
+  });
+  // A long list: the "Add Player" row slid under the sticky "Continue" footer.
+  const root = {
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      node("AXGroup", "Add Player", 0.055, 0.845, 0.891, 0.09),
+      node("AXButton", "Continue", 0.055, 0.86, 0.891, 0.088),
+      node("AXStaticText", "Add Players", 0.299, 0.075, 0.402, 0.055),
+      node("AXButton", "Options", 0.871, 0.086, 0.075, 0.034),
+    ],
+  };
+  const lineOf = (out: string, label: string) =>
+    out.split("\n").find((l) => new RegExp(`^\\s+\\w+ "${label}"`).test(l))!;
+
+  it("marks both elements of a partial overlap", () => {
+    const out = formatDescribeTree(root as any, { source: "ax-service" });
+    expect(lineOf(out, "Add Player")).toContain(
+      `overlaps "Continue": one covers the other — scroll to separate them before tapping`
+    );
+    expect(lineOf(out, "Continue")).toContain(`overlaps "Add Player"`);
+  });
+
+  it("leaves separate elements alone", () => {
+    const out = formatDescribeTree(root as any, { source: "ax-service" });
+    expect(lineOf(out, "Add Players")).not.toContain("overlaps");
+    expect(lineOf(out, "Options")).not.toContain("overlaps");
+  });
+
+  it("ignores two overlapping labels", () => {
+    const labels = {
+      ...root,
+      children: [
+        node("AXStaticText", "Title", 0.1, 0.1, 0.5, 0.05),
+        node("AXStaticText", "Subtitle", 0.1, 0.13, 0.5, 0.05),
+      ],
+    };
+    expect(formatDescribeTree(labels as any, { source: "ax-service" })).not.toContain("overlaps");
+  });
+
+  it("ignores an element nested inside another (text inside a button)", () => {
+    const nested = {
+      ...root,
+      children: [
+        node("AXButton", "Buy", 0.1, 0.5, 0.8, 0.1),
+        node("AXStaticText", "Buy now", 0.2, 0.52, 0.3, 0.05),
+      ],
+    };
+    expect(formatDescribeTree(nested as any, { source: "ax-service" })).not.toContain("overlaps");
+  });
+
+  const render = (...children: ReturnType<typeof node>[]) =>
+    formatDescribeTree({ ...root, children } as any, { source: "ax-service" });
+  const button = (label: string, x: number, y: number) => node("AXButton", label, x, y, 0.4, 0.1);
+
+  it("ignores an overlap of a quarter or less of the smaller element", () => {
+    // 0.4 x 0.02 shared out of 0.4 x 0.1: 20%.
+    expect(render(button("Top", 0.1, 0.1), button("Bottom", 0.1, 0.18))).not.toContain("overlaps");
+  });
+
+  it("ignores elements that only touch diagonally", () => {
+    expect(render(button("A", 0.1, 0.1), button("B", 0.6, 0.3))).not.toContain("overlaps");
+    expect(
+      render(node("AXButton", "A", 0.1, 0.1, 0.2, 0.1), node("AXButton", "B", 0.4, 0.3, 0.2, 0.1))
+    ).not.toContain("overlaps");
+  });
+
+  it("measures the overlap against the smaller element", () => {
+    // Fully inside a larger button: 100% of the smaller one, 60% of the larger.
+    expect(
+      render(
+        node("AXButton", "Pay", 0.1, 0.5, 0.4, 0.1),
+        node("AXButton", "Now", 0.15, 0.51, 0.3, 0.08)
+      )
+    ).not.toContain("overlaps");
+  });
+
+  it("skips elements of half the screen or more", () => {
+    expect(
+      render(node("AXButton", "Sheet", 0, 0.3, 1, 0.7), button("Behind", 0.3, 0.25))
+    ).not.toContain("overlaps");
+  });
+
+  it("skips sliders, scroll bars and UIKit scroll indicators", () => {
+    for (const other of [
+      node("AXAdjustable", "Volume", 0.1, 0.15, 0.4, 0.1),
+      node("AXScrollBar", "Scroller", 0.1, 0.15, 0.4, 0.1),
+      node("AXGroup", "Vertical scroll bar, 1 page", 0.1, 0.15, 0.4, 0.1),
+      node("AXGroup", "Horizontal scroll bar, 2 pages", 0.1, 0.15, 0.4, 0.1),
+    ]) {
+      expect(render(button("Allow Once", 0.1, 0.1), other)).not.toContain("overlaps");
+    }
+  });
+
+  it("skips unlabelled elements", () => {
+    const blank = {
+      role: "AXButton",
+      frame: { x: 0.1, y: 0.15, width: 0.4, height: 0.1 },
+      children: [],
+    };
+    expect(render(button("Save", 0.1, 0.1), blank as any)).not.toContain("overlaps");
+  });
+
+  it("lists every partner, largest overlap first", () => {
+    const out = render(
+      node("AXButton", "Toast", 0.1, 0.8, 0.8, 0.06),
+      node("AXButton", "Continue", 0.05, 0.84, 0.9, 0.08),
+      node("AXButton", "Save", 0.1, 0.77, 0.3, 0.06)
+    );
+    expect(lineOf(out, "Toast")).toContain(`overlaps "Save", "Continue": one covers the other`);
+    expect(lineOf(out, "Save")).toContain(`overlaps "Toast":`);
+    expect(lineOf(out, "Continue")).toContain(`overlaps "Toast":`);
+  });
+
+  it("keeps the partner's name on one line and JSON-safe", () => {
+    const out = render(
+      button('Say "hi"\nthere', 0.1, 0.1),
+      button(`${"x".repeat(39)}\u{1F600}tail`, 0.1, 0.15)
+    );
+    const lines = out.split("\n").filter((l) => l.includes("overlaps"));
+    expect(lines).toHaveLength(2);
+    expect(lines.every((l) => /\(\d\.\d{3}, \d\.\d{3}, \d\.\d{3}, \d\.\d{3}\)$/.test(l))).toBe(
+      true
+    );
+    expect(out).toContain(`overlaps "Say 'hi'\\nthere"`);
+    // Cut at 40 code points: the emoji survives whole, the rest is dropped.
+    expect(out).toContain(`overlaps "${"x".repeat(39)}\u{1F600}":`);
+    expect(out).not.toContain('tail":');
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+});
+
+describe("formatDescribeTree — overlap notes are iOS-flat only", () => {
+  it("adds no overlap notes to a nested Android tree", () => {
+    const leaf = (label: string, x: number, y: number) => ({
+      role: "Button",
+      label,
+      frame: { x, y, width: 0.8, height: 0.09 },
+      children: [],
+    });
+    const root = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [leaf("Add Player", 0.055, 0.845), leaf("Continue", 0.055, 0.86)],
+    };
+    expect(formatDescribeTree(root as any, { source: "uiautomator" })).not.toContain("overlaps");
+  });
+});
