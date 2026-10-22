@@ -12,30 +12,30 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                                                                               |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators (with the `harmonyos` flag) |
-| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator (with the `harmonyos` flag), or spawn an Electron app                              |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                                                  |
-| `restart-app`                | Terminate then relaunch an app                                                                                                                            |
-| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                                                        |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                                                    |
-| `open-url`                   | Open a URL or URL scheme on the device                                                                                                                    |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                                             |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                                                                                |
-| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                                                 |
-| `shake`                      | Shake the device                                                                                                                                          |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                                             |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                                        |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                                          |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons                                                                          |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                                          |
+| Tool                         | Description                                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators |
+| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, or spawn an Electron app                              |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                      |
+| `restart-app`                | Terminate then relaunch an app                                                                                                |
+| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                            |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                        |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                                        |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                 |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                                                    |
+| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                     |
+| `shake`                      | Shake the device                                                                                                              |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                 |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                            |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                              |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons                                              |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                              |
 
 `launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
 
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
-- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS, with the `harmonyos` flag).
+- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).
 - `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
 
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.

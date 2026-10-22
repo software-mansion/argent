@@ -237,7 +237,7 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 - iOS and Android can run fragments or standalone tests inline. A nested standalone launch restarts its app.
 - Chromium boots one instance per launch **step**, not one per run. The leading launch (the test's own, or the one its leading `run:` chain reaches) boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium standalone test with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
-- HarmonyOS (only with the `harmonyos` flag on): read `references/harmonyos.md` of `argent-device-interact` before writing a test for it.
+- HarmonyOS: read `references/harmonyos.md` of `argent-device-interact` before writing a test for it.
 
 ## Local scripts
 
