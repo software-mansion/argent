@@ -92,6 +92,8 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
 
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, and `gesture-drag` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

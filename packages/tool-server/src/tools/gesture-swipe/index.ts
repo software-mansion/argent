@@ -49,10 +49,18 @@ const zodSchema = z
       .describe(
         "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
       ),
-    fromX: z.number().describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
-    fromY: z.number().describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
-    toX: z.number().describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
-    toY: z.number().describe("End y: normalized 0.0–1.0 (not pixels; same as tap)"),
+    fromX: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
+    fromY: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
+    toX: z.number().min(0).max(1).describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
+    toY: z.number().min(0).max(1).describe("End y: normalized 0.0–1.0 (not pixels; same as tap)"),
     durationMs: z
       .number()
       .max(MAX_DURATION_MS, {

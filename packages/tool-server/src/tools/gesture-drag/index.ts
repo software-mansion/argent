@@ -24,12 +24,26 @@ const MAX_DURATION_MS = 10_000;
 
 const zodSchema = z.object({
   udid: z.string().describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
-  fromX: z.number().describe("Press x: normalized 0.0–1.0 (fraction of window width, not pixels)."),
+  fromX: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe("Press x: normalized 0.0–1.0 (fraction of window width, not pixels)."),
   fromY: z
     .number()
+    .min(0)
+    .max(1)
     .describe("Press y: normalized 0.0–1.0 (fraction of window height, not pixels)."),
-  toX: z.number().describe("Release x: normalized 0.0–1.0 (not pixels; same space as tap)."),
-  toY: z.number().describe("Release y: normalized 0.0–1.0 (not pixels; same space as tap)."),
+  toX: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe("Release x: normalized 0.0–1.0 (not pixels; same space as tap)."),
+  toY: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe("Release y: normalized 0.0–1.0 (not pixels; same space as tap)."),
   durationMs: z
     .number()
     .max(MAX_DURATION_MS, {
