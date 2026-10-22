@@ -95,10 +95,10 @@ export const buttonTool: ToolDefinition<Params, Result> = {
       `Failed to press ${params.button} button: ${failureSignal.error_code}`,
   },
   description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device<flag:harmonyos>, HarmonyOS device</flag:harmonyos>). iOS simulators send a Down then Up event automatically; Android injects a single \`adb\` key event<flag:harmonyos>; HarmonyOS injects one \`uitest uiInput keyEvent\`</flag:harmonyos>.
-Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone<flag:harmonyos>, anything beyond home/back/power on HarmonyOS</flag:harmonyos>) are rejected with a clear error.
+Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton; buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone<flag:harmonyos>, anything beyond home/back/power on HarmonyOS</flag:harmonyos>) are rejected with a clear error.
 Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
-Fails if the device backend is not reachable — the simulator-server for iOS, <flag:harmonyos>\`hdc\` for HarmonyOS, </flag:harmonyos>or \`adb\` for Android (presses are injected with \`adb shell input keyevent\`).`,
+Fails if the device backend is not reachable: the simulator-server for iOS, <flag:harmonyos>\`hdc\` for HarmonyOS, </flag:harmonyos>or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
   zodSchema,
   capability,
   // Declare only the service the resolved path actually consumes. The Android

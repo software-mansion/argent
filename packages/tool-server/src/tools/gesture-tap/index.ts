@@ -47,7 +47,7 @@ const zodSchema = z.object({
       "Number of taps/clicks dispatched as ONE multi-tap gesture (2 = double-tap / double-click). " +
         "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
         "CDP clickCount so dblclick actually fires; on physical iOS 2 is the native double-tap and " +
-        "higher counts land as separate taps. <flag:harmonyos>On HarmonyOS only 2 is one gesture — 3 or more are " +
+        "higher counts land as separate taps. <flag:harmonyos>On HarmonyOS only 2 is one gesture; 3 or more are " +
         "separate injections a device round trip apart, which the OS reads as single taps. </flag:harmonyos>Default 1."
     ),
 });

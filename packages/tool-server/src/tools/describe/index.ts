@@ -170,7 +170,7 @@ On HarmonyOS, runs the device's own \`uitest dumpLayout\` (\`source: "harmony-ui
 child is a window carrying the owning bundle as its \`identifier\` (not its label, which would make a
 full-screen node match a text search for the app's own name), so an app plus the status bar reads as
 two windows. A suspended display still dumps its last-composited windows, indistinguishable in the
-tree from a live screen, so the result carries a \`hint\` saying the panel is off — taps land nowhere
+tree from a live screen, so the result carries a \`hint\` saying the panel is off; taps land nowhere
 until you wake it with \`button\` (power). An empty dump is hinted the same way, as an app that may
 still be starting.</flag:harmonyos>
 
