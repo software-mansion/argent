@@ -178,4 +178,173 @@ describe("await-screen-idle tool", () => {
     expect(result.settled).toBe(false);
     expect(result.waitedMs).toBeGreaterThanOrEqual(80);
   });
+
+  it("settles when only a looping animation keeps moving (ambient motion)", async () => {
+    // A coach-mark hand bobbing between two positions forever next to static
+    // content: the full tree never repeats for long, but nothing else moves.
+    const bob = (y: number) =>
+      axResponse([
+        { label: "Settings", frame: FRAME, traits: ["button"] },
+        { label: "hand", frame: { x: 0.4, y, width: 0.18, height: 0.08 }, traits: ["image"] },
+      ]);
+    const looping = Array.from({ length: 60 }, (_, i) => bob(i % 2 ? 0.218 : 0.238));
+    const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService(looping)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 1000, pollIntervalMs: 10, minStableMs: 30 }
+    );
+
+    expect(result.settled).toBe(true);
+    expect(result.ambientMotion).toBe(true);
+    expect(result.waitedMs).toBeLessThan(1000);
+  });
+
+  it("keeps waiting while an element slides without repeating a position", async () => {
+    const slide = Array.from({ length: 200 }, (_, i) =>
+      axResponse([
+        { label: "Settings", frame: FRAME, traits: ["button"] },
+        { label: "sheet", frame: { x: 0, y: 1 - i * 0.004, width: 1, height: 0.5 }, traits: [] },
+      ])
+    );
+    const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService(slide)));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 150, pollIntervalMs: 10, minStableMs: 30 }
+    );
+
+    expect(result.settled).toBe(false);
+  });
+
+  describe("ambient motion rules", () => {
+    type Box = { label: string; x?: number; y: number; width?: number; height?: number };
+    const screen = (...boxes: Box[]) =>
+      axResponse([
+        { label: "Settings", frame: FRAME, traits: ["button"] },
+        ...boxes.map((b) => ({
+          label: b.label,
+          frame: { x: b.x ?? 0.4, y: b.y, width: b.width ?? 0.18, height: b.height ?? 0.08 },
+          traits: ["image"],
+        })),
+      ]);
+    const run = (
+      frames: AXDescribeResponse[],
+      opts: { timeoutMs?: number; minStableMs?: number } = {}
+    ) =>
+      createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService(frames))).execute(
+        {},
+        {
+          udid: IOS_UDID,
+          timeoutMs: opts.timeoutMs ?? 300,
+          pollIntervalMs: 10,
+          minStableMs: opts.minStableMs ?? 30,
+        }
+      );
+    const bobY = (i: number) => (i % 2 ? 0.218 : 0.238);
+
+    it("keeps waiting when an entrance overshoots once and keeps moving", async () => {
+      // Slides up, overshoots, then creeps back down without reversing again.
+      const ys = [
+        ...Array.from({ length: 10 }, (_, i) => 0.9 - i * 0.04),
+        ...Array.from({ length: 200 }, (_, i) => 0.5 + i * 0.012),
+      ];
+      const result = await run(ys.map((y) => screen({ label: "snackbar", y })));
+
+      expect(result.settled).toBe(false);
+    });
+
+    it("does not count an axis coming to rest as a reversal", async () => {
+      // A slow diagonal: x moves on every other rounded poll, y on every poll.
+      const result = await run(
+        Array.from({ length: 200 }, (_, i) =>
+          screen({ label: "toast", x: 0.5 - i * 0.005, y: 0.9 - i * 0.012 })
+        )
+      );
+
+      expect(result.settled).toBe(false);
+    });
+
+    it("settles once a one-time slide has stopped and only a loop keeps moving", async () => {
+      const result = await run(
+        Array.from({ length: 200 }, (_, i) =>
+          screen({ label: "panel", y: 0.9 - Math.min(i, 10) * 0.04 }, { label: "hand", y: bobY(i) })
+        ),
+        { timeoutMs: 1000 }
+      );
+
+      expect(result.settled).toBe(true);
+      expect(result.ambientMotion).toBe(true);
+    });
+
+    it("counts nodes that move together as one animation", async () => {
+      // A coach mark: container, arrow, text and button bob as one.
+      const result = await run(
+        Array.from({ length: 200 }, (_, i) =>
+          screen(
+            { label: "coach", y: bobY(i), height: 0.2 },
+            { label: "arrow", y: bobY(i) + 0.01 },
+            { label: "tip", y: bobY(i) + 0.05 },
+            { label: "Got it", y: bobY(i) + 0.1 }
+          )
+        ),
+        { timeoutMs: 1000 }
+      );
+
+      expect(result.settled).toBe(true);
+      expect(result.ambientMotion).toBe(true);
+    });
+
+    it("keeps waiting when more than three separate loops move", async () => {
+      const result = await run(
+        Array.from({ length: 200 }, (_, i) =>
+          screen(
+            ...[0.02, 0.03, 0.04, 0.05].map((amp, k) => ({
+              label: `dot-${k}`,
+              y: 0.3 + k * 0.1 + (i % 2) * amp,
+            }))
+          )
+        )
+      );
+
+      expect(result.settled).toBe(false);
+    });
+
+    it("holds the structure for minStableMs before taking the ambient path", async () => {
+      const result = await run(
+        Array.from({ length: 400 }, (_, i) => screen({ label: "hand", y: bobY(i) })),
+        { timeoutMs: 2000, minStableMs: 300 }
+      );
+
+      expect(result.settled).toBe(true);
+      expect(result.waitedMs).toBeGreaterThanOrEqual(300);
+    });
+
+    it("forgets loop evidence when the structure changes", async () => {
+      // The hand bobs, then a toast appears and the hand slides away for good.
+      const result = await run(
+        [
+          ...Array.from({ length: 6 }, (_, i) => screen({ label: "hand", y: bobY(i) })),
+          ...Array.from({ length: 200 }, (_, i) =>
+            screen({ label: "hand", y: 0.24 + i * 0.012 }, { label: "toast", y: 0.8 })
+          ),
+        ],
+        { timeoutMs: 600, minStableMs: 200 }
+      );
+
+      expect(result.settled).toBe(false);
+    });
+
+    it("forgets loop evidence across a blank read", async () => {
+      // The sheet slides, the screen blanks, then the slide replays from the top.
+      const result = await run([
+        screen({ label: "sheet", y: 0.9 }),
+        screen({ label: "sheet", y: 0.7 }),
+        axResponse([]),
+        ...Array.from({ length: 200 }, (_, i) => screen({ label: "sheet", y: 0.9 - i * 0.012 })),
+      ]);
+
+      expect(result.settled).toBe(false);
+    });
+  });
 });

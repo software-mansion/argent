@@ -74,6 +74,10 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
+`await-screen-idle` does not wait for looping animations that move or resize an element, such as a bobbing hint or a pulsing badge. When only one to three such animations move, the tool returns `settled: true` and `ambientMotion: true`. Elements that move together count as one animation. An element counts as looping after it reverses direction twice. With `ambientMotion: true`, these elements are still moving, and a looping loading spinner also counts as ambient motion. Check for the content you expect with `await-ui-element`.
+
+The tool still waits for a one-time transition, such as a sliding panel or an entrance that overshoots once. A loop that changes a label or a value, such as an animated `Loading...` label or a page indicator, is a content change, so the tool waits for it until the timeout.
+
 ## Interacting
 
 | Tool                     | Description                                                     |
