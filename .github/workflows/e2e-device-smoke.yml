@@ -20,9 +20,10 @@ name: Device E2E smoke
 # can't run, so they are intentionally not jobs here:
 #   - Android emulator on macOS: the arm64 emulator needs HVF (`-enable-hvf`),
 #     but the macOS runners (GitHub-hosted and our tart ones) are VMs with no
-#     nested virtualization — qemu dies with "HVF error: HV_UNSUPPORTED" seconds into boot. The
-#     Android boot/screenshot/tap path is already regression-guarded on Linux
-#     via KVM (wayland-e2e.yml), so macOS adds no runnable coverage here.
+#     nested virtualization — qemu dies with "HVF error: HV_UNSUPPORTED"
+#     seconds into boot. The Android boot/screenshot/tap path is already
+#     regression-guarded on Linux via KVM (wayland-e2e.yml), so macOS adds no
+#     runnable coverage here.
 #   - Physical devices: real iOS (CoreDevice HID) and real Android (adb-USB)
 #     have no attached hardware on CI runners.
 #   Both would need a bare-metal Mac runner (HVF / wired-up devices).
@@ -60,8 +61,8 @@ jobs:
   # ── iOS simulator on macOS ────────────────────────────────────────────────
   ios-sim-macos:
     name: macOS + iOS E2E
-    # Argent's self-hosted tart VMs; fork PRs get a GitHub-hosted runner so
-    # untrusted code never runs on our machines.
+    # Argent's self-hosted tart VMs. They persist between jobs, so fork PRs
+    # get a GitHub-hosted runner instead.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","tart"]') }}
     timeout-minutes: 30
     steps:
