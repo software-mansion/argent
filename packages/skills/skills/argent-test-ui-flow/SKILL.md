@@ -1,6 +1,6 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running end-to-end UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
+description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
 ---
 
 ## Platform-agnostic
@@ -110,7 +110,7 @@ Steps:
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
 - If a permission dialog or modal is visible: re-run `describe` first. Stay in screenshot-driven navigation only when the overlay is not exposed reliably, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
-- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow`'s [Diagnose a replay failure](../argent-create-flow/references/reliability-and-recovery.md#diagnose-a-replay-failure): classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full flow.
+- If a **saved e2e test** fails during `e2e-execute` replay (as opposed to live test steps above): follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure): classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full e2e test.
 
 ## Tips
 
@@ -118,7 +118,7 @@ Steps:
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Permission modals**: try `describe` first. Use `screenshot` only as fallback, tap one visible button at a time, and verify with the returned screenshot before continuing.
-- **Record for replay**: If a tested flow is likely to be repeated, use the `argent-create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
+- **Record for replay**: If a tested flow is likely to be repeated, use the `argent-create-e2e` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `e2e-execute` call instead of re-running each step manually.
 
 ## Related Skills
 
@@ -130,4 +130,4 @@ Steps:
 | `argent-android-emulator-setup`    | Booting and connecting an Android emulator               |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues                    |
 | `argent-metro-debugger`            | Console logs, JS evaluation, component inspection        |
-| `argent-create-flow`               | Record a test sequence as a replayable flow              |
+| `argent-create-e2e`                | Record a test sequence as a replayable e2e test          |

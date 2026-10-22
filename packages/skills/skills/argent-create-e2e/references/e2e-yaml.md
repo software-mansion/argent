@@ -1,9 +1,9 @@
-# Flow YAML
+# E2E YAML
 
-Read this reference when polishing, composing, or manually reviewing a flow.
+Read this reference when polishing, composing, or manually reviewing an e2e test.
 
-- [Flow YAML](#flow-yaml)
-  - [File shape and flow type](#file-shape-and-flow-type)
+- [E2E YAML](#e2e-yaml)
+  - [File shape and test type](#file-shape-and-test-type)
   - [Selectors](#selectors)
     - [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree)
     - [Relational scopes](#relational-scopes)
@@ -15,10 +15,10 @@ Read this reference when polishing, composing, or manually reviewing a flow.
   - [Optional divergences](#optional-divergences)
   - [Composition and platform limits](#composition-and-platform-limits)
   - [Local scripts](#local-scripts)
-  - [Snapshots and standalone runs](#snapshots-and-standalone-runs)
+  - [Snapshots and CLI runs](#snapshots-and-cli-runs)
   - [YAML safety](#yaml-safety)
 
-## File shape and flow type
+## File shape and test type
 
 ```yaml
 steps:
@@ -27,9 +27,9 @@ steps:
   - await: { idle: true }
 ```
 
-An e2e flow has a literal `launch:` as its first step that is not `echo:` or `script:`. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
+A standalone e2e test has a literal `launch:` as its first step that is not `echo:` or `script:`. It cannot declare `executionPrerequisite`. Put the named start state in a leading echo.
 
-A leading `run:` does not classify the outer flow as e2e, but the runner still follows the chain to the launch it reaches, and on Chromium that launch boots the app before step 1. A flow whose `run:` chain reaches a launch is refused an `executionPrerequisite` too: parse accepts the file, then the run rejects it. The one exception is a run pinned to a Chromium instance you brought to the required state yourself (`--device chromium-cdp-<port>`), where that leading launch only attaches.
+A leading `run:` does not classify the outer test as standalone, but the runner still follows the chain to the launch it reaches, and on Chromium that launch boots the app before step 1. A test whose `run:` chain reaches a launch is refused an `executionPrerequisite` too: parse accepts the file, then the run rejects it. The one exception is a run pinned to a Chromium instance you brought to the required state yourself (`--device chromium-cdp-<port>`), where that leading launch only attaches.
 
 A fragment reaches no leading launch, by its own step or through a `run:` chain, and can declare:
 
@@ -38,9 +38,9 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
-Flows never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
+E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
-The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly: an auto-detected device would retarget the teardown at a device the flow never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup flow there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup flow whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
+The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly: an auto-detected device would retarget the teardown at a device the test never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup test there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup test whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
 
 ## Selectors
 
@@ -63,7 +63,7 @@ Use single quotes for anchored, case-sensitive regexes:
 
 ### The runner tree is not the discovery tree
 
-Flow selectors and live discovery use different screen projections:
+YAML selectors and live discovery use different screen projections:
 
 | Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
 | -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
@@ -72,7 +72,7 @@ Flow selectors and live discovery use different screen projections:
 | Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
 | Vega     | toolkit page source                                       | same source                     | Same elements, different shape                         |
 
-On iOS, Android, and Chromium, an id absent from `describe` can still resolve in a flow. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
+On iOS, Android, and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
 The recorder rechecks each successful `await-ui-element` against the runner tree. Follow any `message` warning and replay each conversion. On Vega, a mismatch usually means the screen changed. A `text` check can also select different elements from the same source. See [Live waits and checks](live-authoring.md#live-waits-and-checks).
 
@@ -82,7 +82,7 @@ Any raw `tool:` step ends the pin, because its effect on the screen is opaque to
 
 So on iOS recording and replay can read different apps, not only different projections: recording has no run state and always auto-detects the frontmost connected app, while a replay read between a `launch:` and the next raw `tool:` step reads the launched app.
 
-**On iOS, never copy a `role` from `describe` into a flow selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
+**On iOS, never copy a `role` from `describe` into a YAML selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
 
 When several nodes match, the directive decides:
 
@@ -93,7 +93,7 @@ A container that aggregates a child's text therefore splits them: `tap` hits the
 
 ### Relational scopes
 
-Flow selectors support frame-based `within`, `after`, and `next` in every selector slot. Live `await-ui-element` does not support them.
+YAML selectors support frame-based `within`, `after`, and `next` in every selector slot. Live `await-ui-element` does not support them.
 
 ```yaml
 - tap: { text: Delete, within: { id: profile-card } } # inside a container
@@ -109,23 +109,23 @@ Scopes can combine and nest, with at most six scope keys. Use strict selectors f
 
 ## Directives
 
-Directives stop the flow on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `fold`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
+Directives stop the test on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `fold`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
 
-`fold` folds or unfolds a foldable iOS simulator. Write a posture (`fold: closed`, `fold: half-open`, `fold: open`) or an angle from 0 to 180 (`fold: 120`). The step waits until the device accepts input again. A recorded `fold` tool call becomes a `fold:` step. After a `fold` step:
+`fold` folds or unfolds a foldable iOS simulator or Android emulator. Write a posture (`fold: closed`, `fold: half-open`, `fold: open`) or an angle from 0 to 180 (`fold: 120`). The step waits until the device accepts input again. A recorded `fold` tool call becomes a `fold:` step. After a `fold` step:
 
 - The coordinates change with the panel. Selectors resolve against a new tree.
 - A `snapshot` baseline is valid only for the posture that made it.
-- Unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
-- A fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
+- iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
+- iOS: a fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
-Use the launch map for cross-platform flows. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no flow needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
+Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
 - launch: { ios: com.acme.app, android: com.acme.app.android, chromium: ../../app }
 ```
 
-An Android app that needs a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` and keep the flow as a fragment.
+An Android app that needs a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` and keep the test as a fragment.
 
 In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller.
 
@@ -226,21 +226,22 @@ Use `when:` only for optional setup or an interstitial that reconverges:
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega }`. A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate flows. Never place a required acceptance check inside `when:`.
+The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega }`. A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate tests. Never place a required acceptance check inside `when:`.
 
 ## Composition and platform limits
 
-A `run:` target is a YAML path resolved against the directory of the flow file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the flow.
+A `run:` target is a YAML path resolved against the directory of the test file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the test. A bare name that is missing beside a test in `.argent/e2e/` is also looked up in `.argent/flows/`, and the reverse. The recorder writes a nested test that is only in the other directory by its path, for example `run: ../flows/login.yaml`.
 
-`run:` steps and `tool: flow-execute` steps make one chain of flows. A step that closes a cycle in that chain, such as a flow that runs itself through `tool: flow-execute`, fails with a reason that contains `cyclic flow reference:`. A step that makes the chain longer than 20 flows fails with a reason that contains `max run depth exceeded`.
+`run:` steps and `tool: e2e-execute` steps make one chain of tests. A step that closes a cycle in that chain, such as a test that runs itself through `tool: e2e-execute`, fails with a reason that contains `cyclic e2e test reference:`. A step that makes the chain longer than 20 tests fails with a reason that contains `max run depth exceeded`.
 
-- iOS and Android can run fragments or e2e flows inline. A nested e2e launch restarts its app.
-- Chromium boots one instance per launch **step**, not one per run. The leading launch (the flow's own, or the one its leading `run:` chain reaches) boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium e2e flow with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
+- iOS and Android can run fragments or standalone tests inline. A nested standalone launch restarts its app.
+- Chromium boots one instance per launch **step**, not one per run. The leading launch (the test's own, or the one its leading `run:` chain reaches) boots before step 1, unless you pinned the run with an explicit `device`, where it only attaches. Every later launch boots a fresh instance, moves the run onto it, and tears down the instance the run already owned for that app path. Nesting a Chromium standalone test with its own launch is therefore the supported way to give a sub-scenario its own restart. Chromium rejects `pinch` and `rotate`. Use the app's own zoom or rotate controls.
 - Vega uses `tool: tv-remote` and raw `tool: keyboard`. The touch directives (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) are unsupported. Gate focus and navigation results with `await`.
+- HarmonyOS: read `references/harmonyos.md` of `argent-device-interact` before writing a test for it.
 
 ## Local scripts
 
-Use a local `.mjs` script only when the user requests one. Record it with `flow-add-script` at the point where it must run.
+Use a local `.mjs` script only when the user requests one. Record it with `e2e-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
@@ -249,25 +250,25 @@ Use a local `.mjs` script only when the user requests one. Record it with `flow-
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-- **`path`** is relative to the flow file that contains the step. Include `.mjs` and match the file name's letter case.
+- **`path`** is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
-Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `flow-add-script` refuses the call, and a replay rejects a flow with a `script:` step. Record and replay a flow with a script without a link.
+Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 
 If a script fails, check its changes before you retry.
 
-## Snapshots and standalone runs
+## Snapshots and CLI runs
 
-`argent flow run <name> [--device <id>] [--platform ios|android|chromium|vega|ios-remote] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
+`argent e2e run <name> [--device <id>] [--platform ios|android|chromium|vega|ios-remote] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
 Do not use a snapshot as the only proof of navigation, persistence, data, accessibility state, logs, or network behavior. Avoid unstable timestamps, live data, ads, animation, and device drift. First establish deterministic state, identity, and readiness.
 
-Baselines live under `.argent/flows/__baselines__/<flow>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A flow that a `tool: flow-execute` step runs keeps its own baselines, and `--update-baselines` updates them too unless the step sets `updateBaselines` itself. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
+Baselines live beside the test, under `.argent/e2e/__baselines__/<name>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A test that a `tool: e2e-execute` step runs keeps its own baselines, and `--update-baselines` updates them too unless the step sets `updateBaselines` itself. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
-Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<flow>/` for CI artifact upload.
+Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<name>/` for CI artifact upload.
 
 ## YAML safety
 
-Quote strings containing `#`, `:`, or quotes. Quote numbers and `true` or `false` in text slots. Use single quotes for regexes with backslashes. Parsing rejects invalid directives, selectors, regexes, `else`, unsupported options, and e2e flows that also declare `executionPrerequisite`.
+Quote strings containing `#`, `:`, or quotes. Quote numbers and `true` or `false` in text slots. Use single quotes for regexes with backslashes. Parsing rejects invalid directives, selectors, regexes, `else`, unsupported options, and standalone tests that also declare `executionPrerequisite`.

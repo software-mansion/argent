@@ -1,142 +1,4838 @@
-import { runInNewContext } from "node:vm";
+import { isUtf8 } from "node:buffer";
+import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
 import { describe, it, expect } from "vitest";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
   makeNetworkDetailReadScript,
 } from "../../src/utils/debugger/scripts/network-interceptor";
+import { PREVIOUS_NETWORK_INTERCEPTOR_SCRIPT } from "./previous-network-interceptor";
 
-describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
-  async function interceptResponse({
-    body,
-    mimeType,
-    byteLength,
-    contentLength,
-    method = "GET",
-    status = 200,
-    blobFails = false,
-  }: {
-    body: string | undefined;
-    mimeType: string;
-    byteLength?: number;
-    contentLength?: number;
-    method?: string;
-    status?: number;
-    blobFails?: boolean;
-  }) {
-    const response = {
-      url: "https://example.test/data",
-      status,
-      statusText: "OK",
-      headers: {
-        forEach: (callback: (value: string, key: string) => void) => {
-          callback(mimeType, "content-type");
-          if (contentLength !== undefined) callback(String(contentLength), "content-length");
-        },
-      },
-      clone: () => ({
-        text: async () => body,
-        blob: async () => {
-          if (blobFails) throw new Error("Blob unavailable");
-          return { size: byteLength };
-        },
-      }),
-    };
-    const sandbox: Record<string, unknown> = {
-      fetch: async () => response,
-    };
+// React Native's global fetch is this build: react-native/Libraries/Network/fetch.js requires it.
+const WHATWG_FETCH = readFileSync(require.resolve("whatwg-fetch/dist/fetch.umd.js"), "utf8");
+const BODY_CAP = 1024 * 1024;
 
-    runInNewContext(NETWORK_INTERCEPTOR_SCRIPT, sandbox);
-    await (sandbox.fetch as (_input: string, init: { method: string }) => Promise<unknown>)(
-      response.url,
-      { method }
-    );
-    await new Promise<void>((resolve) => setImmediate(resolve));
+/**
+ * Expo's native fetch module as expo/ios/Fetch (NativeResponse.swift, ResponseSink.swift,
+ * ExpoFetchModule.swift) and its Android twin run it. A NativeResponse goes from started to
+ * responseReceived, then to bodyStreamingStarted, bodyCompleted, errorReceived or
+ * bodyStreamingCanceled. Data received before the app reads the body waits in a sink:
+ * startStreaming() emits it as didReceiveResponseData, or returns it whole once the body completed,
+ * and text() and arrayBuffer() wait for the body to complete and take it, so a body is handed out
+ * once. didComplete and didFailWithError are emitted only while the body streams,
+ * readyForJSFinalization at the end of every request.
+ *
+ * Every hop to JS is a timer task. A promise waiting for a state settles a native hop after the
+ * state changes, so an event sent with the change reaches JS first, as on a device. With
+ * `startsAtBodyEnd`, start resolves only once the body completed, as SDK 55 does on iOS.
+ * `__expoNative.requests` lists the requests started, which the test answers as the native side,
+ * `calls` counts the calls that touch a body and `log` the order JS got the end events in.
+ */
+const EXPO_NATIVE = `(function() {
+  var native = globalThis.__expoNative;
+  var calls = native.calls;
+  function later(fn) { setTimeout(fn, 0); }
+  // Native data reaches JS as a new Uint8Array.
+  function toJS(bytes) { var out = new Uint8Array(bytes.byteLength); out.set(bytes); return out; }
 
-    return (
-      sandbox.__argent_network_log as Array<{
-        encodedDataLength?: number;
-        responseBody?: string;
-      }>
-    )[0];
+  // expo-modules-core's SharedObject: an emit calls the listeners of a snapshot of the list, and one
+  // that throws does not stop the others.
+  class SharedObject {
+    constructor() { this._listeners = {}; }
+    addListener(event, listener) { (this._listeners[event] = this._listeners[event] || []).push(listener); }
+    removeListener(event, listener) {
+      this._listeners[event] = (this._listeners[event] || []).filter(function(l) { return l !== listener; });
+    }
+    removeAllListeners(event) { this._listeners[event] = []; }
+    emit(event, payload) {
+      var self = this;
+      (this._listeners[event] || []).slice().forEach(function(listener) {
+        try { listener.call(self, payload); } catch (e) {}
+      });
+    }
   }
 
-  it("records decoded entity bytes instead of JavaScript string length", async () => {
-    const body = JSON.stringify({ message: "你好 👋" });
-    const byteLength = Buffer.byteLength(body, "utf8");
-    const entry = await interceptResponse({ body, byteLength, mimeType: "application/json" });
+  class NativeResponse extends SharedObject {
+    constructor() {
+      super();
+      this._native = { state: 'initialized', sink: [], head: null, error: null, waiting: [], bodyUsed: false };
+    }
+    get status() { return this._native.head ? this._native.head.status : -1; }
+    get statusText() { return this._native.head ? this._native.head.statusText : ''; }
+    get url() { return this._native.head ? this._native.head.url : ''; }
+    get _rawHeaders() { return this._native.head ? this._native.head.headers : []; }
+    get redirected() { return false; }
+    get bodyUsed() { return this._native.bodyUsed; }
 
-    expect(entry?.encodedDataLength).toBe(byteLength);
-    expect(entry?.encodedDataLength).not.toBe(body.length);
+    startStreaming() {
+      calls.startStreaming++;
+      var self = this, n = this._native;
+      return new Promise(function(resolve) {
+        later(function() {
+          var completed = null;
+          if (n.state === 'responseReceived') {
+            self._set('bodyStreamingStarted');
+            self._send('didReceiveResponseData', self._takeSink());
+          } else if (n.state === 'bodyCompleted') {
+            completed = self._takeSink();
+          }
+          later(function() { resolve(completed); });
+        });
+      });
+    }
+    cancelStreaming(reason) {
+      calls.cancelStreaming++;
+      var self = this;
+      return new Promise(function(resolve) {
+        later(function() {
+          if (self._native.state === 'bodyStreamingStarted') self._set('bodyStreamingCanceled');
+          later(resolve);
+        });
+      });
+    }
+    arrayBuffer() {
+      calls.arrayBuffer++;
+      var self = this;
+      return new Promise(function(resolve) {
+        later(function() {
+          self._waitFor(['bodyCompleted'], function() {
+            var data = self._takeSink();
+            later(function() { resolve(data.buffer); });
+          });
+        });
+      });
+    }
+    // Decoded as UTF-8, a byte that is not becomes U+FFFD.
+    text() {
+      calls.text++;
+      var self = this;
+      return new Promise(function(resolve) {
+        later(function() {
+          self._waitFor(['bodyCompleted'], function() {
+            var text = native.decode(self._takeSink());
+            later(function() { resolve(text); });
+          });
+        });
+      });
+    }
+
+    _takeSink() {
+      var n = this._native, size = 0, at = 0;
+      n.sink.forEach(function(chunk) { size += chunk.byteLength; });
+      var data = new Uint8Array(size);
+      n.sink.forEach(function(chunk) { data.set(chunk, at); at += chunk.byteLength; });
+      n.sink = [];
+      n.bodyUsed = true;
+      return data;
+    }
+    _send(event, payload) {
+      var self = this;
+      later(function() {
+        native.log.push(event);
+        self.emit(event, payload);
+      });
+    }
+    // The callbacks waiting for a state run a native hop after it changes, or right away with now.
+    _set(state, now) {
+      var n = this._native;
+      n.state = state;
+      var notify = function() { n.waiting = n.waiting.filter(function(waiter) { return !waiter(state); }); };
+      if (now) notify();
+      else later(notify);
+    }
+    _waitFor(states, callback) {
+      if (states.indexOf(this._native.state) !== -1) return callback(this._native.state);
+      this._native.waiting.push(function(state) {
+        if (states.indexOf(state) === -1) return false;
+        callback(state);
+        return true;
+      });
+    }
+    // The request fails or the app cancels it (emitRequestCanceled).
+    _end(error, settleFirst) {
+      var n = this._native;
+      n.error = error;
+      if (n.state === 'bodyStreamingStarted') this._send('didFailWithError', error.message);
+      this._set('errorReceived', settleFirst);
+      this._send('readyForJSFinalization');
+    }
+  }
+
+  class NativeRequest extends SharedObject {
+    constructor(response) {
+      super();
+      this.response = response;
+    }
+    start(url, init, body) {
+      var request = this, response = this.response;
+      request.url = url;
+      request.init = init;
+      request.body = body;
+      native.requests.push(request);
+      return new Promise(function(resolve, reject) {
+        later(function() {
+          if (response._native.state === 'initialized') response._set('started');
+          var resolvesAt = native.startsAtBodyEnd ? 'bodyCompleted' : 'responseReceived';
+          response._waitFor([resolvesAt, 'errorReceived'], function(state) {
+            later(function() {
+              native.log.push(state === 'errorReceived' ? 'start rejected' : 'start resolved');
+              if (state === 'errorReceived') reject(response._native.error);
+              else resolve();
+            });
+          });
+        });
+      });
+    }
+    cancel() {
+      calls.cancel++;
+      var request = this;
+      request.cancelled = true;
+      return new Promise(function(resolve) {
+        later(function() {
+          request.response._end(new Error('Fetch request has been canceled'));
+          later(resolve);
+        });
+      });
+    }
+
+    // The native side, as the test drives it: the response head arrives.
+    head(status, headers) {
+      this.response._native.head = { status: status, statusText: '', url: this.url, headers: Object.entries(headers || {}) };
+      this.response._set('responseReceived');
+    }
+    // Body data arrives: it waits in the sink until the app reads the body, and is dropped once
+    // the app cancelled its stream.
+    chunk(data) {
+      var response = this.response, n = response._native;
+      var bytes = toJS(typeof data === 'string' ? native.encode(data) : data);
+      if (n.state === 'responseReceived') {
+        n.sink.push(bytes);
+        n.bodyUsed = true;
+      } else if (n.state === 'bodyStreamingStarted') {
+        response._send('didReceiveResponseData', bytes);
+      }
+    }
+    // The body completes.
+    done() {
+      var response = this.response, n = response._native;
+      if (['responseReceived', 'bodyStreamingStarted', 'bodyStreamingCanceled'].indexOf(n.state) === -1) return;
+      if (n.state === 'bodyStreamingStarted') response._send('didComplete');
+      response._set('bodyCompleted');
+      response._send('readyForJSFinalization');
+    }
+    // The request fails. JS gets the end of the request before start rejects, or after it when the
+    // rejection, sent at a higher priority, overtakes it on a busy JS thread.
+    fail(message, settleFirst) {
+      var n = this.response._native;
+      if (['started', 'responseReceived', 'bodyStreamingStarted', 'bodyStreamingCanceled'].indexOf(n.state) === -1) return;
+      this.response._end(new Error(message), settleFirst);
+    }
+    // Head, body and its completion: the body follows once start has resolved.
+    respond(status, headers, body) {
+      var request = this;
+      request.head(status, headers);
+      later(function() {
+        later(function() {
+          if (body !== undefined) request.chunk(body);
+          request.done();
+        });
+      });
+    }
+  }
+
+  globalThis.expo = { modules: { ExpoFetchModule: { NativeRequest: NativeRequest, NativeResponse: NativeResponse } } };
+})()`;
+
+/**
+ * expo/fetch over that module, as expo/src/winter/fetch/fetch.ts and FetchResponse.ts write it
+ * (SDK 57; SDK 55 where `sdk` says so): FetchResponse extends the native NativeResponse, its body is
+ * a stream that pulls through startStreaming(), text() and arrayBuffer() read the native body (a
+ * clone reads through a tee of the stream instead), json() goes through text() and blob() and
+ * bytes() through arrayBuffer(), and it drops its stream listeners on readyForJSFinalization.
+ * fetch() is `expoFetch` and reads NativeRequest off the module at each call. On SDK 55 a response
+ * cannot clone and its text() and arrayBuffer() are the native ones.
+ */
+const EXPO_FETCH_JS = `(function() {
+  var native = globalThis.__expoNative;
+  var calls = native.calls;
+  var ExpoFetchModule = globalThis.expo.modules.ExpoFetchModule;
+  var NativeResponse = ExpoFetchModule.NativeResponse;
+
+  class FetchError extends Error {
+    constructor(message) { super('fetch failed: ' + message); }
+  }
+
+  function concat(chunks) {
+    var size = 0, at = 0;
+    chunks.forEach(function(chunk) { size += chunk.byteLength; });
+    var out = new Uint8Array(size);
+    chunks.forEach(function(chunk) { out.set(chunk, at); at += chunk.byteLength; });
+    return out;
+  }
+
+  // The JS side of a body. After clone() each response reads its own branch of a tee.
+  class Body {
+    constructor(cloned) {
+      this.streamingState = 'none';
+      this.stream = null;
+      this.cloned = cloned;
+      this.consumed = false;
+      this.detach = null;
+    }
+    get used() { return this.cloned ? this.consumed : this.consumed || this.streamingState !== 'none'; }
+    async readAsBuffer() {
+      if (this.stream == null) return new ArrayBuffer(0);
+      var reader = this.stream.getReader(), chunks = [];
+      try {
+        for (;;) {
+          var chunk = await reader.read();
+          if (chunk.done) break;
+          chunks.push(chunk.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return concat(chunks).buffer;
+    }
+  }
+
+  // A branch of a tee that marks its body consumed on its first read.
+  function wrapWithConsumption(source, body) {
+    var reader = source.getReader(), marked = false, detached = false;
+    function mark() { if (!marked && !detached) { marked = true; body.consumed = true; } }
+    var stream = new ReadableStream({
+      async pull(controller) {
+        mark();
+        try {
+          var chunk = await reader.read();
+          if (chunk.done) { controller.close(); reader.releaseLock(); } else controller.enqueue(chunk.value);
+        } catch (error) {
+          controller.error(error);
+          reader.releaseLock();
+        }
+      },
+      cancel(reason) { mark(); reader.cancel(reason).catch(function() {}); }
+    }, { highWaterMark: 0 });
+    return { stream: stream, detach: function() { detached = true; } };
+  }
+
+  class FetchResponse extends NativeResponse {
+    constructor(abortCleanup) {
+      super();
+      this._body = new Body(false);
+      this._metadata = null;
+      this._streamClosed = false;
+      this._controller = null;
+      this._abortReason = undefined;
+      this._abortCleanup = abortCleanup;
+      this.finalize = () => {
+        this.removeListener('readyForJSFinalization', this.finalize);
+        this._abortCleanup();
+        this.removeAllListeners('didReceiveResponseData');
+        this.removeAllListeners('didComplete');
+        this.removeAllListeners('didFailWithError');
+      };
+      this.addListener('readyForJSFinalization', this.finalize);
+    }
+
+    // Errors the body stream with the reason the app aborted with.
+    abort(reason) {
+      this._abortReason = reason != null ? reason : Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+      if (this._streamClosed) return;
+      this._streamClosed = true;
+      try { if (this._controller) this._controller.error(this._abortReason); } catch (e) {}
+    }
+    _close(controller) {
+      if (this._streamClosed) return;
+      this._streamClosed = true;
+      if (controller.desiredSize == null) return;
+      try { controller.close(); } catch (e) {}
+    }
+    _error(controller, error) {
+      if (this._streamClosed) return;
+      this._streamClosed = true;
+      try { controller.error(error); } catch (e) {}
+    }
+    _enqueue(controller, data) {
+      if (this._streamClosed || controller.desiredSize == null) return;
+      try { controller.enqueue(data); } catch (e) {}
+    }
+
+    get _rawHeaders() { return this._metadata ? this._metadata.rawHeaders : super._rawHeaders; }
+    get status() { return this._metadata ? this._metadata.status : super.status; }
+    get statusText() { return this._metadata ? this._metadata.statusText : super.statusText; }
+    get url() { return this._metadata ? this._metadata.url : super.url; }
+    get redirected() { return this._metadata ? this._metadata.redirected : super.redirected; }
+    get headers() { return new Headers(this._rawHeaders); }
+    get ok() { return this.status >= 200 && this.status < 300; }
+
+    get body() {
+      calls.body++;
+      var body = this._body;
+      if (body.stream == null) {
+        body.stream = new ReadableStream({
+          start: (controller) => {
+            this._controller = controller;
+            if (this._abortReason !== undefined) {
+              this._streamClosed = true;
+              controller.error(this._abortReason);
+              return;
+            }
+            if (body.streamingState === 'completed') return;
+            this.addListener('didReceiveResponseData', (data) => { this._enqueue(controller, data); });
+            this.addListener('didComplete', () => { this._close(controller); });
+            this.addListener('didFailWithError', (error) => { this._error(controller, new Error(error)); });
+          },
+          pull: async (controller) => {
+            if (body.streamingState === 'none') {
+              var completed = await this.startStreaming();
+              if (completed != null) {
+                this._enqueue(controller, completed);
+                this._close(controller);
+                body.streamingState = 'completed';
+              } else {
+                body.streamingState = 'started';
+              }
+            } else if (body.streamingState === 'completed') {
+              this._close(controller);
+            }
+          },
+          cancel: (reason) => {
+            this._streamClosed = true;
+            this.cancelStreaming(String(reason));
+          }
+        }, { highWaterMark: 0 });
+      }
+      return body.stream;
+    }
+    get bodyUsed() { return this._body.used; }
+    _checkUsed(method) {
+      if (this._body.used || (this._body.stream && this._body.stream.locked)) {
+        throw new TypeError("Failed to execute '" + method + "' on 'Response': Response body is already used.");
+      }
+    }
+
+    // React Native's Blob, which Expo fills through its native blob store.
+    async blob() {
+      calls.blob++;
+      this._checkUsed('blob');
+      var type = this.headers.get('content-type') || '';
+      var buffer = await this.arrayBuffer();
+      return new Blob([new Uint8Array(buffer)], { type: type });
+    }
+    async json() {
+      this._checkUsed('json');
+      return JSON.parse(await this.text());
+    }
+    async bytes() {
+      this._checkUsed('bytes');
+      return new Uint8Array(await this.arrayBuffer());
+    }
+    async arrayBuffer() {
+      this._checkUsed('arrayBuffer');
+      var body = this._body;
+      body.consumed = true;
+      if (body.cloned) return body.readAsBuffer();
+      return super.arrayBuffer();
+    }
+    async text() {
+      this._checkUsed('text');
+      var body = this._body;
+      body.consumed = true;
+      if (body.cloned) return new TextDecoder().decode(await body.readAsBuffer());
+      return super.text();
+    }
+    clone() {
+      calls.clone++;
+      this._checkUsed('clone');
+      var clone = Object.create(FetchResponse.prototype);
+      clone._body = new Body(true);
+      clone._metadata = {
+        rawHeaders: this._rawHeaders.slice(), status: this.status, statusText: this.statusText,
+        url: this.url, redirected: this.redirected
+      };
+      if (this.body != null) {
+        if (this._body.detach) this._body.detach();
+        var branches = this.body.tee();
+        var own = wrapWithConsumption(branches[0], this._body);
+        var sibling = wrapWithConsumption(branches[1], clone._body);
+        this._body.stream = own.stream;
+        this._body.detach = own.detach;
+        clone._body.stream = sibling.stream;
+        clone._body.detach = sibling.detach;
+      }
+      this._body.cloned = true;
+      return clone;
+    }
+  }
+
+  class FetchResponse55 extends FetchResponse {
+    get bodyUsed() { return this._native.bodyUsed; }
+    async json() { return JSON.parse(await this.text()); }
+    async bytes() { return new Uint8Array(await this.arrayBuffer()); }
+    clone() {
+      calls.clone++;
+      throw new Error('Not implemented');
+    }
+  }
+  // SDK 55 inherits text() and arrayBuffer() from the native class.
+  FetchResponse55.prototype.text = function() { return NativeResponse.prototype.text.apply(this, arguments); };
+  FetchResponse55.prototype.arrayBuffer = function() { return NativeResponse.prototype.arrayBuffer.apply(this, arguments); };
+  var Response = native.sdk === 55 ? FetchResponse55 : FetchResponse;
+  native.FetchResponse = Response;
+
+  function normalizeBody(body) {
+    if (body == null) return null;
+    // Copied into this realm: TextEncoder is the host's.
+    if (typeof body === 'string') return new Uint8Array(new TextEncoder().encode(body));
+    if (body instanceof ArrayBuffer) return new Uint8Array(body);
+    if (ArrayBuffer.isView(body)) return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+    throw new TypeError('Unsupported BodyInit type');
+  }
+
+  function normalizeMethod(method) {
+    var upper = String(method).toUpperCase();
+    return ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT'].indexOf(upper) !== -1 ? upper : method;
+  }
+
+  globalThis.expoFetch = async function fetch(input, init) {
+    init = init || {};
+    var signal = init.signal;
+    var headers = init.headers == null ? [] : Array.isArray(init.headers) ? init.headers : Object.entries(init.headers);
+    var abortSubscription = null;
+    var response = new Response(function() { if (abortSubscription) abortSubscription(); });
+    var request = new ExpoFetchModule.NativeRequest(response);
+    var requestBody = await normalizeBody(init.body);
+    var nativeInit = {
+      credentials: init.credentials || 'include',
+      headers: headers,
+      method: init.method != null ? normalizeMethod(init.method) : 'GET',
+      redirect: init.redirect || 'follow'
+    };
+    if (signal && signal.aborted) throw new FetchError('The operation was aborted.');
+    if (signal) {
+      // SDK 57 errors the body stream before it cancels the native request.
+      var onAbort = function() {
+        if (native.sdk !== 55) response.abort(signal.reason);
+        request.cancel();
+      };
+      signal.addEventListener('abort', onAbort);
+      abortSubscription = function() { signal.removeEventListener('abort', onAbort); };
+    }
+    try {
+      await request.start(String(input), nativeInit, requestBody);
+    } catch (e) {
+      throw new FetchError(e instanceof Error ? e.message : String(e));
+    }
+    return response;
+  };
+})()`;
+
+interface CapturedRecord {
+  requestId: string;
+  state: string;
+  resourceType: string;
+  request: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    postData?: string;
+    postDataTruncated?: boolean;
+  };
+  response?: {
+    url: string;
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    mimeType: string;
+  };
+  durationMs?: number;
+  encodedDataLength?: number;
+  errorText?: string;
+  responseBody?: string;
+  bodyTruncated?: boolean;
+  bodyLength?: number;
+  bodyOmitted?: boolean;
+}
+
+/** A request Expo's native module started, answered by the test as the native side. */
+interface NativeRequestControl {
+  body: Uint8Array | null;
+  cancelled?: boolean;
+  /** The NativeResponse it fills. */
+  response: {
+    addListener(event: string, listener: () => void): void;
+    _native: { state: string };
+    /** Changes the native state without sending the events that come with it. */
+    _set(state: string): void;
+  };
+  /** The response head arrives: start resolves. */
+  head(status: number, headers?: Record<string, string>): void;
+  /** Body data arrives. */
+  chunk(data: string | Uint8Array): void;
+  /** The body completes: the request ends. */
+  done(): void;
+  /** The request fails; with settleFirst, start rejects before JS gets the end of the request. */
+  fail(message: string, settleFirst?: boolean): void;
+  /** Head, body and its completion, the body once start has resolved. */
+  respond(status: number, headers?: Record<string, string>, body?: string | Uint8Array): void;
+  /** NativeRequest.prototype.cancel, as expo/fetch calls it. */
+  cancel(): Promise<void>;
+}
+
+/** The calls of Expo's methods that touch a body: native ones, and FetchResponse's body, clone and blob. */
+interface ExpoCalls {
+  text: number;
+  arrayBuffer: number;
+  startStreaming: number;
+  cancelStreaming: number;
+  cancel: number;
+  body: number;
+  clone: number;
+  blob: number;
+}
+
+type Listener = (this: unknown) => void;
+
+/** A request React Native's network module got, answered by the test as the native side. */
+interface NetworkRequest {
+  id: number;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  data: unknown;
+  responseType: string;
+  incremental: boolean;
+  /** Sent by an XHR. */
+  fromXhr: boolean;
+  aborted: boolean;
+}
+
+/** React Native's native blob store: a blob's bytes by id, until the last reference is released. */
+const nativeBlobs = new Map<string, Buffer>();
+let nextBlobId = 1;
+
+class FakeBlob {
+  readonly data: Buffer;
+  readonly type: string;
+  closed = false;
+
+  constructor(parts: Array<string | Uint8Array | FakeBlob> = [], options: { type?: string } = {}) {
+    this.data = Buffer.concat(
+      parts.map((part) =>
+        part instanceof FakeBlob ? part.data : typeof part === "string" ? Buffer.from(part) : part
+      )
+    );
+    this.type = options.type ?? "";
+  }
+
+  get size(): number {
+    // React Native's Blob throws on access once it is closed.
+    if (this.closed) throw new Error("Blob has been closed and is no longer available");
+    return this.data.length;
+  }
+
+  slice(start = 0, end = this.size): FakeBlob {
+    if (this.closed) throw new Error("Blob has been closed and is no longer available");
+    return new FakeBlob([this.data.subarray(start, end)]);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
+/** React Native's FormData, which exposes its parts through getParts(). */
+class FakeFormData {
+  private readonly parts: Array<[string, unknown]> = [];
+
+  append(name: string, value: unknown): void {
+    this.parts.push([name, value]);
+  }
+
+  getParts(): Array<Record<string, unknown>> {
+    return this.parts.map(([fieldName, value]) =>
+      typeof value === "string"
+        ? { string: value, fieldName, headers: {} }
+        : { ...(value as object), fieldName, headers: {} }
+    );
+  }
+}
+
+interface RuntimeOptions {
+  /** React Native's fetch, as the global fetch and as `rnFetch`. */
+  polyfillFetch?: boolean;
+  /**
+   * Expo's native fetch module and expo/fetch as `expoFetch`. On SDK 57 a Response clones, on 55
+   * clone() throws. `global` installs expo/fetch as the global fetch, marked as Expo's own, as
+   * SDK 56+ does. `startsAtBodyEnd`: fetch resolves only after the whole body arrived and the
+   * request ended, as a device showed for SDK 55 on iOS.
+   */
+  expo?: { sdk: 55 | 57; global?: boolean; startsAtBodyEnd?: boolean };
+  /** iOS: FileReader.readAsText resolves null for bytes that are not valid UTF-8. */
+  readAsTextNullOnInvalidUtf8?: boolean;
+  /** event-target-shim (RN before 0.81): a listener added during dispatch runs for that event too. */
+  liveDispatch?: boolean;
+  /** Runs just before a FileReader read delivers its result. */
+  beforeReadResult?: (blob: FakeBlob) => void;
+  /** Metro's module list (`__r.getModules()`), as a development build has it. On by default. */
+  metro?: boolean;
+  /** How React Native's network module hands back a request id: iOS by default. */
+  networkPlatform?: "ios" | "android";
+  /** Whether the app has loaded React Native's network module before the install. */
+  networkModuleLoaded?: boolean;
+}
+
+/**
+ * What the app's code in each context can call: `tick(value)` resolves on the next timer turn,
+ * `readStream(response)` reads a body stream to its text, `countStream(response)` counts its bytes
+ * and drops them, and `outcome(promise)` resolves with `{ value }` or `{ error }`.
+ */
+const APP_HELPERS = `
+  function tick(value) { return new Promise(function(resolve) { setTimeout(function() { resolve(value); }, 0); }); }
+  function readStream(response) {
+    var reader = response.body.getReader(), decoder = new TextDecoder(), text = '';
+    function pump() {
+      return reader.read().then(function(chunk) {
+        if (chunk.done) return text + decoder.decode();
+        text += decoder.decode(chunk.value, { stream: true });
+        return pump();
+      });
+    }
+    return pump();
+  }
+  function countStream(response) {
+    var reader = response.body.getReader(), size = 0;
+    function pump() {
+      return reader.read().then(function(chunk) {
+        if (chunk.done) return size;
+        size += chunk.value.byteLength;
+        return pump();
+      });
+    }
+    return pump();
+  }
+  function outcome(promise) {
+    return promise.then(function(value) { return { value: value }; }, function(error) { return { error: error }; });
+  }`;
+
+/**
+ * react-native-fetch-api 3.0.0 (src/Fetch.js, Request.js, Response.js, Body.js, BlobResponse.js,
+ * ArrayBufferResponse.js), cut to what a request goes through: a fetch over React Native's network
+ * module (`__networking`, the `Networking` of 'react-native'), and its own Request, Response and
+ * Headers. `__installLibrary()` sets them as the globals with React Native's polyfillGlobal, as
+ * react-native-polyfill-globals does: Object.defineProperty, never a plain assignment.
+ */
+const LIB_FETCH = `(function() {
+  var Networking = __networking;
+  class Headers {
+    constructor(init) {
+      this.map = new Map();
+      if (init instanceof Headers) init.forEach((value, name) => this.append(name, value));
+      else if (init) Object.getOwnPropertyNames(init).forEach((name) => this.append(name, init[name]));
+    }
+    append(name, value) {
+      name = String(name).trim().toLowerCase();
+      var old = this.map.get(name);
+      this.map.set(name, old ? old + ', ' + value : String(value));
+    }
+    set(name, value) { this.map.set(String(name).toLowerCase(), String(value)); }
+    get(name) { return this.map.has(name.toLowerCase()) ? this.map.get(name.toLowerCase()) : null; }
+    has(name) { return this.map.has(name.toLowerCase()); }
+    forEach(callback, thisArg) { this.map.forEach((value, name) => callback.call(thisArg, value, name, this)); }
+    entries() { return this.map.entries(); }
+  }
+  class Body {
+    constructor(body) {
+      this.bodyUsed = false;
+      this._bodyInit = body;
+      if (!body) { this._bodyText = ''; return; }
+      if (body instanceof Blob) { this._bodyBlob = body; this._mimeType = body.type; return; }
+      if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+        this._bodyArrayBuffer = body.slice(0); this._mimeType = 'application/octet-stream'; return;
+      }
+      if (body instanceof ReadableStream) { this._bodyReadableStream = body; this._mimeType = 'application/octet-stream'; return; }
+      this._bodyText = body.toString();
+      this._mimeType = 'text/plain;charset=UTF-8';
+    }
+    async text() {
+      if (this.bodyUsed) throw new TypeError('Already read');
+      this.bodyUsed = true;
+      if (this._bodyReadableStream) return readStream({ body: this._bodyReadableStream });
+      if (this._bodyBlob) {
+        var blob = this._bodyBlob;
+        return new Promise((resolve, reject) => {
+          var reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('read failed'));
+          reader.readAsText(blob);
+        });
+      }
+      if (this._bodyArrayBuffer) return new TextDecoder().decode(this._bodyArrayBuffer);
+      return this._bodyText;
+    }
+    get body() { return this._bodyReadableStream; }
+  }
+  class Request {
+    constructor(input, options = {}) {
+      this.url = input instanceof Request ? input.url : input;
+      this.method = (options.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      this._body = input instanceof Request && !options.body ? new Body(input._body._bodyInit) : new Body(options.body);
+      this.headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
+      this.signal = options.signal || (input instanceof Request ? input.signal : undefined);
+      this.credentials = 'same-origin';
+      if (!this.headers.has('content-type') && this._body._mimeType) this.headers.set('content-type', this._body._mimeType);
+    }
+  }
+  class Response {
+    constructor(body, options = {}) {
+      this.type = 'basic';
+      this.status = options.status ?? 200;
+      this.ok = this.status >= 200 && this.status < 300;
+      this.statusText = options.statusText ?? '';
+      this.headers = new Headers(options.headers);
+      this.url = options.url ?? '';
+      this._body = new Body(body);
+      if (!this.headers.has('content-type') && this._body._mimeType) this.headers.set('content-type', this._body._mimeType);
+    }
+    get bodyUsed() { return this._body.bodyUsed; }
+    get body() { return this._body.body; }
+    clone() {
+      return new Response(this._body._bodyInit, { status: this.status, statusText: this.statusText, headers: new Headers(this.headers), url: this.url });
+    }
+    text() { return this._body.text(); }
+    json() { return this._body.text().then(JSON.parse); }
+  }
+  class BlobResponse extends Response {
+    constructor(blobData, options) {
+      super(__blobManager.createFromOptions(blobData), options);
+      this._blobData = blobData;
+    }
+    clone() {
+      return new BlobResponse(this._blobData, { status: this.status, statusText: this.statusText, headers: new Headers(this.headers), url: this.url });
+    }
+  }
+  class ArrayBufferResponse extends Response {
+    constructor(base64, options) {
+      super(__base64Bytes(base64), options);
+      this._base64 = base64;
+    }
+  }
+  class AbortError extends Error {
+    constructor() { super('Aborted'); this.name = 'AbortError'; }
+  }
+  function defer() {
+    var deferred = {};
+    deferred.promise = new Promise((resolve, reject) => { deferred.resolve = resolve; deferred.reject = reject; });
+    return deferred;
+  }
+  class Fetch {
+    constructor(resource, options = {}) {
+      this._nativeNetworkSubscriptions = new Set();
+      this._nativeResponseType = 'blob';
+      this._nativeRequestHeaders = {};
+      this._textEncoder = new TextEncoder();
+      this._request = new Request(resource, options);
+      if (this._request.signal && this._request.signal.aborted) throw new AbortError();
+      this._abortFn = this.__abort.bind(this);
+      this._deferredPromise = defer();
+      if (this._request.signal) this._request.signal.addEventListener('abort', this._abortFn);
+      for (const [name, value] of this._request.headers.entries()) this._nativeRequestHeaders[name] = value;
+      var reactNative = options.reactNative;
+      if (reactNative && reactNative.textStreaming) this._nativeResponseType = 'text';
+      else this._nativeResponseType = (reactNative && reactNative.__nativeResponseType) || this._nativeResponseType;
+      this.__doFetch();
+      return this._deferredPromise.promise;
+    }
+    __subscribeToNetworkEvents() {
+      ['didReceiveNetworkResponse', 'didReceiveNetworkData', 'didReceiveNetworkIncrementalData', 'didCompleteNetworkResponse'].forEach((eventName) => {
+        this._nativeNetworkSubscriptions.add(Networking.addListener(eventName, (args) => { this['__' + eventName](...args); }));
+      });
+    }
+    __clearNetworkSubscriptions() {
+      this._nativeNetworkSubscriptions.forEach((subscription) => subscription.remove());
+      this._nativeNetworkSubscriptions.clear();
+    }
+    __abort() {
+      this._requestId && Networking.abortRequest(this._requestId);
+      this._streamController && this._streamController.error(new AbortError());
+      this._deferredPromise.reject(new AbortError());
+      this.__clearNetworkSubscriptions();
+    }
+    __doFetch() {
+      this.__subscribeToNetworkEvents();
+      Networking.sendRequest(this._request.method, this._request.url.toString(), this._request.url.toString(),
+        this._nativeRequestHeaders, this._request._body._bodyInit ?? null, this._nativeResponseType,
+        this._nativeResponseType === 'text', 0, this.__didCreateRequest.bind(this),
+        ['include', 'same-origin'].includes(this._request.credentials));
+    }
+    __didCreateRequest(requestId) { this._requestId = requestId; }
+    __didReceiveNetworkResponse(requestId, status, headers, url) {
+      if (requestId !== this._requestId) return;
+      var controller;
+      var stream = new ReadableStream({
+        start(c) { controller = c; },
+        cancel: () => { this.__clearNetworkSubscriptions(); Networking.abortRequest(this._requestId); }
+      });
+      this._streamController = controller;
+      this._responseStatus = status;
+      this._nativeResponseHeaders = headers;
+      this._responseUrl = url;
+      if (this._nativeResponseType === 'text') {
+        this._response = new Response(stream, { status, headers, url });
+        this._deferredPromise.resolve(this._response);
+      }
+    }
+    __didReceiveNetworkData(requestId, response) {
+      if (requestId !== this._requestId) return;
+      this._nativeResponse = response;
+    }
+    __didReceiveNetworkIncrementalData(requestId, responseText) {
+      if (requestId !== this._requestId) return;
+      this._streamController.enqueue(this._textEncoder.encode(responseText));
+    }
+    async __didCompleteNetworkResponse(requestId, errorMessage, didTimeOut) {
+      if (requestId !== this._requestId) return;
+      this.__clearNetworkSubscriptions();
+      if (this._request.signal) this._request.signal.removeEventListener('abort', this._abortFn);
+      if (didTimeOut) { this.__closeStream(); return this._deferredPromise.reject(new TypeError('Network request timed out')); }
+      if (errorMessage) { this.__closeStream(); return this._deferredPromise.reject(new TypeError('Network request failed: ' + errorMessage)); }
+      if (this._nativeResponseType === 'text') { this.__closeStream(); return; }
+      var ResponseClass = this._nativeResponseType === 'base64' ? ArrayBufferResponse : BlobResponse;
+      try {
+        this._response = new ResponseClass(this._nativeResponse, { status: this._responseStatus, url: this._responseUrl, headers: this._nativeResponseHeaders });
+        this._deferredPromise.resolve(this._response);
+      } catch (error) {
+        this._deferredPromise.reject(error);
+      } finally {
+        this.__closeStream();
+      }
+    }
+    __closeStream() { this._streamController && this._streamController.close(); }
+  }
+  var library = { fetch: (resource, options) => new Fetch(resource, options), Headers, Request, Response };
+  globalThis.__library = library;
+  globalThis.__installLibrary = function() {
+    ['fetch', 'Headers', 'Request', 'Response'].forEach(function(name) {
+      Object.defineProperty(globalThis, name, {
+        configurable: true, enumerable: true,
+        get: function() { return library[name]; },
+        set: function(value) { Object.defineProperty(globalThis, name, { value: value, writable: true, configurable: true, enumerable: true }); }
+      });
+    });
+  };
+})()`;
+
+/**
+ * A JS context shaped like React Native's: its XHR, FileReader, Blob, FormData, AbortController
+ * and fetch, and the app helpers above.
+ */
+function createRuntime({
+  polyfillFetch = false,
+  expo,
+  readAsTextNullOnInvalidUtf8 = false,
+  liveDispatch = false,
+  beforeReadResult,
+  metro = true,
+  networkPlatform = "ios",
+  networkModuleLoaded = true,
+}: RuntimeOptions = {}) {
+  const sends: FakeXMLHttpRequest[] = [];
+  const reads: FakeBlob[] = [];
+  const expoNative = {
+    sdk: expo?.sdk,
+    startsAtBodyEnd: expo?.startsAtBodyEnd ?? false,
+    requests: [] as NativeRequestControl[],
+    calls: {
+      text: 0,
+      arrayBuffer: 0,
+      startStreaming: 0,
+      cancelStreaming: 0,
+      cancel: 0,
+      body: 0,
+      clone: 0,
+      blob: 0,
+    } satisfies ExpoCalls,
+    log: [] as string[],
+    encode: (text: string) => new TextEncoder().encode(text),
+    // Native text() keeps a byte order mark.
+    decode: (bytes: Uint8Array) => new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes),
+  };
+
+  /**
+   * React Native's network module (RCTNetworking), which XHR sends through. On iOS the id of a
+   * request comes back a native hop after the send and an abort ends it with no event; on Android
+   * the id comes back inside the send. Each event reaches the listeners as one array, as
+   * RCTDeviceEventEmitter hands it on.
+   */
+  const networkRequests: NetworkRequest[] = [];
+  const networkListeners = new Map<string, Array<(args: unknown[]) => void>>();
+  let nextRequestId = 1;
+  const networking = {
+    sendRequest(
+      method: string,
+      _trackingName: string | undefined,
+      url: string,
+      headers: Record<string, string>,
+      data: unknown,
+      responseType: string,
+      incrementalUpdates: boolean,
+      _timeout: number,
+      callback: ((id: number) => void) & { fromXhr?: boolean },
+      _withCredentials: boolean
+    ): void {
+      const request: NetworkRequest = {
+        id: nextRequestId++,
+        method,
+        url,
+        headers,
+        data,
+        responseType,
+        incremental: incrementalUpdates,
+        fromXhr: callback.fromXhr === true,
+        aborted: false,
+      };
+      networkRequests.push(request);
+      if (networkPlatform === "android") callback(request.id);
+      else setTimeout(() => callback(request.id), 0);
+    },
+    abortRequest(id: number): void {
+      const request = networkRequests.find((r) => r.id === id);
+      if (request) request.aborted = true;
+    },
+    addListener(event: string, listener: (args: unknown[]) => void): { remove(): void } {
+      const list = networkListeners.get(event) ?? [];
+      list.push(listener);
+      networkListeners.set(event, list);
+      return {
+        remove: () => {
+          const at = list.indexOf(listener);
+          if (at >= 0) list.splice(at, 1);
+        },
+      };
+    },
+  };
+  const emitNetwork = (event: string, args: unknown[]): void => {
+    for (const listener of [...(networkListeners.get(event) ?? [])]) listener(args);
+  };
+  const network = {
+    requests: networkRequests,
+    /** The requests a fetch library sent through the module itself, not an XHR. */
+    library: () => networkRequests.filter((r) => !r.fromXhr),
+    listeners: () => [...networkListeners.values()].reduce((n, list) => n + list.length, 0),
+    head(
+      request: NetworkRequest,
+      status: number,
+      headers: Record<string, string> = {},
+      url = request.url
+    ): void {
+      emitNetwork("didReceiveNetworkResponse", [request.id, status, headers, url]);
+    },
+    /** The whole body, as the request's response type has it. */
+    data(request: NetworkRequest, body: string | Uint8Array, type = ""): void {
+      const bytes = Buffer.from(body);
+      if (request.responseType === "blob") {
+        const blobId = `native-blob-${nextBlobId++}`;
+        nativeBlobs.set(blobId, bytes);
+        emitNetwork("didReceiveNetworkData", [
+          request.id,
+          { blobId, offset: 0, size: bytes.length, type, name: undefined, lastModified: 0 },
+        ]);
+      } else if (request.responseType === "base64") {
+        emitNetwork("didReceiveNetworkData", [request.id, bytes.toString("base64")]);
+      } else {
+        emitNetwork("didReceiveNetworkData", [request.id, bytes.toString("utf8")]);
+      }
+    },
+    /** A part of a text the request streams. */
+    part(request: NetworkRequest, text: string): void {
+      emitNetwork("didReceiveNetworkIncrementalData", [request.id, text, 0, -1]);
+    },
+    end(request: NetworkRequest, error = "", timedOut = false): void {
+      emitNetwork("didCompleteNetworkResponse", [request.id, error, timedOut]);
+    },
+    /** Head, data and the end of a request. */
+    respond(
+      request: NetworkRequest,
+      status: number,
+      headers: Record<string, string> = {},
+      body: string | Uint8Array = "",
+      url = request.url
+    ): void {
+      network.head(request, status, headers, url);
+      if (request.incremental) network.part(request, Buffer.from(body).toString("utf8"));
+      else network.data(request, body, headers["Content-Type"] ?? headers["content-type"] ?? "");
+      network.end(request);
+    },
+  };
+  // Metro's module list in a development build, with React Native's network module in it.
+  const metroModules = new Map<number, Record<string, unknown>>([
+    [
+      7,
+      {
+        verboseName: "node_modules/react-native/Libraries/Utilities/PolyfillFunctions.js",
+        isInitialized: true,
+        publicModule: { exports: { polyfillGlobal: () => {} } },
+      },
+    ],
+    [
+      42,
+      {
+        verboseName: "node_modules/react-native/Libraries/Network/RCTNetworking.ios.js",
+        isInitialized: networkModuleLoaded,
+        publicModule: { exports: networkModuleLoaded ? { default: networking } : {} },
+      },
+    ],
+  ]);
+  const metroRequire = Object.assign(
+    (id: number) => {
+      const mod = metroModules.get(id)!;
+      if (!mod.isInitialized) {
+        mod.isInitialized = true;
+        mod.publicModule = { exports: { default: networking } };
+      }
+      return (mod.publicModule as { exports: unknown }).exports;
+    },
+    { getModules: () => metroModules }
+  );
+
+  /** Models React Native's XMLHttpRequest: event order, responseURL timing and incremental-events flag. */
+  class FakeXMLHttpRequest {
+    readyState = 0;
+    status = 0;
+    responseType = "";
+    responseURL: string | undefined = undefined;
+    declare onload: Listener | null;
+    declare onloadend: Listener | null;
+    declare onerror: Listener | null;
+    declare ontimeout: Listener | null;
+    declare onabort: Listener | null;
+    declare onreadystatechange: Listener | null;
+    _incrementalEvents = false;
+
+    method = "";
+    url = "";
+    requestHeaders: Record<string, string> = {};
+    body: unknown;
+    /** The incremental-events flag each send handed to the native module. */
+    readonly incrementalAtSend: boolean[] = [];
+    readonly listeners = new Map<string, Listener[]>();
+
+    private sent = false;
+    _aborted = false;
+    _hasError = false;
+    _timedOut = false;
+    private responseHeaders: Record<string, string> | undefined;
+    private raw: unknown = "";
+
+    constructor() {
+      // React Native registers an on<event> handler as a listener when it is first assigned,
+      // so it runs in order with the listeners added before and after it.
+      for (const type of ["readystatechange", "load", "loadend", "error", "timeout", "abort"]) {
+        let handler: Listener | null = null;
+        let registered = false;
+        Object.defineProperty(this, `on${type}`, {
+          get: () => handler,
+          set: (value: Listener | null) => {
+            handler = value;
+            if (registered || !value) return;
+            registered = true;
+            this.addListener(type, function (this: unknown) {
+              handler?.call(this);
+            });
+          },
+        });
+      }
+    }
+
+    open(method: string, url: string): void {
+      if (this.readyState !== 0) throw new Error("Cannot open, already sending");
+      this.method = method.toUpperCase();
+      this.url = url;
+      this._aborted = false;
+      this.setReadyState(1);
+    }
+
+    setRequestHeader(name: string, value: unknown): void {
+      if (this.readyState !== 1) throw new Error("Request has not been opened");
+      this.requestHeaders[name.toLowerCase()] = String(value);
+    }
+
+    send(body?: unknown): void {
+      if (this.readyState !== 1) throw new Error("Request has not been opened");
+      if (this.sent) throw new Error("Request has already been sent");
+      this.sent = true;
+      this.body = body;
+      this.incrementalAtSend.push(this._incrementalEvents || !!this.onreadystatechange);
+      sends.push(this);
+      const created = Object.assign(() => {}, { fromXhr: true });
+      networking.sendRequest(
+        this.method,
+        undefined,
+        this.url,
+        this.requestHeaders,
+        body,
+        this.responseType === "blob"
+          ? "blob"
+          : this.responseType === "arraybuffer"
+            ? "base64"
+            : "text",
+        false,
+        0,
+        created,
+        false
+      );
+    }
+
+    abort(): void {
+      this._aborted = true;
+      if (!(
+        this.readyState === 0 ||
+        (this.readyState === 1 && !this.sent) ||
+        this.readyState === 4
+      )) {
+        this.reset();
+        this.setReadyState(4);
+      }
+      this.reset();
+    }
+
+    addEventListener(type: string, listener: Listener): void {
+      if (type === "readystatechange" || type === "progress") this._incrementalEvents = true;
+      this.addListener(type, listener);
+    }
+
+    removeEventListener(type: string, listener: Listener): void {
+      const list = this.listeners.get(type) ?? [];
+      const index = list.indexOf(listener);
+      if (index >= 0) list.splice(index, 1);
+    }
+
+    private addListener(type: string, listener: Listener): void {
+      const list = this.listeners.get(type);
+      if (list) list.push(listener);
+      else this.listeners.set(type, [listener]);
+    }
+
+    get response(): unknown {
+      if (this.responseType !== "json") return this.raw;
+      try {
+        return JSON.parse(this.raw as string);
+      } catch {
+        return null;
+      }
+    }
+
+    /** React Native keeps the text it received here, also for a json responseType. */
+    get _response(): unknown {
+      return this.raw;
+    }
+
+    get responseText(): string {
+      if (this.responseType !== "" && this.responseType !== "text") {
+        throw new Error("responseText needs a text responseType");
+      }
+      return this.raw as string;
+    }
+
+    getAllResponseHeaders(): string | null {
+      if (!this.responseHeaders) return null;
+      return Object.entries(this.responseHeaders)
+        .map(([name, value]) => `${name}: ${value}`)
+        .join("\r\n");
+    }
+
+    /** Native side: the response headers arrive. */
+    receiveHeaders(status: number, headers: Record<string, string>, responseURL = this.url): void {
+      this.status = status;
+      this.responseHeaders = headers;
+      this.setReadyState(2);
+      // Like React Native, responseURL is set only after HEADERS_RECEIVED is announced.
+      this.responseURL = responseURL;
+    }
+
+    /** Native side: a part of a response body arrives while the request streams (LOADING). */
+    receiveText(text: string): void {
+      this.raw = (this.raw as string) + text;
+      this.setReadyState(3);
+    }
+
+    /** Native side: headers, data and completion of a response. */
+    respond(
+      status: number,
+      headers: Record<string, string>,
+      body: string | ArrayBuffer | Uint8Array,
+      responseURL = this.url
+    ): void {
+      this.receiveHeaders(status, headers, responseURL);
+      this.raw = this.responseType === "blob" ? new FakeBlob([body as string | Uint8Array]) : body;
+      this.setReadyState(3);
+      this.setReadyState(4);
+    }
+
+    /** Native side: the request fails or times out. */
+    fail(error: string, timedOut = false): void {
+      if (this.responseType === "" || this.responseType === "text") this.raw = error;
+      this._hasError = true;
+      this._timedOut = timedOut;
+      this.setReadyState(4);
+    }
+
+    dispatch(type: string): void {
+      const list = this.listeners.get(type) ?? [];
+      if (liveDispatch) {
+        // event-target-shim walks the live list: a listener added now runs for this event too,
+        // and removing one does not skip the listener after it.
+        const called = new Set<Listener>();
+        let next: Listener | undefined = list[0];
+        while (next) {
+          called.add(next);
+          next.call(this);
+          next = list.find((listener) => !called.has(listener));
+        }
+        return;
+      }
+      // RN 0.81+ dispatches over a snapshot and skips listeners removed during dispatch.
+      for (const listener of [...list]) if (list.includes(listener)) listener.call(this);
+    }
+
+    private setReadyState(state: number): void {
+      this.readyState = state;
+      this.dispatch("readystatechange");
+      if (state !== 4) return;
+      if (this._aborted) this.dispatch("abort");
+      else if (!this._hasError) this.dispatch("load");
+      else this.dispatch(this._timedOut ? "timeout" : "error");
+      this.dispatch("loadend");
+    }
+
+    private reset(): void {
+      this.readyState = 0;
+      this.status = 0;
+      this.responseHeaders = undefined;
+      this.responseURL = undefined;
+      this.raw = "";
+      this.responseType = "";
+      this.sent = false;
+      this.requestHeaders = {};
+      this._hasError = false;
+      this._timedOut = false;
+    }
+  }
+
+  class FakeFileReader {
+    result: string | null = null;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+
+    readAsText(blob: FakeBlob): void {
+      reads.push(blob);
+      // A Blob of native blob data is read from the native store, in the order of the calls.
+      const data = blob.data as Buffer | { blobId: string; offset?: number; size: number };
+      const bytes = Buffer.isBuffer(data)
+        ? undefined
+        : nativeBlobs.get(data.blobId)?.subarray(data.offset ?? 0, (data.offset ?? 0) + data.size);
+      if (!Buffer.isBuffer(data) && !bytes) {
+        setImmediate(() => this.onerror?.());
+        return;
+      }
+      setImmediate(() => {
+        beforeReadResult?.(blob);
+        const read = bytes ?? blob.data;
+        this.result = readAsTextNullOnInvalidUtf8 && !isUtf8(read) ? null : read.toString("utf8");
+        this.onload?.();
+      });
+    }
+  }
+
+  const context = createContext({
+    XMLHttpRequest: FakeXMLHttpRequest,
+    FileReader: FakeFileReader,
+    Blob: FakeBlob,
+    FormData: FakeFormData,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    __networking: networking,
+    ...(metro ? { __r: metroRequire } : {}),
   });
+  const run = (code: string): unknown => runInContext(code, context);
+  run(APP_HELPERS);
+  if (polyfillFetch) {
+    run(WHATWG_FETCH);
+    run("var rnFetch = fetch;");
+  }
+  if (expo) {
+    Object.assign(context, {
+      TextEncoder,
+      TextDecoder,
+      ReadableStream,
+      Headers,
+      __expoNative: expoNative,
+    });
+    run(EXPO_NATIVE);
+    run(EXPO_FETCH_JS);
+    if (expo.global) {
+      run(
+        `Object.defineProperty(expoFetch, Symbol.for('expo.builtin'), { value: true }); fetch = expoFetch;`
+      );
+    }
+  }
 
-  it("records zero bytes for HEAD even when Content-Length describes a GET body", async () => {
-    const entry = await interceptResponse({
-      body: "",
-      byteLength: 0,
-      contentLength: 524_288_000,
-      method: "HEAD",
-      mimeType: "application/octet-stream",
+  return {
+    context,
+    sends,
+    reads,
+    run,
+    /** The requests Expo's native module started. */
+    native: expoNative.requests,
+    /** The calls of Expo's methods that touch a body so far. */
+    expoCalls: (): ExpoCalls => ({ ...expoNative.calls }),
+    /** The end events and start settlements of Expo's requests, in the order JS got them. */
+    expoLog: () => expoNative.log.filter((event) => event !== "didReceiveResponseData"),
+    /** React Native's network module, answered by the test. */
+    network,
+    /** The requests that left JavaScript: XHR sends, Expo native starts and library requests. */
+    sent: () => sends.length + expoNative.requests.length + network.library().length,
+    install: () => JSON.parse(run(NETWORK_INTERCEPTOR_SCRIPT) as string) as unknown,
+    /** The records, as the agent reads each one with view-network-request-details. */
+    records: () =>
+      (context.__argent_network_log as Array<{ requestId: string }>).map(
+        (entry) =>
+          JSON.parse(run(makeNetworkDetailReadScript(entry.requestId)) as string) as CapturedRecord
+      ),
+    last: () => sends[sends.length - 1]!,
+  };
+}
+
+type Runtime = ReturnType<typeof createRuntime>;
+type FakeXhr = ReturnType<Runtime["last"]>;
+
+/**
+ * Notes the size of the buffer behind each decode of the interceptor, from now on. It decodes with
+ * `fatal`, to tell text from binary; the app's own decodes do not count.
+ */
+function noteDecodes(rt: Runtime): number[] {
+  const decoded: number[] = [];
+  rt.context.TextDecoder = class extends TextDecoder {
+    decode(...args: Parameters<TextDecoder["decode"]>): string {
+      const [input] = args;
+      if (this.fatal && input && ArrayBuffer.isView(input)) decoded.push(input.buffer.byteLength);
+      return super.decode(...args);
+    }
+  };
+  return decoded;
+}
+
+/** A runtime whose app replaced the global fetch with `wrapper` at startup, before the install. */
+function appWrapped(wrapper: string, options: RuntimeOptions = { polyfillFetch: true }): Runtime {
+  const rt = createRuntime(options);
+  rt.run(wrapper);
+  rt.install();
+  return rt;
+}
+
+const EXPO_GLOBAL: RuntimeOptions = { polyfillFetch: true, expo: { sdk: 57, global: true } };
+
+// An app's own Response class over the Response it got.
+const API_RESPONSE = `function ApiResponse(r) { this.raw = r; this.status = r.status; this.url = r.url; this.headers = r.headers; }
+  ApiResponse.prototype.clone = function() { return new ApiResponse(this.raw.clone()); };
+  ApiResponse.prototype.text = function() { return this.raw.text(); };
+  Object.defineProperty(ApiResponse.prototype, 'body', { get: function() { return this.raw.body; } });`;
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 10; i++) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+/** Waits until Expo's native side has taken `request` to `state`. */
+async function untilNativeState(request: NativeRequestControl, state: string): Promise<void> {
+  for (let i = 0; i < 20 && request.response._native.state !== state; i++) await settle();
+  expect(request.response._native.state).toBe(state);
+}
+
+/** `count` requests have left JavaScript (by default, however many have), and each has one record. */
+function expectRecordPerRequest(rt: Runtime, count = rt.sent()): void {
+  expect(rt.sent()).toBe(count);
+  expect(rt.records()).toHaveLength(count);
+}
+
+/** Waits until `count` requests have left JavaScript, checking at every step that each has one record. */
+async function untilSent(rt: Runtime, count: number): Promise<void> {
+  expectRecordPerRequest(rt);
+  for (let i = 0; i < 20 && rt.sent() < count; i++) {
+    await settle();
+    expectRecordPerRequest(rt);
+  }
+  expectRecordPerRequest(rt, count);
+}
+
+/** The name of what a promise rejected with. */
+async function rejectionName(promise: Promise<unknown>): Promise<string> {
+  const reason = (await promise.then(
+    () => ({ name: "(resolved)" }),
+    (error: unknown) => error
+  )) as { name: string };
+  return reason.name;
+}
+
+describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
+  describe("XMLHttpRequest", () => {
+    it("records an axios-style XHR and leaves its response to the app", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var seen;
+        var x = new XMLHttpRequest();
+        x.open('get', 'https://api.test/users?page=2', true);
+        x.setRequestHeader('Accept', 'application/json');
+        x.onloadend = function() { seen = x.status + ' ' + x.responseText; };
+        x.send(null);
+      `);
+      const body = '{"name":"Zoë 👋"}';
+      rt.last().respond(200, { "Content-Type": "application/json; charset=utf-8" }, body);
+      await settle();
+
+      expect(rt.run("seen")).toBe(`200 ${body}`);
+      expect(rt.last().incrementalAtSend).toEqual([false]);
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({
+        requestId: "rn-net-1",
+        state: "finished",
+        resourceType: "XHR",
+        request: {
+          method: "GET",
+          url: "https://api.test/users?page=2",
+          headers: { accept: "application/json" },
+        },
+        response: {
+          url: "https://api.test/users?page=2",
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+          mimeType: "application/json",
+        },
+        responseBody: body,
+        encodedDataLength: Buffer.byteLength(body),
+      });
+      expect(rt.records()[0].durationMs).toEqual(expect.any(Number));
     });
 
-    expect(entry?.encodedDataLength).toBe(0);
-  });
+    it.each([
+      { responseType: "text", body: "plain", responseBody: "plain", encodedDataLength: 5 },
+      {
+        responseType: "json",
+        body: '{ "a": [1, 2] }',
+        responseBody: '{ "a": [1, 2] }',
+        encodedDataLength: 15,
+      },
+    ])(
+      "reads a $responseType response body",
+      ({ responseType, body, responseBody, encodedDataLength }) => {
+        const rt = createRuntime();
+        rt.install();
+        rt.run(
+          `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/t'); x.responseType = '${responseType}'; x.send();`
+        );
+        rt.last().respond(200, {}, body);
 
-  it("records zero bytes for a 304 cached response", async () => {
-    const entry = await interceptResponse({
-      body: "",
-      byteLength: 0,
-      contentLength: 4096,
-      mimeType: "application/json",
-      status: 304,
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          responseBody,
+        });
+        expect(rt.records()[0]!.encodedDataLength).toBe(encodedDataLength);
+      }
+    );
+
+    it.each([
+      { counter: "TextEncoder", textEncoder: true },
+      { counter: "the fallback loop", textEncoder: false },
+    ])("counts the UTF-8 bytes of a text body with $counter", ({ textEncoder }) => {
+      const rt = createRuntime();
+      if (textEncoder) rt.context.TextEncoder = TextEncoder;
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/u'); x.send();`);
+      const body = "ascii é ✓ 👋 \ud800";
+      rt.last().respond(200, {}, body);
+
+      expect(rt.records()[0]!.encodedDataLength).toBe(Buffer.byteLength(body));
     });
 
-    expect(entry?.encodedDataLength).toBe(0);
-  });
+    it("keeps a copy of a Uint8Array body whose slice() returns a view, as the buffer package's Buffer does", () => {
+      const rt = createRuntime();
+      // Expo installs a TextDecoder, which shows a UTF-8 body as its text.
+      rt.context.TextDecoder = TextDecoder;
+      rt.install();
+      rt.run(`class ViewSlice extends Uint8Array { slice(start, end) { return this.subarray(start, end); } }
+        var sent = new ViewSlice([123, 125]);
+        var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/upload'); x.send(sent);
+        sent[0] = 0;`);
 
-  it("does not re-encode replacement characters from a non-UTF-8 response", async () => {
-    const body = "Caf\uFFFD na\uFFFDve r\uFFFDsum\uFFFD";
-    const entry = await interceptResponse({
-      body,
-      byteLength: 17,
-      mimeType: "text/plain; charset=iso-8859-1",
+      // The app changed its buffer after the send: the record keeps what was sent.
+      expect(rt.records()[0]!.request.postData).toBe("{}");
     });
 
-    expect(entry?.encodedDataLength).toBe(17);
-    expect(entry?.encodedDataLength).not.toBe(Buffer.byteLength(body, "utf8"));
-  });
+    it.each([
+      {
+        case: "a binary type",
+        type: "image/png",
+        bytes: [0x89, 0x50],
+        decoder: true,
+        body: undefined,
+        omitted: true,
+      },
+      {
+        case: "a binary type, without a decoder",
+        type: "image/png",
+        bytes: [0x89, 0x50],
+        decoder: false,
+        body: undefined,
+        omitted: true,
+      },
+      {
+        case: "UTF-8 text",
+        type: "application/json",
+        bytes: [0x7b, 0x7d],
+        decoder: true,
+        body: "{}",
+        omitted: undefined,
+      },
+      {
+        case: "bytes that are not UTF-8",
+        type: "text/plain",
+        bytes: [0xff, 0xfe],
+        decoder: true,
+        body: undefined,
+        omitted: true,
+      },
+      // React Native has no TextDecoder: the text cannot be told from binary.
+      {
+        case: "text, without a decoder",
+        type: "application/json",
+        bytes: [0x7b, 0x7d],
+        decoder: false,
+        body: undefined,
+        omitted: undefined,
+      },
+    ])(
+      "records an arraybuffer response of $case as a blob one",
+      ({ type, bytes, decoder, body, omitted }) => {
+        const rt = createRuntime();
+        if (decoder) rt.context.TextDecoder = TextDecoder;
+        rt.install();
+        rt.run(
+          `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/bin'); x.responseType = 'arraybuffer'; x.send();`
+        );
+        rt.last().respond(200, { "content-type": type }, new Uint8Array(bytes).buffer);
+        const [record] = rt.records();
 
-  it("uses decoded body bytes instead of compressed Content-Length", async () => {
-    const entry = await interceptResponse({
-      body: "x".repeat(6308),
-      byteLength: 6308,
-      contentLength: 1510,
-      mimeType: "application/json",
+        expect(record).toMatchObject({ state: "finished", encodedDataLength: bytes.length });
+        expect(record!.responseBody).toBe(body);
+        expect(record!.bodyOmitted).toBe(omitted);
+      }
+    );
+
+    it("keeps at most 1 MiB of a large arraybuffer response", () => {
+      const rt = createRuntime();
+      rt.context.TextDecoder = TextDecoder;
+      rt.install();
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.responseType = 'arraybuffer'; x.send();`
+      );
+      rt.last().respond(
+        200,
+        { "content-type": "text/plain" },
+        new Uint8Array(3 * BODY_CAP).fill(0x61).buffer
+      );
+      const log = rt.context.__argent_network_log as Array<{ bodyBytes?: Uint8Array }>;
+      expect(log[0]!.bodyBytes!.byteLength).toBeLessThanOrEqual(BODY_CAP + 3);
+      const [record] = rt.records();
+
+      expect(record).toMatchObject({ encodedDataLength: 3 * BODY_CAP, bodyTruncated: true });
+      expect(record!.responseBody).toHaveLength(BODY_CAP);
     });
 
-    expect(entry?.encodedDataLength).toBe(6308);
-  });
+    it.each([
+      {
+        outcome: "an error",
+        end: (x: FakeXhr) => x.fail("Unable to resolve host"),
+        errorText: "Unable to resolve host",
+      },
+      {
+        outcome: "a timeout",
+        end: (x: FakeXhr) => x.fail("timed out", true),
+        errorText: "timeout",
+      },
+      {
+        outcome: "an abort",
+        end: (x: FakeXhr) => x.abort(),
+        errorText: "aborted",
+      },
+    ])("records $outcome as a failed request", ({ end, errorText }) => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/f'); x.send();`);
+      end(rt.last());
 
-  it("records binary bytes when no text body is exposed", async () => {
-    const entry = await interceptResponse({
-      body: undefined,
-      byteLength: 16,
-      mimeType: "image/png",
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText });
+      expect(rt.records()[0].durationMs).toEqual(expect.any(Number));
     });
 
-    expect(entry?.encodedDataLength).toBe(16);
-    expect(entry?.responseBody).toBeUndefined();
-  });
+    it("mints a record per send on a reused XHR without stacking listeners", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var x = new XMLHttpRequest();
+        x.open('GET', 'https://api.test/first');
+        x.send();
+        x.abort();
+        x.open('POST', 'https://api.test/second');
+        x.setRequestHeader('X-Attempt', '2');
+        x.send('retry');
+      `);
+      const xhr = rt.last();
+      const types = ["readystatechange", "load", "error", "timeout", "abort"];
+      // The aborted request removed its listeners: only the second request's remain.
+      for (const type of types) expect(xhr.listeners.get(type)).toHaveLength(1);
+      xhr.respond(200, {}, "done");
 
-  it("leaves size unknown when Blob conversion is unavailable", async () => {
-    const entry = await interceptResponse({
-      body: "hello",
-      blobFails: true,
-      mimeType: "text/plain",
+      for (const type of types) expect(xhr.listeners.get(type)).toHaveLength(0);
+      expect(rt.sends).toHaveLength(2);
+      expect(rt.sends[0]).toBe(xhr);
+      expect(xhr.incrementalAtSend).toEqual([false, false]);
+      const [first, second] = rt.records();
+      expect(first).toMatchObject({
+        requestId: "rn-net-1",
+        state: "failed",
+        errorText: "aborted",
+        request: { method: "GET", url: "https://api.test/first", headers: {} },
+      });
+      expect(second).toMatchObject({
+        requestId: "rn-net-2",
+        state: "finished",
+        request: {
+          method: "POST",
+          url: "https://api.test/second",
+          headers: { "x-attempt": "2" },
+          postData: "retry",
+        },
+        response: { status: 200 },
+        responseBody: "done",
+      });
     });
 
-    expect(entry?.encodedDataLength).toBeUndefined();
-    expect(entry?.responseBody).toBe("hello");
+    it.each([
+      { dispatch: "RN 0.81+", liveDispatch: false },
+      { dispatch: "event-target-shim", liveDispatch: true },
+    ])(
+      "keeps each poll's record when the app reuses the XHR from its load handler ($dispatch)",
+      ({ liveDispatch }) => {
+        const rt = createRuntime({ liveDispatch });
+        rt.install();
+        rt.run(`
+        var polls = 0;
+        var x = new XMLHttpRequest();
+        x.onload = function() {
+          polls++;
+          if (polls < 2) { x.abort(); x.open('GET', 'https://api.test/poll/' + polls); x.send(); }
+        };
+        x.open('GET', 'https://api.test/poll/0');
+        x.send();
+      `);
+        rt.last().respond(200, {}, "zero");
+        expect(rt.records()[1]).toMatchObject({ state: "pending" });
+        rt.last().respond(201, {}, "one");
+
+        expect(rt.records()).toMatchObject([
+          {
+            request: { url: "https://api.test/poll/0" },
+            state: "finished",
+            response: { status: 200 },
+            responseBody: "zero",
+          },
+          {
+            request: { url: "https://api.test/poll/1" },
+            state: "finished",
+            response: { status: 201 },
+            responseBody: "one",
+          },
+        ]);
+      }
+    );
+
+    it.each([
+      { dispatch: "RN 0.81+", liveDispatch: false },
+      { dispatch: "event-target-shim", liveDispatch: true },
+    ])(
+      "keeps both records when the app retries on the same XHR from its error handler ($dispatch)",
+      ({ liveDispatch }) => {
+        const rt = createRuntime({ liveDispatch });
+        rt.install();
+        rt.run(`
+        var x = new XMLHttpRequest();
+        x.onerror = function() { x.abort(); x.open('GET', 'https://api.test/retry'); x.send(); };
+        x.open('GET', 'https://api.test/retry');
+        x.send();
+      `);
+        rt.last().fail("offline");
+        expect(rt.records()[1]).toMatchObject({ state: "pending" });
+        rt.last().respond(200, {}, "ok");
+
+        expect(rt.records()).toMatchObject([
+          { state: "failed", errorText: "offline" },
+          { state: "finished", response: { status: 200 }, responseBody: "ok" },
+        ]);
+      }
+    );
+
+    it("keeps both records when the app reuses the XHR from onreadystatechange", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var polls = 0;
+        var x = new XMLHttpRequest();
+        x.onreadystatechange = function() {
+          if (x.readyState !== 4 || polls++ > 0) return;
+          x.abort();
+          x.open('GET', 'https://api.test/poll/1');
+          x.send();
+        };
+        x.open('GET', 'https://api.test/poll/0');
+        x.send();
+      `);
+      rt.last().respond(200, {}, "zero");
+      expect(rt.records()[1]).toMatchObject({ state: "pending" });
+      rt.last().respond(201, {}, "one");
+
+      expect(rt.records()).toMatchObject([
+        { state: "finished", response: { status: 200 }, responseBody: "zero" },
+        { state: "finished", response: { status: 201 }, responseBody: "one" },
+      ]);
+    });
+
+    it("reads a blob body when the app reuses the XHR from its load handler", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var polls = 0;
+        var x = new XMLHttpRequest();
+        x.onload = function() {
+          if (polls++ > 0) return;
+          x.abort();
+          x.open('GET', 'https://api.test/blob/1');
+          x.responseType = 'blob';
+          x.send();
+        };
+        x.open('GET', 'https://api.test/blob/0');
+        x.responseType = 'blob';
+        x.send();
+      `);
+      rt.last().respond(200, {}, "blob-zero");
+      rt.last().respond(200, {}, "blob-one");
+      await settle();
+
+      expect(rt.records()).toMatchObject([
+        { state: "finished", responseBody: "blob-zero", encodedDataLength: 9 },
+        { state: "finished", responseBody: "blob-one", encodedDataLength: 8 },
+      ]);
+    });
+
+    it("records an abort as aborted when the app's abort handler aborts again", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var x = new XMLHttpRequest();
+        x.onabort = function() { x.abort(); };
+        x.open('GET', 'https://api.test/slow');
+        x.send();
+      `);
+      rt.last().receiveHeaders(200, {});
+      rt.run("x.abort()");
+
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText: "aborted" });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+    });
+
+    it("drops a request RN reset from under it, so it cannot take the next response", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var n = 0;
+        var x = new XMLHttpRequest();
+        function start() { x.open('GET', 'https://api.test/poll/' + n++); x.send(); }
+        // Re-sent from inside the abort's own dispatch: RN's abort then resets the XHR once more.
+        x.onabort = function() { if (n === 1) { x.abort(); start(); } };
+        start();
+        x.abort();
+        start();
+      `);
+      rt.last().respond(200, {}, "two");
+
+      expect(rt.records()).toMatchObject([
+        { request: { url: "https://api.test/poll/0" }, state: "failed", errorText: "aborted" },
+        { request: { url: "https://api.test/poll/1" }, state: "failed", errorText: "aborted" },
+        { request: { url: "https://api.test/poll/2" }, state: "finished", responseBody: "two" },
+      ]);
+      expect(rt.records()[1]!.response).toBeUndefined();
+    });
+
+    it("records a request the app sends from its readyState 1 handler", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var x = new XMLHttpRequest();
+        x.onreadystatechange = function() {
+          if (x.readyState === 1) { x.setRequestHeader('X-From-Open', '1'); x.send(); }
+        };
+        x.open('GET', 'https://api.test/from-open');
+      `);
+      rt.last().respond(200, {}, "ok");
+
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({
+        request: { url: "https://api.test/from-open", headers: { "x-from-open": "1" } },
+        state: "finished",
+        responseBody: "ok",
+      });
+    });
+
+    it("ignores events that reach an XHR after its abort", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/slow'); x.send(); x.abort();`
+      );
+      const xhr = rt.last();
+      // On iOS an abort before the request id arrives cannot cancel the native request,
+      // so its response still walks the aborted object.
+      xhr.receiveHeaders(200, { "content-type": "text/plain" });
+      xhr.dispatch("load");
+
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText: "aborted" });
+      expect(rt.records()[0].response).toBeUndefined();
+    });
+
+    it("records headers and summarizes FormData, Blob and binary bodies without changing the request", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        var form = new FormData();
+        form.append('name', 'Ada');
+        form.append('avatar', { uri: 'file:///tmp/a.png', name: 'a.png', type: 'image/png' });
+        var up = new XMLHttpRequest();
+        up.open('POST', 'https://api.test/upload');
+        up.setRequestHeader('Authorization', 'Bearer t');
+        up.setRequestHeader('Accept', 'text/plain');
+        up.setRequestHeader('accept', 'application/json');
+        up.send(form);
+        var bin = new XMLHttpRequest();
+        bin.open('PUT', 'https://api.test/bytes');
+        bin.send(new Uint8Array(12));
+        bin.setRequestHeader('X-Late', '1');
+        var blobUp = new XMLHttpRequest();
+        blobUp.open('POST', 'https://api.test/blob');
+        blobUp.send(new Blob(['abc']));
+      `);
+      const [upload, binary] = rt.sends;
+      const headers = { authorization: "Bearer t", accept: "application/json" };
+
+      expect(upload!.requestHeaders).toEqual(headers);
+      expect(upload!.url).toBe("https://api.test/upload");
+      expect(upload!.body).toBe(rt.run("form"));
+      expect((binary!.body as Uint8Array).byteLength).toBe(12);
+      const [uploadRecord, binaryRecord, blobRecord] = rt.records();
+      expect(uploadRecord!.request).toEqual({
+        method: "POST",
+        url: "https://api.test/upload",
+        headers,
+        postData: "[FormData] name=Ada; avatar=<file a.png image/png>",
+      });
+      expect(binaryRecord!.request).toEqual({
+        method: "PUT",
+        url: "https://api.test/bytes",
+        headers: {},
+        postData: "[binary 12 bytes]",
+      });
+      expect(blobRecord!.request.postData).toBe("[Blob 3 bytes]");
+    });
+
+    it("keeps the response headers when the app aborts from its own HEADERS_RECEIVED handler", () => {
+      const rt = createRuntime();
+      rt.install();
+      // Set before send, as an upload that gives up on a 413 does: it runs before the interceptor's listener.
+      rt.run(`
+        var x = new XMLHttpRequest();
+        x.open('PUT', 'https://video.test/upload');
+        x.onreadystatechange = function() { if (x.readyState === 2 && x.status === 413) x.abort(); };
+        x.send(new Uint8Array(4));
+      `);
+      rt.last().receiveHeaders(413, { "content-type": "application/json" });
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "aborted",
+        response: { status: 413, mimeType: "application/json" },
+      });
+    });
+
+    it("keeps the text a streaming XHR received when the app aborts it", () => {
+      const rt = createRuntime();
+      rt.install();
+      // react-native-sse reads the events in onprogress and aborts the XHR in close().
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/sse'); x.onreadystatechange = function() {}; x.send();`
+      );
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, { "content-type": "text/event-stream" });
+      xhr.receiveText("data: 1\n\n");
+      xhr.receiveText("data: 2\n\n");
+      rt.run("x.abort()");
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "aborted",
+        response: { status: 200, mimeType: "text/event-stream" },
+        responseBody: "data: 1\n\ndata: 2\n\n",
+        encodedDataLength: 18,
+      });
+      expect(rt.records()[0]!.bodyTruncated).toBeUndefined();
+    });
+
+    it("caps the text of an aborted streaming XHR at 1 MiB", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/sse'); x.send();`);
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, {});
+      xhr.receiveText("e".repeat(BODY_CAP + 7));
+      rt.run("x.abort()");
+
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "aborted",
+        bodyTruncated: true,
+      });
+      expect(rt.records()[0]!.responseBody).toHaveLength(BODY_CAP);
+    });
+
+    it.each([
+      { when: "before the response", headers: false },
+      { when: "after the headers, before any data", headers: true },
+    ])("records no body for an XHR the app aborts $when", ({ headers }) => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/sse'); x.send();`);
+      if (headers) rt.last().receiveHeaders(200, {});
+      rt.run("x.abort()");
+
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText: "aborted" });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+      expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
+    });
+  });
+
+  describe("React Native's fetch", () => {
+    it("records a GET once, as a Fetch, and leaves the global fetch as it is", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      const fetch = rt.run("fetch");
+      rt.install();
+      expect(rt.run("fetch")).toBe(fetch);
+      expect(rt.run("fetch.polyfill")).toBe(true);
+
+      const pending = rt.run(
+        `fetch('https://api.test/old').then(function(r) { return r.text().then(function(text) { return r.url + ' ' + text; }); })`
+      ) as Promise<string>;
+      expectRecordPerRequest(rt, 1);
+      const body = JSON.stringify({ token: "héllo" });
+      rt.last().respond(200, { "content-type": "application/json" }, body, "https://api.test/new");
+      expect(await pending).toBe(`https://api.test/new ${body}`);
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        resourceType: "Fetch",
+        state: "finished",
+        request: { method: "GET", url: "https://api.test/old" },
+        response: { url: "https://api.test/new", status: 200, mimeType: "application/json" },
+        responseBody: body,
+        encodedDataLength: Buffer.byteLength(body),
+      });
+    });
+
+    it("records a POST with the headers and body it sends", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/login', {
+        method: 'post',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"user":"ada"}'
+      })`) as Promise<unknown>;
+      rt.last().respond(201, {}, "");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        request: {
+          method: "POST",
+          url: "https://api.test/login",
+          headers: { "content-type": "application/json" },
+          postData: '{"user":"ada"}',
+        },
+        response: { status: 201 },
+      });
+    });
+
+    it("records headers given as [name, value] pairs under their own names", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/me', {
+        headers: [['Authorization', 'Bearer tok'], ['X-List', 'a,b']]
+      })`) as Promise<unknown>;
+      // whatwg-fetch sets the pairs as if the array were an object, then each pair by its name.
+      expect(rt.last().requestHeaders).toMatchObject({
+        "0": "Authorization,Bearer tok",
+        "length": "2",
+      });
+      rt.last().respond(200, {}, "");
+      await pending;
+      await settle();
+
+      const headers = rt.records()[0]!.request.headers;
+      expect(headers).toEqual({ "authorization": "Bearer tok", "x-list": "a,b" });
+      expect(JSON.stringify(headers)).not.toMatch(/"\d+"|"length"/);
+    });
+
+    it.each([
+      {
+        outcome: "fails",
+        end: (rt: Runtime) => rt.last().fail("Unable to resolve host"),
+        rejection: "TypeError",
+        errorText: "Network request failed",
+      },
+      {
+        outcome: "is aborted",
+        end: (rt: Runtime) => rt.run("controller.abort()"),
+        rejection: "AbortError",
+        errorText: "aborted",
+      },
+    ])(
+      "records a fetch that $outcome as one failed request",
+      async ({ end, rejection, errorText }) => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.install();
+        const pending = rt.run(
+          `var controller = new AbortController(); fetch('https://api.test/f', { signal: controller.signal })`
+        ) as Promise<unknown>;
+        end(rt);
+
+        expect(await rejectionName(pending)).toBe(rejection);
+        await settle();
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          resourceType: "Fetch",
+          state: "failed",
+          errorText,
+        });
+      }
+    );
+
+    it("records the URL with the cache buster React Native's fetch adds", () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      rt.run(`fetch('https://api.test/feed?page=2', { cache: 'no-store' })`);
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.last().url).toMatch(/^https:\/\/api\.test\/feed\?page=2&_=\d+$/);
+      expect(rt.records()[0]!.request.url).toBe(rt.last().url);
+    });
+
+    it("records a HEAD request with its empty body, whatever its Content-Length says", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/video', { method: 'HEAD' })`
+      ) as Promise<unknown>;
+      rt.last().respond(200, { "content-length": "524288000" }, "");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        request: { method: "HEAD" },
+        responseBody: "",
+        encodedDataLength: 0,
+      });
+    });
+
+    it.each([
+      { request: "with an aborted signal", init: "{ signal: aborted }", rejection: "AbortError" },
+      { request: "that new Request rejects", init: "{ body: 'on a GET' }", rejection: "TypeError" },
+    ])("records nothing for a fetch $request, which sends nothing", async ({ init, rejection }) => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      const pending = rt.run(
+        `var c = new AbortController(); c.abort(); var aborted = c.signal; fetch('https://api.test/none', ${init})`
+      ) as Promise<unknown>;
+
+      expect(await rejectionName(pending)).toBe(rejection);
+      expectRecordPerRequest(rt, 0);
+    });
+  });
+
+  describe("resource type", () => {
+    // An app's own XHR with the handlers and responseType React Native's fetch sets.
+    const FETCH_SHAPED_XHR = (responseType: string) => `
+      var x = new XMLHttpRequest();
+      x.open('GET', 'https://api.test/file.bin');
+      x.responseType = '${responseType}';
+      x.onload = function() {};
+      x.onabort = function() {};
+      x.ontimeout = function() {};
+      x.onerror = function() {};
+      x.send();`;
+
+    it.each(["blob", "arraybuffer"])(
+      "labels an app's own XHR with responseType %s as XHR",
+      async (responseType) => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.install();
+        rt.run(FETCH_SHAPED_XHR(responseType));
+        rt.last().respond(200, { "content-type": "application/octet-stream" }, "bytes");
+        await settle();
+
+        expect(rt.records().map((r) => r.resourceType)).toEqual(["XHR"]);
+      }
+    );
+
+    it("labels an axios-style XHR as XHR", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      rt.run(`
+        var x = new XMLHttpRequest();
+        x.open('POST', 'https://api.test/users', true);
+        x.setRequestHeader('Content-Type', 'application/json');
+        x.onloadend = function() {};
+        x.onabort = function() {};
+        x.onerror = function() {};
+        x.ontimeout = function() {};
+        x.send('{}');
+      `);
+      rt.last().respond(201, { "content-type": "application/json" }, "{}");
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["XHR"]);
+    });
+
+    it("labels React Native's fetch as Fetch, also through a reference taken before the install", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.run("var captured = fetch;");
+      rt.install();
+      // cache: 'no-store' makes whatwg-fetch add a query to the URL after it built the Request.
+      rt.run(`
+        fetch('https://api.test/a');
+        captured('https://api.test/b', { method: 'post', body: 'x' });
+        fetch(new Request('https://api.test/c', { cache: 'no-store' }));
+      `);
+      for (const xhr of rt.sends) xhr.respond(200, { "content-type": "text/plain" }, "ok");
+      await settle();
+
+      expect(rt.records().map((r) => `${r.resourceType} ${r.request.url.split("?")[0]}`)).toEqual([
+        "Fetch https://api.test/a",
+        "Fetch https://api.test/b",
+        "Fetch https://api.test/c",
+      ]);
+    });
+
+    it("labels an XHR the app opens after it built a Request of its own as XHR", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      await (rt.run(
+        `var request = new Request('https://api.test/file.bin'); tick()`
+      ) as Promise<unknown>);
+      rt.run(FETCH_SHAPED_XHR("blob"));
+      rt.last().respond(200, { "content-type": "application/octet-stream" }, "bytes");
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["XHR"]);
+    });
+
+    it("labels Expo's fetch as Fetch", async () => {
+      const rt = createRuntime(EXPO_GLOBAL);
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/me').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      rt.native[0]!.respond(200, { "content-type": "text/plain" }, "ok");
+      await pending;
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["Fetch"]);
+    });
+
+    it("tells React Native's fetch by the shape of its XHR when it has no whatwg-fetch Request", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(FETCH_SHAPED_XHR("blob"));
+      rt.last().respond(200, { "content-type": "application/octet-stream" }, "bytes");
+      await settle();
+
+      expect(rt.records().map((r) => r.resourceType)).toEqual(["Fetch"]);
+    });
+  });
+
+  // Each wrapper replaced the global fetch at startup, before the install: the global fetch the
+  // interceptor finds is the app's.
+  describe("over the previous fetch-only interceptor", () => {
+    // A tool-server upgrade without a reload of the app: the previous script wrapped fetch first.
+    it("empties the previous script's buffers and keeps them empty", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.run(PREVIOUS_NETWORK_INTERCEPTOR_SCRIPT);
+      const oldLog = rt.run("__argent_network_log") as unknown[];
+      const oldById = rt.run("__argent_network_by_id") as Record<string, unknown>;
+      for (let i = 0; i < 3; i++) {
+        const pending = rt.run(
+          `fetch('https://api.test/x').then(function(r) { return r.text(); })`
+        ) as Promise<unknown>;
+        rt.last().respond(200, {}, "hello");
+        await pending;
+        await settle();
+      }
+      expect(oldLog.length).toBe(3);
+      rt.install();
+      expect(oldLog.length).toBe(0);
+
+      const pending = rt.run(
+        `fetch('https://api.test/x').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      rt.last().respond(200, {}, "hello");
+      await pending;
+      await settle();
+      expect(oldLog.length).toBe(0);
+      expect(Object.keys(oldById)).toHaveLength(0);
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "hello" });
+    });
+  });
+
+  describe("app wrappers over React Native's fetch", () => {
+    it.each([
+      {
+        through: "a wrapper that passes the Response through, as Sentry's does",
+        code: `fetch = function(u, init) { return rnFetch(u, init).then(function(r) { return r; }, function(e) { throw e; }); };`,
+      },
+      {
+        through: "a wrapper that awaits a token before it sends",
+        code: `fetch = async function(u, init) { var token = await tick('t1'); return rnFetch(u, { headers: { Authorization: 'Bearer ' + token } }); };`,
+      },
+      {
+        through: "a wrapper that rewrites the URL",
+        code: `fetch = function(path, init) { return rnFetch('https://api.test' + path, init); };`,
+        call: `fetch('/me')`,
+      },
+      {
+        through: "a wrapper that resolves parsed JSON",
+        code: `fetch = async function(u, init) { return (await rnFetch(u, init)).json(); };`,
+      },
+      {
+        through: "a wrapper that rebuilds the Response from its text",
+        code: `fetch = async function(u, init) { var r = await rnFetch(u, init); return new Response(await r.text(), r); };`,
+      },
+      {
+        through: "a wrapper that resolves its own Response class",
+        code: `${API_RESPONSE} fetch = async function(u, init) { return new ApiResponse(await rnFetch(u, init)); };`,
+      },
+      {
+        through: "React Native's fetch that a module captured before the install",
+        code: `var captured = fetch; fetch = function(u, init) { return captured(u, init); };`,
+        call: `captured('https://api.test/me')`,
+      },
+    ])(
+      "records one request made through $through",
+      async ({ code, call = `fetch('https://api.test/me')` }) => {
+        const rt = appWrapped(code);
+        const pending = rt.run(call) as Promise<unknown>;
+        await untilSent(rt, 1);
+        rt.last().respond(200, { "content-type": "application/json" }, '{"id":7}');
+        await pending;
+        await settle();
+
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          resourceType: "Fetch",
+          state: "finished",
+          request: { url: "https://api.test/me" },
+          responseBody: '{"id":7}',
+        });
+      }
+    );
+
+    const SHARED = `var inflight = {};
+      function shared(u, init) {
+        if (!inflight[u]) inflight[u] = rnFetch(u, init).finally(function() { delete inflight[u]; });
+        return inflight[u];
+      }`;
+
+    it.each([
+      { wrapper: "returns one promise to every caller", code: `${SHARED} fetch = shared;` },
+      {
+        wrapper: "gives every caller a clone",
+        code: `${SHARED} fetch = function(u, init) { return shared(u, init).then(function(r) { return r.clone(); }); };`,
+      },
+      {
+        wrapper: "shares it under an async auth layer",
+        code: `${SHARED} fetch = async function(u, init) { await tick(); return shared(u, init); };`,
+      },
+      {
+        wrapper: "gives every caller its own Response class",
+        code: `${SHARED} ${API_RESPONSE} fetch = function(u, init) { return shared(u, init).then(function(r) { return new ApiResponse(r.clone()); }); };`,
+      },
+    ])("records one request for three callers of a wrapper that $wrapper", async ({ code }) => {
+      const rt = appWrapped(code);
+      const pending = rt.run(
+        `Promise.all([fetch('https://api.test/feed'), fetch('https://api.test/feed'), fetch('https://api.test/feed')])`
+      ) as Promise<Array<{ status: number }>>;
+      await untilSent(rt, 1);
+      rt.last().respond(200, {}, "feed");
+      expect((await pending).map((r) => r.status)).toEqual([200, 200, 200]);
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "feed" });
+    });
+
+    it("records one request when a caller joins it after its XHR loaded", async () => {
+      const rt = appWrapped(`${SHARED} fetch = shared;`);
+      const first = rt.run(`fetch('https://api.test/feed')`) as Promise<unknown>;
+      rt.last().respond(200, {}, "feed");
+      // React Native's fetch resolves on the next timer turn: the request is still shared.
+      const second = rt.run(`fetch('https://api.test/feed')`) as Promise<unknown>;
+      expect(await second).toBe(await first);
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+    });
+
+    it("records a request a timeout gave up on before it was sent, once it is sent", async () => {
+      const rt = appWrapped(`fetch = function(u, init) {
+        var request = new Promise(function(resolve) { setTimeout(resolve, 10); }).then(function() { return rnFetch(u, init); });
+        var timeout = new Promise(function(_, reject) { setTimeout(function() { reject(new Error('timeout')); }, 0); });
+        return Promise.race([request, timeout]);
+      };`);
+      const pending = rt.run(`fetch('https://api.test/slow')`) as Promise<unknown>;
+      expect(await rejectionName(pending)).toBe("Error");
+      expectRecordPerRequest(rt, 0);
+      await untilSent(rt, 1);
+      rt.last().respond(200, {}, "late");
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "late" });
+    });
+
+    it("records both requests when a queue sends one inside the next call", async () => {
+      const rt = appWrapped(`var queued = null;
+        fetch = function(u, init) {
+          var previous = queued;
+          queued = null;
+          if (previous) previous();
+          return new Promise(function(resolve, reject) {
+            queued = function() { rnFetch(u, init).then(resolve, reject); };
+          });
+        };`);
+      const first = rt.run(`fetch('https://api.test/a')`) as Promise<unknown>;
+      expectRecordPerRequest(rt, 0);
+      const second = rt.run(`fetch('https://api.test/b')`) as Promise<unknown>;
+      rt.run(`fetch('https://api.test/c')`);
+      expectRecordPerRequest(rt, 2);
+      for (const xhr of rt.sends) xhr.respond(200, {}, "ok");
+      await Promise.all([first, second]);
+      await settle();
+
+      // c is still queued: it has sent nothing.
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => `${r.state} ${r.request.url}`)).toEqual([
+        "finished https://api.test/a",
+        "finished https://api.test/b",
+      ]);
+    });
+
+    it("records both requests of a wrapper that retries after a 500", async () => {
+      const rt = appWrapped(`fetch = async function(u, init) {
+        var r = await rnFetch(u, init);
+        return r.status >= 500 ? rnFetch(u, init) : r;
+      };`);
+      const pending = rt.run(`fetch('https://api.test/flaky')`) as Promise<{ status: number }>;
+      expectRecordPerRequest(rt, 1);
+      rt.last().respond(500, {}, "down");
+      await untilSent(rt, 2);
+      rt.last().respond(200, {}, "up");
+      expect((await pending).status).toBe(200);
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => `${r.response?.status} ${r.responseBody}`)).toEqual([
+        "500 down",
+        "200 up",
+      ]);
+    });
+
+    it.each([
+      { shape: "on its own stack", awaits: "" },
+      { shape: "after an await", awaits: "await tick();" },
+    ])(
+      "records one request of a wrapper that re-dispatches it through the global fetch $shape",
+      async ({ awaits }) => {
+        // `fetch` below is the global at call time: after the install, the interceptor's wrapper.
+        const rt = appWrapped(`fetch = async function(u, init) { ${awaits}
+          if (u.charAt(0) === '/') return fetch('https://api.test' + u, init);
+          return rnFetch(u, init);
+        };`);
+        const pending = rt.run(`fetch('/users')`) as Promise<unknown>;
+        await untilSent(rt, 1);
+        rt.last().respond(200, {}, "[]");
+        await pending;
+        await settle();
+
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]!.request.url).toBe("https://api.test/users");
+      }
+    );
+
+    it("records the fetch and the beacon XHR a wrapper sends on the same stack", async () => {
+      const rt = appWrapped(`fetch = function(u, init) {
+        var beacon = new XMLHttpRequest();
+        beacon.open('POST', 'https://log.test/event');
+        beacon.onloadend = function() {};
+        beacon.send('{"event":"fetch"}');
+        return rnFetch(u, init);
+      };`);
+      const pending = rt.run(`fetch('https://api.test/me')`) as Promise<unknown>;
+      expectRecordPerRequest(rt, 2);
+      for (const xhr of rt.sends) xhr.respond(204, {}, "");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => `${r.resourceType} ${r.state} ${r.request.url}`)).toEqual([
+        "XHR finished https://log.test/event",
+        "Fetch finished https://api.test/me",
+      ]);
+    });
+  });
+
+  describe("Expo's native fetch", () => {
+    const EXPO_57: RuntimeOptions = { expo: { sdk: 57 } };
+    const TEXT_BODY = '{"name":"Zoë 👋"}';
+    const NOT_UTF8 = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);
+    const NO_CALLS: ExpoCalls = {
+      text: 0,
+      arrayBuffer: 0,
+      startStreaming: 0,
+      cancelStreaming: 0,
+      cancel: 0,
+      body: 0,
+      clone: 0,
+      blob: 0,
+    };
+
+    /**
+     * The app fetches with expo/fetch and reads the response with `read` (`r` is the response),
+     * while the native side answers with `body`. Runs with the interceptor or without it, so a test
+     * can compare what the app got and which methods ran.
+     */
+    async function appReads(
+      read: string,
+      body: string | Uint8Array,
+      { install = true, options = EXPO_57 }: { install?: boolean; options?: RuntimeOptions } = {}
+    ) {
+      const rt = createRuntime(options);
+      if (install) rt.install();
+      const pending = rt.run(
+        `expoFetch('https://api.test/me').then(function(r) { return ${read}; })`
+      ) as Promise<unknown>;
+      for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+      rt.native[0]!.respond(200, { "Content-Type": "application/json" }, body);
+      const value = await pending;
+      await settle();
+      return { rt, value, calls: rt.expoCalls() };
+    }
+
+    it("records the global expo/fetch at start and leaves the global fetch as it is", async () => {
+      const rt = createRuntime(EXPO_GLOBAL);
+      const fetch = rt.run("fetch");
+      rt.install();
+      expect(rt.run("fetch")).toBe(fetch);
+
+      const pending = rt.run(
+        `fetch('https://api.test/me', { headers: { 'X-Id': '7' } }).then(function(r) { return r.json(); })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        resourceType: "Fetch",
+        state: "pending",
+        request: { method: "GET", url: "https://api.test/me", headers: { "x-id": "7" } },
+      });
+      rt.native[0]!.respond(200, { "Content-Type": "application/json" }, TEXT_BODY);
+      expect(await pending).toEqual({ name: "Zoë 👋" });
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        response: {
+          url: "https://api.test/me",
+          status: 200,
+          headers: { "content-type": "application/json" },
+          mimeType: "application/json",
+        },
+        responseBody: TEXT_BODY,
+        encodedDataLength: Buffer.byteLength(TEXT_BODY),
+      });
+      expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
+    });
+
+    it.each([
+      { read: "text()", code: "r.text()", value: TEXT_BODY },
+      { read: "json()", code: "r.json()", value: { name: "Zoë 👋" } },
+      {
+        read: "arrayBuffer()",
+        code: "r.arrayBuffer().then(function(b) { return b.byteLength; })",
+        value: Buffer.byteLength(TEXT_BODY),
+      },
+      {
+        read: "bytes()",
+        code: "r.bytes().then(function(b) { return b.byteLength; })",
+        value: Buffer.byteLength(TEXT_BODY),
+      },
+      {
+        read: "blob()",
+        code: "r.blob().then(function(b) { return b.size; })",
+        value: Buffer.byteLength(TEXT_BODY),
+      },
+      {
+        read: "a clone and itself",
+        code: "Promise.all([r.clone().text(), r.text()])",
+        value: [TEXT_BODY, TEXT_BODY],
+      },
+    ])(
+      "records the body the app reads with $read, and calls nothing of its own",
+      async ({ code, value }) => {
+        const without = await appReads(code, TEXT_BODY, { install: false });
+        const { rt, ...observed } = await appReads(code, TEXT_BODY);
+
+        expect(without.value).toEqual(value);
+        expect(observed).toEqual({ value, calls: without.calls });
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          response: { status: 200 },
+          responseBody: TEXT_BODY,
+          encodedDataLength: Buffer.byteLength(TEXT_BODY),
+        });
+        expect(rt.records()[0]!.bodyTruncated).toBeUndefined();
+      }
+    );
+
+    it.each([
+      { read: "arrayBuffer()", code: "r.arrayBuffer().then(function(b) { return b.byteLength; })" },
+      { read: "blob()", code: "r.blob().then(function(b) { return b.size; })" },
+    ])(
+      "records only the size of a body that is not UTF-8 when the app reads it with $read",
+      async ({ code }) => {
+        const { rt, value } = await appReads(code, NOT_UTF8);
+
+        expect(value).toBe(NOT_UTF8.byteLength);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          encodedDataLength: NOT_UTF8.byteLength,
+          bodyOmitted: true,
+        });
+        expect(rt.records()[0]!.responseBody).toBeUndefined();
+      }
+    );
+
+    it("keeps no bytes of a binary body the app reads with arrayBuffer()", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const pending = rt.run(
+        `expoFetch('https://img.test/a.png').then(function(r) { return r.arrayBuffer(); })`
+      ) as Promise<ArrayBuffer>;
+      for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+      // UTF-8 bytes, which a decode would show as text.
+      rt.native[0]!.respond(200, { "Content-Type": "image/png" }, "PNG");
+      expect((await pending).byteLength).toBe(3);
+      await settle();
+
+      const log = rt.context.__argent_network_log as Array<{ bodyBytes?: Uint8Array }>;
+      expect(log[0]!.bodyBytes).toBeUndefined();
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        encodedDataLength: 3,
+        bodyOmitted: true,
+      });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+    });
+
+    it("records no body and no size when the app never reads the body, and ends the record with the request", async () => {
+      const { rt, value, calls } = await appReads("r.status", TEXT_BODY);
+
+      expect(value).toBe(200);
+      expect(calls).toEqual(NO_CALLS);
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 200 } });
+      expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+      expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
+    });
+
+    it("records the request headers under lowercased names", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const pending = rt.run(
+        `expoFetch('https://api.test/me', { headers: [['Authorization', 'Bearer tok'], ['X-D', '4']] })`
+      ) as Promise<unknown>;
+      for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+      rt.native[0]!.respond(200, {}, "");
+      await pending;
+      await settle();
+
+      expect(rt.records()[0]!.request.headers).toEqual({
+        "authorization": "Bearer tok",
+        "x-d": "4",
+      });
+    });
+
+    /**
+     * The app gets a response with `status` and does not read its body, until the test runs `read`
+     * (`response` is the response) once the request ended. Runs with the interceptor or without it.
+     */
+    async function readsLater(
+      status: number,
+      body: string,
+      read: string,
+      { install = true, options = EXPO_57 }: { install?: boolean; options?: RuntimeOptions } = {}
+    ) {
+      const rt = createRuntime(options);
+      if (install) rt.install();
+      rt.run(
+        `var response; expoFetch('https://api.test/signup', { method: 'POST', body: '{}' }).then(function(r) { response = r; })`
+      );
+      for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+      rt.native[0]!.respond(status, { "Content-Type": "application/json" }, body);
+      await settle();
+      const usedBefore = rt.run("response.bodyUsed");
+      // The record before the app reads the body.
+      const recorded = install ? rt.records()[0] : undefined;
+      // Expo's response keeps no stream listeners once the request ended.
+      const listeners = rt.run(
+        `['didReceiveResponseData', 'didComplete', 'didFailWithError'].map(function(e) { return (response._listeners[e] || []).length; })`
+      );
+      const value = await (rt.run(read) as Promise<unknown>);
+      await settle();
+      return {
+        rt,
+        value,
+        recorded,
+        usedBefore,
+        usedAfter: rt.run("response.bodyUsed"),
+        listeners,
+        calls: rt.expoCalls(),
+      };
+    }
+
+    it.each([
+      { status: 422, read: "json()", code: "response.json()", value: { error: "email taken" } },
+      { status: 500, read: "text()", code: "response.text()", value: '{"error":"email taken"}' },
+      {
+        status: 404,
+        read: "arrayBuffer()",
+        code: "response.arrayBuffer().then(function(b) { return b.byteLength; })",
+        value: 23,
+      },
+      {
+        status: 503,
+        read: "its body stream",
+        code: "readStream(response)",
+        value: '{"error":"email taken"}',
+      },
+      {
+        status: 400,
+        read: "a clone",
+        code: "response.clone().text()",
+        value: '{"error":"email taken"}',
+      },
+    ])(
+      "records the body of a $status response the app does not read, and the app still reads it with $read",
+      async ({ status, code, value }) => {
+        const without = await readsLater(status, '{"error":"email taken"}', code, {
+          install: false,
+        });
+        const { rt, ...observed } = await readsLater(status, '{"error":"email taken"}', code);
+
+        expect(without.value).toEqual(value);
+        expect(observed.value).toEqual(value);
+        expect(observed.usedBefore).toBe(without.usedBefore);
+        expect(observed.usedAfter).toBe(without.usedAfter);
+        expect(observed.listeners).toEqual(without.listeners);
+        expect(observed.calls.clone).toBe(without.calls.clone);
+        expectRecordPerRequest(rt, 1);
+        expect(observed.recorded).toMatchObject({
+          state: "finished",
+          response: { status },
+          responseBody: '{"error":"email taken"}',
+          encodedDataLength: 23,
+        });
+      }
+    );
+
+    it.each([
+      {
+        read: "text()",
+        code: "response.text().then(function(t) { return Array.from(t).map(function(c) { return c.charCodeAt(0); }); })",
+      },
+      {
+        read: "json()",
+        code: "response.json().then(function(j) { return j; }, function(e) { return e.name; })",
+      },
+    ])(
+      "hands the app an unread error body with its byte order mark, as native $read does",
+      async ({ code }) => {
+        const body = "\ufeff{}";
+        const without = await readsLater(400, body, code, { install: false });
+        const { rt, value } = await readsLater(400, body, code);
+
+        expect(value).toEqual(without.value);
+        expect(rt.records()[0]!.encodedDataLength).toBe(5);
+      }
+    );
+
+    it("leaves the app a body stream it took before the end of an error response", async () => {
+      const read = `response.body.getReader().read().then(function(c) { return new TextDecoder().decode(c.value); })`;
+      const takeStream = async (install: boolean) => {
+        const rt = createRuntime(EXPO_57);
+        if (install) rt.install();
+        rt.run(
+          `var response, stream; expoFetch('https://api.test/down').then(function(r) { response = r; stream = r.body; })`
+        );
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(503, {}, "down");
+        await settle();
+        return {
+          rt,
+          value: await (rt.run(read.replace("response.body", "stream")) as Promise<string>),
+        };
+      };
+      const without = await takeStream(false);
+      const { rt, value } = await takeStream(true);
+
+      expect(without.value).toBe("down");
+      expect(value).toBe("down");
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "down" });
+    });
+
+    it("finishes an unread error response whose body did not complete, and holds it while the app reads it later", async () => {
+      // An iOS file:// URL that is missing gets a 404, then the error state; a drop gets the error
+      // state after a part of the body.
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      rt.run(`var response; expoFetch('file:///missing.json').then(function(r) { response = r; })`);
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(404, {});
+      await settle();
+      request.fail("The file does not exist.");
+      await settle();
+      await settle();
+      expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 404 } });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+
+      // Native text() waits for a body that never completes, with or without the interceptor.
+      rt.run(`var got = 'nothing'; response.text().then(function(t) { got = t; })`);
+      await settle();
+      expect(rt.run("got")).toBe("nothing");
+      expect(rt.records()[0]!.state).toBe("pending");
+    });
+
+    it("records a size of 0 for an error response with Content-Length 0 the app does not read, and reads nothing", async () => {
+      // On SDK 55 bodyUsed is native: a read of an empty body would turn it true.
+      const bodyUsed = async (install: boolean) => {
+        const rt = createRuntime({ polyfillFetch: true, expo: { sdk: 55 } });
+        if (install) rt.install();
+        rt.run(
+          `var response; expoFetch('https://api.test/me').then(function(r) { response = r; })`
+        );
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(401, { "Content-Length": "0" });
+        await settle();
+        return { rt, bodyUsed: rt.run("response.bodyUsed"), calls: rt.expoCalls() };
+      };
+      const without = await bodyUsed(false);
+      const { rt, ...observed } = await bodyUsed(true);
+
+      expect(observed).toEqual({ bodyUsed: without.bodyUsed, calls: NO_CALLS });
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "",
+        encodedDataLength: 0,
+      });
+    });
+
+    it("leaves an error body the app reads as soon as fetch resolves to native, when the request ended first", async () => {
+      // SDK 55 on iOS resolves fetch only once the request ended.
+      const options: RuntimeOptions = {
+        polyfillFetch: true,
+        expo: { sdk: 55, startsAtBodyEnd: true },
+      };
+      const reads = async (install: boolean) => {
+        const rt = createRuntime(options);
+        if (install) rt.install();
+        const text = rt.run(
+          `expoFetch('https://api.test/signup').then(function(r) { return r.text(); })`
+        ) as Promise<string>;
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(422, {}, "taken");
+        const value = await text;
+        await settle();
+        return { rt, value, calls: rt.expoCalls() };
+      };
+      const without = await reads(false);
+      const { rt, ...observed } = await reads(true);
+
+      expect(observed).toEqual({ value: "taken", calls: without.calls });
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "taken" });
+    });
+
+    it("records the body of an error response an SDK 55 app does not read, and the app still reads it", async () => {
+      const options: RuntimeOptions = { polyfillFetch: true, expo: { sdk: 55 } };
+      const without = await readsLater(422, "taken", "response.text()", {
+        install: false,
+        options,
+      });
+      const { value, recorded } = await readsLater(422, "taken", "response.text()", { options });
+
+      expect(without.value).toBe("taken");
+      expect(value).toBe("taken");
+      expect(recorded).toMatchObject({
+        state: "finished",
+        response: { status: 422 },
+        responseBody: "taken",
+        encodedDataLength: 5,
+      });
+    });
+
+    it("attaches a body the app reads after the request ended to its finished record", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      rt.run(`var response; expoFetch('https://api.test/me').then(function(r) { response = r; })`);
+      await untilSent(rt, 1);
+      rt.native[0]!.respond(200, {}, "later");
+      await settle();
+      expect(rt.records()[0]!.state).toBe("finished");
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+
+      expect(await (rt.run("response.text()") as Promise<string>)).toBe("later");
+      await settle();
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "later",
+        encodedDataLength: 5,
+      });
+    });
+
+    it.each([
+      {
+        arrives: "in chunks while the app streams it",
+        body: Buffer.from(TEXT_BODY),
+        opensAfterEnd: false,
+        responseBody: TEXT_BODY as string | undefined,
+      },
+      {
+        arrives: "in chunks while the app streams it, not UTF-8",
+        body: Buffer.from(NOT_UTF8),
+        opensAfterEnd: false,
+        responseBody: undefined,
+      },
+      {
+        arrives: "whole, as the app opens its stream after the request ended",
+        body: Buffer.from(TEXT_BODY),
+        opensAfterEnd: true,
+        responseBody: TEXT_BODY,
+      },
+    ])(
+      "records a body the app streams, $arrives, and calls nothing of its own",
+      async ({ body, opensAfterEnd, responseBody }) => {
+        const streams = async (install: boolean) => {
+          const rt = createRuntime(EXPO_57);
+          if (install) rt.install();
+          // The app opens the body stream once the test calls open().
+          const text =
+            rt.run(`var open, opened = new Promise(function(resolve) { open = resolve; });
+            expoFetch('https://api.test/me').then(function(r) { return opened.then(function() { return readStream(r); }); })`) as Promise<string>;
+          for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+          const request = rt.native[0]!;
+          request.head(200, { "Content-Type": "application/json" });
+          await settle();
+          if (!opensAfterEnd) {
+            rt.run("open()");
+            await untilNativeState(request, "bodyStreamingStarted");
+          }
+          // The first chunk ends inside a character.
+          request.chunk(body.subarray(0, 12));
+          request.chunk(body.subarray(12));
+          request.done();
+          await settle();
+          if (opensAfterEnd) rt.run("open()");
+          const value = await text;
+          await settle();
+          return { rt, value, calls: rt.expoCalls() };
+        };
+        const without = await streams(false);
+        const { rt, ...observed } = await streams(true);
+
+        expect(without.value).toBe(new TextDecoder().decode(body));
+        expect(observed).toEqual({ value: without.value, calls: without.calls });
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          response: { status: 200 },
+          encodedDataLength: body.length,
+        });
+        expect(rt.records()[0]!.responseBody).toBe(responseBody);
+      }
+    );
+
+    it("records a body the app streams cut at 1 MiB between characters, with the size of all of it", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const text = rt.run(
+        `expoFetch('https://api.test/big').then(function(r) { return readStream(r); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "text/plain; charset=utf-8" });
+      await untilNativeState(request, "bodyStreamingStarted");
+      // Characters of 3 bytes after 2: the cut at 1 MiB splits one, and so do chunk edges.
+      const body = Buffer.from("ab" + "你".repeat(BODY_CAP / 2));
+      for (let at = 0; at < body.length; at += 65536) request.chunk(body.subarray(at, at + 65536));
+      request.done();
+
+      expect(await text).toBe(body.toString());
+      await settle();
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "ab" + "你".repeat((BODY_CAP - 4) / 3),
+        bodyTruncated: true,
+        encodedDataLength: body.length,
+      });
+    });
+
+    it("keeps at most 1 MiB of a 5 MiB stream for the record", async () => {
+      const rt = createRuntime(EXPO_57);
+      const decoded = noteDecodes(rt);
+      rt.install();
+      const size = rt.run(
+        `expoFetch('https://api.test/feed').then(function(r) { return countStream(r); })`
+      ) as Promise<number>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "text/event-stream" });
+      await untilNativeState(request, "bodyStreamingStarted");
+      const chunk = Buffer.alloc(65536, "a");
+      for (let i = 0; i < 80; i++) {
+        request.chunk(chunk);
+        await settle();
+      }
+      request.done();
+
+      expect(await size).toBe(5 * BODY_CAP);
+      await settle();
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "a".repeat(BODY_CAP),
+        bodyTruncated: true,
+        encodedDataLength: 5 * BODY_CAP,
+      });
+      expect(decoded).toEqual([BODY_CAP + 3]);
+    });
+
+    it("decodes no body while the app sends and reads, only when the agent reads the record", async () => {
+      const rt = createRuntime(EXPO_57);
+      const decoded = noteDecodes(rt);
+      rt.install();
+      // Expo's own fetch encodes the string body, before the interceptor sees it.
+      const pending = rt.run(`Promise.all([
+        expoFetch('https://api.test/upload', { method: 'POST', body: '{"name":"Zoë"}' }).then(function(r) { return r.arrayBuffer(); }),
+        expoFetch('https://api.test/feed').then(function(r) { return readStream(r); })
+      ])`) as Promise<[ArrayBuffer, string]>;
+      // Without reading the records, which decodes them.
+      for (let i = 0; i < 20 && rt.native.length < 2; i++) await settle();
+      const [upload, feed] = rt.native;
+      upload!.respond(201, {}, '{"id":7}');
+      feed!.head(200, {});
+      await untilNativeState(feed!, "bodyStreamingStarted");
+      feed!.chunk("data: 1\n\n");
+      feed!.done();
+      const [buffer, text] = await pending;
+      await settle();
+      const before = decoded.length;
+
+      expect(buffer.byteLength).toBe(8);
+      expect(text).toBe("data: 1\n\n");
+      expect(before).toBe(0);
+      expect(rt.records().map((r) => [r.request.postData, r.responseBody])).toEqual([
+        ['{"name":"Zoë"}', '{"id":7}'],
+        [undefined, "data: 1\n\n"],
+      ]);
+      expect(decoded.length).toBe(3);
+      // A record is decoded once.
+      rt.records();
+      expect(decoded.length).toBe(3);
+    });
+
+    it.each(["text", "json", "arrayBuffer"])(
+      "hands the app the value and the error that %s() gives",
+      async (method) => {
+        const rt = createRuntime(EXPO_57);
+        // What FetchResponse's own method settles with, on each call.
+        rt.run(`var own = [];
+          var proto = __expoNative.FetchResponse.prototype, original = proto.${method};
+          proto.${method} = function() { var p = original.apply(this, arguments); own.push(outcome(p)); return p; };`);
+        rt.install();
+        // The second read fails: a body is read once.
+        const pending = rt.run(
+          `expoFetch('https://api.test/me').then(function(r) { return Promise.all([outcome(r.${method}()), outcome(r.${method}())]); })`
+        ) as Promise<Array<{ value?: unknown; error?: { name: string } }>>;
+        await untilSent(rt, 1);
+        rt.native[0]!.respond(200, {}, '{"id":7}');
+        const [first, second] = await pending;
+        const [ownFirst, ownSecond] = await (rt.run("Promise.all(own)") as Promise<
+          Array<{ value?: unknown; error?: { name: string } }>
+        >);
+        await settle();
+
+        expect(first!.value).toBeDefined();
+        expect(first!.value).toBe(ownFirst!.value);
+        expect(second!.error!.name).toBe("TypeError");
+        expect(second!.error).toBe(ownSecond!.error);
+        expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: '{"id":7}' });
+      }
+    );
+
+    it("lets the app's cancel of its body stream reach Expo's native side", async () => {
+      const cancelAfterFirstChunk = async (install: boolean) => {
+        const rt = createRuntime(EXPO_57);
+        if (install) rt.install();
+        // Native sends what it buffered as the first chunk, empty here.
+        const got = rt.run(`expoFetch('https://api.test/sse').then(function(r) {
+          var reader = r.body.getReader();
+          function firstData() {
+            return reader.read().then(function(chunk) { return chunk.value.byteLength ? chunk : firstData(); });
+          }
+          return firstData().then(function(chunk) {
+            return reader.cancel('enough').then(function() { return new TextDecoder().decode(chunk.value); });
+          });
+        })`) as Promise<string>;
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        const request = rt.native[0]!;
+        request.head(200, { "Content-Type": "text/event-stream" });
+        await untilNativeState(request, "bodyStreamingStarted");
+        request.chunk("hello ");
+        expect(await got).toBe("hello ");
+        await untilNativeState(request, "bodyStreamingCanceled");
+        // Native drops what arrives after the cancel.
+        request.chunk("world");
+        request.done();
+        await settle();
+        return { rt, calls: rt.expoCalls(), log: rt.expoLog() };
+      };
+      const without = await cancelAfterFirstChunk(false);
+      const { rt, ...observed } = await cancelAfterFirstChunk(true);
+
+      expect(without.calls.cancelStreaming).toBe(1);
+      expect(observed).toEqual({ calls: without.calls, log: without.log });
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "hello ",
+        encodedDataLength: 6,
+      });
+    });
+
+    it("records a failure while the app streams the body as failed, with its response", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const text = rt.run(
+        `expoFetch('https://api.test/sse').then(function(r) { return readStream(r); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "text/event-stream" });
+      await untilNativeState(request, "bodyStreamingStarted");
+      request.chunk("data: 1\n\n");
+      request.fail("The network connection was lost.");
+
+      expect(await rejectionName(text)).toBe("Error");
+      await settle();
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "The network connection was lost.",
+        response: { status: 200, mimeType: "text/event-stream" },
+      });
+      expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
+    });
+
+    it("keeps a request pending when the connection drops while the app reads the body with text(), as iOS never settles that read", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      rt.run(
+        `var got = 'nothing'; expoFetch('https://api.test/big').then(function(r) {
+          return r.text().then(function(text) { got = text; }, function(error) { got = error; });
+        })`
+      );
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "application/json" });
+      await settle();
+      request.chunk('{"partial":');
+      // Not streaming: no didFailWithError, only the end of the request.
+      request.fail("The network connection was lost.");
+      await settle();
+      await settle();
+
+      expect(rt.expoLog()).toEqual(["start resolved", "readyForJSFinalization"]);
+      expect(rt.run("got")).toBe("nothing");
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({ state: "pending", response: { status: 200 } });
+      expect(rt.records()[0]!.errorText).toBeUndefined();
+      expect(rt.records()[0]!.durationMs).toBeUndefined();
+    });
+
+    it.each([
+      { read: "text()", code: "response.text()" },
+      { read: "its body stream", code: "readStream(response)" },
+    ])(
+      "puts a record back to pending when the app starts to read the body with $read after the connection dropped",
+      async ({ code }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.install();
+        rt.run(
+          `var response; expoFetch('https://api.test/big').then(function(r) { response = r; })`
+        );
+        await untilSent(rt, 1);
+        const request = rt.native[0]!;
+        request.head(200, { "Content-Type": "application/json" });
+        await settle();
+        request.chunk('{"partial":');
+        request.fail("The network connection was lost.");
+        await settle();
+        expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 200 } });
+
+        // The app reads the body only now, after other work: the read never settles.
+        rt.run(
+          `var got = 'nothing'; ${code}.then(function(v) { got = v; }, function(e) { got = e; })`
+        );
+        await settle();
+        await settle();
+        expect(rt.run("got")).toBe("nothing");
+        expect(rt.records()[0]).toMatchObject({ state: "pending", response: { status: 200 } });
+      }
+    );
+
+    it("finishes a streamed body whose startStreaming() result reaches JS after the end of the request, as SDK 55 can on Android", async () => {
+      const rt = createRuntime({ polyfillFetch: true, expo: { sdk: 55 } });
+      // Native answers the call on one thread while another ends the body: the answer comes last.
+      rt.run(`var proto = expo.modules.ExpoFetchModule.NativeResponse.prototype, start = proto.startStreaming;
+        proto.startStreaming = function() {
+          return start.apply(this, arguments).then(function(data) {
+            return new Promise(function(resolve) { setTimeout(function() { resolve(data); }, 20); });
+          });
+        };`);
+      rt.install();
+      const text = rt.run(
+        `expoFetch('https://api.test/items').then(function(r) { return readStream(r); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, {});
+      await untilNativeState(request, "bodyStreamingStarted");
+      request.chunk('{"items":[1,2,3]}');
+      request.done();
+
+      expect(await text).toBe('{"items":[1,2,3]}');
+      await new Promise((r) => setTimeout(r, 40));
+      await settle();
+      expect(rt.expoLog()).toEqual(["start resolved", "didComplete", "readyForJSFinalization"]);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: '{"items":[1,2,3]}',
+      });
+    });
+
+    it("finishes a record once a text() read that was in flight at the end of the request settles", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const text = rt.run(
+        `expoFetch('https://api.test/me').then(function(r) { return r.text(); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, {});
+      await settle();
+      request.chunk("late");
+      request.done();
+
+      expect(await text).toBe("late");
+      await settle();
+      // JS got the end of the request first, then the result of the read.
+      expect(rt.expoLog()).toEqual(["start resolved", "readyForJSFinalization"]);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: "late",
+        encodedDataLength: 4,
+      });
+    });
+
+    it.each([
+      {
+        order: "the end of the request before start rejects, as a device does",
+        settleFirst: false,
+        log: ["readyForJSFinalization", "start rejected"],
+      },
+      {
+        order: "start's rejection first",
+        settleFirst: true,
+        log: ["start rejected", "readyForJSFinalization"],
+      },
+    ])(
+      "records a request that fails before its response as failed, when JS gets $order",
+      async ({ settleFirst, log }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.install();
+        const pending = rt.run(`expoFetch('https://nowhere.test/')`) as Promise<unknown>;
+        await untilSent(rt, 1);
+        rt.native[0]!.fail("A server with the specified hostname could not be found.", settleFirst);
+
+        await expect(pending).rejects.toThrow(
+          "fetch failed: A server with the specified hostname could not be found."
+        );
+        await settle();
+        expect(rt.expoLog()).toEqual(log);
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "failed",
+          errorText: "A server with the specified hostname could not be found.",
+        });
+        expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
+        expect(rt.records()[0]!.response).toBeUndefined();
+      }
+    );
+
+    it.each([
+      { order: "start resolves before the request ends", endsFirst: false },
+      { order: "the request ends before start resolves", endsFirst: true },
+    ])(
+      "finishes a record with the time of the end of the request when $order",
+      async ({ endsFirst }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.run("var clock = 1000; Date.now = function() { return clock; };");
+        rt.install();
+        const status = rt.run(
+          `expoFetch('https://api.test/me').then(function(r) { return r.status; })`
+        ) as Promise<number>;
+        await untilSent(rt, 1);
+        const request = rt.native[0]!;
+        // JS gets the end of the request at 1250, and start resolves at 1000 or 1900.
+        if (endsFirst) {
+          rt.run("clock = 1250");
+          // Runs after the interceptor's listener, which the request added when it started.
+          request.response.addListener("readyForJSFinalization", () => rt.run("clock = 1900"));
+          request.head(200, {});
+          request.done();
+        } else {
+          request.head(200, {});
+          expect(await status).toBe(200);
+          rt.run("clock = 1250");
+          request.done();
+        }
+
+        expect(await status).toBe(200);
+        await settle();
+        expect(rt.expoLog()).toEqual(
+          endsFirst
+            ? ["readyForJSFinalization", "start resolved"]
+            : ["start resolved", "readyForJSFinalization"]
+        );
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          response: { status: 200 },
+          durationMs: 250,
+        });
+      }
+    );
+
+    it("records a request the app aborts before its response as aborted, without a response", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const pending = rt.run(
+        `var controller = new AbortController(); expoFetch('https://api.test/slow', { signal: controller.signal })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      rt.run("controller.abort()");
+
+      await expect(pending).rejects.toThrow("fetch failed: Fetch request has been canceled");
+      await settle();
+      expectRecordPerRequest(rt, 1);
+      expect(rt.native[0]!.cancelled).toBe(true);
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText: "aborted" });
+      expect(rt.records()[0]!.response).toBeUndefined();
+    });
+
+    it("records a request the app aborts while it streams the body as aborted, with its response", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const text = rt.run(
+        `var controller = new AbortController();
+        expoFetch('https://api.test/sse', { signal: controller.signal }).then(function(r) { return readStream(r); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "text/event-stream" });
+      await untilNativeState(request, "bodyStreamingStarted");
+      request.chunk("data: 1\n\n");
+      await settle();
+      expect(rt.records()[0]).toMatchObject({ state: "pending", response: { status: 200 } });
+      rt.run("controller.abort()");
+
+      expect(await rejectionName(text)).toBe("AbortError");
+      await settle();
+      expectRecordPerRequest(rt, 1);
+      expect(request.cancelled).toBe(true);
+      expect(rt.records()[0]).toMatchObject({
+        state: "failed",
+        errorText: "aborted",
+        response: { status: 200, mimeType: "text/event-stream" },
+      });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+    });
+
+    it.each<{ sdk: string; options: RuntimeOptions }>([
+      { sdk: "SDK 57", options: EXPO_57 },
+      { sdk: "SDK 55 on iOS", options: { expo: { sdk: 55, startsAtBodyEnd: true } } },
+    ])(
+      "keeps a finished request finished when the app aborts it afterwards ($sdk)",
+      async ({ options }) => {
+        const rt = createRuntime(options);
+        rt.install();
+        const text = rt.run(
+          `var controller = new AbortController();
+        expoFetch('https://api.test/me', { signal: controller.signal }).then(function(r) { return r.text(); })`
+        ) as Promise<string>;
+        await untilSent(rt, 1);
+        rt.native[0]!.respond(200, {}, "ok");
+        expect(await text).toBe("ok");
+        await settle();
+        expect(rt.records()[0]!.state).toBe("finished");
+
+        // Expo dropped its abort listener when the request ended: nothing is cancelled.
+        rt.run("controller.abort()");
+        await settle();
+        expect(rt.native[0]!.cancelled).toBeUndefined();
+        // Nor does a cancel that reaches the native request anyway change the record.
+        await rt.native[0]!.cancel();
+        await settle();
+
+        expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "ok" });
+        expect(rt.records()[0]!.errorText).toBeUndefined();
+      }
+    );
+
+    it.each<{ sdk: string; options: RuntimeOptions }>([
+      { sdk: "SDK 57", options: EXPO_57 },
+      { sdk: "SDK 55", options: { polyfillFetch: true, expo: { sdk: 55 } } },
+    ])(
+      "keeps a request finished when the app aborts it once it streamed the body to the end ($sdk)",
+      async ({ options }) => {
+        const rt = createRuntime(options);
+        rt.install();
+        // urql and graphql-sse abort as cleanup, before JS gets the end of the request.
+        const text = rt.run(
+          `var controller = new AbortController();
+          expoFetch('https://api.test/stream', { signal: controller.signal }).then(function(r) {
+            return readStream(r).then(function(text) { controller.abort(); return text; });
+          })`
+        ) as Promise<string>;
+        await untilSent(rt, 1);
+        const request = rt.native[0]!;
+        request.head(200, { "Content-Type": "text/plain" });
+        await untilNativeState(request, "bodyStreamingStarted");
+        request.chunk("start ");
+        request.chunk("end");
+        request.done();
+
+        expect(await text).toBe("start end");
+        await settle();
+        expect(request.cancelled).toBe(true);
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          response: { status: 200 },
+          responseBody: "start end",
+          encodedDataLength: 9,
+        });
+        expect(rt.records()[0]!.errorText).toBeUndefined();
+      }
+    );
+
+    it.each([
+      { read: "arrayBuffer()", code: "r.arrayBuffer().then(function(b) { return b.byteLength; })" },
+      { read: "blob()", code: "r.blob().then(function(b) { return b.size; })" },
+    ])(
+      "keeps a request finished when the app aborts it once $read resolved, before JS got the end of the request",
+      async ({ code }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.install();
+        const size = rt.run(
+          `var controller = new AbortController();
+          expoFetch('https://api.test/file', { signal: controller.signal }).then(function(r) {
+            return ${code}.then(function(value) { controller.abort(); return value; });
+          })`
+        ) as Promise<number>;
+        await untilSent(rt, 1);
+        const request = rt.native[0]!;
+        request.head(200, { "Content-Type": "application/octet-stream" });
+        await settle();
+        request.chunk("12345");
+        request.response._set("bodyCompleted");
+
+        expect(await size).toBe(5);
+        await settle();
+        expect(request.cancelled).toBe(true);
+        expect(rt.records()[0]).toMatchObject({ state: "finished", encodedDataLength: 5 });
+        expect(rt.records()[0]!.errorText).toBeUndefined();
+      }
+    );
+
+    it("keeps a request finished when the app aborts it once json() resolved, before JS got the end of the request", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.install();
+      const json = rt.run(
+        `var controller = new AbortController();
+        expoFetch('https://api.test/me', { signal: controller.signal }).then(function(r) {
+          return r.json().then(function(value) { controller.abort(); return value; });
+        })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      request.head(200, { "Content-Type": "application/json" });
+      await settle();
+      // On iOS the result of a body read can reach JS before the end of the request: the body
+      // completes here, and the end of the request does not follow.
+      request.chunk('{"id":7}');
+      request.response._set("bodyCompleted");
+
+      expect(await json).toEqual({ id: 7 });
+      await settle();
+      expect(request.cancelled).toBe(true);
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        response: { status: 200 },
+        responseBody: '{"id":7}',
+        encodedDataLength: 8,
+      });
+      expect(rt.records()[0]!.errorText).toBeUndefined();
+    });
+
+    it.each([
+      { read: "text()", code: "r.text()", value: TEXT_BODY },
+      { read: "json()", code: "r.json()", value: { name: "Zoë 👋" } },
+      {
+        read: "arrayBuffer()",
+        code: "r.arrayBuffer().then(function(b) { return b.byteLength; })",
+        value: Buffer.byteLength(TEXT_BODY),
+      },
+    ])(
+      "records the body an SDK 55 app reads with $read, where a response cannot clone",
+      async ({ code, value }) => {
+        // SDK 55: expo/fetch is opt-in, and the global fetch stays React Native's.
+        const options: RuntimeOptions = { polyfillFetch: true, expo: { sdk: 55 } };
+        const without = await appReads(code, TEXT_BODY, { install: false, options });
+        const { rt, ...observed } = await appReads(code, TEXT_BODY, { options });
+
+        expect(without.value).toEqual(value);
+        expect(observed).toEqual({ value, calls: without.calls });
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          responseBody: TEXT_BODY,
+          encodedDataLength: Buffer.byteLength(TEXT_BODY),
+        });
+      }
+    );
+
+    it("records the whole body an SDK 55 app on iOS streams, where fetch resolves after the request ended", async () => {
+      const rt = createRuntime({ polyfillFetch: true, expo: { sdk: 55, startsAtBodyEnd: true } });
+      rt.install();
+      const text = rt.run(
+        `expoFetch('https://api.test/me').then(function(r) { return readStream(r); })`
+      ) as Promise<string>;
+      await untilSent(rt, 1);
+      const request = rt.native[0]!;
+      const body = Buffer.from(TEXT_BODY);
+      request.head(200, { "Content-Type": "application/json" });
+      request.chunk(body.subarray(0, 12));
+      request.chunk(body.subarray(12));
+      request.done();
+
+      // The app opens its stream once fetch resolves: startStreaming hands it the whole body.
+      expect(await text).toBe(TEXT_BODY);
+      await settle();
+      expect(rt.expoLog()).toEqual(["readyForJSFinalization", "start resolved"]);
+      expect(rt.expoCalls()).toMatchObject({ startStreaming: 1, text: 0, arrayBuffer: 0 });
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        response: { status: 200, mimeType: "application/json" },
+        responseBody: TEXT_BODY,
+        encodedDataLength: body.length,
+      });
+    });
+
+    it.each([
+      {
+        reference: "expo/fetch imported while the global fetch is React Native's",
+        options: { polyfillFetch: true, expo: { sdk: 57 } } as RuntimeOptions,
+        capture: "expoFetch",
+      },
+      {
+        reference: "the global expo/fetch captured before the install",
+        options: EXPO_GLOBAL,
+        capture: "fetch",
+      },
+    ])("records a call of $reference", async ({ options, capture }) => {
+      const rt = createRuntime(options);
+      rt.run(`var captured = ${capture};`);
+      rt.install();
+      const pending = rt.run(
+        `captured('https://api.test/me').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      rt.native[0]!.respond(200, {}, "ok");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        resourceType: "Fetch",
+        state: "finished",
+        responseBody: "ok",
+      });
+    });
+
+    it("records one request for three callers of a wrapper that shares one promise", async () => {
+      const rt = appWrapped(
+        `var inner = fetch; var inflight = null;
+        fetch = function(u, init) {
+          if (!inflight) inflight = inner(u, init).finally(function() { inflight = null; });
+          return inflight;
+        };`,
+        EXPO_GLOBAL
+      );
+      const pending = rt.run(
+        `Promise.all([fetch('https://api.test/feed'), fetch('https://api.test/feed'), fetch('https://api.test/feed')])`
+      ) as Promise<unknown[]>;
+      await untilSent(rt, 1);
+      rt.native[0]!.respond(200, {}, "feed");
+      expect(new Set(await pending).size).toBe(1);
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", response: { status: 200 } });
+    });
+
+    it("records both requests of a wrapper that retries a failure through the fetch it captured", async () => {
+      const rt = appWrapped(
+        `var inner = fetch;
+        fetch = function(u, init) { return inner(u, init).catch(function() { return inner(u, init); }); };`,
+        EXPO_GLOBAL
+      );
+      const pending = rt.run(
+        `fetch('https://api.test/flaky').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      rt.native[0]!.fail("offline");
+      await untilSent(rt, 2);
+      rt.native[1]!.respond(200, {}, "ok");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => `${r.state} ${r.errorText ?? r.responseBody}`)).toEqual([
+        "failed offline",
+        "finished ok",
+      ]);
+    });
+
+    it("records both requests a wrapper aborts with one shared reason", async () => {
+      const rt = appWrapped(
+        `var inner = fetch; var session = new AbortController();
+        fetch = function(u, init) {
+          return inner(u, Object.assign({}, init, { signal: session.signal })).catch(function(e) {
+            throw session.signal.aborted ? session.signal.reason : e;
+          });
+        };`,
+        EXPO_GLOBAL
+      );
+      const pending = rt.run(
+        `Promise.allSettled([fetch('https://api.test/a'), fetch('https://api.test/b')])`
+      ) as Promise<Array<{ reason: unknown }>>;
+      await untilSent(rt, 2);
+      rt.run(`session.abort(new Error('signed out'))`);
+      const [a, b] = await pending;
+      expect(a!.reason).toBe(b!.reason);
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(rt.native.map((request) => request.cancelled)).toEqual([true, true]);
+      expect(rt.records().map((r) => `${r.state} ${r.errorText}`)).toEqual([
+        "failed aborted",
+        "failed aborted",
+      ]);
+    });
+
+    it.each([
+      {
+        resolves: "parsed JSON",
+        code: `fetch = async function(u, init) { return (await inner(u, init)).json(); };`,
+      },
+      {
+        resolves: "its own Response class",
+        code: `${API_RESPONSE} fetch = async function(u, init) { return new ApiResponse(await inner(u, init)); };`,
+      },
+    ])("records one request through a wrapper that resolves $resolves", async ({ code }) => {
+      const rt = appWrapped(`var inner = fetch; ${code}`, EXPO_GLOBAL);
+      const pending = rt.run(
+        `fetch('https://api.test/me').then(function(r) { return typeof r.text === 'function' ? r.text() : r; })`
+      ) as Promise<unknown>;
+      await untilSent(rt, 1);
+      rt.native[0]!.respond(200, { "Content-Type": "application/json" }, '{"id":7}');
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: '{"id":7}' });
+    });
+
+    it("records each request of a wrapper that sends some over React Native's fetch and some over Expo's", async () => {
+      const rt = appWrapped(
+        `fetch = function(u, init) { return u.indexOf('/stream/') !== -1 ? expoFetch(u, init) : rnFetch(u, init); };`,
+        EXPO_GLOBAL
+      );
+      const pending = rt.run(
+        `Promise.all(['/stream/1', '/users', '/stream/2', '/me'].map(function(path) {
+          return fetch('https://api.test' + path).then(function(r) { return r.text(); });
+        }))`
+      ) as Promise<unknown>;
+      await untilSent(rt, 4);
+      expect(rt.sends).toHaveLength(2);
+      for (const xhr of rt.sends) xhr.respond(200, {}, "xhr");
+      for (const request of rt.native) request.respond(200, {}, "native");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 4);
+      expect(
+        rt
+          .records()
+          .map((r) => `${r.resourceType} ${r.state} ${r.request.url} ${r.responseBody}`)
+          .sort()
+      ).toEqual([
+        "Fetch finished https://api.test/me xhr",
+        "Fetch finished https://api.test/stream/1 native",
+        "Fetch finished https://api.test/stream/2 native",
+        "Fetch finished https://api.test/users xhr",
+      ]);
+    });
+
+    it.each([
+      {
+        shows: "UTF-8 bytes as their text",
+        body: `'{"name":"Zoë 👋"}'`,
+        postData: '{"name":"Zoë 👋"}',
+        truncated: undefined,
+      },
+      {
+        shows: "bytes that are not UTF-8 as their size",
+        body: "new Uint8Array([0xff, 0xfe, 0x00, 0x01])",
+        postData: "[binary 4 bytes]",
+        truncated: undefined,
+      },
+      {
+        // Characters of 3 bytes after 2: the cut at 1 MiB splits one, 2 bytes earlier it does not.
+        shows: "the first 1 MiB of a longer body, cut between characters",
+        body: `'ab' + '你'.repeat(${BODY_CAP / 2})`,
+        postData: "ab" + "你".repeat((BODY_CAP - 4) / 3),
+        truncated: true,
+      },
+    ])(
+      "shows $shows in an Expo request body",
+      async ({ body, postData, truncated }) => {
+        const rt = createRuntime(EXPO_57);
+        rt.install();
+        rt.run(
+          `var sent = ${body}; expoFetch('https://api.test/upload', { method: 'POST', body: sent })`
+        );
+        await untilSent(rt, 1);
+        expect(rt.records()[0]!.request.postData).toBe(postData);
+        expect(rt.records()[0]!.request.postDataTruncated).toBe(truncated);
+        // The request goes out as the app sent it.
+        expect(Buffer.from(rt.native[0]!.body!)).toEqual(
+          Buffer.from(
+            rt.run(`typeof sent === 'string' ? new TextEncoder().encode(sent) : sent`) as Uint8Array
+          )
+        );
+      },
+      20_000
+    );
+
+    it("passes a native request constructed before the install through, unrecorded", async () => {
+      const rt = createRuntime(EXPO_57);
+      rt.run(`var ExpoFetchModule = expo.modules.ExpoFetchModule;
+        var early = new ExpoFetchModule.NativeRequest(new ExpoFetchModule.NativeResponse());`);
+      rt.install();
+      const started = rt.run(
+        `early.start('https://api.test/early', { method: 'GET', headers: [] }, null)`
+      ) as Promise<unknown>;
+      rt.native[0]!.respond(200, {}, "ok");
+      await started;
+      rt.run("early.cancel()");
+      await settle();
+
+      // The interceptor never saw the Response it fills.
+      expect(rt.records()).toHaveLength(0);
+      expect(rt.expoCalls()).toEqual({ ...NO_CALLS, cancel: 1 });
+    });
+
+    it("keeps the app working when Expo's module cannot be patched", async () => {
+      const rt = createRuntime(EXPO_GLOBAL);
+      rt.run("Object.freeze(expo.modules.ExpoFetchModule)");
+      expect(rt.install()).toEqual({ installed: true });
+      const pending = rt.run(
+        `fetch('https://api.test/me').then(function(r) { return r.text(); })`
+      ) as Promise<string>;
+      await settle();
+      rt.native[0]!.respond(200, { "Content-Type": "text/plain" }, "ok");
+
+      expect(await pending).toBe("ok");
+      expect(rt.expoCalls()).toEqual({ ...NO_CALLS, text: 1 });
+      expect(rt.records()).toHaveLength(0);
+    });
+  });
+
+  describe("a fetch library over React Native's network module", () => {
+    /**
+     * react-native-fetch-api (LIB_FETCH) in a React Native runtime. With `installed`, it is the
+     * global fetch from startup, as react-native-polyfill-globals sets it; else `__library.fetch`.
+     */
+    function libRuntime(options: RuntimeOptions & { installed?: boolean } = {}) {
+      const { installed = true, ...runtimeOptions } = options;
+      const rt = createRuntime({ polyfillFetch: true, ...runtimeOptions });
+      Object.assign(rt.context, {
+        ReadableStream,
+        TextEncoder,
+        TextDecoder,
+        __base64Bytes: (base64: string) => new Uint8Array(Buffer.from(base64, "base64")),
+        __blobManager: {
+          createFromOptions: (data: { blobId: string; type?: string }) => {
+            const blob = new FakeBlob([nativeBlobs.get(data.blobId)!], { type: data.type });
+            // The only reference: closing it frees the native blob.
+            blob.close = () => {
+              blob.closed = true;
+              nativeBlobs.delete(data.blobId);
+            };
+            return blob;
+          },
+        },
+      });
+      rt.run(LIB_FETCH);
+      if (installed) rt.run("__installLibrary()");
+      return rt;
+    }
+
+    /** Waits until the library has sent `count` requests through the module. */
+    async function untilLibrarySent(rt: Runtime, count: number): Promise<NetworkRequest[]> {
+      for (let i = 0; i < 20 && rt.network.library().length < count; i++) await settle();
+      expect(rt.network.library()).toHaveLength(count);
+      // The id comes back a native hop later on iOS.
+      await settle();
+      return rt.network.library();
+    }
+
+    it("records a call as the request it sends, with the headers the library adds, and its body", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/signup', { method: 'post', headers: { 'X-Id': '1' }, body: '{"email":"a@b.c"}' })
+          .then(function(r) { return r.text().then(function(text) { return [r.status, text]; }); })`
+      ) as Promise<unknown>;
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({ state: "pending", resourceType: "Fetch" });
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(
+        request!,
+        422,
+        { "Content-Type": "application/json", "X-Trace": "t1" },
+        '{"error":"email taken"}',
+        "https://api.test/signup?v=2"
+      );
+
+      expect(await pending).toEqual([422, '{"error":"email taken"}']);
+      await settle();
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        resourceType: "Fetch",
+        state: "finished",
+        request: {
+          method: "POST",
+          url: "https://api.test/signup",
+          // The library adds a content-type for a text body.
+          headers: { "x-id": "1", "content-type": "text/plain;charset=UTF-8" },
+          postData: '{"email":"a@b.c"}',
+        },
+        response: {
+          url: "https://api.test/signup?v=2",
+          status: 422,
+          headers: { "content-type": "application/json", "x-trace": "t1" },
+          mimeType: "application/json",
+        },
+        responseBody: '{"error":"email taken"}',
+        encodedDataLength: 23,
+      });
+      expect(rt.records()[0]!.durationMs).toEqual(expect.any(Number));
+    });
+
+    it.each(["ios", "android"] as const)(
+      "records each request once and an app XHR once, when the module hands back the id as on %s",
+      async (networkPlatform) => {
+        const rt = libRuntime({ networkPlatform });
+        rt.install();
+        const all = rt.run(
+          `Promise.all([fetch('https://api.test/a'), fetch('https://api.test/b')])`
+        ) as Promise<unknown>;
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/c'); x.send();`);
+        const requests = await untilLibrarySent(rt, 2);
+        for (const request of requests) rt.network.respond(request, 200, {}, "ok");
+        rt.sends[0]!.respond(200, {}, "xhr");
+        await all;
+        await settle();
+
+        expectRecordPerRequest(rt, 3);
+        expect(rt.records().map((r) => `${r.resourceType} ${r.request.url} ${r.state}`)).toEqual([
+          "Fetch https://api.test/a finished",
+          "Fetch https://api.test/b finished",
+          "XHR https://api.test/c finished",
+        ]);
+      }
+    );
+
+    it("records the requests of a library installed after capture started, before the next injection", async () => {
+      // A route loaded later runs react-native-polyfill-globals.
+      const rt = libRuntime({ installed: false });
+      rt.install();
+      rt.run("__installLibrary()");
+      expect(rt.run("fetch === __library.fetch")).toBe(true);
+      const pending = rt.run(
+        `fetch('https://api.test/late').then(function(r) { return r.text(); })`
+      ) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, { "content-type": "text/plain" }, "late body");
+      expect(await pending).toBe("late body");
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        request: { url: "https://api.test/late" },
+        responseBody: "late body",
+      });
+      // A later injection changes nothing.
+      expect(rt.install()).toEqual({ installed: false, reason: "already installed" });
+      expect(rt.records()).toHaveLength(1);
+    });
+
+    it("records a library call and an app XHR with the same method, URL and body sent at the same time", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/graphql', { method: 'POST', body: '{"query":"q"}' })`
+      ) as Promise<unknown>;
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/graphql'); x.send('{"query":"q"}');`
+      );
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, {}, "lib");
+      rt.sends[0]!.respond(200, {}, "xhr");
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => `${r.resourceType} ${r.responseBody}`)).toEqual([
+        "Fetch lib",
+        "XHR xhr",
+      ]);
+    });
+
+    it("records both of two calls with the same method, URL and body at the same time", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const all = rt.run(
+        `Promise.all([0, 1].map(function() { return fetch('https://api.test/track', { method: 'POST', body: '{"e":"view"}' }); }))`
+      ) as Promise<unknown>;
+      const requests = await untilLibrarySent(rt, 2);
+      for (const request of requests) rt.network.respond(request, 204);
+      await all;
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(rt.records().map((r) => r.response?.status)).toEqual([204, 204]);
+    });
+
+    it("records each request of an app wrapper that retries on 401 with a new token, with its own URL", async () => {
+      const rt = libRuntime();
+      rt.run(`var libFetch = fetch, token = 'old';
+        fetch = function(u, init) {
+          var send = function() { return libFetch(u + '?token=' + token, init); };
+          return send().then(function(r) {
+            if (r.status !== 401) return r;
+            token = 'new';
+            return send();
+          });
+        };`);
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/me')`) as Promise<{ status: number }>;
+      const [first] = await untilLibrarySent(rt, 1);
+      rt.network.respond(first!, 401, {}, "expired");
+      const [, second] = await untilLibrarySent(rt, 2);
+      rt.network.respond(second!, 200, {}, "me");
+      expect((await pending).status).toBe(200);
+      await settle();
+
+      expectRecordPerRequest(rt, 2);
+      expect(
+        rt.records().map((r) => `${r.request.url} ${r.response?.status} ${r.responseBody}`)
+      ).toEqual([
+        "https://api.test/me?token=old 401 expired",
+        "https://api.test/me?token=new 200 me",
+      ]);
+    });
+
+    it.each([
+      {
+        wrapper: "returns a Response class of its own",
+        code: `${API_RESPONSE}
+          var libFetch = fetch;
+          fetch = function(u, init) { return libFetch(u, init).then(function(r) { return new ApiResponse(r); }); };`,
+        url: "https://api.test/item",
+      },
+      {
+        wrapper: "rewrites the URL",
+        code: `var libFetch = fetch;
+          fetch = function(u, init) { return libFetch(u.replace('api.test', 'api-v2.test'), init); };`,
+        url: "https://api-v2.test/item",
+      },
+      {
+        wrapper: "rewrites the URL, with a global Response the app set",
+        code: `var libFetch = fetch;
+          Response = function AppResponse() {};
+          fetch = function(u, init) { return libFetch(u.replace('api.test', 'api-v2.test'), init); };`,
+        url: "https://api-v2.test/item",
+      },
+    ])(
+      "records one request with the URL sent when an app wrapper $wrapper",
+      async ({ code, url }) => {
+        const rt = libRuntime();
+        rt.run(code);
+        rt.install();
+        const all = rt.run(
+          `Promise.all([fetch('https://api.test/item'), fetch('https://api.test/item').then(function() {})])`
+        ) as Promise<unknown>;
+        const requests = await untilLibrarySent(rt, 2);
+        for (const request of requests) rt.network.respond(request, 200, {}, "item");
+        await all;
+        await settle();
+
+        expectRecordPerRequest(rt, 2);
+        expect(rt.records().map((r) => `${r.request.url} ${r.state} ${r.responseBody}`)).toEqual([
+          `${url} finished item`,
+          `${url} finished item`,
+        ]);
+      }
+    );
+
+    it("records one request for callers of an app wrapper that share it or get it from a cache", async () => {
+      const rt = libRuntime();
+      rt.run(`var libFetch = fetch, inflight = {}, cache = {};
+        fetch = function(u) {
+          if (cache[u]) return Promise.resolve(cache[u].clone());
+          if (!inflight[u]) inflight[u] = libFetch(u).then(function(r) { cache[u] = r; delete inflight[u]; return r; });
+          return inflight[u].then(function(r) { return r.clone(); });
+        };`);
+      rt.install();
+      const all = rt.run(
+        `Promise.all([fetch('https://api.test/me'), fetch('https://api.test/me')])`
+      ) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, {}, "me");
+      await all;
+      await (rt.run(`fetch('https://api.test/me')`) as Promise<unknown>);
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+    });
+
+    describe("text streaming (reactNative.textStreaming)", () => {
+      it("keeps the record pending while the text streams, and finished with the whole text at its end", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const text = rt.run(
+          `fetch('https://api.test/sse', { reactNative: { textStreaming: true } }).then(readStream)`
+        ) as Promise<string>;
+        const [request] = await untilLibrarySent(rt, 1);
+        expect(request!.incremental).toBe(true);
+        rt.network.head(request!, 200, { "content-type": "text/event-stream" });
+        rt.network.part(request!, "data: 1\n\n");
+        rt.network.part(request!, "data: é\n\n");
+        await settle();
+        expect(rt.records()[0]).toMatchObject({ state: "pending", response: { status: 200 } });
+        rt.network.end(request!);
+
+        expect(await text).toBe("data: 1\n\ndata: é\n\n");
+        await settle();
+        expectRecordPerRequest(rt, 1);
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          response: { mimeType: "text/event-stream" },
+          responseBody: "data: 1\n\ndata: é\n\n",
+          encodedDataLength: 19,
+        });
+      });
+
+      it("records a stream the app aborts as failed, with the text it got", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const done = rt.run(`var controller = new AbortController();
+          fetch('https://api.test/sse', { signal: controller.signal, reactNative: { textStreaming: true } })
+            .then(function(r) { return outcome(readStream(r)); })`) as Promise<{ error?: Error }>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.head(request!, 200, { "content-type": "text/event-stream" });
+        rt.network.part(request!, "data: 1\n\n");
+        await settle();
+        rt.run("controller.abort()");
+
+        expect((await done).error?.name).toBe("AbortError");
+        expect(request!.aborted).toBe(true);
+        await settle();
+        expect(rt.records()[0]).toMatchObject({
+          state: "failed",
+          errorText: "aborted",
+          responseBody: "data: 1\n\n",
+        });
+        // No listener stays behind for a request that never ends on iOS.
+        expect(rt.network.listeners()).toBe(0);
+      });
+
+      it("keeps the start of a long stream and its length", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const size = rt.run(
+          `fetch('https://api.test/log', { reactNative: { textStreaming: true } }).then(countStream)`
+        ) as Promise<number>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.head(request!, 200, { "content-type": "text/plain" });
+        for (let i = 0; i < 3; i++) rt.network.part(request!, "x".repeat(BODY_CAP / 2));
+        rt.network.end(request!);
+        expect(await size).toBe((BODY_CAP / 2) * 3);
+        await settle();
+
+        const record = rt.records()[0]!;
+        expect(record).toMatchObject({
+          state: "finished",
+          bodyTruncated: true,
+          bodyLength: (BODY_CAP / 2) * 3,
+        });
+        expect(record.responseBody).toHaveLength(BODY_CAP);
+        expect(record.encodedDataLength).toBeUndefined();
+      });
+    });
+
+    describe("base64 responses (ArrayBuffer)", () => {
+      it("records the text and size of a body", async () => {
+        const rt = libRuntime();
+        rt.context.TextDecoder = TextDecoder;
+        rt.install();
+        const text = rt.run(
+          `fetch('https://api.test/data', { reactNative: { __nativeResponseType: 'base64' } }).then(function(r) { return r.text(); })`
+        ) as Promise<string>;
+        const [request] = await untilLibrarySent(rt, 1);
+        expect(request!.responseType).toBe("base64");
+        rt.network.respond(
+          request!,
+          200,
+          { "content-type": "application/json" },
+          '{"name":"zażółć"}'
+        );
+
+        expect(await text).toBe('{"name":"zażółć"}');
+        await settle();
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          responseBody: '{"name":"zażółć"}',
+          encodedDataLength: Buffer.byteLength('{"name":"zażółć"}'),
+        });
+      });
+
+      it.each([1, 2, 3, 4, 5])("records the size of a binary body of %i bytes", async (length) => {
+        const rt = libRuntime();
+        // Without a decoder too, a binary body is marked as omitted.
+        rt.context.TextDecoder = undefined;
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://api.test/img', { reactNative: { __nativeResponseType: 'base64' } })`
+        ) as Promise<unknown>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.respond(
+          request!,
+          200,
+          { "content-type": "image/png" },
+          new Uint8Array(length).fill(0xff)
+        );
+        await pending;
+        await settle();
+
+        expect(rt.records()[0]).toMatchObject({
+          state: "finished",
+          encodedDataLength: length,
+          bodyOmitted: true,
+        });
+        expect(rt.records()[0]!.responseBody).toBeUndefined();
+      });
+
+      it("keeps the start of a long body", async () => {
+        const rt = libRuntime();
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://api.test/big', { reactNative: { __nativeResponseType: 'base64' } })`
+        ) as Promise<unknown>;
+        const [request] = await untilLibrarySent(rt, 1);
+        rt.network.respond(
+          request!,
+          200,
+          { "content-type": "text/plain" },
+          "y".repeat(BODY_CAP + 10)
+        );
+        await pending;
+        await settle();
+
+        const record = rt.records()[0]!;
+        expect(record).toMatchObject({ bodyTruncated: true, encodedDataLength: BODY_CAP + 10 });
+        expect(record.responseBody).toBe("y".repeat(BODY_CAP));
+      });
+    });
+
+    it("reads a blob body without closing it, and the app's close() still frees it", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/me')`) as Promise<{
+        _blobData: { blobId: string };
+        _body: { _bodyBlob: FakeBlob };
+      }>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, { "content-type": "application/json" }, '{"id":1}');
+      const response = await pending;
+      // The app closes the blob at once, without reading it.
+      response._body._bodyBlob.close();
+      await settle();
+
+      expect(nativeBlobs.has(response._blobData.blobId)).toBe(false);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        responseBody: '{"id":1}',
+        encodedDataLength: 8,
+      });
+    });
+
+    it("records the size and no body of a binary blob, which it does not read", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/logo.png')`) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(
+        request!,
+        200,
+        { "content-type": "image/png" },
+        new Uint8Array([0x89, 0x50])
+      );
+      await pending;
+      await settle();
+
+      expect(rt.reads).toHaveLength(0);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        bodyOmitted: true,
+        encodedDataLength: 2,
+      });
+    });
+
+    it("keeps the start of a long blob body", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/big')`) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200, { "content-type": "text/plain" }, "z".repeat(BODY_CAP + 5));
+      await pending;
+      await settle();
+
+      const record = rt.records()[0]!;
+      expect(record).toMatchObject({ bodyTruncated: true, encodedDataLength: BODY_CAP + 5 });
+      expect(record.responseBody).toBe("z".repeat(BODY_CAP));
+    });
+
+    it.each([
+      {
+        ends: "fails",
+        error: "Could not connect to the server.",
+        timedOut: false,
+        errorText: "Could not connect to the server.",
+      },
+      { ends: "times out", error: "", timedOut: true, errorText: "timeout" },
+    ])("records a request that $ends as failed", async ({ error, timedOut, errorText }) => {
+      const rt = libRuntime();
+      rt.install();
+      const result = rt.run(`outcome(fetch('https://api.test/down'))`) as Promise<{
+        error?: Error;
+      }>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.end(request!, error, timedOut);
+
+      expect((await result).error).toBeDefined();
+      await settle();
+      expect(rt.records()[0]).toMatchObject({ state: "failed", errorText });
+      expect(rt.network.listeners()).toBe(0);
+    });
+
+    it("records a call the app aborts before the response as failed, and one in flight as pending", async () => {
+      const rt = libRuntime();
+      rt.install();
+      const aborted = rt.run(
+        `var controller = new AbortController(); fetch('https://api.test/slow', { signal: controller.signal })`
+      ) as Promise<unknown>;
+      rt.run(`fetch('https://api.test/pending')`);
+      await untilLibrarySent(rt, 2);
+      rt.run("controller.abort()");
+
+      expect(await rejectionName(aborted)).toBe("AbortError");
+      await settle();
+      expect(rt.records().map((r) => `${r.request.url} ${r.state} ${r.errorText ?? "-"}`)).toEqual([
+        "https://api.test/slow failed aborted",
+        "https://api.test/pending pending -",
+      ]);
+    });
+
+    it("keeps no record of a call that throws before it sends", () => {
+      const rt = libRuntime();
+      rt.install();
+
+      expect(() =>
+        rt.run(
+          `var c = new AbortController(); c.abort(); fetch('https://api.test/never', { signal: c.signal })`
+        )
+      ).toThrow("Aborted");
+      expect(rt.records()).toHaveLength(0);
+    });
+
+    it("keeps no record of a request the module refuses", () => {
+      const rt = libRuntime({ installed: false });
+      rt.install();
+      rt.run(`__networking.sendRequest = (function(send) {
+        return function() { if (arguments[2] === 'bad') throw new Error('Invalid URL'); return send.apply(this, arguments); };
+      })(__networking.sendRequest);`);
+
+      expect(() =>
+        rt.run(
+          `__networking.sendRequest('GET', 'bad', 'bad', {}, null, 'text', false, 0, function() {}, false)`
+        )
+      ).toThrow("Invalid URL");
+      expect(rt.records()).toHaveLength(0);
+    });
+
+    it("finds the module when the app has not loaded it yet", async () => {
+      const rt = libRuntime({ networkModuleLoaded: false });
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/first')`) as Promise<unknown>;
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200);
+      await pending;
+      await settle();
+
+      expectRecordPerRequest(rt, 1);
+    });
+
+    it("records no library request, and each XHR once, without Metro's module list", async () => {
+      const rt = libRuntime({ metro: false });
+      expect(rt.install()).toEqual({ installed: true });
+      const pending = rt.run(`fetch('https://api.test/lib')`) as Promise<unknown>;
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/xhr'); x.send();`);
+      const [request] = await untilLibrarySent(rt, 1);
+      rt.network.respond(request!, 200);
+      rt.sends[0]!.respond(200, {}, "");
+      await pending;
+      await settle();
+
+      expect(rt.records().map((r) => r.request.url)).toEqual(["https://api.test/xhr"]);
+    });
+
+    it("leaves the global fetch, Response and the module's events as they are", () => {
+      const rt = libRuntime();
+      const before = rt.run("[fetch, Response, Headers, Request]") as unknown[];
+      rt.install();
+
+      expect(rt.run("[fetch, Response, Headers, Request]")).toEqual(before);
+      expect(rt.network.listeners()).toBe(0);
+    });
+
+    // Both keep whatwg-fetch's global Response, so the interceptor leaves the global fetch alone.
+    it.each<{ fetch: string; options: RuntimeOptions }>([
+      { fetch: "React Native's fetch", options: { polyfillFetch: true } },
+      { fetch: "Expo's fetch (SDK 56+)", options: EXPO_GLOBAL },
+    ])("leaves the global fetch alone when it is an app wrapper over $fetch", ({ options }) => {
+      const rt = createRuntime(options);
+      rt.run(
+        `fetch = (function(inner) { return function(u, init) { return inner(u, init); }; })(fetch);`
+      );
+      const wrapper = rt.run("fetch");
+      rt.install();
+
+      expect(rt.run("fetch")).toBe(wrapper);
+    });
+  });
+
+  describe("limits", () => {
+    it.each([
+      { mimeType: "image/png", omitted: true },
+      { mimeType: "application/octet-stream", omitted: true },
+      { mimeType: "font/woff2", omitted: true },
+      { mimeType: "image/svg+xml", omitted: false },
+      { mimeType: "text/plain", omitted: false },
+    ])(
+      "skips the text read of a $mimeType blob body as binary: $omitted",
+      async ({ mimeType, omitted }) => {
+        const rt = createRuntime({ polyfillFetch: true });
+        rt.install();
+        const pending = rt.run(
+          `fetch('https://img.test/a').then(function(r) { return r.blob(); })`
+        ) as Promise<unknown>;
+        const bytes = Buffer.alloc(3000, 0x41);
+        rt.last().respond(200, { "content-type": mimeType }, bytes);
+        await pending;
+        await settle();
+
+        const [record] = rt.records();
+        expect(rt.reads).toHaveLength(omitted ? 0 : 1);
+        expect(record).toMatchObject({ state: "finished", encodedDataLength: 3000 });
+        expect(record!.bodyOmitted).toBe(omitted ? true : undefined);
+        expect(record!.responseBody).toBe(omitted ? undefined : "A".repeat(3000));
+      }
+    );
+
+    // Android reads the bytes of a text responseType as UTF-8, each invalid byte as U+FFFD.
+    const PNG_AS_TEXT = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
+    ]).toString("utf8");
+
+    it.each<{ headers: Record<string, string>; fields: Record<string, unknown> }>([
+      { headers: { "Content-Length": "10" }, fields: { encodedDataLength: 10 } },
+      { headers: {}, fields: { bodyLength: PNG_AS_TEXT.length } },
+      {
+        headers: { "Content-Length": "8", "Content-Encoding": "gzip" },
+        fields: { bodyLength: PNG_AS_TEXT.length },
+      },
+    ])(
+      "keeps no text of a binary XHR body read as text, with the size from %j",
+      ({ headers, fields }) => {
+        const rt = createRuntime();
+        rt.install();
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://img.test/a.png'); x.send();`);
+        rt.last().respond(200, { "content-type": "image/png", ...headers }, PNG_AS_TEXT);
+        const [record] = rt.records();
+
+        expect(record).toMatchObject({ state: "finished", bodyOmitted: true, ...fields });
+        expect(record!.responseBody).toBeUndefined();
+        if (!("encodedDataLength" in fields)) expect(record!.encodedDataLength).toBeUndefined();
+      }
+    );
+
+    it("keeps no text of a binary XHR body the app aborts while it arrives", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://img.test/a.png'); x.send();`);
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, { "content-type": "image/png", "content-length": "5000" });
+      xhr.receiveText(PNG_AS_TEXT);
+      rt.run("x.abort()");
+      const [record] = rt.records();
+
+      expect(record).toMatchObject({
+        state: "failed",
+        bodyOmitted: true,
+        bodyLength: PNG_AS_TEXT.length,
+      });
+      expect(record!.responseBody).toBeUndefined();
+      expect(record!.encodedDataLength).toBeUndefined();
+    });
+
+    it.each<{ headers: Record<string, string>; fields: Record<string, unknown> }>([
+      {
+        headers: { "Content-Type": "image/png", "Content-Length": "4" },
+        fields: { encodedDataLength: 4 },
+      },
+      { headers: { "Content-Type": "image/png" }, fields: { bodyLength: 4 } },
+    ])(
+      "keeps no text of a binary body Expo's text() reads, with the size from %j",
+      async ({ headers, fields }) => {
+        const rt = createRuntime({ expo: { sdk: 57 } });
+        rt.install();
+        const pending = rt.run(
+          `expoFetch('https://img.test/a.png').then(function(r) { return r.text(); })`
+        ) as Promise<string>;
+        for (let i = 0; i < 20 && rt.native.length === 0; i++) await settle();
+        rt.native[0]!.respond(200, headers, new Uint8Array([0xff, 0xfe, 0x00, 0x01]));
+        // Native text() reads each byte that is not UTF-8 as U+FFFD; the app gets that text.
+        expect(await pending).toBe("\ufffd\ufffd\u0000\u0001");
+        await settle();
+
+        const [record] = rt.records();
+        expect(record).toMatchObject({ state: "finished", bodyOmitted: true, ...fields });
+        expect(record!.responseBody).toBeUndefined();
+      }
+    );
+
+    it("reads no text of a blob response whose own type is binary", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://img.test/b'); x.responseType = 'blob'; x.send();`
+      );
+      const xhr = rt.last();
+      xhr.receiveHeaders(200, {});
+      // Native hands the blob over with the type it read from the response.
+      Object.defineProperty(xhr, "response", {
+        value: new FakeBlob([Buffer.alloc(10)], { type: "video/mp4" }),
+      });
+      xhr.respond(200, {}, Buffer.alloc(10));
+      await settle();
+
+      expect(rt.reads).toHaveLength(0);
+      expect(rt.records()[0]).toMatchObject({ bodyOmitted: true, encodedDataLength: 10 });
+    });
+
+    it("caps a text body and a request body at 1 MiB", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('POST', 'https://api.test/big'); x.send('p'.repeat(${BODY_CAP + 1}));`
+      );
+      rt.last().respond(200, {}, "a".repeat(BODY_CAP + 10));
+      const [record] = rt.records();
+
+      expect(record!.responseBody).toHaveLength(BODY_CAP);
+      expect(record).toMatchObject({ bodyTruncated: true, bodyLength: BODY_CAP + 10 });
+      expect(record!.encodedDataLength).toBeUndefined();
+      expect(record!.request.postData).toHaveLength(BODY_CAP);
+      expect(record!.request.postDataTruncated).toBe(true);
+    });
+
+    it.each<{ headers: Record<string, string>; size: number | undefined }>([
+      { headers: { "content-length": String(2 * BODY_CAP) }, size: 2 * BODY_CAP },
+      { headers: {} as Record<string, string>, size: undefined },
+      // iOS keeps the compressed size of a body it decoded.
+      { headers: { "Content-Length": "3000", "Content-Encoding": "gzip" }, size: undefined },
+      { headers: { "content-length": "3000", "content-encoding": "br" }, size: undefined },
+      {
+        headers: { "content-length": String(2 * BODY_CAP), "content-encoding": "identity" },
+        size: 2 * BODY_CAP,
+      },
+    ])(
+      "gives a cut text body the Content-Length $size as its size, and its length in the list",
+      ({ headers, size }) => {
+        const rt = createRuntime();
+        rt.install();
+        rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.send();`);
+        rt.last().respond(200, headers, "b".repeat(2 * BODY_CAP));
+        const list = JSON.parse(rt.run(makeNetworkLogReadScript(0, 50, 8081)) as string) as {
+          entries: Array<{ encodedDataLength?: number; bodyLength?: number }>;
+        };
+
+        expect(rt.records()[0]!.encodedDataLength).toBe(size);
+        expect(list.entries[0]).toMatchObject({ bodyLength: 2 * BODY_CAP });
+        expect(list.entries[0]!.encodedDataLength).toBe(size);
+      }
+    );
+
+    it("counts the bytes of at most 1 MiB of a large text body", () => {
+      const rt = createRuntime();
+      const encoded: number[] = [];
+      rt.context.TextEncoder = function () {
+        return {
+          encode: (text: string) => {
+            encoded.push(text.length);
+            return new TextEncoder().encode(text);
+          },
+        };
+      };
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.send();`);
+      const body = "é" + "x".repeat(8 * BODY_CAP);
+      rt.last().respond(200, {}, body);
+
+      expect(Math.max(0, ...encoded)).toBeLessThanOrEqual(BODY_CAP);
+      expect(rt.records()[0]).toMatchObject({ bodyTruncated: true, bodyLength: body.length });
+    });
+
+    it("walks at most 1 MiB of a large text body without TextEncoder", () => {
+      const rt = createRuntime();
+      rt.install();
+      // Counts the characters the fallback loop reads.
+      rt.run(`var __reads = 0, __charCodeAt = String.prototype.charCodeAt;
+        String.prototype.charCodeAt = function(i) { __reads++; return __charCodeAt.call(this, i); };`);
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.send();`);
+      const body = "é".repeat(4 * BODY_CAP);
+      rt.last().respond(200, {}, body);
+
+      expect(rt.run("__reads")).toBeLessThanOrEqual(BODY_CAP);
+      expect(rt.records()[0]).toMatchObject({ bodyTruncated: true, bodyLength: body.length });
+    });
+
+    it("keeps the received text of a json response instead of serializing the parsed object", () => {
+      const rt = createRuntime();
+      rt.install();
+      const serialized: number[] = [];
+      rt.context.__noteStringify = (length: number) => serialized.push(length);
+      rt.run(`var __stringify = JSON.stringify;
+        JSON.stringify = function() { var out = __stringify.apply(JSON, arguments); __noteStringify(out.length); return out; };`);
+      rt.run(
+        `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big'); x.responseType = 'json'; x.send();`
+      );
+      const body = JSON.stringify({ a: "x".repeat(5 * BODY_CAP) });
+      rt.last().respond(200, {}, body);
+      const [entry] = rt.context.__argent_network_log as CapturedRecord[];
+
+      expect(serialized).toEqual([]);
+      expect(entry).toMatchObject({ bodyTruncated: true, bodyLength: body.length });
+      expect(entry!.responseBody).toBe(body.slice(0, BODY_CAP));
+    });
+
+    it("serializes a json response whose received text React Native does not keep", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/j'); x.responseType = 'json';
+        Object.defineProperty(x, '_response', { value: undefined }); x.send();`);
+      rt.last().respond(200, {}, '{ "a": [1, 2] }');
+
+      expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: '{"a":[1,2]}' });
+      expect(rt.records()[0]!.encodedDataLength).toBeUndefined();
+    });
+
+    it("reads at most 1 MiB of a blob body and leaves the app's own read whole", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/huge').then(function(r) { return r.text(); })`
+      ) as Promise<string>;
+      rt.last().respond(200, {}, "z".repeat(BODY_CAP + 5));
+
+      expect(await pending).toHaveLength(BODY_CAP + 5);
+      await settle();
+      expect(rt.reads.map((blob) => blob.data.length).sort()).toEqual([BODY_CAP, BODY_CAP + 5]);
+      expect(rt.reads.find((blob) => blob.data.length === BODY_CAP)!.closed).toBe(true);
+      const [record] = rt.records();
+      expect(record!.responseBody).toHaveLength(BODY_CAP);
+      expect(record).toMatchObject({ bodyTruncated: true, encodedDataLength: BODY_CAP + 5 });
+    });
+
+    it("steps back from a cut that splits a UTF-8 character when iOS reads it as null", async () => {
+      const rt = createRuntime({ polyfillFetch: true, readAsTextNullOnInvalidUtf8: true });
+      rt.install();
+      const pending = rt.run(
+        `fetch('https://api.test/cjk').then(function(r) { return r.text(); })`
+      ) as Promise<string>;
+      // 3-byte characters: a cut at 1 MiB splits one, a cut one byte earlier does not.
+      rt.last().respond(200, {}, "你".repeat(Math.floor(BODY_CAP / 3) + 10));
+      await pending;
+      await settle();
+
+      const [record] = rt.records();
+      expect(record!.responseBody).toHaveLength((BODY_CAP - 1) / 3);
+      expect(record!.bodyTruncated).toBe(true);
+      const slices = rt.reads.filter((blob) => blob.data.length <= BODY_CAP);
+      expect(slices.map((blob) => [blob.data.length, blob.closed])).toEqual([
+        [BODY_CAP, true],
+        [BODY_CAP - 1, true],
+      ]);
+    });
+
+    it("stops stepping back after 3 bytes when iOS cannot read a cut body as text", async () => {
+      const rt = createRuntime({ polyfillFetch: true, readAsTextNullOnInvalidUtf8: true });
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/binary')`) as Promise<unknown>;
+      rt.last().respond(200, {}, Buffer.alloc(BODY_CAP + 10, 0xff));
+      await pending;
+      await settle();
+
+      expect(rt.reads.map((blob) => [blob.data.length, blob.closed])).toEqual([
+        [BODY_CAP, true],
+        [BODY_CAP - 1, true],
+        [BODY_CAP - 2, true],
+        [BODY_CAP - 3, true],
+      ]);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        encodedDataLength: BODY_CAP + 10,
+      });
+      expect(rt.records()[0]!.responseBody).toBeUndefined();
+    });
+
+    it("gives up without a body when the app closes the blob before a shorter read", async () => {
+      const app: { blob?: FakeBlob } = {};
+      const rt = createRuntime({
+        polyfillFetch: true,
+        readAsTextNullOnInvalidUtf8: true,
+        beforeReadResult: (blob) => {
+          if (blob.data.length === BODY_CAP) app.blob?.close();
+        },
+      });
+      rt.install();
+      const pending = rt.run(`fetch('https://api.test/cjk')`) as Promise<unknown>;
+      const size = (Math.floor(BODY_CAP / 3) + 10) * 3;
+      rt.last().respond(200, {}, "你".repeat(size / 3));
+      app.blob = rt.last().response as FakeBlob;
+      await pending;
+      await settle();
+
+      const [record] = rt.records();
+      expect(record).toMatchObject({ state: "finished", encodedDataLength: size });
+      expect(record!.responseBody).toBeUndefined();
+    });
+
+    it("evicts the oldest records once the buffered bodies pass 50 MB", () => {
+      const rt = createRuntime();
+      rt.install();
+      const body = "x".repeat(BODY_CAP);
+      for (let i = 0; i < 60; i++) {
+        rt.run(
+          `var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/big/${i}'); x.send();`
+        );
+        rt.last().respond(200, {}, body);
+      }
+      const log = rt.context.__argent_network_log as CapturedRecord[];
+      const byId = rt.context.__argent_network_by_id as Record<string, CapturedRecord>;
+
+      expect(log.reduce((sum, r) => sum + (r.responseBody?.length ?? 0), 0)).toBeLessThanOrEqual(
+        50 * BODY_CAP
+      );
+      expect(log.length).toBeLessThan(60);
+      expect(log[log.length - 1]!.request.url).toBe("https://api.test/big/59");
+      expect(Object.keys(byId)).toHaveLength(log.length);
+      expect(byId["rn-net-1"]).toBeUndefined();
+    });
+
+    it("keeps the most recent 2000 records", () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(`
+        for (var i = 0; i < 2001; i++) {
+          var x = new XMLHttpRequest();
+          x.open('GET', 'https://api.test/n/' + i);
+          x.send();
+        }
+      `);
+      const records = rt.records();
+
+      expect(records).toHaveLength(2000);
+      expect(records[0]!.requestId).toBe("rn-net-2");
+      expect(
+        (rt.context.__argent_network_by_id as Record<string, unknown>)["rn-net-1"]
+      ).toBeUndefined();
+    });
+
+    it("installs once per JS context", async () => {
+      const rt = createRuntime({ polyfillFetch: true });
+      expect(rt.install()).toEqual({ installed: true });
+      const send = rt.run("XMLHttpRequest.prototype.send");
+      const fetch = rt.run("fetch");
+      expect(rt.install()).toEqual({ installed: false, reason: "already installed" });
+      expect(rt.run("XMLHttpRequest.prototype.send")).toBe(send);
+      expect(rt.run("fetch")).toBe(fetch);
+
+      const pending = rt.run(`fetch('https://api.test/once')`) as Promise<unknown>;
+      rt.last().respond(200, {}, "ok");
+      await pending;
+      await settle();
+      expect(rt.records()).toHaveLength(1);
+    });
+
+    it("keeps the previous fetch-only script from replacing the buffer", () => {
+      const rt = createRuntime();
+      rt.install();
+      // The previous script's guard, as an older tool-server would evaluate it.
+      rt.run(`
+        if (!globalThis.__argent_network_installed) {
+          globalThis.__argent_network_installed = true;
+          globalThis.__argent_network_log = [];
+          globalThis.__argent_network_by_id = {};
+        }
+      `);
+      rt.run(`var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/after'); x.send();`);
+      rt.last().respond(200, {}, "ok");
+
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]!.request.url).toBe("https://api.test/after");
+    });
+  });
+
+  it("serves XHR records through the read scripts, minus Metro's own requests", () => {
+    const rt = createRuntime();
+    rt.install();
+    rt.run(
+      `var m = new XMLHttpRequest(); m.open('POST', 'http://localhost:8081/symbolicate'); m.send('{}');`
+    );
+    rt.last().respond(200, {}, "{}");
+    rt.run(`var a = new XMLHttpRequest(); a.open('GET', 'https://api.test/me'); a.send();`);
+    rt.last().respond(200, { "content-type": "application/json" }, '{"id":7}');
+
+    const list = JSON.parse(rt.run(makeNetworkLogReadScript(0, 50, 8081)) as string) as unknown;
+    expect(list).toMatchObject({
+      total: 1,
+      interceptorInstalled: true,
+      entries: [
+        {
+          requestId: "rn-net-2",
+          state: "finished",
+          resourceType: "XHR",
+          request: { method: "GET", url: "https://api.test/me" },
+          response: { status: 200, mimeType: "application/json" },
+        },
+      ],
+    });
+    const detail = JSON.parse(rt.run(makeNetworkDetailReadScript("rn-net-2")) as string) as unknown;
+    expect(detail).toMatchObject({ requestId: "rn-net-2", responseBody: '{"id":7}' });
   });
 });
 
@@ -174,6 +4870,27 @@ describe("makeNetworkLogReadScript", () => {
     const script = makeNetworkLogReadScript(0, 50, 8081);
     // The script builds entries without responseBody to avoid large payloads
     expect(script).not.toContain("responseBody: s.responseBody");
+  });
+
+  it("lists the final URL of a redirected request", async () => {
+    const rt = createRuntime();
+    rt.install();
+    rt.run(`
+      var x = new XMLHttpRequest();
+      x.open('GET', 'https://api.test/old');
+      x.onloadend = function() {};
+      x.send();
+    `);
+    rt.last().respond(200, { "content-type": "text/plain" }, "ok", "https://api.test/new");
+    await settle();
+
+    const { entries } = JSON.parse(rt.run(makeNetworkLogReadScript(0, 50, 8081)) as string) as {
+      entries: Array<{ request: { url: string }; response: { url: string } }>;
+    };
+    expect(entries[0]).toMatchObject({
+      request: { url: "https://api.test/old" },
+      response: { url: "https://api.test/new" },
+    });
   });
 
   it("is a valid IIFE", () => {

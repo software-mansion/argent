@@ -1,5 +1,10 @@
 export { TypedEventEmitter } from "./event-emitter";
-export { LINKED_CALL_HEADER, ServiceState, isLiveServiceState } from "./types";
+export {
+  E2E_DIR_CLIENT_HEADER,
+  LINKED_CALL_HEADER,
+  ServiceState,
+  isLiveServiceState,
+} from "./types";
 export type {
   ServiceEvents,
   ServiceInstance,
@@ -62,7 +67,22 @@ export {
   resolveFlowRelativeFile,
 } from "./flow-file-refs";
 export type { NestedFlowTarget, OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
+export {
+  E2E_DIR,
+  E2E_DIRS,
+  LEGACY_E2E_DIRS,
+  e2eDirFor,
+  e2eDirProject,
+  e2eDirsFor,
+  e2eFileCandidates,
+  e2eRunFallbackDirs,
+  e2eShadowWarning,
+  pickE2eFile,
+  resolveE2eFile,
+} from "./e2e-dirs";
+export type { ResolvedE2eFile } from "./e2e-dirs";
 export { parseURN } from "./urn";
+export { TOOL_ID_ALIASES, canonicalToolId } from "./tool-ids";
 export {
   ServiceNotFoundError,
   ServiceInitializationError,

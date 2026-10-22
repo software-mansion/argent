@@ -76,7 +76,7 @@ Decision order:
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot and the element tree automatically.
   Call `screenshot` or `describe` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url`; never tap home screen icons.
-- If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
+- If a task can require a saved e2e test, choose `argent-create-e2e` or `argent-qa-e2e` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
   naming the devices this session actually used. One tool-server is shared by every other agent using this
@@ -119,7 +119,7 @@ Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Covers phone/tablet iOS and Android simulators and emulators plus Chromium (CDP) apps: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`
@@ -130,7 +130,7 @@ TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
 When: Any TV target: a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
 Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
-Saved artifacts: on Vega, a replayable path is `argent-create-flow` and an acceptance-criteria regression test is `argent-qa-flows`; both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no saved-flow support; report that limitation.
+Saved artifacts: on Vega, a replayable path is `argent-create-e2e` and an acceptance-criteria regression test is `argent-qa-e2e`; both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no e2e support; report that limitation.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
@@ -138,7 +138,7 @@ When: Explicit visual regression, screenshot diff, compare screenshots, before/a
 
 SCREEN RECORDING (VIDEO CAPTURE)
 Skill: `argent-screen-recording`
-When: The user wants an mp4 of an interaction, animation, or bug reproduction. Use `argent-create-flow` instead for a replayable sequence.
+When: The user wants an mp4 of an interaction, animation, or bug reproduction. Use `argent-create-e2e` instead for a replayable sequence.
 Prompt keywords: record, recording, screen recording, video, capture video, clip, mp4
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
@@ -165,16 +165,16 @@ INTERACTIVE UI TESTING (ONE-OFF, NOT SAVED)
 Skill: `argent-test-ui-flow`
 When: Running a one-off interact → screenshot → verify check with no saved regression artifact.
 
-RECORDING & REPLAYING FLOWS
-Use skill: `argent-create-flow`
-When: Saving or replaying a repeatable path for profiling, A/B comparison, retry, or reuse. For acceptance-driven regression tests, use `argent-qa-flows`.
-Prompt keywords: flow, repeat, test X times
+RECORDING & REPLAYING E2E TESTS
+Use skill: `argent-create-e2e`
+When: Saving or replaying a repeatable path for profiling, A/B comparison, retry, or reuse. For acceptance-driven regression tests, use `argent-qa-e2e`.
+Prompt keywords: record e2e, replay e2e, run e2e, flow, repeat, test X times
 
 GENERATED QA REGRESSION TESTS
-Use skill: `argent-qa-flows`
+Use skill: `argent-qa-e2e`
 When: Saving a test case, ticket, or acceptance criteria as a repeatable regression test. Requires stable evidence and two unchanged full passes. iOS, Android, Chromium, and Vega (D-pad navigation records as `tool: tv-remote` steps); not Apple TV or Android TV.
-Prompt keywords: QA test, regression test, test case, automate this test, automate an e2e test, keep this e2e test, generate a test
-Routing: one-off check → `argent-test-ui-flow`; saved path → `argent-create-flow`; saved acceptance test → `argent-qa-flows`.
+Prompt keywords: QA test, regression test, test case, automate an e2e test, write an e2e test, generate a test
+Routing: one-off check → `argent-test-ui-flow`; saved path → `argent-create-e2e`; saved acceptance test → `argent-qa-e2e`.
 
 PROPOSING DESIGN VARIANTS FOR HUMAN SELECTION
 Use skill: `argent-lens`

@@ -2,7 +2,14 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { FAILURE_CODES, FLOW_NAME_PATTERN } from "@argent/registry";
+import {
+  E2E_DIR,
+  E2E_DIRS,
+  FAILURE_CODES,
+  FLOW_NAME_PATTERN,
+  e2eShadowWarning,
+  resolveE2eFile,
+} from "@argent/registry";
 import {
   createToolsClient,
   getResolvedToolsUrl,
@@ -20,6 +27,8 @@ export interface FlowCommandOptions {
   paths: ToolsServerPaths;
 }
 
+export type E2eCommandOptions = FlowCommandOptions;
+
 export interface StepReport {
   index: number;
   kind: string;
@@ -28,6 +37,8 @@ export interface StepReport {
   /** Set by the tool-server on a step that PASSED in a way that weakens it as proof. */
   warning?: string;
   tool?: string;
+  /** Tool result for `tool` steps; a nested run's report for `e2e-execute`. */
+  result?: unknown;
   flow?: string;
   message?: string;
   /** Human-readable step target (selector / snapshot name). */
@@ -100,97 +111,100 @@ function durationSuffix(ms: unknown): string {
 
 function printHelp(toStderr = false): void {
   const print = toStderr ? console.error : console.log;
-  print(`Usage: argent flow <subcommand> [options]
+  print(`Usage: argent e2e <subcommand> [options]
 
-Run a YAML flow without an LLM in the loop. \`run\` takes any of these forms:
+Run a YAML e2e test without an LLM in the loop. \`run\` takes any of these forms:
 
-  a name   A flow saved under .argent/flows — "checkout" runs
-           .argent/flows/checkout.yaml, resolved from the current directory
+  a name   An e2e test saved under .argent/e2e or .argent/flows, resolved
+           from the current directory. "checkout" runs
+           .argent/e2e/checkout.yaml, or .argent/flows/checkout.yaml when only
+           that one exists
   a path   Any .yaml file on the local filesystem, resolved from the current
            directory. It must not contain ".." segments (pass the resolved
-           path instead); a path is what reaches flows kept elsewhere, and
-           what \`argent flow list\` prints for nested ones
-  a dir    Every flow in that directory, run sequentially
+           path instead); a path is what reaches e2e tests kept elsewhere, and
+           what \`argent e2e list\` prints for nested ones
+  a dir    Every e2e test in that directory, run sequentially
 
 For a name and for a file path alike, the
 filename (minus .yaml) names the run's report and artifacts, so it must
 contain only letters, numbers, "_", or "-" — the same charset a name must
-match. A flow is e2e when its first non-\`echo\`/\`script\` step is \`launch\`.
-Other flows are fragments and use the device's current state. Exception: a fragment whose first step \`run:\`s a chromium e2e
-flow boots that flow's app before step 1 — when that launch is unambiguously
+match. A test is standalone when its first non-\`echo\`/\`script\` step is \`launch\`.
+Other tests are fragments and use the device's current state. Exception: a fragment whose first step \`run:\`s a chromium standalone
+test boots that test's app before step 1 — when that launch is unambiguously
 chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
 multi-platform launch auto-detects a device instead. Pass --device to attach to
 a running instance.
 
 A directory run prints only the steps that need attention (each failure, each
-warning, and each script step's output), then its outcome. After the last flow
-it lists every failed flow with its reason and a command that re-runs that flow
-alone, then a final flow summary; --recursive walks subdirectories too
-(dot-directories and node_modules are skipped). A flow that fails its steps
+warning, and each script step's output), then its outcome. After the last test
+it lists every failed test with its reason and a command that re-runs that test
+alone, then a final summary; --recursive walks subdirectories too
+(dot-directories and node_modules are skipped). A test that fails its steps
 keeps the batch running, as does one the server rejects up front — an invalid
 file, or a device it cannot resolve. A transport failure, a rejection the server
 does not mark as validation, or a reply that is not a report stops the batch and
-counts the remaining flows skipped.
+counts the remaining tests skipped.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
 a link, the CLI uploads these files and writes the new baselines that the run
 returns:
-  - the flow file and the run: fragments that it reaches
-  - each flow that a tool: flow-execute step names with name (a nested flow)
+  - the e2e test file and the run: fragments that it reaches
+  - each e2e test that a tool: e2e-execute step names with name (a nested test)
   - the snapshot baselines of each run
   - each .png or .yaml file that a tool: step takes as a file argument by an
     absolute path
-The tool-server rejects the flow before the first step when the flow, a
-fragment or a nested flow has one of these steps:
+The tool-server rejects the test before the first step when the test, a
+fragment or a nested test has one of these steps:
   - a script: step
-  - a tool: flow-execute step that does not name its flow with name and an
+  - a tool: e2e-execute step that does not name its test with name and an
     absolute project_root that has no .. segment
-  - a tool: step that records a flow
+  - a tool: step that records an e2e test
   - a tool: step that takes a directory, an app or an output directory
   - a tool: step whose tool builds a file path from several arguments
   - a tool: step that names a relative path or a file other than .png or .yaml
 Without a link, all step kinds run.
 
 Subcommands:
-  run <flow|flow.yaml|dir>   Run a saved flow by name, a YAML file by path, or
-                             every flow in a directory, and report pass/fail
+  run <test|test.yaml|dir>   Run a saved e2e test by name, a YAML file by path,
+                             or every test in a directory, and report pass/fail
                              (exit reflects result)
-  list                       List runnable YAML paths in .argent/flows
+  list                       List runnable YAML paths in .argent/e2e and
+                             .argent/flows (legacy); notes go to stderr
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
   --platform <p>         ios | android | chromium | vega | ios-remote — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
-                         also those of flows that tool: flow-execute steps run,
+                         also those of tests that tool: e2e-execute steps run,
                          unless such a step sets updateBaselines
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          and failed-step screenshots (step-<n>-screen.png)
-                         under <dir>/<flow>/ — a stable path for CI artifact
-                         upload; a directory run keys nested flows as
-                         <dir>/<subdir>/<flow>/. A different flow file with the
-                         same filename sharing <dir> exports to <flow>-<pathhash>/
-                         instead (with a warning), so no flow's evidence is
+                         under <dir>/<test>/ — a stable path for CI artifact
+                         upload; a directory run keys nested tests as
+                         <dir>/<subdir>/<test>/. A different test file with the
+                         same filename sharing <dir> exports to <test>-<pathhash>/
+                         instead (with a warning), so no test's evidence is
                          overwritten
-  -r, --recursive        With a directory path, also run flows in subdirectories
-  --json                 Print the flow's JSON report, or a directory run's JSON
+  -r, --recursive        With a directory path, also run tests in subdirectories
+  --json                 Print the test's JSON report, or a directory run's JSON
                          aggregate
   --json-stream          Print each step and the final report as NDJSON (single
-                         flow only, never with --json)
+                         test only, never with --json)
   --help, -h             Show this help
-  --                     End of options — only needed for a flow whose name
-                         starts with "-" (\`argent flow run -- -nightly\`)
+  --                     End of options — only needed for a test whose name
+                         starts with "-" (\`argent e2e run -- -nightly\`)
 
 Examples:
-  argent flow run checkout --platform ios
-  argent flow run .argent/flows/checkout.yaml --output flow-artifacts --json
-  argent flow run ~/shared-flows/checkout.yaml --device <UDID> --update-baselines
-  argent flow run .argent/flows --recursive
+  argent e2e run checkout --platform ios
+  argent e2e run .argent/e2e/checkout.yaml --output e2e-artifacts --json
+  argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
+  argent e2e run .argent/e2e --recursive
 `);
 }
 
-// --help/-h never reach this parser: flow() intercepts them first.
+// --help/-h never reach this parser: e2e() intercepts them first.
 const RUN_OPTIONS = {
   "update-baselines": { kind: "boolean" },
   "json": { kind: "boolean" },
@@ -231,7 +245,7 @@ export function parseRunArgs(argv: string[]): {
   // path only.
   if (positionals.length > 1) {
     throw new FlagParseException(
-      `unexpected argument ${JSON.stringify(positionals[1])}; flow run accepts one flow name, YAML file path, or directory path`
+      `unexpected argument ${JSON.stringify(positionals[1])}; e2e run accepts one e2e test name, YAML file path, or directory path`
     );
   }
   const out: ReturnType<typeof parseRunArgs> = {
@@ -240,6 +254,10 @@ export function parseRunArgs(argv: string[]): {
     json: options.json === true,
     jsonStream: options["json-stream"] === true,
   };
+  // Their reads are truthy-guarded, so "" would be silently dropped.
+  for (const name of ["device", "platform", "output"] as const) {
+    if (options[name] === "") throw new FlagParseException(`--${name} requires a value`);
+  }
   if (positionals[0] !== undefined) out.flowRef = positionals[0];
   if (options.device !== undefined) out.device = options.device as string;
   if (options.platform !== undefined) out.platform = options.platform as string;
@@ -397,7 +415,7 @@ export function renderBatchSummary(
   },
   durationMs?: number
 ): string {
-  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} flow${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
+  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} e2e test${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
 }
 
 interface FailedFlow {
@@ -441,7 +459,7 @@ export function renderFailedFlows(failed: readonly FailedFlow[]): string[] {
   if (failed.length === 0) return [];
   return [
     "",
-    `Failed flows (${failed.length})`,
+    `Failed e2e tests (${failed.length})`,
     ...failed.flatMap((f) => ["", ...renderFailedFlow(f)]),
   ];
 }
@@ -460,9 +478,6 @@ const SAFE_ARTIFACT_NAME = FLOW_NAME_PATTERN;
 /** The filename stem becomes the runner's internal flow/report name. */
 const SAFE_FLOW_NAME = FLOW_NAME_PATTERN;
 
-/** Where flows are saved, relative to the current directory. */
-const FLOWS_DIR = path.join(".argent", "flows");
-
 /**
  * Charset every POSIX shell passes through unquoted (shlex.quote's set).
  * Anything outside it — a space above all — would be word-split or interpreted
@@ -472,7 +487,7 @@ const FLOWS_DIR = path.join(".argent", "flows");
 const SHELL_SAFE_ARG = /^(?!=)[A-Za-z0-9_@%+=:,./-]+$/;
 
 /**
- * Quote an argument for splicing into a printed `argent flow run …` command —
+ * Quote an argument for splicing into a printed `argent e2e run …` command —
  * a "Did you mean" hint or a batch `re-run:` line — whose whole value is being
  * copy-pasteable. Single quotes are the one POSIX form with no further escapes
  * inside; an all-safe argument stays bare so the command reads like what the
@@ -501,7 +516,7 @@ function rerunCommand(
   const fromCwd = path.relative(projectRoot, flowPath);
   const shown =
     path.isAbsolute(fromCwd) || fromCwd.split(/[\\/]+/).includes("..") ? flowPath : fromCwd;
-  const parts = ["argent flow run", pathArg(shown)];
+  const parts = ["argent e2e run", pathArg(shown)];
   if (args.device) parts.push("--device", shellQuoteArg(args.device));
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
   if (args.updateBaselines) parts.push("--update-baselines");
@@ -565,9 +580,7 @@ async function readExportMarker(dir: string): Promise<string | null | undefined>
  * a second, atomic step (takeExportDir) and only its verdict is binding.
  */
 type ExportDirClaim =
-  | { state: "free" }
-  | { state: "mine" }
-  | { state: "foreign"; owner: string | null };
+  { state: "free" } | { state: "mine" } | { state: "foreign"; owner: string | null };
 
 async function classifyExportDir(dir: string, flowPath: string): Promise<ExportDirClaim> {
   let owner = await readExportMarker(dir); // null = has content but proves no owner
@@ -686,7 +699,7 @@ async function claimExportDirName(
     // the directory being avoided and where the artifacts actually land.
     for (const entry of avoided) {
       console.error(
-        `warning: ${entry.dir} ${entry.reason}; writing this flow's artifacts to ` +
+        `warning: ${entry.dir} ${entry.reason}; writing this e2e test's artifacts to ` +
           `${dir} so neither set is overwritten`
       );
     }
@@ -740,7 +753,7 @@ export async function exportFailureArtifacts(
   const stem = path.basename(flowPath, ".yaml");
   if (!SAFE_ARTIFACT_NAME.test(stem)) {
     console.error(
-      `warning: skipping artifact export for unsafe flow filename ${JSON.stringify(stem)}`
+      `warning: skipping artifact export for unsafe e2e test filename ${JSON.stringify(stem)}`
     );
     return;
   }
@@ -867,7 +880,7 @@ export function exitAfterFlush(
 
 export function renderReport(report: FlowReport): string {
   const lines: string[] = [];
-  lines.push(`Flow "${report.flow}"${report.device ? ` on ${report.device}` : ""}`);
+  lines.push(`E2E test "${report.flow}"${report.device ? ` on ${report.device}` : ""}`);
   if (report.executionPrerequisite) {
     lines.push(`  assumes: ${report.executionPrerequisite}`);
   }
@@ -950,20 +963,23 @@ async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<strin
 }
 
 /**
- * The YAML path a `flow run` argument addresses: a saved-flow name becomes
- * `.argent/flows/<name>.yaml`, anything else is already a path and is handed
- * back untouched.
+ * The YAML path an `e2e run` argument addresses: a saved test's name becomes
+ * `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when only that one
+ * exists (the shared resolver's order, so the CLI and the tool-server pick the
+ * same file); anything else is already a path and is handed back untouched.
+ * `shadowed` names a legacy file of the same name that the pick hides.
  *
  * The two forms cannot collide. A name is exactly what SAFE_FLOW_NAME accepts —
  * a charset with no separator and no dot, so a name can carry no directory and
  * no extension — while a runnable path must end in `.yaml`. The token that
  * looks ambiguous, `checkout.yaml`, carries an extension and is therefore a
- * path; it does NOT fall back to the flows directory.
+ * path; it does NOT fall back to the e2e test directories.
  *
- * Deciding this lexically rather than by probing the filesystem is deliberate:
- * an argument's meaning must not depend on which files happen to exist, or a
- * stray `./checkout.yaml` appearing next to a CI checkout would silently
- * re-point a `run checkout` that had been reading `.argent/flows` for months.
+ * Deciding the form lexically rather than by probing the filesystem is
+ * deliberate: an argument's meaning must not depend on which files happen to
+ * exist, or a stray `./checkout.yaml` appearing next to a CI checkout would
+ * silently re-point a `run checkout` that had been reading `.argent/e2e` for
+ * months. Only a name probes, and only among the e2e test directories.
  *
  * What contains the join is the charset itself, not the guards downstream: no
  * string SAFE_FLOW_NAME admits can carry a separator or a dot. The rewrite is
@@ -976,55 +992,73 @@ async function collectRunnableFlowPaths(dir: string, relDir = ""): Promise<strin
  * back, and leaves `path.resolve(projectRoot, …)` landing on the very same
  * absolute file the spelled-out path resolves to — which keys the report,
  * `__baselines__/`, and the `--output` export directory, so `run checkout` and
- * `run .argent/flows/checkout.yaml` are one run under one identity.
+ * `run .argent/e2e/checkout.yaml` are one run under one identity.
  *
  * One name shape the CLI cannot address, though the contract admits it: a
  * leading "-" makes the token a flag to any argv parser, so `-dash` is
  * reachable only as `-- -dash` or by path.
  */
-function resolveFlowRef(ref: string): { suppliedPath: string; fromName: boolean } {
+async function resolveFlowRef(
+  ref: string,
+  projectRoot: string
+): Promise<{ suppliedPath: string; fromName: boolean; shadowed?: string }> {
   if (!SAFE_FLOW_NAME.test(ref)) return { suppliedPath: ref, fromName: false };
-  return { suppliedPath: path.join(FLOWS_DIR, `${ref}.yaml`), fromName: true };
+  const picked = await resolveE2eFile(projectRoot, ref);
+  return {
+    suppliedPath: path.relative(projectRoot, picked.path),
+    fromName: true,
+    ...(picked.shadowed === undefined
+      ? {}
+      : { shadowed: path.relative(projectRoot, picked.shadowed) }),
+  };
 }
 
 /**
- * Recovery for a path that named nothing while a flow of that very stem IS
- * saved — `argent flow run checkout.yaml` typed at the project root, where the
- * file actually lives a directory down. An implicit fallback into
- * `.argent/flows` would make an argument's meaning depend on which files exist
- * (see resolveFlowRef), so it stays refused and only the message improves.
+ * Recovery for a path that named nothing while an e2e test of that very stem
+ * IS saved — `argent e2e run checkout.yaml` typed at the project root, where
+ * the file actually lives a directory down. An implicit fallback into the e2e
+ * test directories would make an argument's meaning depend on which files
+ * exist (see resolveFlowRef), so it stays refused and only the message
+ * improves.
  *
  * The name it suggests comes from the directory listing, never from the user's
  * spelling: a stat-based probe would match `Checkout.yaml` against an on-disk
  * `checkout.yaml` on a case-insensitive filesystem and hand back a command
  * `run` itself then refuses at its byte-exact spelling check. An entry whose
- * own stem the flow-name contract refuses (`Upper.YAML`) is no hint at all — it
+ * own stem the name contract refuses (`Upper.YAML`) is no hint at all — it
  * needs a rename — and the runnability probe still runs, so the hint can never
  * name something `run` would reject downstream. A name that clears
- * SAFE_FLOW_NAME is inside SHELL_SAFE_ARG, so it needs no quoting.
+ * SAFE_FLOW_NAME is inside SHELL_SAFE_ARG, so it needs no quoting. The
+ * directories are searched in lookup order, so the hinted name runs the file
+ * the hint names.
  *
- * Empty when the missing path already points inside the flows directory: a
- * same-stem sibling elsewhere in the tree is a different flow, not the one they
- * asked for.
+ * Empty when the missing path already points inside an e2e test directory: a
+ * same-stem sibling elsewhere in the tree is a different test, not the one
+ * they asked for.
  */
 async function savedFlowHint(projectRoot: string, missingPath: string): Promise<string> {
-  const dir = path.resolve(projectRoot, FLOWS_DIR);
-  const within = path.relative(dir, missingPath);
-  if (!within.startsWith("..") && !path.isAbsolute(within)) return "";
+  const dirs = E2E_DIRS.map((rel) => ({ rel, abs: path.resolve(projectRoot, rel) }));
+  for (const { abs } of dirs) {
+    const within = path.relative(abs, missingPath);
+    if (!within.startsWith("..") && !path.isAbsolute(within)) return "";
+  }
   const wanted = `${path.basename(missingPath, ".yaml")}.yaml`;
-  const entries = await fsp.readdir(dir).catch(() => null);
-  if (entries === null) return "";
-  const actual = entries.includes(wanted)
-    ? wanted
-    : entries.find((name) => name.toLowerCase() === wanted.toLowerCase());
-  if (actual === undefined) return "";
-  const name = path.basename(actual, ".yaml");
-  if (!SAFE_FLOW_NAME.test(name)) return "";
-  if (!(await isRunnableFlowFile(path.join(dir, actual)))) return "";
-  return (
-    `\nA flow named "${name}" is saved under ${FLOWS_DIR} — ` +
-    `did you mean: argent flow run ${name}`
-  );
+  for (const { rel, abs } of dirs) {
+    const entries = await fsp.readdir(abs).catch(() => null);
+    if (entries === null) continue;
+    const actual = entries.includes(wanted)
+      ? wanted
+      : entries.find((name) => name.toLowerCase() === wanted.toLowerCase());
+    if (actual === undefined) continue;
+    const name = path.basename(actual, ".yaml");
+    if (!SAFE_FLOW_NAME.test(name)) return "";
+    if (!(await isRunnableFlowFile(path.join(abs, actual)))) return "";
+    return (
+      `\nAn e2e test named "${name}" is saved under ${rel} — ` +
+      `did you mean: argent e2e run ${name}`
+    );
+  }
+  return "";
 }
 
 /**
@@ -1056,7 +1090,13 @@ async function collectFlowFiles(dir: string, recursive: boolean): Promise<string
   return found.sort();
 }
 
-/** One flow-execute payload builder so single and batch runs cannot drift. */
+/**
+ * One run payload builder so single and batch runs cannot drift. A tool-server
+ * that predates `e2e-execute` lists only `flow-execute`; the tools-client sends
+ * the call there, so this CLI still works over a link to it.
+ */
+const RUN_TOOL_ID = "e2e-execute";
+
 function buildRunPayload(
   flowPath: string,
   projectRoot: string,
@@ -1216,7 +1256,7 @@ async function exportAndResolveArtifacts(
  * that way too (nothing matched the run, or several did and none was singled
  * out), and blaming perfectly good YAML on a simulator nobody started sends the
  * reader to the wrong file. Only a code whose subject IS the file licenses
- * "invalid flow"; an unrecognized one stays neutral and leaves the reason to
+ * "invalid e2e test"; an unrecognized one stays neutral and leaves the reason to
  * the stderr line beside it.
  */
 function rejectionVerdict(code: string | undefined): string {
@@ -1224,13 +1264,36 @@ function rejectionVerdict(code: string | undefined): string {
     case FAILURE_CODES.FLOW_FILE_INVALID:
     case FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED:
     case FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE:
-      return "not run (invalid flow)";
+      return "not run (invalid e2e test)";
     case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
       return "not run (no device resolved)";
     case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:
       return "not run (upload failed)";
     default:
       return "not run (rejected)";
+  }
+}
+
+/**
+ * The warnings carried in `tool:` step results, at any depth: a nested
+ * `e2e-execute name: X` that read .argent/e2e over a shadowed .argent/flows
+ * file says so only in its result. No renderer reads results, so the run
+ * prints these the way it prints its own shadow warning (see printWarnings).
+ */
+function nestedStepWarnings(steps: readonly StepReport[], into = new Set<string>()): string[] {
+  for (const s of steps) {
+    if (!s || typeof s.result !== "object" || s.result === null) continue;
+    const { warning, steps: inner } = s.result as { warning?: unknown; steps?: unknown };
+    if (typeof warning === "string" && warning !== s.warning) into.add(warning);
+    if (Array.isArray(inner)) nestedStepWarnings(inner as StepReport[], into);
+  }
+  return [...into];
+}
+
+/** Stderr warning lines: a JSON record each under --json, prose otherwise. */
+function printWarnings(warnings: readonly string[], json: boolean): void {
+  for (const warning of warnings) {
+    console.error(json ? JSON.stringify({ event: "warning", warning }) : `warning: ${warning}`);
   }
 }
 
@@ -1308,11 +1371,11 @@ async function runFlowDirectory(
   try {
     flows = await collectFlowFiles(dir, args.recursive);
   } catch {
-    return reject(`Could not read flow directory: ${dir}`);
+    return reject(`Could not read e2e test directory: ${dir}`);
   }
   if (flows.length === 0) {
     return reject(
-      `No flows found in ${dir}` +
+      `No e2e tests found in ${dir}` +
         (args.recursive ? "" : "\nPass -r/--recursive to include subdirectories.")
     );
   }
@@ -1343,7 +1406,7 @@ async function runFlowDirectory(
     let report: FlowReport | undefined;
     try {
       // No onProgress: batch output is failures-only, never live step lines.
-      const resp = await callTool("flow-execute", buildRunPayload(flowPath, projectRoot, args));
+      const resp = await callTool(RUN_TOOL_ID, buildRunPayload(flowPath, projectRoot, args));
       if (isFlowReport(resp.data)) report = resp.data;
     } catch (thrown) {
       const unreachableErr = await toolServerUnreachable(thrown);
@@ -1380,6 +1443,7 @@ async function runFlowDirectory(
       stopped = true;
       continue;
     }
+    printWarnings(nestedStepWarnings(report.steps), args.json);
     // Key exports by the flow's subdirectory so recursive same-stem flows
     // cannot clobber each other (exportFailureArtifacts keys by stem only).
     await exportAndResolveArtifacts(
@@ -1423,7 +1487,7 @@ async function runFlowDirectory(
   return exitAfterFlush(unreachable ? 2 : counts.failed === 0 ? 0 : 1);
 }
 
-export async function flow(argv: string[], options: FlowCommandOptions): Promise<void> {
+export async function e2e(argv: string[], options: FlowCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
   if (!sub || sub === "--help" || sub === "-h") {
@@ -1432,24 +1496,55 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   }
 
   if (sub === "list") {
-    const dir = path.join(process.cwd(), FLOWS_DIR);
-    try {
-      // One final sort over full relative paths, not per-directory: the
-      // ordering must be a pure function of the set of paths, never of the walk
-      // order.
-      const paths = (await collectRunnableFlowPaths(dir))
-        .sort()
-        .map((rel) => path.join(FLOWS_DIR, rel));
-      if (paths.length === 0) console.log("No flows found in .argent/flows");
-      else console.log(paths.join("\n"));
-    } catch {
-      console.log("No .argent/flows directory in the current working directory.");
+    // Every e2e test directory in lookup order. Stdout stays bare paths, one
+    // per line, so `list | xargs -n1 run` keeps working; notes on legacy and
+    // shadowed entries go to stderr.
+    const lines: string[] = [];
+    const notes: string[] = [];
+    let legacyCount = 0;
+    const byName = new Map<string, string>();
+    let anyDir = false;
+    for (const dir of E2E_DIRS) {
+      let rels: string[];
+      try {
+        // One final sort over full relative paths, not per-directory: the
+        // ordering must be a pure function of the set of paths, never of the
+        // walk order.
+        rels = (await collectRunnableFlowPaths(path.join(process.cwd(), dir))).sort();
+      } catch {
+        continue;
+      }
+      anyDir = true;
+      for (const rel of rels) {
+        const shown = path.join(dir, rel);
+        // Only a file directly in the directory is reachable by name.
+        const name = path.dirname(rel) === "." ? path.basename(rel, ".yaml") : undefined;
+        const usedByName = name === undefined ? undefined : byName.get(name);
+        if (name !== undefined && usedByName === undefined) byName.set(name, shown);
+        lines.push(shown);
+        if (dir === E2E_DIR) continue;
+        legacyCount++;
+        if (usedByName)
+          notes.push(`warning: ${shown} is shadowed by ${usedByName} when run by name`);
+      }
+    }
+    if (legacyCount > 0) {
+      notes.push(
+        `note: ${legacyCount} test${legacyCount === 1 ? "" : "s"} listed from .argent/flows (legacy); move ${legacyCount === 1 ? "it" : "them"} to .argent/e2e`
+      );
+    }
+    if (!anyDir) {
+      console.log(`No ${E2E_DIRS.join(" or ")} directory in the current working directory.`);
+    } else if (lines.length === 0) console.log(`No e2e tests found in ${E2E_DIRS.join(" or ")}`);
+    else {
+      console.log(lines.join("\n"));
+      for (const note of notes) console.error(note);
     }
     return;
   }
 
   if (sub !== "run") {
-    console.error(`Unknown flow subcommand "${sub}". Run \`argent flow --help\`.`);
+    console.error(`Unknown e2e subcommand "${sub}". Run \`argent e2e --help\`.`);
     return exitAfterFlush(2);
   }
 
@@ -1489,7 +1584,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   }
   if (!args.flowRef) {
     const message =
-      "argent flow run <flow|flow.yaml|dir> requires a flow name, a YAML file path, or a directory path.";
+      "argent e2e run <test|test.yaml|dir> requires an e2e test name, a YAML file path, or a directory path.";
     return usageError(message, message);
   }
 
@@ -1508,7 +1603,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // of guards, one resolved identity, one run (see resolveFlowRef). `fromName`
   // survives only to aim the not-found recovery, since a name resolves
   // somewhere the user never spelled out.
-  const { suppliedPath, fromName } = resolveFlowRef(args.flowRef);
+  const { suppliedPath, fromName, shadowed } = await resolveFlowRef(args.flowRef, projectRoot);
+  if (shadowed !== undefined) {
+    printWarnings([e2eShadowWarning(suppliedPath, shadowed)], args.json);
+  }
   // path.resolve collapses ".." lexically, without consulting symlinks, so a
   // ".." following a symlinked directory would make the CLI stat and run a
   // different file than the one the kernel opens for this string. Rejected
@@ -1522,7 +1620,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   // hint would quietly rename the run. A basename of ".." or "." names no flow
   // file and gets the generic recovery.
   if (suppliedPath.split(/[\\/]+/).includes("..")) {
-    let recovery = "Pass the fully resolved path to the flow's YAML.";
+    let recovery = "Pass the fully resolved path to the e2e test's YAML.";
     const suppliedBase = path.basename(suppliedPath);
     if (suppliedBase !== ".." && suppliedBase !== ".") {
       try {
@@ -1530,13 +1628,13 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
         // The reassembled path must itself be kernel-reachable — a hint
         // naming nothing on disk is worse than the generic line.
         await fsp.stat(resolved);
-        recovery = `Did you mean: argent flow run ${shellQuoteArg(resolved)}`;
+        recovery = `Did you mean: argent e2e run ${shellQuoteArg(resolved)}`;
       } catch {
         // Parent unresolvable, or nothing at the reassembled path.
       }
     }
     return fail(
-      `Flow path must not contain ".." segments — they are collapsed without following symlinks, ` +
+      `E2E test path must not contain ".." segments — they are collapsed without following symlinks, ` +
         `so the path can name a different file than the one your shell opens: ${suppliedPath}\n` +
         recovery,
       2
@@ -1555,21 +1653,21 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // name, "directory not found" would quote a path they never typed, so that
     // form falls through instead.
     if (args.recursive && !fromName) {
-      return fail(`Flow directory not found: ${resolvedPath}`, 2);
+      return fail(`E2E test directory not found: ${resolvedPath}`, 2);
     }
   }
   if (isDirectory) {
     if (args.jsonStream) {
-      return fail("--json-stream supports a single flow; directory runs are not supported.", 2);
+      return fail("--json-stream supports a single e2e test; directory runs are not supported.", 2);
     }
     return runFlowDirectory(resolvedPath, args, projectRoot, options);
   }
   if (args.recursive) {
     return fail(
       fromName
-        ? `flow run --recursive requires a directory path; "${args.flowRef}" is a saved-flow name, ` +
+        ? `e2e run --recursive requires a directory path; "${args.flowRef}" is a saved test's name, ` +
             `which always addresses the single file ${suppliedPath}.`
-        : `flow run --recursive requires a directory path: ${suppliedPath}`,
+        : `e2e run --recursive requires a directory path: ${suppliedPath}`,
       2
     );
   }
@@ -1592,10 +1690,10 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       ? `.${path.sep}${separatorTrimmedPath}`
       : separatorTrimmedPath;
     return fail(
-      `Flow path must not end in a path separator — the separator claims a directory, ` +
+      `E2E test path must not end in a path separator — the separator claims a directory, ` +
         `which the kernel would refuse to open as a file, so the CLI would run a file ` +
         `this string does not name: ${suppliedPath}\n` +
-        `Did you mean: argent flow run ${shellQuoteArg(hint)}`,
+        `Did you mean: argent e2e run ${shellQuoteArg(hint)}`,
       2
     );
   }
@@ -1613,31 +1711,31 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
       // path.extname treats a bare ".yaml" as an extensionless dotfile, so name the missing stem.
       return fail(
-        `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
+        `E2E test filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
         2
       );
     }
     if (looksLikeName) {
       return fail(
-        `Flow name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
-          `Names run \`${FLOWS_DIR}/<name>.yaml\`; pass a path ending in .yaml to run a flow file kept elsewhere.`,
+        `E2E test name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
+          `Names run \`${E2E_DIRS.map((dir) => `${dir}/<name>.yaml`).join("` or `")}\`; pass a path ending in .yaml to run an e2e test file kept elsewhere.`,
         2
       );
     }
     if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
       // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
       return fail(
-        `Flow extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`,
+        `E2E test extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`,
         2
       );
     }
-    return fail(`Flow path must end in .yaml: ${suppliedPath}`, 2);
+    return fail(`E2E test path must end in .yaml: ${suppliedPath}`, 2);
   }
 
   const flowName = path.basename(suppliedPath, ".yaml");
   if (!SAFE_FLOW_NAME.test(flowName)) {
     return fail(
-      `Flow filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
+      `E2E test filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
       2
     );
   }
@@ -1646,12 +1744,12 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   try {
     const stat = await fsp.stat(flowPath);
     if (!stat.isFile()) {
-      return fail(`Flow path is not a file: ${flowPath}`, 2);
+      return fail(`E2E test path is not a file: ${flowPath}`, 2);
     }
     await fsp.access(flowPath, fsConstants.R_OK);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    const detail = code === "ENOENT" ? "Flow file not found" : "Could not read flow file";
+    const detail = code === "ENOENT" ? "E2E test file not found" : "Could not read e2e test file";
     // Each form misses for its own reason. A name is the one form whose file
     // the user never spelled out, so the resolved path plus `flow list` settles
     // whether the flow is missing or the lookup went somewhere unexpected. A
@@ -1660,7 +1758,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     let recovery = "";
     if (code === "ENOENT") {
       recovery = fromName
-        ? `\nNo flow named "${args.flowRef}" is saved there — run \`argent flow list\` to see the saved flows.`
+        ? `\nNo e2e test named "${args.flowRef}" is saved in ${E2E_DIRS.join(" or ")} — run \`argent e2e list\` to see the saved tests.`
         : await savedFlowHint(projectRoot, flowPath);
     }
     return fail(`${detail}: ${flowPath}${recovery}`, 2);
@@ -1694,15 +1792,15 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // name is inside SHELL_SAFE_ARG by the check above, so it needs no quoting.
     const recovery = actualRunnable
       ? fromName
-        ? `Did you mean: argent flow run ${path.basename(actual!, ".yaml")}`
-        : `Did you mean: argent flow run ${shellQuoteArg(path.join(path.dirname(suppliedPath), actual!))}`
+        ? `Did you mean: argent e2e run ${path.basename(actual!, ".yaml")}`
+        : `Did you mean: argent e2e run ${shellQuoteArg(path.join(path.dirname(suppliedPath), actual!))}`
       : actual !== undefined
-        ? `Rename ${actual} to ${suppliedBase} to run it — flow files must be lowercase .yaml.`
-        : "Pass the flow file's name exactly as it appears on disk.";
+        ? `Rename ${actual} to ${suppliedBase} to run it — e2e test files must be lowercase .yaml.`
+        : "Pass the e2e test file's name exactly as it appears on disk.";
     return fail(
-      `Flow path must name the file as it appears on disk — this filesystem matched ` +
+      `E2E test path must name the file as it appears on disk — this filesystem matched ` +
         `${JSON.stringify(suppliedBase)} case-insensitively` +
-        `${actual !== undefined ? ` to ${JSON.stringify(actual)}` : ""}, so the flow name ` +
+        `${actual !== undefined ? ` to ${JSON.stringify(actual)}` : ""}, so the test name ` +
         `(which keys the report, __baselines__/, and --output) would be one no file carries: ` +
         `${suppliedPath}\n${recovery}`,
       2
@@ -1724,7 +1822,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
       writeJsonStreamRecord({ event: "progress", data: s });
       return;
     }
-    if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+    if (liveSteps === 0) console.log(`E2E test "${flowName}"`);
     liveSteps++;
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
@@ -1740,7 +1838,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
   let report: FlowReport;
   try {
     const resp = await callTool(
-      "flow-execute",
+      RUN_TOOL_ID,
       payload,
       args.json ? undefined : { onProgress: onStepReport }
     );
@@ -1758,7 +1856,7 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
     // here when the run failed before any of them. Streaming mode owns stdout,
     // so no prose verdict there either.
     if (!args.json && !args.jsonStream) {
-      if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+      if (liveSteps === 0) console.log(`E2E test "${flowName}"`);
       console.log(
         `  ${STATUS_GLYPH.error} ` +
           (unreachableErr
@@ -1774,11 +1872,12 @@ export async function flow(argv: string[], options: FlowCommandOptions): Promise
 
   if (!isFlowReport(report)) {
     if (!args.json && !args.jsonStream) {
-      if (liveSteps === 0) console.log(`Flow "${flowName}"`);
+      if (liveSteps === 0) console.log(`E2E test "${flowName}"`);
       console.log(`  ${STATUS_GLYPH.error} did not finish (no run report)`);
     }
     return fail(`"${flowName}" did not produce a run report.`, 2);
   }
+  printWarnings(nestedStepWarnings(report.steps), args.json);
 
   try {
     await exportAndResolveArtifacts(

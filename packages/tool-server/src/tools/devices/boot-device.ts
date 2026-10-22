@@ -1,5 +1,15 @@
 import { execFile, spawn, type StdioOptions } from "node:child_process";
-import { closeSync, existsSync, openSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -9,6 +19,7 @@ import {
   FAILURE_CODES,
   FailureError,
   ServiceNotFoundError,
+  getFailureSignal,
   type Registry,
   type ToolCapability,
   type ToolDefinition,
@@ -37,7 +48,14 @@ import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
-import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import {
+  assertHarmonyEnabled,
+  classifyDevice,
+  harmonyInstanceName,
+  stripRemotePrefix,
+  harmonyDeviceId,
+  harmonyEmulatorId,
+} from "../../utils/device-info";
 import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
 import { InvalidToolInputError } from "../../utils/capability";
 import {
@@ -49,31 +67,56 @@ import {
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
+import {
+  EMULATOR_NOT_FOUND,
+  EMULATOR_TIMEOUT_MS,
+  emulatorFailure,
+  isChinaOnlyRestriction,
+  resolveHarmonyEmulator,
+  runHarmonyEmulator,
+} from "../../utils/harmony-cli";
+import {
+  HARMONY_LIST_TIMEOUT_MS,
+  HDC_LIST_TIMEOUT_MS,
+  listHarmonyHdcTargetsStrict,
+  listHarmonyInstances,
+} from "../../utils/harmony-devices";
+import { resolveHdc } from "../../utils/harmony-hdc";
+import { HARMONY_FLAG } from "../../utils/harmony-flag";
+import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
+import { UITEST_TIMEOUT_MS, harmonyDisplay, harmonyDumpLayout } from "../../utils/harmony-uitest";
 import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
 
-// The exactly-one check over `udid`/`avdName`/`vvdImage`/`electronAppPath` lives in
-// `execute`, so each field's `.describe()` restates the constraint for MCP clients.
+// The exactly-one check over `udid`/`avdName`/`vvdImage`/`harmonyInstance`/`electronAppPath`
+// lives in `execute`, so each field's `.describe()` restates the constraint for MCP clients.
 const zodSchema = z.object({
   udid: z
     .string()
     .optional()
     .describe(
-      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
     ),
   avdName: z
     .string()
     .optional()
     .describe(
-      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
     ),
   vvdImage: z
     .string()
     .optional()
     .describe(
-      "Vega (Fire TV): VVD image to boot: the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+      "Vega (Fire TV): VVD image to boot: the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
     ),
+  harmonyInstance: z
+    .string()
+    .optional()
+    .describe(
+      'HarmonyOS: emulator instance to start: the `name` of a `kind: "emulator"` device from `list-devices` (e.g. `Phone_1`); the `harmony-emulator-<name>` id that entry reports as its `udid` is accepted too. Provide exactly one of `udid`, `avdName`, `vvdImage`, `harmonyInstance`, or `electronAppPath`.'
+    )
+    .meta({ [FLAG_META_KEY]: HARMONY_FLAG }),
   bootTimeoutMs: z
     .number()
     .int()
@@ -81,29 +124,31 @@ const zodSchema = z.object({
     .max(900_000)
     .optional()
     .describe(
-      "Android/Vega: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega. Clamped to [30s, 15min]. Ignored on iOS."
+      "Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega<flag:harmonyos>, 180000 (3 min) on HarmonyOS, where with `force` it spans the shutdown as well as the boot</flag:harmonyos>. Clamped to [30s, 15min]. Ignored on iOS."
     ),
   force: z
     .boolean()
     .optional()
-    .describe("Shut down and re-boot the device even if already running."),
+    .describe(
+      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to the `hdc` connect key it registered under, since the emulator manager never reports one: without it the instance is left alone and the payload names the instance rather than a key (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos> Ignored for Electron, which always spawns a fresh process."
+    ),
   sound: z
     .boolean()
     .optional()
     .describe(
-      "Android only: boot the emulator with audio output enabled. Defaults to false: argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega/Electron, which argent never mutes."
+      "Android only: boot the emulator with audio output enabled. Defaults to false: argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which argent never mutes."
     ),
   headless: z
     .boolean()
     .optional()
     .describe(
-      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega/Electron, which have no equivalent GUI step."
+      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which have no equivalent GUI step."
     ),
   electronAppPath: z
     .string()
     .optional()
     .describe(
-      "Electron: path to the Electron app to launch. Either a packaged .app bundle / executable, or a project directory whose package.json points the Electron binary at the entry script. Mutually exclusive with udid/avdName."
+      "Electron: path to the Electron app to launch. Either a packaged .app bundle / executable, or a project directory whose package.json points the Electron binary at the entry script. Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
     ),
   electronPort: z
     .number()
@@ -129,11 +174,19 @@ type BootDeviceResult =
   | { platform: "ios-remote"; udid: string; booted: true }
   | { platform: "android"; serial: string; avdName: string; booted: true }
   | VegaBootResult
+  | HarmonyBootResult
   | ElectronBootResult
   | NativeDevtoolsInitFailedResult;
 
 function bootTarget(params: BootDeviceParams): string {
-  return params.udid ?? params.avdName ?? params.vvdImage ?? params.electronAppPath ?? "device";
+  return (
+    params.udid ??
+    params.avdName ??
+    params.vvdImage ??
+    params.harmonyInstance ??
+    params.electronAppPath ??
+    "device"
+  );
 }
 
 // Flags every boot-device launch passes (`-noaudio` unless the caller opts
@@ -1322,12 +1375,662 @@ function bootVega(params: {
   return promise;
 }
 
+/** `udid` is the connect-key id once the instance reached `hdc`, else the instance id. */
+type HarmonyBootResult = {
+  platform: "harmony";
+  udid: string;
+  instanceName: string;
+  booted: true;
+  note?: string;
+};
+
+// One in-flight boot per instance, as `inFlightVegaBoots`; `force` tells a
+// boot that can be shared from one that must queue.
+const inFlightHarmonyBoots = new Map<
+  string,
+  { force: boolean; promise: Promise<HarmonyBootResult> }
+>();
+
+/** Also spans a `force` shutdown, which runs on unpredictably after `-stop` returns. */
+const HARMONY_BOOT_TIMEOUT_MS = 180_000;
+
+/** Each poll spawns `hdc`, far dearer than an adb poll. */
+const HARMONY_TARGET_POLL_MS = 2_000;
+
+/** Only outlasts process startup: a failing `-start` prints and exits at once. */
+const HARMONY_NO_HDC_GRACE_MS = 3_000;
+
+/** How long a spent start-attempt log may keep occupying tmpdir before a sweep. */
+const HARMONY_LOG_TTL_MS = 24 * 60 * 60 * 1_000;
+
+const HARMONY_EXIT_POLL_MS = 50;
+
+/** The manager reports only the symptom: a missing instance or image. */
+const HARMONY_IMAGE_RESTRICTION =
+  "Huawei serves HarmonyOS emulator images only within mainland China; outside it no image can " +
+  "be downloaded, so no instance can be created and none can be started. argent cannot supply " +
+  "the image; an instance has to be created in DevEco Studio on a host that can download one.";
+
+/** A failed `-list` is also empty, so the restriction is offered, not asserted. */
+const HARMONY_NO_INSTANCES =
+  "The emulator manager listed no HarmonyOS instances — either none has been created, or the " +
+  "listing itself failed; `Emulator -list -details` shows which. Create one in DevEco Studio if " +
+  "there is none. If creating one fails for want of an image, note that Huawei serves HarmonyOS " +
+  "emulator images only within mainland China.";
+
+const HARMONY_ALREADY_RUNNING =
+  "The instance was already running, so argent did not restart it — and an instance argent did " +
+  "not start cannot be matched to the `hdc` connect key it registered under. Take the connect " +
+  'key from `list-devices` (the `kind: "device"` entry), or re-run with `force: true` to ' +
+  "restart the instance and have its key resolved here.";
+
+const HARMONY_NO_TARGET =
+  "The instance started but had not registered with `hdc` before the boot budget ran out, so " +
+  "this payload names the instance rather than a connect key. It keeps booting: call " +
+  '`list-devices` once it finishes and drive the `kind: "device"` entry that appears.';
+
+const HARMONY_AMBIGUOUS_TARGET =
+  "More than one `hdc` target registered while the instance was booting, so argent could not " +
+  "tell which is the instance it started and did not guess. Call `list-devices` and drive the " +
+  '`kind: "device"` entry for the instance, or stop the other emulator and re-run.';
+
+const HARMONY_MISMATCHED_TARGET =
+  "A target registered while the instance was booting, but its display is not the panel this " +
+  "instance is configured with, so it is another device rather than the one argent started. " +
+  'Call `list-devices` and drive the `kind: "device"` entry for the instance once it appears.';
+
+const HARMONY_UNPROBEABLE_TARGET =
+  "A target registered while the instance was booting but never reported a display argent could " +
+  "read, so it could not tell whether the target is this instance or another device that " +
+  "reconnected, and did not guess. A guest that has not finished compositing reads this way too, " +
+  'so call `list-devices` once it finishes booting and drive the `kind: "device"` entry for ' +
+  "the instance.";
+
+const HARMONY_UNCONFIRMED_TARGET =
+  "argent had no panel on record for this instance, so it could not check the target it returned " +
+  "against one and matched on arrival timing alone. If another emulator or device reconnected " +
+  "while the instance was booting, this may be its connect key; confirm against `list-devices` " +
+  "before relying on it.";
+
+const HARMONY_NOT_DRIVABLE =
+  "The instance registered with `hdc` but had not answered `uitest` before the boot budget " +
+  "ran out, so `describe`, `screenshot` and the gesture tools may fail for a little longer. " +
+  "Retry the first interaction.";
+
+const HARMONY_UNLISTABLE_TARGETS =
+  "`hdc list targets` failed every time argent asked while the instance was booting, so it could " +
+  "not tell whether the instance registered — this says nothing about the instance itself. Check " +
+  "that `hdc` works (`hdc list targets`), then call `list-devices` and drive the " +
+  '`kind: "device"` entry for the instance.';
+
+const HARMONY_UNATTEMPTED_LISTING =
+  "The boot budget ran out before argent could ask `hdc list targets` once while the instance " +
+  "was coming up, so whether the instance registered was never checked — this says nothing " +
+  'about `hdc` itself. Call `list-devices` and drive the `kind: "device"` entry for the ' +
+  "instance once it appears.";
+
+const HARMONY_NO_HDC =
+  "The instance started, but `hdc` was not found, so argent cannot tell which target it " +
+  "registered as and no interaction tool can reach it. Install DevEco Studio's device " +
+  "connector (or put `hdc` on PATH), then call `list-devices`.";
+
+/**
+ * Strict listing: `hdc` exits 0 on its own failures, and an unreadable table
+ * must not read as "nothing registered". `ok` is false only if every poll failed.
+ */
+async function connectedHarmonyTargets(
+  timeoutMs?: number
+): Promise<{ ok: boolean; targets: Awaited<ReturnType<typeof listHarmonyHdcTargetsStrict>> }> {
+  try {
+    const targets = await listHarmonyHdcTargetsStrict(timeoutMs);
+    return { ok: true, targets: targets.filter((t) => t.state === "Connected") };
+  } catch {
+    return { ok: false, targets: [] };
+  }
+}
+
+/**
+ * Keys `Connected` before the start. Not every listed key: a stopped instance
+ * leaves an `Offline` row that it re-registers on, so it could never arrive.
+ * Strict, because an empty baseline would make every connected emulator an
+ * arrival; retried once, as the daemon restarting after `-stop` clears.
+ */
+async function connectedHarmonyKeys(
+  stoppedInstance: string | null,
+  deadline: number
+): Promise<Set<string>> {
+  for (let attempt = 0; ; attempt++) {
+    // Spent from the boot budget: a `force` shutdown often leaves none.
+    const budget = Math.max(1, deadline - Date.now());
+    try {
+      const targets = await listHarmonyHdcTargetsStrict(Math.min(HDC_LIST_TIMEOUT_MS, budget));
+      return new Set(targets.filter((t) => t.state === "Connected").map((t) => t.connectKey));
+    } catch (err) {
+      if (attempt > 0 || Date.now() >= deadline) {
+        throw new FailureError(
+          "Could not read `hdc`'s device table while preparing to start the HarmonyOS instance, " +
+            "so the target it registers under could not have been told apart from those already " +
+            "connected: " +
+            (err instanceof Error ? err.message : String(err)) +
+            (stoppedInstance
+              ? `. \`force\` had already stopped "${stoppedInstance}", which is still down — ` +
+                "re-run boot-device to start it"
+              : ""),
+          {
+            error_code: FAILURE_CODES.BOOT_HARMONY_TARGET_LIST_FAILED,
+            failure_stage: "boot_harmony_target_snapshot",
+            failure_area: "tool_server",
+            // `runHdc` already classified a timeout; keep its kind.
+            error_kind: getFailureSignal(err)?.error_kind ?? "subprocess",
+            failure_command: "hdc",
+          },
+          { cause: err instanceof Error ? err : new Error(String(err)) }
+        );
+      }
+      await new Promise((r) =>
+        setTimeout(r, Math.min(HARMONY_TARGET_POLL_MS, Math.max(0, deadline - Date.now())))
+      );
+    }
+  }
+}
+
+/** The guest reports its panel as oriented, the manager as configured. */
+function sameHarmonyPanel(
+  a: { width: number; height: number },
+  b: { width: number; height: number }
+): boolean {
+  return (
+    Math.min(a.width, a.height) === Math.min(b.width, b.height) &&
+    Math.max(a.width, a.height) === Math.max(b.width, b.height)
+  );
+}
+
+/** A `USB` target is a handset; an emulator is reached over TCP loopback. */
+function couldBeHarmonyEmulator(target: { connection: string | null }): boolean {
+  return target.connection !== "USB";
+}
+
+/**
+ * `Emulator -start` is the emulator's supervisor and runs for its whole
+ * lifetime, so it is spawned detached, logging to a file for diagnosis.
+ */
+async function startHarmonyEmulator(
+  instanceName: string
+): Promise<{ exited: () => { reason: string; output: string } | null }> {
+  const bin = await resolveHarmonyEmulator();
+  if (!bin) {
+    throw new FailureError(EMULATOR_NOT_FOUND, {
+      error_code: FAILURE_CODES.HARMONY_EMULATOR_NOT_FOUND,
+      failure_stage: "harmony_emulator_resolve_binary",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+      failure_command: "deveco_emulator",
+    });
+  }
+  // Unique per attempt: two tool-servers can boot one instance, and a shared
+  // log would be truncated by the loser. Day-old logs are swept.
+  try {
+    for (const entry of readdirSync(tmpdir())) {
+      if (!entry.startsWith("argent-harmony-") || !entry.endsWith(".log")) continue;
+      try {
+        if (Date.now() - statSync(join(tmpdir(), entry)).mtimeMs > HARMONY_LOG_TTL_MS) {
+          rmSync(join(tmpdir(), entry), { force: true });
+        }
+      } catch {
+        // best-effort
+      }
+    }
+  } catch {
+    // the guarded open below handles an unreadable tmpdir
+  }
+  const safeName = instanceName.replace(/[^\w.-]/g, (c) => `%${c.codePointAt(0)!.toString(16)}`);
+  const logPath = join(tmpdir(), `argent-harmony-${safeName}-${process.hrtime.bigint()}.log`);
+  // Without a writable tmpdir the boot proceeds with no log.
+  let logFd: number | null;
+  try {
+    logFd = openSync(logPath, "w");
+  } catch {
+    logFd = null;
+  }
+  const child = spawn(bin, ["-start", instanceName], {
+    detached: true,
+    stdio: logFd === null ? "ignore" : ["ignore", logFd, logFd],
+  });
+  child.unref();
+  if (logFd !== null) {
+    try {
+      closeSync(logFd);
+    } catch {
+      // best-effort
+    }
+  }
+
+  let exit: { reason: string; output: string } | null = null;
+  const record = (reason: string) => {
+    if (exit) return;
+    let output = "";
+    try {
+      output = readFileSync(logPath, "utf8");
+    } catch {
+      // no log; the reason alone carries it
+    }
+    exit = { reason, output };
+  };
+  child.on("exit", (code, signal) =>
+    record(signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`)
+  );
+  // An unhandled async spawn `error` would crash the tool-server.
+  child.on("error", (err) => record(`could not be spawned: ${err.message}`));
+
+  return { exited: () => exit };
+}
+
+/** Keyed by the whole `reason` union so a new reason must be worded here. */
+const HARMONY_NO_KEY_CAVEAT: Record<NonNullable<HarmonyTargetOutcome["reason"]>, string> = {
+  ambiguous: HARMONY_AMBIGUOUS_TARGET,
+  mismatched: HARMONY_MISMATCHED_TARGET,
+  unprobeable: HARMONY_UNPROBEABLE_TARGET,
+  unlistable: HARMONY_UNLISTABLE_TARGETS,
+  unattempted: HARMONY_UNATTEMPTED_LISTING,
+  none: HARMONY_NO_TARGET,
+};
+
+type HarmonyTargetOutcome = {
+  key: string | null;
+  unconfirmed?: boolean;
+  reason?: "ambiguous" | "mismatched" | "unprobeable" | "unlistable" | "unattempted" | "none";
+};
+
+/**
+ * `start()`, or null once `deadline` passes: each probe has a fixed timeout, so
+ * a poll over several arrivals would otherwise overrun `bootTimeoutMs`. A thunk,
+ * so nothing is spawned past the deadline.
+ */
+async function withinBudget<T>(start: () => Promise<T>, deadline: number): Promise<T | null> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return null;
+  const work = start();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), remaining);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The connect key of the one target that arrives after the start, or null.
+ * Arrival is the only join between the manager and `hdc`. USB arrivals are
+ * excluded, a candidate must report the instance's configured panel
+ * (`expected`; null skips the check and marks the key `unconfirmed`), and two
+ * confirmed arrivals are refused. A mismatched or unreadable panel is re-checked
+ * every poll, since a booting foldable's panel is not settled.
+ *
+ * Not covered: two instances of one device profile, or another emulator started
+ * outside this call during the window.
+ */
+async function waitForHarmonyTarget(
+  before: Set<string>,
+  deadline: number,
+  checkAlive: () => void,
+  expected: { width: number; height: number } | null
+): Promise<HarmonyTargetOutcome> {
+  let sawMismatch = false;
+  let sawUnprobeable = false;
+  // Never asking (a `force` shutdown spent the budget) is not a broken `hdc`.
+  let listedOnce = false;
+  let asked = false;
+  const noKeyReason = (): HarmonyTargetOutcome["reason"] =>
+    sawMismatch
+      ? "mismatched"
+      : sawUnprobeable
+        ? "unprobeable"
+        : listedOnce
+          ? "none"
+          : asked
+            ? "unlistable"
+            : "unattempted";
+  for (;;) {
+    // Bounded, not abandoned: a listing landing at the deadline still names the key.
+    const budget = deadline - Date.now();
+    if (budget <= 0) {
+      // Catches an emulator that died in the final interval.
+      checkAlive();
+      return { key: null, reason: noKeyReason() };
+    }
+    const listing = await connectedHarmonyTargets(Math.min(HDC_LIST_TIMEOUT_MS, budget));
+    asked = true;
+    if (listing.ok) listedOnce = true;
+    const arrived = listing.targets.filter(
+      (t) => !before.has(t.connectKey) && couldBeHarmonyEmulator(t)
+    );
+    const confirmed: string[] = [];
+    for (const target of arrived) {
+      if (!expected) {
+        confirmed.push(target.connectKey);
+        continue;
+      }
+      const display = await withinBudget(
+        () => harmonyDisplay(target.connectKey).catch(() => null),
+        deadline
+      );
+      // `0x0` is a guest not yet composited; a budget-cut probe lands here too.
+      if (!display || display.width <= 0 || display.height <= 0) {
+        sawUnprobeable = true;
+        continue;
+      }
+      if (sameHarmonyPanel(display, expected)) confirmed.push(target.connectKey);
+      else sawMismatch = true;
+    }
+    if (confirmed.length === 1) {
+      return { key: confirmed[0]!, unconfirmed: !expected };
+    }
+    // Refused now: polling on would turn the refusal into a guess once one flaps.
+    if (confirmed.length > 1) return { key: null, reason: "ambiguous" };
+    checkAlive();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return { key: null, reason: noKeyReason() };
+    }
+    await new Promise((r) => setTimeout(r, Math.min(HARMONY_TARGET_POLL_MS, remaining)));
+  }
+}
+
+/**
+ * Whether the guest answered `uitest dumpLayout` in time: `Connected` comes
+ * before the window service, which fails dumps for a while after.
+ */
+async function waitForHarmonyDrivable(
+  connectKey: string,
+  deadline: number,
+  checkAlive: () => void
+): Promise<boolean> {
+  const probePath = join(tmpdir(), `argent-harmony-bootprobe-${process.hrtime.bigint()}.json`);
+  let inFlight: Promise<unknown> | null = null;
+  try {
+    for (;;) {
+      const budget = deadline - Date.now();
+      if (budget <= 0) {
+        checkAlive();
+        return false;
+      }
+      // An abandoned probe holds the device's `uitest` queue until killed.
+      const probe = harmonyDumpLayout(
+        connectKey,
+        probePath,
+        Math.min(UITEST_TIMEOUT_MS, budget)
+      ).then(
+        () => true,
+        () => false
+      );
+      inFlight = probe;
+      const answered = await withinBudget(() => probe, deadline);
+      if (answered !== null) inFlight = null;
+      if (answered) return true;
+      checkAlive();
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      await new Promise((r) => setTimeout(r, Math.min(HARMONY_TARGET_POLL_MS, remaining)));
+    }
+  } finally {
+    // An abandoned probe may still write the dump; remove it once it settles.
+    const remove = () => rm(probePath, { force: true }).catch(() => {});
+    if (inFlight) void inFlight.then(remove);
+    else await remove();
+  }
+}
+
+/** Resolve when the manager has exited, or when `graceMs` has passed. */
+async function waitForHarmonyExit(
+  emulator: { exited: () => unknown },
+  graceMs: number
+): Promise<void> {
+  const deadline = Date.now() + graceMs;
+  for (;;) {
+    if (emulator.exited()) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return;
+    await new Promise((r) => setTimeout(r, Math.min(HARMONY_EXIT_POLL_MS, remaining)));
+  }
+}
+
+/**
+ * Whether the manager stopped reporting the instance as running. `-stop`
+ * returns before the process is gone, and the `hdc` endpoint dies first.
+ */
+async function waitForHarmonyInstanceStopped(name: string, deadline: number): Promise<boolean> {
+  for (;;) {
+    const budget = deadline - Date.now();
+    if (budget <= 0) return false;
+    const instances = await listHarmonyInstances(Math.min(HARMONY_LIST_TIMEOUT_MS, budget)).catch(
+      () => null
+    );
+    // A failed `-list` resolves `[]`, while a stopped instance is still a row.
+    if (instances?.length && !instances.some((i) => i.name === name && i.running)) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await new Promise((r) => setTimeout(r, Math.min(HARMONY_TARGET_POLL_MS, remaining)));
+  }
+}
+
+async function bootHarmonyImpl(params: {
+  instanceName: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<HarmonyBootResult> {
+  await ensureDep("harmony-emulator");
+  const bootDeadline = Date.now() + params.bootTimeoutMs;
+
+  // `null` (the listing failed) neither blocks the start nor explains its failure.
+  const instances = await listHarmonyInstances(
+    Math.min(HARMONY_LIST_TIMEOUT_MS, Math.max(1, bootDeadline - Date.now()))
+  ).catch(() => null);
+  // Refuse an unknown name, as Android does. Only a listing with rows can: a
+  // failed `-list` also resolves `[]`.
+  if (instances?.length && !instances.some((i) => i.name === params.instanceName)) {
+    throw new FailureError(
+      `HarmonyOS emulator instance "${params.instanceName}" not found. ` +
+        `Available: ${instances.map((i) => i.name).join(", ")}.`,
+      {
+        error_code: FAILURE_CODES.BOOT_HARMONY_INSTANCE_NOT_FOUND,
+        failure_stage: "boot_harmony_instance_lookup",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+
+  const alreadyRunning =
+    instances?.some((i) => i.name === params.instanceName && i.running) ?? false;
+
+  if (alreadyRunning && !params.force) {
+    return {
+      platform: "harmony",
+      udid: harmonyEmulatorId(params.instanceName),
+      instanceName: params.instanceName,
+      booted: true,
+      note: HARMONY_ALREADY_RUNNING,
+    };
+  }
+  if (alreadyRunning) {
+    // `-stop`'s own 30s ceiling can be a whole minimum budget.
+    const stopped = await runHarmonyEmulator(
+      ["-stop", params.instanceName],
+      Math.min(EMULATOR_TIMEOUT_MS, Math.max(1, bootDeadline - Date.now()))
+    );
+    const stopDiagnostic = emulatorFailure(stopped);
+    if (stopDiagnostic) {
+      throw new FailureError(
+        `Failed to stop HarmonyOS emulator "${params.instanceName}" before restarting it: ${stopDiagnostic}`,
+        {
+          error_code: FAILURE_CODES.BOOT_HARMONY_STOP_FAILED,
+          failure_stage: "boot_harmony_stop",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_command: "deveco_emulator",
+        }
+      );
+    }
+    if (!(await waitForHarmonyInstanceStopped(params.instanceName, bootDeadline))) {
+      throw new FailureError(
+        `HarmonyOS emulator "${params.instanceName}" was still running when the ` +
+          `${Math.round(params.bootTimeoutMs / 1_000)}s budget ran out after \`-stop\`, so ` +
+          "starting it now would only report that it is already running. Re-run with a larger " +
+          "bootTimeoutMs, or stop the instance from DevEco Studio.",
+        {
+          error_code: FAILURE_CODES.BOOT_HARMONY_STOP_TIMEOUT,
+          failure_stage: "boot_harmony_stop_wait",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+          failure_command: "deveco_emulator",
+        }
+      );
+    }
+  }
+
+  // Without a connector there is no target list to wait on; checked before the
+  // snapshot, which reads that list.
+  const hdcAvailable = Boolean(await resolveHdc());
+
+  // Keys connected now belong to other devices; reaching `Connected` after this
+  // marks the instance, even on the key it held before. `alreadyRunning` here
+  // means this call stopped the instance.
+  const before = hdcAvailable
+    ? await connectedHarmonyKeys(alreadyRunning ? params.instanceName : null, bootDeadline)
+    : new Set<string>();
+  // Separates the instance reconnecting from another device doing the same.
+  const expectedPanel = instances?.find((i) => i.name === params.instanceName)?.display ?? null;
+
+  const emulator = await startHarmonyEmulator(params.instanceName);
+
+  // Lets a death in the readiness wait say it came after registration.
+  let resolvedKey: string | null = null;
+  const assertEmulatorAlive = () => {
+    {
+      const exit = emulator.exited();
+      if (!exit) return;
+      // The exit code is no verdict; only the printed diagnostic is (see `harmony-cli.ts`).
+      const diagnostic = emulatorFailure({ stdout: exit.output, stderr: "" });
+      if (!diagnostic) {
+        const when = resolvedKey
+          ? `while "${params.instanceName}" (\`${resolvedKey}\`) was still coming up`
+          : `before "${params.instanceName}" registered with \`hdc\``;
+        throw new FailureError(
+          `The HarmonyOS emulator manager exited (${exit.reason}) ${when}` +
+            `, so nothing is running to drive. It printed: ${exit.output.trim() || "(nothing)"}`,
+          {
+            error_code: FAILURE_CODES.BOOT_HARMONY_MANAGER_EXITED,
+            failure_stage: "boot_harmony_manager_exit",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            failure_command: "deveco_emulator",
+          }
+        );
+      }
+      const imageMissing =
+        isChinaOnlyRestriction(diagnostic) || diagnostic.includes("Cannot find image");
+      // Only the manager's own words justify blaming the region.
+      const cause = imageMissing
+        ? ` ${HARMONY_IMAGE_RESTRICTION}`
+        : instances?.length === 0
+          ? ` ${HARMONY_NO_INSTANCES}`
+          : "";
+      throw new FailureError(
+        cause
+          ? `Failed to start HarmonyOS emulator "${params.instanceName}".${cause} The manager reported: ${diagnostic}`
+          : `Failed to start HarmonyOS emulator "${params.instanceName}": ${diagnostic}`,
+        {
+          error_code: FAILURE_CODES.BOOT_HARMONY_START_FAILED,
+          failure_stage: "boot_harmony_start",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_command: "deveco_emulator",
+        }
+      );
+    }
+  };
+
+  // Without a connector, still watch the manager briefly so a failing start is
+  // not reported `booted: true`. A single check would run before the child could
+  // exit.
+  if (!hdcAvailable) {
+    const grace = Math.min(HARMONY_NO_HDC_GRACE_MS, Math.max(0, bootDeadline - Date.now()));
+    if (grace > 0) await waitForHarmonyExit(emulator, grace);
+    assertEmulatorAlive();
+  }
+
+  const outcome: HarmonyTargetOutcome = hdcAvailable
+    ? await waitForHarmonyTarget(before, bootDeadline, assertEmulatorAlive, expectedPanel)
+    : { key: null };
+  const connectKey = outcome.key;
+
+  // Registered is not drivable.
+  resolvedKey = connectKey;
+  const drivable = connectKey
+    ? await waitForHarmonyDrivable(connectKey, bootDeadline, assertEmulatorAlive)
+    : false;
+
+  const caveats: string[] = [];
+  if (connectKey) {
+    if (outcome.unconfirmed) caveats.push(HARMONY_UNCONFIRMED_TARGET);
+    if (!drivable) caveats.push(HARMONY_NOT_DRIVABLE);
+  } else if (!hdcAvailable) {
+    caveats.push(HARMONY_NO_HDC);
+  } else {
+    caveats.push(HARMONY_NO_KEY_CAVEAT[outcome.reason ?? "none"]);
+  }
+  const note = caveats.length > 0 ? caveats.join(" ") : undefined;
+
+  return {
+    platform: "harmony",
+    udid: connectKey ? harmonyDeviceId(connectKey) : harmonyEmulatorId(params.instanceName),
+    instanceName: params.instanceName,
+    booted: true,
+    ...(note ? { note } : {}),
+  };
+}
+
+function bootHarmony(params: {
+  instanceName: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<HarmonyBootResult> {
+  // `harmonyInstance` carries no `udid`, so the HTTP capability gate never sees it.
+  assertHarmonyEnabled();
+  // Same-`force` boots share one run; opposite ones serialize, or both reach
+  // `-start` and the instance starts twice.
+  const key = params.instanceName;
+  const force = Boolean(params.force);
+  const existing = inFlightHarmonyBoots.get(key);
+  if (existing && existing.force === force) return existing.promise;
+  const tracked = (async () => {
+    if (existing) {
+      try {
+        await existing.promise;
+      } catch {
+        // the prior attempt failed; this one reports for itself
+      }
+    }
+    return bootHarmonyImpl(params);
+  })().finally(() => {
+    if (inFlightHarmonyBoots.get(key)?.promise === tracked) inFlightHarmonyBoots.delete(key);
+  });
+  inFlightHarmonyBoots.set(key, { force, promise: tracked });
+  return tracked;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { emulator: true },
 };
 
 export function createBootDeviceTool(
@@ -1341,14 +2044,15 @@ export function createBootDeviceTool(
       failedMsg: ({ params, failureSignal }) =>
         `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
     },
-    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
-Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
+    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
+Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), <flag:harmonyos>'harmonyInstance' for a HarmonyOS emulator instance (the 'name' of a harmony device from list-devices), </flag:harmonyos>or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
-Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
+HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager itself reports no readiness signal and never names a port, so an instance that is already running is left alone unless you pass 'force: true'; when the key could not be resolved the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
     alwaysLoad: true,
     searchHint:
-      "boot start launch simulator emulator avd device session ios android vega vvd firetv cold hot",
+      "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
     zodSchema,
     capability,
     services: () => ({}),
@@ -1356,11 +2060,15 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
       const hasUdid = Boolean(params.udid);
       const hasAvd = Boolean(params.avdName);
       const hasVega = Boolean(params.vvdImage);
+      const hasHarmony = Boolean(params.harmonyInstance);
       const hasElectron = Boolean(params.electronAppPath);
-      const provided = [hasUdid, hasAvd, hasVega, hasElectron].filter(Boolean).length;
+      const provided = [hasUdid, hasAvd, hasVega, hasHarmony, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
         throw new FailureError(
-          "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron).",
+          renderFlagGated(
+            "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), <flag:harmonyos>`harmonyInstance` (HarmonyOS), </flag:harmonyos>or `electronAppPath` (Electron).",
+            isFlagEnabled
+          ),
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
@@ -1398,8 +2106,17 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
             }
           );
         }
-        if (classifyDevice(params.udid!) === "ios-remote") {
+        const platform = classifyDevice(params.udid!);
+        if (platform === "ios-remote") {
           return bootIosRemote(params.udid!, registry, params.force);
+        }
+        // The capability gate admits only HarmonyOS emulator instances here.
+        if (platform === "harmony") {
+          return bootHarmony({
+            instanceName: harmonyInstanceName(params.udid!),
+            bootTimeoutMs: params.bootTimeoutMs ?? HARMONY_BOOT_TIMEOUT_MS,
+            force: params.force,
+          });
         }
         return bootIos(params.udid!, registry, params.force, params.headless);
       }
@@ -1418,6 +2135,13 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         return bootVega({
           vvdImage: params.vvdImage!,
           bootTimeoutMs: params.bootTimeoutMs ?? 120_000,
+          force: params.force,
+        });
+      }
+      if (hasHarmony) {
+        return bootHarmony({
+          instanceName: harmonyInstanceName(params.harmonyInstance!),
+          bootTimeoutMs: params.bootTimeoutMs ?? HARMONY_BOOT_TIMEOUT_MS,
           force: params.force,
         });
       }

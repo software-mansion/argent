@@ -11,6 +11,8 @@ import {
   type SecretSourceOptions,
 } from "../src/utils/secrets";
 import { InvalidToolInputError } from "../src/utils/capability";
+import { shellQuote as adbShellQuote } from "../src/utils/adb";
+import { shellQuote as hdcShellQuote } from "../src/utils/harmony-hdc";
 
 vi.mock("../src/utils/simulator-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils/simulator-client")>();
@@ -263,6 +265,17 @@ describe("redactSecretsFromError", () => {
     expect(err.message).toBe("adb input text {{secret:APP_PASSWORD}} failed");
     expect(err.name).toBe("InvalidToolInputError");
     expect(err.stack ?? "").not.toContain("hunter2");
+  });
+
+  it("scrubs a value echoed back inside a shell-quoted command line", () => {
+    const secret = { name: "APP_PASSWORD", value: "it's-me" };
+    for (const quote of [adbShellQuote, hdcShellQuote]) {
+      const err = new Error(`uitest uiInput text ${quote(secret.value)} failed on 127.0.0.1:5555`);
+      redactSecretsFromError(err, [secret]);
+      expect(err.message).toBe(
+        "uitest uiInput text '{{secret:APP_PASSWORD}}' failed on 127.0.0.1:5555"
+      );
+    }
   });
 
   it("skips empty values instead of corrupting the message", () => {

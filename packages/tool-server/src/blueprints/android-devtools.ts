@@ -46,7 +46,7 @@ export interface GetHierarchyOptions {
   clearCache?: boolean;
 }
 
-export interface HierarchyResult {
+interface HierarchyResult {
   xml: string;
   captureMode: string;
   windowCount: number;
@@ -90,6 +90,8 @@ export interface AndroidDevtoolsApi {
 const READY_TIMEOUT_MS = 30_000;
 /** How long `close` gets to follow `exit` before the exit alone is the verdict. */
 const EXIT_GRACE_MS = 200;
+/** How long `am instrument` gets to exit once `shutdown` is answered; it takes about 0.1 s. */
+const HELPER_EXIT_TIMEOUT_MS = 3_000;
 const HELPER_PORT_MARKER = /^INSTRUMENTATION_STATUS:\s*port=(\d+)/;
 const ADB_FORWARD_PORT_MARKER = /^(\d+)\s*$/;
 
@@ -429,14 +431,50 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
     const spawned = await spawnHelperWithRepair(serial);
     let ready = false;
     let disposed = false;
+    let procExited = false;
+    spawned.proc.once("exit", () => {
+      procExited = true;
+    });
+
+    // Each connection gets a generation; only the active one may report its
+    // close, so a socket the blueprint replaced or opened for `shutdown`
+    // never tears the service down.
+    let generation = 0;
+    let activeGeneration = 0;
+    // The helper drops a connection after 60 s without a request but keeps
+    // listening, and `am instrument` stays alive: the next request reconnects
+    // to the same forward instead of tearing down a working helper.
+    let socketLost = false;
+    let clientClosed = false;
+    let reconnecting: Promise<AndroidDevtoolsClient> | null = null;
+
+    const onClientClosed = (gen: number, err?: Error) => {
+      if (gen !== activeGeneration) return;
+      clientClosed = true;
+      if (disposed) return;
+      if (
+        !procExited &&
+        getFailureSignal(err)?.error_code === FAILURE_CODES.ANDROID_DEVTOOLS_SOCKET_CLOSED
+      ) {
+        socketLost = true;
+        return;
+      }
+      events.emit("terminated", err);
+    };
+
+    const openClient = async (): Promise<{ client: AndroidDevtoolsClient; gen: number }> => {
+      const gen = ++generation;
+      const opened = await connectAndroidDevtoolsClient(spawned.localPort, (err) =>
+        onClientClosed(gen, err)
+      );
+      return { client: opened, gen };
+    };
 
     let client: AndroidDevtoolsClient;
     try {
-      client = await connectAndroidDevtoolsClient(spawned.localPort, (err) => {
-        if (!disposed) {
-          events.emit("terminated", err);
-        }
-      });
+      const opened = await openClient();
+      client = opened.client;
+      activeGeneration = opened.gen;
     } catch (err) {
       try {
         spawned.proc.kill();
@@ -489,10 +527,75 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       if (!disposed) events.emit("terminated", err);
     });
 
+    // One attempt per lost socket. The forward accepts a connection even when
+    // nothing listens behind it and closes it at once, so only an answered
+    // ping proves the helper is still there; anything else tears down.
+    const reconnect = async (): Promise<AndroidDevtoolsClient> => {
+      let opened: { client: AndroidDevtoolsClient; gen: number } | undefined;
+      try {
+        opened = await openClient();
+        await opened.client.request("ping");
+      } catch (err) {
+        opened?.client.close();
+        if (!disposed) events.emit("terminated", err instanceof Error ? err : undefined);
+        throw err;
+      }
+      if (disposed) {
+        opened.client.close();
+        throw new FailureError("AndroidDevtools client closed", {
+          error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_CLIENT_CLOSED,
+          failure_stage: "android_devtools_rpc_reconnect",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        });
+      }
+      client = opened.client;
+      activeGeneration = opened.gen;
+      socketLost = false;
+      clientClosed = false;
+      return client;
+    };
+
+    const waitForHelperExit = (timeoutMs: number) =>
+      new Promise<void>((resolve) => {
+        if (procExited) return resolve();
+        const timer = setTimeout(resolve, timeoutMs);
+        spawned.proc.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+
+    const request = async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
+      let current = client;
+      if (socketLost && !disposed && !procExited) {
+        reconnecting ??= reconnect().finally(() => {
+          reconnecting = null;
+        });
+        current = await reconnecting;
+      }
+      try {
+        return await current.request<T>(method, params);
+      } catch (err) {
+        // The helper answers `ping` with UiAutomation unregistered (#1442) and
+        // then fails every read. Before reconnecting, the 60 s close was what
+        // replaced it; now this does.
+        if (
+          !disposed &&
+          getFailureSignal(err)?.error_code === FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR &&
+          err instanceof Error &&
+          err.message.includes("UiAutomation not connected")
+        ) {
+          events.emit("terminated", err);
+        }
+        throw err;
+      }
+    };
+
     const api: AndroidDevtoolsApi = {
       isReady: () => ready && !disposed,
       getHierarchy(getOpts: GetHierarchyOptions = {}) {
-        return client.request<HierarchyResult>("getHierarchy", {
+        return request<HierarchyResult>("getHierarchy", {
           waitForIdleMs: getOpts.waitForIdleMs ?? 500,
           maxDepth: getOpts.maxDepth ?? 128,
           maxNodes: getOpts.maxNodes ?? 5000,
@@ -500,15 +603,15 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         });
       },
       getScreenSize() {
-        return client.request<{ width: number; height: number; rotation: number }>("getScreenSize");
+        return request<{ width: number; height: number; rotation: number }>("getScreenSize");
       },
       ping() {
-        return client.request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
+        return request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
       },
       async setText(text: string, setOpts: { check?: boolean } = {}) {
         let result: Partial<SetTextResult>;
         try {
-          result = await client.request<Partial<SetTextResult>>("setText", {
+          result = await request<Partial<SetTextResult>>("setText", {
             text,
             ...(setOpts.check ? { check: true } : {}),
           });
@@ -547,22 +650,50 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       dispose: async () => {
         disposed = true;
         ready = false;
-        // Ask the helper to exit on its own so `am instrument` ends cleanly.
-        try {
-          await Promise.race([
-            client.request("shutdown"),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("shutdown timeout")), 1_000)
-            ),
-          ]);
-        } catch {
-          /* fall through to force-kill */
+        // Ask the helper to exit on its own and let `am instrument` follow it.
+        // The helper finishes 50 ms after it replies, and once `am` is gone
+        // that `finish()` crashes on the dead UiAutomation connection, so
+        // killing adb on the reply crashes the helper, and killing it without
+        // a reply orphans it until the next start force-stops it.
+        let opening: Promise<{ client: AndroidDevtoolsClient }> | undefined;
+        let acknowledged = false;
+        if (!procExited) {
+          let timer: NodeJS.Timeout | undefined;
+          try {
+            await Promise.race([
+              (async () => {
+                // A socket the helper closed leaves its listener and the
+                // forward in place, so a fresh one still reaches it.
+                let target = client;
+                if (clientClosed) {
+                  opening = openClient();
+                  target = (await opening).client;
+                }
+                await target.request("shutdown");
+              })(),
+              new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error("shutdown timeout")), 1_000);
+              }),
+            ]);
+            acknowledged = true;
+          } catch {
+            /* fall through to force-kill */
+          } finally {
+            clearTimeout(timer);
+          }
         }
+        if (acknowledged) await waitForHelperExit(HELPER_EXIT_TIMEOUT_MS);
+        void opening?.then(
+          (opened) => opened.client.close(),
+          () => undefined
+        );
         client.close();
-        try {
-          spawned.proc.kill();
-        } catch {
-          /* ignore */
+        if (!procExited) {
+          try {
+            spawned.proc.kill();
+          } catch {
+            /* ignore */
+          }
         }
         await removeAdbForward(serial, spawned.localPort);
       },

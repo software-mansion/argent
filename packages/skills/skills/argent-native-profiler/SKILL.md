@@ -32,7 +32,7 @@ After `native-profiler-analyze` surfaces findings, use `profiler-stack-query` to
 
 After presenting findings, ask the user whether to investigate further, implement fixes, or stop. After applying fixes, always re-profile the same scenario and compare with `profiler-load`. Report honestly whether the target metric improved, regressed, or stayed flat. If the fix showed no net benefit or introduced regressions elsewhere, say so and reconsider.
 
-**Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `argent-create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
+**Tip:** For reproducible before/after comparisons, record the interaction sequence as an e2e test using the `argent-create-e2e` skill before the first profiling run. Replay with `e2e-execute` on subsequent runs to eliminate interaction variance.
 
 > **Note:** The `argent-react-native-profiler` instructs to start native profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
 

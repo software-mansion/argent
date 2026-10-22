@@ -51,7 +51,7 @@ export interface McpServerEntry {
 // Argent config or client state outside the scope init just wrote that can keep
 // that entry from taking effect. Adapters only report; init-stale-config.ts
 // decides removal vs. warning.
-export interface ShadowingConfigFinding {
+interface ShadowingConfigFinding {
   /** Human-readable location, e.g. `~/.claude.json (project-local scope)`. */
   location: string;
   /** One-line consequence for the user, e.g. `takes precedence over .mcp.json`. */
@@ -1132,8 +1132,7 @@ const zedAdapter: McpConfigAdapter = {
     if (!fs.existsSync(settingsPath)) return;
     const config = readJsonc(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (!perms || perms.default !== "allow") return;
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "confirm");
   },
@@ -1790,6 +1789,14 @@ export function getManagedContentTargets(
             : path.join(root, ".opencode");
         addManagedTarget(targets.skillTargets, adapter.name, path.join(base, "skills"), root);
         addManagedTarget(targets.agentTargets, adapter.name, path.join(base, "agents"), root);
+        break;
+      }
+      case "Kiro": {
+        // Argent writes no skills here itself, but `npx skills add` links
+        // .kiro/skills/<name> into .agents/skills when it detects Kiro.
+        const kiroBase =
+          scope === "global" ? path.join(homedir(), ".kiro") : path.join(root, ".kiro");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(kiroBase, "skills"), root);
         break;
       }
     }

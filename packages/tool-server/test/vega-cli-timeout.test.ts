@@ -99,7 +99,7 @@ if (cmd === "hang") {
   // it — only the descendant sweep does. It also inherits our stdout, reproducing the
   // pipe-held-open freeze. \`secs\` is a per-test sentinel so pgrep finds strays
   // unambiguously.
-  const worker = spawn("sleep", [secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+  const worker = spawn("sh", ["-c", "trap '' TERM; exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
   worker.unref();
   // The launcher itself also hangs so it stays alive to be timed out and snapshotted.
   // This sleep is a descendant, so the sweep reaps it before the group kill runs.
@@ -162,6 +162,7 @@ if (cmd === "linger-grouped") {
   process.stdout.write("OK-linger");
   return;
 }
+if (cmd === "sig") process.kill(process.pid, "SIGTERM");
 process.stdout.write("OK-" + cmd);
 `,
     { mode: 0o755 }
@@ -216,7 +217,7 @@ function cmdlinePattern(target: string): string {
 
 function sweep(): void {
   try {
-    execSync(`pkill -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
+    execSync(`pkill -9 -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
   } catch {
     // `|| true` maps every `pkill` exit - no-match, or `pkill` itself missing - to 0, so
     // only the shell itself failing reaches here - fork EAGAIN under load, the same mode
@@ -368,11 +369,14 @@ describe("runVega timeout (real subprocess)", () => {
     expect(await waitForClear(SENTINEL_REAP)).toBe(0);
   });
 
-  it("returns normally when the CLI responds before the deadline", async () => {
+  it("returns normally, leaving no timer armed, when the CLI responds before the deadline", async () => {
+    const timeouts = () => process.getActiveResourcesInfo().filter((k) => k === "Timeout").length;
+    const before = timeouts();
     await expect(runVega(["go"], { timeoutMs: 5_000 })).resolves.toEqual({
       stdout: "OK-go",
       stderr: "",
     });
+    expect(timeouts()).toBe(before);
   });
 
   it("resolves a clean exit even when a worker holds the stdout pipe open (delayed close)", async () => {
@@ -452,6 +456,10 @@ describe("runVega timeout (real subprocess)", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/device offline/);
     expect(getFailureSignal(err)?.error_kind).toBe("subprocess");
+  });
+
+  it("classifies a signal death it did not cause as `subprocess`", async () => {
+    expect(await runVega(["sig"]).catch((e) => getFailureSignal(e)?.error_kind)).toBe("subprocess");
   });
 
   it("rejects + reaps when output exceeds the cap, classified as `subprocess`", async () => {

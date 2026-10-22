@@ -230,7 +230,7 @@ async function recordWait(
 }
 
 async function recordedSteps(name: string) {
-  const yaml = await fs.readFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), "utf8");
+  const yaml = await fs.readFile(path.join(tmpDir, ".argent", "e2e", `${name}.yaml`), "utf8");
   return parseFlow(yaml).steps;
 }
 
@@ -247,7 +247,7 @@ function echoedReasonOf(warning: string): string {
 
 /** The warning half of `message`. "Step added" prefixes EVERY message. */
 function warningOf(result: { message: string }, name: string): string | undefined {
-  const prefix = `Step added to "${name}" flow`;
+  const prefix = `Step added to "${name}" e2e test`;
   expect(result.message.startsWith(prefix)).toBe(true);
   const rest = result.message.slice(prefix.length);
   return rest === "" ? undefined : rest.replace(/^ — /, "");
@@ -403,7 +403,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("neither contains the other");
     expect(warning).not.toContain("present in both");
     // "Delete it from the .yaml" holds in host mode only.
-    expect(warning).toContain("after `flow-finish-recording`");
+    expect(warning).toContain("after `e2e-finish-recording`");
     expect(fetchCount).toBe(0);
     expect(await recordedSteps("unmet")).toHaveLength(1);
   });
@@ -476,7 +476,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     const warning = warningOf(result, "remoteunmet");
     expect(warning).toContain("the wait itself never held");
-    expect(warning).toContain("after `flow-finish-recording` rather than mid-recording");
+    expect(warning).toContain("after `e2e-finish-recording` rather than mid-recording");
     // The advice the create-flow skill forbids; it renumbers the steps.
     expect(warning).not.toContain("in host (local) mode, where the recorder re-reads");
     // The host wrote no file, so the step and its verdict live in memory.
@@ -1213,6 +1213,24 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("blind")).toHaveLength(1);
   });
 
+  it("warns without probing on a platform whose runner has no UI tree", async () => {
+    // The served tree agrees, so a probe that ran would raise no warning at all.
+    await startRecording("harmony");
+
+    const result = await recordWait("harmony", {
+      udid: "harmony-127.0.0.1:5555",
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+
+    expect(warningOf(result, "harmony")).toBe(
+      "this platform's e2e runner has no UI tree, so an `await:`/`assert:` conversion of " +
+        "this step always fails there; keep it as a `tool:` step."
+    );
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("harmony")).toHaveLength(1);
+  });
+
   // The recorder's tree is the accessibility tree only on iOS and Android.
   it("does not call the recorder's tree the accessibility tree on Chromium", async () => {
     fetchRunnerTree = async () => {
@@ -1623,7 +1641,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { name: "clean", project_root: tmpDir }
     );
 
-    expect(finished.message).toBe('Finished recording "clean" flow (1 steps)');
+    expect(finished.message).toBe('Finished recording "clean" e2e test (1 steps)');
     expect(finished.summary[0]).not.toContain("warning:");
   });
 
@@ -1666,7 +1684,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     expect(finished.message).toBe(
-      'Finished recording "plural" flow (4 steps) — 2 steps carry a cross-tree warning about ' +
+      'Finished recording "plural" e2e test (4 steps) — 2 steps carry a cross-tree warning about ' +
         "converting a recorded wait, and 2 steps recorded a wait that did not pass; read " +
         "`summary` before converting or replaying"
     );
@@ -1688,7 +1706,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     );
 
     expect(finished.message).toBe(
-      'Finished recording "mixed" flow (2 steps) — 1 step carries a cross-tree warning about ' +
+      'Finished recording "mixed" e2e test (2 steps) — 1 step carries a cross-tree warning about ' +
         "converting a recorded wait, and 1 step recorded a wait that did not pass; read " +
         "`summary` before converting or replaying"
     );
@@ -1729,7 +1747,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     await recordWait("edited", { condition: "visible", selector: { text: "Continue" } });
 
     // Delete the MIDDLE step: the innocent third slides into the anchored position 2.
-    const file = path.join(tmpDir, ".argent", "flows", "edited.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "edited.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = [parsed.steps[0], parsed.steps[2]];
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -1743,7 +1761,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     for (const line of finished.summary) expect(line).not.toContain("warning:");
     // …and `message` must not advertise what the summary no longer carries.
     expect(finished.message).toBe(
-      'Finished recording "edited" flow (2 steps) — 1 warning raised during this recording is ' +
+      'Finished recording "edited" e2e test (2 steps) — 1 warning raised during this recording is ' +
         "NOT in `summary`: a hand edit to the .yaml moved the step it judged, so which step it " +
         "belongs to is no longer knowable — re-record that wait to see it again"
     );
@@ -1758,7 +1776,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     serveTree(iosRunnerTree([iosLabel("Sign in")]));
     await recordWait("inplace", { condition: "visible", selector: { text: "Sign in" } });
 
-    const file = path.join(tmpDir, ".argent", "flows", "inplace.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "inplace.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     const second = parsed.steps[1];
     if (second.kind !== "tool") throw new Error("fixture: expected a recorded tool step");
@@ -1791,7 +1809,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     await recordWait("swapped", { condition: "exists", selector: { text: "Continue" } });
 
     // Hand-swap steps 2 and 3. The step inheriting number 2 agrees across both trees.
-    const file = path.join(tmpDir, ".argent", "flows", "swapped.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "swapped.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = [parsed.steps[0], parsed.steps[2], parsed.steps[1]];
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -1817,7 +1835,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     await recordWait("deleted", { condition: "visible", selector: { text: "Sign in" } });
 
     // Delete the diverging step 1, the remedy `UNMET_WAIT_WARNING` offers.
-    const file = path.join(tmpDir, ".argent", "flows", "deleted.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "deleted.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(1);
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -1853,7 +1871,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     serveTree(iosRunnerTree([iosLabel("Continue")]));
     await recordWait("twins", { condition: "visible", selector: { text: "Continue" } });
 
-    const file = path.join(tmpDir, ".argent", "flows", "twins.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "twins.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(1);
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -1886,7 +1904,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     await recordWait("midtwins", { condition: "visible", selector: { text: "Continue" } });
 
     // Hand-delete the diverging step 2, leaving its twin to inherit the number.
-    const file = path.join(tmpDir, ".argent", "flows", "midtwins.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "midtwins.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = [parsed.steps[0], parsed.steps[2]];
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -1919,7 +1937,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     await recordWait("collide", { condition: "visible", selector: { text: "Beta" } });
 
     // Delete "Alpha": the file is one step long again, so the next append is 2.
-    const file = path.join(tmpDir, ".argent", "flows", "collide.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "collide.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(1);
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -1966,7 +1984,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
       { name: "nodrop", project_root: tmpDir }
     );
 
-    expect(finished.message).toBe('Finished recording "nodrop" flow (1 steps)');
+    expect(finished.message).toBe('Finished recording "nodrop" e2e test (1 steps)');
   });
 
   it("keeps the verdicts a hand edit left in place", async () => {
@@ -1979,7 +1997,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     await recordWait("kept", { condition: "visible", selector: { text: "Sign in" } });
 
     // Delete the clean step 2, then record one more warned step.
-    const file = path.join(tmpDir, ".argent", "flows", "kept.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "kept.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(0, 1);
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -2006,7 +2024,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     serveTree(iosRunnerTree([iosLabel("Continue")]));
     await recordWait("relen", { condition: "visible", selector: { text: "Continue" } });
 
-    const file = path.join(tmpDir, ".argent", "flows", "relen.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "relen.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(1);
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -2032,7 +2050,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     serveTree(iosRunnerTree([iosLabel("Proceed")]));
     await recordWait("grown", { condition: "visible", selector: { text: "Continue" } });
 
-    const file = path.join(tmpDir, ".argent", "flows", "grown.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "grown.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = [parsed.steps[0], parsed.steps[0]];
     await fs.writeFile(file, serializeFlow(parsed), "utf8");
@@ -2060,7 +2078,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     await recordWait("cyclic", { condition: "visible", selector: { text: "Continue" } });
 
     // Alias the step's own `args` map back into itself: it cannot be stringified.
-    const file = path.join(tmpDir, ".argent", "flows", "cyclic.yaml");
+    const file = path.join(tmpDir, ".argent", "e2e", "cyclic.yaml");
     await fs.writeFile(
       file,
       [
@@ -2185,7 +2203,7 @@ describe("a flow-directive name points at the tool that records it", () => {
     ];
     for (const [command, why] of cases) {
       const result = await hint(command);
-      expect(result.message, command).toContain("is a flow directive, not a tool");
+      expect(result.message, command).toContain("is an e2e test directive, not a tool");
       expect(result.message, command).toContain("records one");
       expect(result.message, command).toContain(why);
       expect(result.message, command).not.toContain("Record it by calling");
@@ -2199,8 +2217,8 @@ describe("a flow-directive name points at the tool that records it", () => {
     // The other half of the same contract as the nested-recorder refusal above:
     // one of the two names is the call to make, the other refuses the nesting.
     const result = await hint("script");
-    expect(result.message).toContain('"script" is a flow directive');
-    expect(result.message).toContain("Call `flow-add-script` directly");
+    expect(result.message).toContain('"script" is an e2e test directive');
+    expect(result.message).toContain("Call `e2e-add-script` directly");
     expect(result.message).not.toContain("Add the `script:` step by hand");
     expect(result.stepCount).toBe(0);
     expect(await recordedSteps("hints")).toEqual([]);
@@ -2215,7 +2233,7 @@ describe("a flow-directive name points at the tool that records it", () => {
 
   it("names flow-add-echo for `echo`", async () => {
     const result = await hint("echo");
-    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("e2e-add-echo");
     expect(result.message).toContain("no step was recorded");
   });
 
@@ -2258,11 +2276,15 @@ describe("a flow-directive name points at the tool that records it", () => {
       ],
       [
         "flow-add-script",
-        ["records its own step", "Call it directly", "not through flow-add-step"],
+        ["records its own step", "Call it directly", "not through e2e-add-step"],
         ["truncates", "ends the recording"],
       ],
       ["flow-add-step", ["cannot record itself"], ["truncates", "ends the recording"]],
-      ["flow-start-recording", ["truncates the flow it names", "erase"], ["ends the recording"]],
+      [
+        "flow-start-recording",
+        ["truncates the e2e test it names", "erase"],
+        ["ends the recording"],
+      ],
       [
         "flow-finish-recording",
         ["ends the recording", "cannot also be a step in it"],
@@ -2303,7 +2325,7 @@ describe("a flow-directive name points at the tool that records it", () => {
         {},
         { name: "hints", project_root: tmpDir, command, args: "{not json" }
       );
-      expect(result.message, command).toContain("is a flow directive");
+      expect(result.message, command).toContain("is an e2e test directive");
       expect(result.message, command).toContain("no step was recorded");
       expect(result.stepCount, command).toBe(0);
     }
@@ -2324,7 +2346,7 @@ describe("a flow-directive name points at the tool that records it", () => {
 
   it("reports the step count as the hand-edited file now stands, not the stale snapshot", async () => {
     const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
-    const flowPath = path.join(tmpDir, ".argent", "flows", "hints.yaml");
+    const flowPath = path.join(tmpDir, ".argent", "e2e", "hints.yaml");
 
     await tool.execute(
       {},
@@ -2344,7 +2366,7 @@ describe("a flow-directive name points at the tool that records it", () => {
       { name: "hints", project_root: tmpDir, command: "echo", args: "{}" }
     );
 
-    expect(result.message).toContain("flow-add-echo");
+    expect(result.message).toContain("e2e-add-echo");
     expect(result.message).not.toContain("could not be read");
     expect(result.stepCount).toBe(3); // the file, not the snapshot's 1
   });
@@ -2352,7 +2374,7 @@ describe("a flow-directive name points at the tool that records it", () => {
   it("qualifies the step count when the persisted flow can no longer be read", async () => {
     const tool = createFlowAddStepTool(registryWhereWaitSucceeds());
     await fs.writeFile(
-      path.join(tmpDir, ".argent", "flows", "hints.yaml"),
+      path.join(tmpDir, ".argent", "e2e", "hints.yaml"),
       "steps:\n  - [unclosed",
       "utf8"
     );
@@ -2362,8 +2384,8 @@ describe("a flow-directive name points at the tool that records it", () => {
       { name: "hints", project_root: tmpDir, command: "echo", args: "{}" }
     );
 
-    expect(result.message).toContain("flow-add-echo");
-    expect(result.message).toContain("The persisted flow could not be read and parsed");
+    expect(result.message).toContain("e2e-add-echo");
+    expect(result.message).toContain("The persisted e2e test could not be read and parsed");
     expect(result.message).toContain("last valid in-memory snapshot");
     expect(result.stepCount).toBe(0);
   });
@@ -2391,7 +2413,7 @@ describe("a flow-directive name points at the tool that records it", () => {
     ];
     for (const [command, tool] of named) {
       const message = (await hint(command)).message;
-      expect(message, command).toContain(`Record it by calling \`${tool}\` through flow-add-step`);
+      expect(message, command).toContain(`Record it by calling \`${tool}\` through e2e-add-step`);
       expect(message, command).toContain(`stored as a raw \`tool: ${tool}\` step`);
     }
     expect((await hint("type")).message).not.toContain("await-ui-element");
@@ -2409,9 +2431,9 @@ describe("a flow-directive name points at the tool that records it", () => {
 
   it("names flow-execute for `run`, with the sibling-flow rewrite condition", async () => {
     const msg = (await hint("run")).message;
-    expect(msg).toContain("flow-execute");
+    expect(msg).toContain("e2e-execute");
     expect(msg).toContain("rewrites it into the `run:` step");
-    expect(msg).toContain("sibling flow");
+    expect(msg).toContain("sibling e2e test");
     expect(msg).toContain("delayMs");
     expect(msg).toContain("in this recording's folder, on the computer that has the project");
     expect(msg).toContain("refused outright and records nothing");

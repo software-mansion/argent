@@ -117,18 +117,18 @@ PY
 # panel on its own.
 _flow_tap_after_external_fold() { # udid hinge-helper project-root to-angle from-angle case
   local udid="$1" hinge="$2" root="$3" to="$4" from="$5" case="$6" before after
-  mkdir -p "$root/.argent/flows"
-  printf 'steps:\n  - tap: { id: probe.pad }\n' > "$root/.argent/flows/pad-tap.yaml"
+  mkdir -p "$root/.argent/e2e"
+  printf 'steps:\n  - tap: { id: probe.pad }\n' > "$root/.argent/e2e/pad-tap.yaml"
   before="$(_probe_taps "$udid")"
   "$hinge" "$udid" hinge "$to" "$from" >/dev/null 2>&1; sleep 2
-  run_tool flow-execute "{\"name\":\"pad-tap\",\"project_root\":\"$root\",\"device\":\"$udid\"}"
+  run_tool e2e-execute "{\"name\":\"pad-tap\",\"project_root\":\"$root\",\"device\":\"$udid\"}"
   if [ "$RT_RC" -ne 0 ] || ! printf '%s' "$RT_JSON" | jq -e '.ok==true' >/dev/null 2>&1; then
-    fail "$P" flow-execute "$case" "$(rt_detail 200)"; return 1
+    fail "$P" e2e-execute "$case" "$(rt_detail 200)"; return 1
   fi
   sleep 1
   after="$(_probe_taps "$udid")"
   if [ "$after" -gt "$before" ] 2>/dev/null; then
-    pass "$P" flow-execute "$case" "taps $before -> $after"
+    pass "$P" e2e-execute "$case" "taps $before -> $after"
   else
     fail "$P" flow-execute "$case" "the flow's tap went to the dark panel (taps $before -> $after)"
   fi

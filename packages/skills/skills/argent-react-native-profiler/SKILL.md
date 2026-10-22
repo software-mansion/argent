@@ -64,9 +64,9 @@ When drilling down, chain query tool calls based on what you find:
 
 When you apply a fix, always re-profile the same scenario afterward. Compare before/after metrics (commit durations, CPU time, render counts) and report honestly: did the target metric improve, stay flat, or regress? Did any _other_ metric get worse? If you need to reference the original data, use `profiler-load` to reload the pre-fix session. If the fix showed no improvement or introduced a regression, say so explicitly and reconsider the approach.
 
-### Use flows for reproducible profiling
+### Use e2e tests for reproducible profiling
 
-When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as a flow** using the `argent-create-flow` skill before the first profiling run. Then replay the same flow for every subsequent run. This eliminates interaction variance as a confounder and makes before/after comparisons meaningful. Especially important when:
+When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as an e2e test** using the `argent-create-e2e` skill before the first profiling run. Then replay the same e2e test for every subsequent run. This eliminates interaction variance as a confounder and makes before/after comparisons meaningful. Especially important when:
 
 - You are about to re-profile after applying a fix (Step 8).
 - The user asks you to compare multiple profiling sessions.
@@ -143,7 +143,7 @@ This is useful for before/after comparisons: profile, fix, re-profile, then relo
 
 If fix is present, read the source code of the identified bottleneck using `react-profiler-component-source` or the Read tool. Apply the fix, then re-profile (Step 1 -> user interaction -> Step 2 -> Step 3 -> Step 4). Report whether the target metric improved, stayed flat, or regressed. Also check whether the fix introduced regressions in other metrics (e.g., render count dropped but CPU time increased, or a different component now re-renders more). If the fix showed no net benefit or unacceptable tradeoffs, revert and reconsider.
 
-**Tip:** If the interaction sequence was recorded as a flow (see "Use flows for reproducible profiling" above), replay it with `flow-execute` instead of manually repeating the steps. This guarantees identical interaction conditions for the comparison. If the flow fails during replay (e.g., a UI fix changed the layout), follow `argent-create-flow`'s [Diagnose a replay failure](../argent-create-flow/references/reliability-and-recovery.md#diagnose-a-replay-failure) to repair the flow before retrying the profiling cycle.
+**Tip:** If the interaction sequence was recorded as an e2e test (see "Use e2e tests for reproducible profiling" above), replay it with `e2e-execute` instead of manually repeating the steps. This guarantees identical interaction conditions for the comparison. If the e2e test fails during replay (e.g., a UI fix changed the layout), follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure) to repair the e2e test before retrying the profiling cycle.
 
 If the user stated that they do not wish for changes, present the profiling report and skip the fix but suggest it to the user.
 
