@@ -66,6 +66,44 @@ Only `enter` (alias `return`), `backspace` (alias `delete`), `space`, `arrow-lef
 - `reinstall-app` takes one `.hap` file as `appPath` and the bundle name from its `module.json` as `bundleId`; a mismatch is refused before anything is uninstalled. A multi-module `.app` bundle is not accepted.
 - `open-url` resolves any scheme through `aa start -U`, and every result carries a `note`: `aa` reports success whenever the system accepts the URI. A web URL can leave the screen unchanged, and `tel:` / `mailto:` can leave a "No options to open with" dialog over it. Confirm with `describe` or `screenshot` before treating the link as followed. It fails whenever `aa` refuses the URI, as it does a scheme nothing claims.
 
+## Building and signing a HAP
+
+Paths below are relative to `C=/Applications/DevEco-Studio.app/Contents` (macOS). Build from the project root without the IDE:
+
+```bash
+export DEVECO_SDK_HOME=$C/sdk PATH=$C/tools/node/bin:$C/tools/ohpm/bin:$PATH
+ohpm install --all
+node $C/tools/hvigor/bin/hvigorw.js --mode module -p module=entry@default -p product=default -p buildMode=debug assembleHap --no-daemon
+```
+
+With no `signingConfigs` in `build-profile.json5` this writes `entry/build/default/outputs/default/entry-default-unsigned.hap`.
+
+The emulator installs any HAP, including an unsigned one or one whose signature fails verification, so an emulator install proves nothing about signing. For a phone, sign with a debug profile that lists the phone's UDID (`hdc -t <connectKey> shell bm get --udid`, last line). Signing uses `L=$C/sdk/default/openharmony/toolchains/lib` and DevEco's Java: `export PATH=$C/jbr/Contents/Home/bin:$PATH`.
+
+**Test keys, no account.** `$L/OpenHarmony.p12` (password `123456`) is OpenHarmony's public test PKI; use it for development only. A HAP signed this way installs and launches on a HarmonyOS 6.0 phone.
+
+1. Certificate chain `app-chain.cer`, leaf first: the `bundle-info.development-certificate` from `$L/UnsgnedDebugProfileTemplate.json`, then the `OpenHarmony Application CA` and `OpenHarmony Application Root CA` certificates from `$L/OpenHarmonyProfileDebug.pem`.
+2. Profile `profile.json`: a copy of the template with your `bundle-info.bundle-name`, the phone's UDID in `debug-info.device-ids`, and a current `validity` window in epoch seconds (the template's expired in January 2024).
+3. Sign the profile, then the HAP:
+
+```bash
+java -jar $L/hap-sign-tool.jar sign-profile -mode localSign -signAlg SHA256withECDSA \
+  -keystoreFile $L/OpenHarmony.p12 -keystorePwd 123456 -keyPwd 123456 \
+  -keyAlias "openharmony application profile debug" -profileCertFile $L/OpenHarmonyProfileDebug.pem \
+  -inFile profile.json -outFile profile.p7b
+java -jar $L/hap-sign-tool.jar sign-app -mode localSign -signAlg SHA256withECDSA -signCode 1 \
+  -keystoreFile $L/OpenHarmony.p12 -keystorePwd 123456 -keyPwd 123456 \
+  -keyAlias "openharmony application release" -appCertFile app-chain.cer -profileFile profile.p7b \
+  -inFile entry-default-unsigned.hap -outFile app-signed.hap
+```
+
+**Real keys, Huawei ID.** These need the user's Huawei account; ask before using it.
+
+- DevEco Studio: sign in, connect the phone, and tick _Automatically generate signature_ under File > Project Structure > Signing Configs. It writes `signingConfigs` into `build-profile.json5`, and the build above then emits `entry-default-signed.hap`.
+- AppGallery Connect: create a `.p12` and CSR (DevEco: Build > Generate Key and CSR), then request a debug certificate (`.cer`) from the CSR, register the phone's UDID, and request a debug profile (`.p7b`) for the bundle, that certificate and the device. Run only `sign-app` above with your `.p12`, key alias, passwords, `.cer` and `.p7b`; AppGallery Connect has already signed the profile.
+
+`hap-sign-tool.jar verify-app -inFile <hap> -outCertChain c.cer -outProfile p.p7b` checks a signed HAP on the host.
+
 ## E2E tests
 
 The e2e runner (`e2e-execute`, skill `argent-create-e2e`) runs on HarmonyOS only when you name the device: `device: "harmony-<connectKey>"` (`--device` on the CLI). A HarmonyOS device is never auto-resolved, and `platform` / `--platform` does not accept `harmony`. HarmonyOS is not an authorable platform either: `when: { platform: harmony }` and a `harmony:` launch-map key are rejected when the YAML is parsed, so launch with a bare app id or `native:`.
