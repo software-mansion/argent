@@ -56,6 +56,7 @@ Argent drives any HarmonyOS phone or emulator that `hdc` is connected to. A phon
 - Argent reads the screen and injects taps, swipes and text through the device's own `uitest`.
 - `gesture-pinch` sends the start and end points of both fingers in one `uinput` call. The device interpolates the movement.
 - `launch-app`, `restart-app` and `open-url` use the `bm` and `aa` shell commands.
+- `reinstall-app` installs a single `.hap` file with `hdc uninstall` and `hdc install`.
 - Argent refuses `gesture-rotate` and `gesture-custom`. The device moves each contact along one straight line per call.
 - Argent also refuses `rotate`, the profilers and the debugger. The device has no orientation command, and the profilers and the debugger have no HarmonyOS ingest path.
 

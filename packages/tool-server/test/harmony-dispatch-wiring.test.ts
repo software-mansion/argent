@@ -9,39 +9,43 @@ import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/c
 
 // Other harmony tests call the backends directly, so they never exercise the
 // `dispatchByPlatform` entries; only the leaf handlers are stubbed here.
-const { launchStub, restartStub, openUrlStub, keyboardStub, androidKeyboardStub, describeStub } =
-  vi.hoisted(() => {
-    const stub = <T>(result: T) => ({
-      handler: vi.fn(
-        async (
-          _services: unknown,
-          _params: unknown,
-          device: { platform: string; kind: string }
-        ) => {
-          void device;
-          return result;
-        }
-      ),
-    });
-    return {
-      launchStub: stub({ launched: true, bundleId: "com.huawei.hmos.calculator" }),
-      restartStub: stub({ restarted: true, bundleId: "com.huawei.hmos.calculator" }),
-      openUrlStub: stub({ opened: true, url: "https://example.com" }),
-      keyboardStub: stub({ typed: "hi" }),
-      // Keeps the one non-harmony case off the host's adb.
-      androidKeyboardStub: stub({ typed: "hi", keys: 2 }),
-      // `describe` dispatches to a bare function, not a `{ handler }` impl.
-      describeStub: vi.fn(async (_connectKey: string) => ({
-        tree: {
-          role: "Screen",
-          frame: { x: 0, y: 0, width: 1, height: 1 },
-          pixelBounds: null,
-          children: [],
-        },
-        source: "harmony-uitest" as const,
-      })),
-    };
+const {
+  launchStub,
+  restartStub,
+  reinstallStub,
+  openUrlStub,
+  keyboardStub,
+  androidKeyboardStub,
+  describeStub,
+} = vi.hoisted(() => {
+  const stub = <T>(result: T) => ({
+    handler: vi.fn(
+      async (_services: unknown, _params: unknown, device: { platform: string; kind: string }) => {
+        void device;
+        return result;
+      }
+    ),
   });
+  return {
+    launchStub: stub({ launched: true, bundleId: "com.huawei.hmos.calculator" }),
+    restartStub: stub({ restarted: true, bundleId: "com.huawei.hmos.calculator" }),
+    reinstallStub: stub({ reinstalled: true, bundleId: "com.example.hello" }),
+    openUrlStub: stub({ opened: true, url: "https://example.com" }),
+    keyboardStub: stub({ typed: "hi" }),
+    // Keeps the one non-harmony case off the host's adb.
+    androidKeyboardStub: stub({ typed: "hi", keys: 2 }),
+    // `describe` dispatches to a bare function, not a `{ handler }` impl.
+    describeStub: vi.fn(async (_connectKey: string) => ({
+      tree: {
+        role: "Screen",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        pixelBounds: null,
+        children: [],
+      },
+      source: "harmony-uitest" as const,
+    })),
+  };
+});
 
 vi.mock("../src/tools/launch-app/platforms/harmony", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -50,6 +54,10 @@ vi.mock("../src/tools/launch-app/platforms/harmony", async (orig) => ({
 vi.mock("../src/tools/restart-app/platforms/harmony", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   harmonyImpl: restartStub,
+}));
+vi.mock("../src/tools/reinstall-app/platforms/harmony", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  harmonyImpl: reinstallStub,
 }));
 vi.mock("../src/tools/open-url/platforms/harmony", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -70,6 +78,7 @@ vi.mock("../src/tools/describe/platforms/harmony", async (orig) => ({
 
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
+import { reinstallAppTool } from "../src/tools/reinstall-app";
 import { openUrlTool } from "../src/tools/open-url";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { createDescribeTool } from "../src/tools/describe";
@@ -97,6 +106,13 @@ const cases = [
     tool: () => createRestartAppTool(registry),
     params: { udid: HARMONY_UDID, bundleId: "com.huawei.hmos.calculator" },
     result: { restarted: true, bundleId: "com.huawei.hmos.calculator" },
+  },
+  {
+    name: "reinstall-app",
+    stub: reinstallStub,
+    tool: () => reinstallAppTool,
+    params: { udid: HARMONY_UDID, bundleId: "com.example.hello", appPath: "/tmp/hello.hap" },
+    result: { reinstalled: true, bundleId: "com.example.hello" },
   },
   {
     name: "open-url",

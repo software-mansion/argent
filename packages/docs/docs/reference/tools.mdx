@@ -35,8 +35,8 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
-- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android) or a `.vpkg` file (Vega).
-- `bundleId` does not match the bundle id in the `.app` or the package name in the `.apk`. On a remote simulator, Argent does not compare the bundle id.
+- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS, with the `harmonyos` flag).
+- `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
 
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 

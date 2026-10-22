@@ -23,7 +23,7 @@ A phone on `hdc` is ready as-is. Otherwise call `boot-device` with `harmonyInsta
 
 ## What runs and what is refused
 
-The device drives the tap / swipe / pinch / type / read loop with the same tool names as iOS and Android: `describe`, `screenshot`, `await-ui-element`, `await-screen-idle`, `gesture-tap`, `gesture-swipe`, `gesture-pinch`, `keyboard`, `button`, `launch-app`, `restart-app`, `open-url`, `run-sequence`, `screenshot-diff`.
+The device drives the tap / swipe / pinch / type / read loop with the same tool names as iOS and Android: `describe`, `screenshot`, `await-ui-element`, `await-screen-idle`, `gesture-tap`, `gesture-swipe`, `gesture-pinch`, `keyboard`, `button`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`, `screenshot-diff`.
 
 Refused as unsupported on harmony:
 
@@ -63,6 +63,7 @@ Only `enter` (alias `return`), `backspace` (alias `delete`), `space`, `arrow-lef
 ## App launch and open-url
 
 - `launch-app` and `restart-app` take the bundle name as listed by `bm dump -a` (e.g. `com.huawei.hmos.calculator`). `activity` is ignored: the ability comes from the bundle's own `abilityInfos`. A launch fails if the app is not installed.
+- `reinstall-app` takes one `.hap` file as `appPath` and the bundle name from its `module.json` as `bundleId`; a mismatch is refused before anything is uninstalled. A multi-module `.app` bundle is not accepted.
 - `open-url` resolves any scheme through `aa start -U`, and every result carries a `note`: `aa` reports success whenever the system accepts the URI. A web URL can leave the screen unchanged, and `tel:` / `mailto:` can leave a "No options to open with" dialog over it. Confirm with `describe` or `screenshot` before treating the link as followed. It fails whenever `aa` refuses the URI, as it does a scheme nothing claims.
 
 ## E2E tests
