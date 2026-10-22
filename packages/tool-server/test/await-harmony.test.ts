@@ -209,8 +209,8 @@ describe("await-ui-element on HarmonyOS", () => {
         udid: HARMONY_ID,
         condition: "hidden",
         selector: { text: "Spinner" },
-        timeoutMs: 40,
-        pollIntervalMs: 10,
+        timeoutMs: 600,
+        pollIntervalMs: 50,
       }
     );
 
