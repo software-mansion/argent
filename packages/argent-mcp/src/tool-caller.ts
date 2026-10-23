@@ -69,6 +69,15 @@ interface ToolCaller {
     name: string,
     args: unknown
   ): Promise<{ result: unknown; outputHint?: string; note?: string }>;
+  /**
+   * One attempt, no reconnect: for a best-effort call the agent did not make,
+   * which must not be resent alongside the agent's own calls or respawn the
+   * tool-server.
+   */
+  callToolOnce(
+    name: string,
+    args: unknown
+  ): Promise<{ result: unknown; outputHint?: string; note?: string }>;
 }
 
 // A tool-server URL without `http://` either fails `new URL`, whose error names
@@ -114,26 +123,33 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
     return { ...init, headers };
   }
 
-  const client = createToolsClient({
-    baseUrl: async () => ({ ...deps.getHandle(), remote: deps.remote }),
-    fetchImpl: async (url, init, meta) => {
-      // A retry cannot fix a URL that does not parse, so fail at once.
-      parseUrl(url);
-      return fetchWithReconnect(() => rebase(url), deps.reconnect, {
-        init: () => withHeaders(init),
-        // A call that carried an upload is sent once and never aborted: the
-        // tool-server consumes the upload when it reads the call, so a second
-        // attempt could only fail.
-        fetchTimeoutMs: meta.longRunning || meta.carriesUpload ? null : timeout,
-        maxRetries: meta.carriesUpload ? 0 : undefined,
-      });
-    },
-  });
+  const makeClient = (once: boolean) =>
+    createToolsClient({
+      baseUrl: async () => ({ ...deps.getHandle(), remote: deps.remote }),
+      fetchImpl: async (url, init, meta) => {
+        // A retry cannot fix a URL that does not parse, so fail at once.
+        parseUrl(url);
+        return fetchWithReconnect(() => rebase(url), deps.reconnect, {
+          init: () => withHeaders(init),
+          // A call that carried an upload is sent once and never aborted: the
+          // tool-server consumes the upload when it reads the call, so a second
+          // attempt could only fail.
+          fetchTimeoutMs: meta.longRunning || meta.carriesUpload ? null : timeout,
+          maxRetries: once || meta.carriesUpload ? 0 : undefined,
+        });
+      },
+    });
+  const client = makeClient(false);
+  const onceClient = makeClient(true);
 
   return {
     fetchTools: client.fetchTools,
     async callTool(name, args) {
       const { data, note, outputHint } = await client.callTool(name, args);
+      return { result: data, outputHint, note };
+    },
+    async callToolOnce(name, args) {
+      const { data, note, outputHint } = await onceClient.callTool(name, args);
       return { result: data, outputHint, note };
     },
   };

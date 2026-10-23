@@ -322,6 +322,14 @@ describe("createToolCaller", () => {
     expect(postsTo("/tools/fast")).toHaveLength(2);
   });
 
+  it("sends a callToolOnce call once, without a reconnect, when its connection drops", async () => {
+    const { callToolOnce, reconnect } = caller();
+
+    await expect(callToolOnce("fast", {})).rejects.toThrow("fetch failed");
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(postsTo("/tools/fast")).toHaveLength(1);
+  });
+
   it("sends a retry to the handle a reconnect installed, with its token", async () => {
     const second = await startStub({ dropFirst: [] });
     try {

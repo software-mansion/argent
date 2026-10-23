@@ -36,6 +36,8 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  isIosSimulatorUdid,
+  startsScreenReader,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -138,7 +140,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   }
 
-  const { fetchTools, callTool } = createToolCaller({
+  const { fetchTools, callTool, callToolOnce } = createToolCaller({
     getHandle: () => ({ url: TOOLS_URL, token: AUTH_TOKEN }),
     remote,
     reconnect,
@@ -175,6 +177,36 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
+  const warmedDevices = new Set<string>();
+  // A note the tool-server hands out once (e.g. the update notice) that landed
+  // on the discarded warm-up read; the next result the agent sees carries it.
+  const pendingNotes: string[] = [];
+
+  async function warmScreenReader(udid: string): Promise<void> {
+    const t1 = Date.now();
+    try {
+      // One attempt: a resend would run beside the agent's own describe.
+      const { note } = await callToolOnce("describe", { udid });
+      if (note) pendingNotes.push(note);
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "warm_describe",
+        udid,
+        durationMs: Date.now() - t1,
+      });
+    } catch (e) {
+      // Not warm after all: let the next action try again.
+      warmedDevices.delete(udid);
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "warm_describe",
+        udid,
+        durationMs: Date.now() - t1,
+        error: String(e instanceof Error ? e.message : e),
+      });
+    }
+  }
+
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     const t0 = Date.now();
     await spyLog({
@@ -183,6 +215,30 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       name: params.name,
       args: params.arguments,
     });
+    // First touch of an iOS simulator: start its accessibility reader in the
+    // background (a read-only describe), so the first action's element tree
+    // does not pay the reader's cold start after the action itself. Other
+    // platforms have no persistent reader to warm, and there a concurrent read
+    // collides with the action's own (uiautomator dump, Vega page source).
+    // A call that starts the reader itself counts as warm.
+    const warmUdid = getUdidFromArgs(params.arguments);
+    if (
+      autoDescribeOn &&
+      warmUdid &&
+      isIosSimulatorUdid(warmUdid) &&
+      !warmedDevices.has(warmUdid)
+    ) {
+      if (startsScreenReader(params.name)) {
+        warmedDevices.add(warmUdid);
+      } else if (
+        shouldAutoDescribe(params.name) &&
+        // No element tree follows a call that types a secret.
+        !containsSecretPlaceholder(params.arguments)
+      ) {
+        warmedDevices.add(warmUdid);
+        void warmScreenReader(warmUdid);
+      }
+    }
     try {
       const { result, outputHint, note } = await callTool(params.name, params.arguments);
 
@@ -314,8 +370,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         }
       }
 
-      if (note) {
-        content = [{ type: "text" as const, text: note }, ...content];
+      const held = pendingNotes.splice(0);
+      const notes = note && !held.includes(note) ? [...held, note] : held;
+      if (notes.length > 0) {
+        content = [...notes.map((text) => ({ type: "text" as const, text })), ...content];
       }
 
       return { content };
