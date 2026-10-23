@@ -68,9 +68,10 @@ Only `enter` (alias `return`), `backspace` (alias `delete`), `space`, `arrow-lef
 
 ## Building and signing a HAP
 
-Paths below are relative to `C=/Applications/DevEco-Studio.app/Contents` (macOS). Build from the project root without the IDE:
+`C` is the macOS install; only that layout is verified, so elsewhere point it at the DevEco Studio directory that `$DEVECO_STUDIO_HOME` names. Build from the project root without the IDE:
 
 ```bash
+C=/Applications/DevEco-Studio.app/Contents
 export DEVECO_SDK_HOME=$C/sdk PATH=$C/tools/node/bin:$C/tools/ohpm/bin:$PATH
 ohpm install --all
 node $C/tools/hvigor/bin/hvigorw.js --mode module -p module=entry@default -p product=default -p buildMode=debug assembleHap --no-daemon
@@ -78,15 +79,17 @@ node $C/tools/hvigor/bin/hvigorw.js --mode module -p module=entry@default -p pro
 
 With no `signingConfigs` in `build-profile.json5` this writes `entry/build/default/outputs/default/entry-default-unsigned.hap`.
 
-The emulator installs any HAP, including an unsigned one or one whose signature fails verification, so an emulator install proves nothing about signing. For a phone, sign with a debug profile that lists the phone's UDID (`hdc -t <connectKey> shell bm get --udid`, last line). Signing uses `L=$C/sdk/default/openharmony/toolchains/lib` and DevEco's Java: `export PATH=$C/jbr/Contents/Home/bin:$PATH`.
+The emulator installs any HAP, including an unsigned one or one whose signature fails verification, so an emulator install proves nothing about signing. A phone refuses an unsigned HAP (`9568320 error: no signature file`). Sign it with a debug profile for the app's bundle name that lists the phone's UDID (`hdc -t <connectKey> shell bm get --udid`, last line). `L` below is `$C/sdk/default/openharmony/toolchains/lib`, set in the signing block.
 
 **Test keys, no account.** `$L/OpenHarmony.p12` (password `123456`) is OpenHarmony's public test PKI; use it for development only. A HAP signed this way installs and launches on a HarmonyOS 6.0 phone.
 
 1. Certificate chain `app-chain.cer`, leaf first: the `bundle-info.development-certificate` from `$L/UnsgnedDebugProfileTemplate.json`, then the `OpenHarmony Application CA` and `OpenHarmony Application Root CA` certificates from `$L/OpenHarmonyProfileDebug.pem`.
 2. Profile `profile.json`: a copy of the template with your `bundle-info.bundle-name`, the phone's UDID in `debug-info.device-ids`, and a current `validity` window in epoch seconds (the template's expired in January 2024).
-3. Sign the profile, then the HAP:
+3. Sign the profile, then the HAP, from the project root with DevEco's Java:
 
 ```bash
+C=/Applications/DevEco-Studio.app/Contents L=$C/sdk/default/openharmony/toolchains/lib
+export PATH=$C/jbr/Contents/Home/bin:$PATH
 java -jar $L/hap-sign-tool.jar sign-profile -mode localSign -signAlg SHA256withECDSA \
   -keystoreFile $L/OpenHarmony.p12 -keystorePwd 123456 -keyPwd 123456 \
   -keyAlias "openharmony application profile debug" -profileCertFile $L/OpenHarmonyProfileDebug.pem \
@@ -94,15 +97,15 @@ java -jar $L/hap-sign-tool.jar sign-profile -mode localSign -signAlg SHA256withE
 java -jar $L/hap-sign-tool.jar sign-app -mode localSign -signAlg SHA256withECDSA -signCode 1 \
   -keystoreFile $L/OpenHarmony.p12 -keystorePwd 123456 -keyPwd 123456 \
   -keyAlias "openharmony application release" -appCertFile app-chain.cer -profileFile profile.p7b \
-  -inFile entry-default-unsigned.hap -outFile app-signed.hap
+  -inFile entry/build/default/outputs/default/entry-default-unsigned.hap -outFile app-signed.hap
 ```
 
 **Real keys, Huawei ID.** These need the user's Huawei account; ask before using it.
 
-- DevEco Studio: sign in, connect the phone, and tick _Automatically generate signature_ under File > Project Structure > Signing Configs. It writes `signingConfigs` into `build-profile.json5`, and the build above then emits `entry-default-signed.hap`.
-- AppGallery Connect: create a `.p12` and CSR (DevEco: Build > Generate Key and CSR), then request a debug certificate (`.cer`) from the CSR, register the phone's UDID, and request a debug profile (`.p7b`) for the bundle, that certificate and the device. Run only `sign-app` above with your `.p12`, key alias, passwords, `.cer` and `.p7b`; AppGallery Connect has already signed the profile.
+- DevEco Studio: sign in, connect the phone, and tick _Automatically generate signature_ under File > Project Structure > Project > Signing Configs. Tick _Support HarmonyOS_ too if it is offered; without it the signature is an OpenHarmony one. It writes `signingConfigs` into `build-profile.json5`, and the build above then emits `entry-default-signed.hap`.
+- AppGallery Connect: create a `.p12` and CSR (DevEco: Build > Generate Key and CSR), then request a debug certificate (`.cer`) from the CSR, register the phone's UDID and the app, and request a debug profile (`.p7b`) for that app, that certificate and the device. Run only `sign-app` above with your `.p12`, key alias, passwords, `.cer` and `.p7b`; AppGallery Connect has already signed the profile.
 
-`hap-sign-tool.jar verify-app -inFile <hap> -outCertChain c.cer -outProfile p.p7b` checks a signed HAP on the host.
+In the signing block's shell, `java -jar $L/hap-sign-tool.jar verify-app -inFile <hap> -outCertChain c.cer -outProfile p.p7b` checks the signature on the host, but not that the profile's bundle name matches the HAP's. A phone refuses that mismatch with `9568329 verify signature failed`, so only an install proves the phone accepts a HAP.
 
 ## E2E tests
 
