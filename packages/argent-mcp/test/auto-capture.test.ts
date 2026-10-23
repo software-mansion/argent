@@ -6,6 +6,9 @@ import { setFlag } from "@argent/configuration-core";
 import {
   AUTO_SCREENSHOT_TOOLS,
   AUTO_SCREENSHOT_DELAY_MS_BY_TOOL,
+  AUTO_DESCRIBE_HEADER,
+  AUTO_DESCRIBE_LEGEND,
+  compactAutoDescribe,
   autoScreenshotEnabled,
   AUTO_DESCRIBE_TOOLS,
   autoDescribeEnabled,
@@ -340,5 +343,56 @@ describe("containsSecretPlaceholder", () => {
       })
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
+});
+
+// tool-server's real formatter, so rewording its header fails here instead of
+// silently turning compaction off. Loaded by URL: the file is outside rootDir.
+const { formatDescribeTree } = (await import(
+  new URL("../../tool-server/src/tools/describe/format-tree.ts", import.meta.url).href
+)) as { formatDescribeTree: (root: unknown, opts: { source: string }) => string };
+
+describe("compactAutoDescribe", () => {
+  const root = {
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      {
+        role: "AXButton",
+        label: "Continue",
+        frame: { x: 0.055, y: 0.86, width: 0.891, height: 0.088 },
+        children: [],
+      },
+    ],
+  };
+
+  it.each(["ax-service", "native-devtools", "uiautomator", "android-devtools", "cdp-dom"])(
+    "replaces the %s preamble with the legend and keeps the tree",
+    (source) => {
+      const full = formatDescribeTree(root, { source });
+      const tree = full.slice(full.indexOf("\n\nROOT  ") + 1);
+      expect(tree.startsWith("\nROOT  AXGroup")).toBe(true);
+      expect(tree).toContain('AXButton "Continue"');
+      expect(compactAutoDescribe(full)).toBe(`${AUTO_DESCRIBE_LEGEND}\n${tree}`);
+    }
+  );
+
+  it.each(["vega-automation", "xcuitest-runner"])(
+    "leaves %s unchanged, since its header carries platform notes",
+    (source) => {
+      const full = formatDescribeTree(root, { source });
+      expect(compactAutoDescribe(full)).toBe(full);
+    }
+  );
+
+  it("leaves output without the preamble unchanged", () => {
+    const hint = "Hint: the tree is empty\n\nROOT  AXGroup (0, 0, 1, 1)";
+    expect(compactAutoDescribe(hint)).toBe(hint);
+  });
+
+  it("matches the attached tree the argent rule describes", () => {
+    const rule = fs.readFileSync(new URL("../../skills/rules/argent.md", import.meta.url), "utf8");
+    expect(rule).toContain(`\`${AUTO_DESCRIBE_HEADER}\``);
+    expect(rule).toContain(`\`${AUTO_DESCRIBE_LEGEND}\``);
   });
 });
