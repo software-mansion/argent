@@ -47,7 +47,11 @@ import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
-import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
+import {
+  androidGuestVulkanFromEnv,
+  androidHeadlessFromEnv,
+  iosHeadlessFromEnv,
+} from "../../utils/no-window-env";
 import {
   assertHarmonyEnabled,
   classifyDevice,
@@ -281,6 +285,14 @@ function selectGpuMode(): string {
     return value;
   }
   return process.platform === "linux" ? "swiftshader" : "auto";
+}
+
+// macOS: guest Vulkan runs on a CPU driver (SwiftShader or lavapipe) that
+// crashes Chrome's GPU process, breaking Chrome and Custom Tab sign-in flows.
+function guestVulkanArgs(): string[] {
+  return process.platform === "darwin" && !androidGuestVulkanFromEnv()
+    ? ["-feature", "-Vulkan"]
+    : [];
 }
 
 // Poll cadences for the boot state machine: they bound latency, not
@@ -968,8 +980,12 @@ async function bootAndroidImpl(params: {
   // ARGENT_EMULATOR_GPU_MODE surfaces immediately rather than mid-boot with a
   // misleading "emulator has been terminated" suffix.
   const gpuMode = selectGpuMode();
-  // Opt-in headless mode via ARGENT_EMULATOR_NO_WINDOW (see no-window-env.ts).
-  const extraEmulatorArgs = androidHeadlessFromEnv() ? ["-no-window"] : [];
+  // Opt-in headless mode via ARGENT_EMULATOR_NO_WINDOW (see no-window-env.ts),
+  // and the macOS guest Vulkan opt-out.
+  const extraEmulatorArgs = [
+    ...(androidHeadlessFromEnv() ? ["-no-window"] : []),
+    ...guestVulkanArgs(),
+  ];
   const hardeningArgs = launchHardeningArgs(params.sound);
 
   for (const msg of linuxBootDiagnostics(params.avdName) ?? []) {

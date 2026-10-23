@@ -316,6 +316,58 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     }
   });
 
+  // A probe without the flag rejects a snapshot saved with it ("feature ...
+  // missing in the snapshot"), so hot boot must pass it to both.
+  it.each([
+    ["darwin", true],
+    ["linux", false],
+  ] as const)("on %s disables guest Vulkan: %s", async (platform, disabled) => {
+    setPlatform(platform);
+    hasSnapshotMock.mockResolvedValue(true);
+    probeMock.mockResolvedValue({ loadable: true, reason: null });
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    const [, , probeOptions] = probeMock.mock.calls[0]!;
+    const hotArgs = spawnMock.mock.calls[0]![1] as string[];
+    for (const args of [(probeOptions as { extraArgs: string[] }).extraArgs, hotArgs]) {
+      const featureIdx = args.indexOf("-feature");
+      expect(featureIdx >= 0 && args[featureIdx + 1] === "-Vulkan").toBe(disabled);
+    }
+  });
+
+  it("disables guest Vulkan on the macOS cold-boot spawn", async () => {
+    setPlatform("darwin");
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    const args = spawnMock.mock.calls[0]![1] as string[];
+    expect(args[args.indexOf("-feature") + 1]).toBe("-Vulkan");
+  });
+
+  it("keeps guest Vulkan on macOS when ARGENT_EMULATOR_GUEST_VULKAN is set", async () => {
+    setPlatform("darwin");
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const prev = process.env.ARGENT_EMULATOR_GUEST_VULKAN;
+    process.env.ARGENT_EMULATOR_GUEST_VULKAN = "1";
+    try {
+      const tool = createBootDeviceTool(registry);
+      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const args = spawnMock.mock.calls[0]![1];
+      expect(args).not.toContain("-feature");
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_EMULATOR_GUEST_VULKAN;
+      else process.env.ARGENT_EMULATOR_GUEST_VULKAN = prev;
+    }
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace", "   "],
