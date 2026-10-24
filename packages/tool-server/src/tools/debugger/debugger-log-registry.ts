@@ -20,9 +20,9 @@ interface LogRegistryResponse extends LogStats {
   appName: string;
   logicalDeviceId: string | undefined;
   /**
-   * Set only when a teardown reaped the previous debugger session while it held
-   * captured console output. Without it an empty registry reads as "the app
-   * logged nothing".
+   * Set when a teardown reaped the previous debugger session while it held
+   * captured console output (without it an empty registry reads as "the app
+   * logged nothing"), or when `file` does not exist.
    */
   note?: string;
 }
@@ -51,7 +51,7 @@ export function createDebuggerLogRegistryTool(
     },
     description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when the stats are empty BECAUSE the previous debugger session ended: torn down (e.g. by stop-all-simulator-servers) with its log file deleted, or cut off by the app crashing with its log file kept at the path the note names. Absent that note, empty really does mean the app has logged nothing.
+Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when { file } does not exist or when the stats are empty BECAUSE the previous debugger session ended: torn down (e.g. by stop-all-simulator-servers) with its log file deleted, or cut off by the app crashing with its log file kept at the path the note names. Absent that note, empty really does mean the app has logged nothing.
 When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Read a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
@@ -91,6 +91,10 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
             api.logicalDeviceId,
           ]);
           if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
+        }
+        if (!api.logWriter.hasFile()) {
+          const missing = `No log file exists at ${stats.file}, so there is nothing to grep: the counts and clusters are all that was captured. Usually ~/.argent/tmp is not writable (e.g. a root-owned ~/.argent: sudo chown -R "$USER" ~/.argent). Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${canonicalDeviceId(params.device_id)}"], then debugger-connect again.`;
+          response.note = response.note ? `${response.note} ${missing}` : missing;
         }
         return response;
       } catch (err) {
