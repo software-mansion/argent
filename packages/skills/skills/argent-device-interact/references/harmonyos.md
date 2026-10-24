@@ -93,7 +93,7 @@ export PATH=$C/jbr/Contents/Home/bin:$PATH
 java -jar $L/hap-sign-tool.jar sign-profile -mode localSign -signAlg SHA256withECDSA \
   -keystoreFile $L/OpenHarmony.p12 -keystorePwd 123456 -keyPwd 123456 \
   -keyAlias "openharmony application profile debug" -profileCertFile $L/OpenHarmonyProfileDebug.pem \
-  -inFile profile.json -outFile profile.p7b
+  -inFile profile.json -outFile profile.p7b &&
 java -jar $L/hap-sign-tool.jar sign-app -mode localSign -signAlg SHA256withECDSA -signCode 1 \
   -keystoreFile $L/OpenHarmony.p12 -keystorePwd 123456 -keyPwd 123456 \
   -keyAlias "openharmony application release" -appCertFile app-chain.cer -profileFile profile.p7b \
