@@ -524,7 +524,7 @@ function memberCollector(roots: string[], opts: PrepareFileInputsOptions) {
         let doc: unknown;
         try {
           // The runner's parse; its warnings belong to the run, not to this terminal.
-          doc = parseYaml(file.text.trim(), { logLevel: "error" });
+          doc = parseYaml(file.text.trimEnd(), { logLevel: "error" });
         } catch {
           continue;
         }

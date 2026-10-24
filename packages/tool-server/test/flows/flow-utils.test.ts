@@ -218,6 +218,12 @@ describe("parseFlow", () => {
     expect((thrown as Error).message).toContain("line 1");
   });
 
+  it("reports a syntax error at its line in the file when the file starts with blank lines", () => {
+    expect(() => parseFlow("\n\n\nsteps:\n  - echo: start\n  - echo: [unclosed\n")).toThrow(
+      "at line 6, column 20"
+    );
+  });
+
   // `step must be an object` is spelled twice — here for a top-level entry, and
   // in parseBlockSteps for a block directive's own steps: list. Nothing else
   // asserts either copy, so the two are free to drift apart or be dropped with
