@@ -29,11 +29,25 @@ export interface MessageCluster {
   sourceLine?: number;
 }
 
+export interface TailEntry {
+  id: number;
+  timestamp: string;
+  level: string;
+  message: string;
+  sourceFile?: string;
+  sourceLine?: number;
+}
+
 export interface LogStats {
   file: string;
   totalEntries: number;
   byLevel: Record<string, number>;
   fileSizeBytes: number;
+  /**
+   * Entries logged after the file stopped at MAX_ENTRIES: in no count, cluster
+   * or file line, only in tail(). Present only when non-zero.
+   */
+  droppedEntries?: number;
 }
 
 interface ClusterState {
@@ -47,6 +61,8 @@ interface ClusterState {
 }
 
 const MAX_ENTRIES = 50_000;
+export const TAIL_MAX = 100;
+export const TAIL_MESSAGE_CHARS = 300;
 const STALE_LOG_MS = 24 * 60 * 60 * 1000;
 const CLUSTER_KEY_LENGTH = 80;
 const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
@@ -61,8 +77,11 @@ export class LogFileWriter {
   private fd: number | null = null;
   private bytesWritten = 0;
   private entryCount = 0;
+  private droppedCount = 0;
   private levelCounts: Record<string, number> = {};
   private clusters = new Map<string, ClusterState>();
+  /** The newest TAIL_MAX entries of each level, kept even past MAX_ENTRIES. */
+  private recent = new Map<string, TailEntry[]>();
   private ready = false;
   private closed = false;
 
@@ -87,7 +106,24 @@ export class LogFileWriter {
 
   write(entry: Omit<RichLogEntry, "marker">): RichLogEntry {
     if (this.closed) throw new Error("LogFileWriter is closed");
+
+    const sourceUrl = entry.stackTrace?.callFrames?.[0]?.url;
+    const sourceLine = entry.stackTrace?.callFrames?.[0]?.lineNumber;
+    const sourceFile = sourceUrl ? (cleanSourceUrl(sourceUrl) ?? undefined) : undefined;
+
+    let ring = this.recent.get(entry.level);
+    if (!ring) this.recent.set(entry.level, (ring = []));
+    ring.push({
+      id: entry.id,
+      timestamp: entry.timestamp,
+      level: entry.level,
+      message: cutMessage(entry.message, TAIL_MESSAGE_CHARS),
+      ...(sourceFile !== undefined ? { sourceFile, sourceLine } : {}),
+    });
+    if (ring.length > TAIL_MAX) ring.shift();
+
     if (this.entryCount >= MAX_ENTRIES) {
+      this.droppedCount++;
       return { ...entry, marker: `[L:${entry.id}]` };
     }
 
@@ -95,10 +131,6 @@ export class LogFileWriter {
       ...entry,
       marker: `[L:${entry.id}]`,
     };
-
-    const sourceUrl = entry.stackTrace?.callFrames?.[0]?.url;
-    const sourceLine = entry.stackTrace?.callFrames?.[0]?.lineNumber;
-    const sourceFile = sourceUrl ? (cleanSourceUrl(sourceUrl) ?? undefined) : undefined;
     const source =
       sourceFile !== undefined && sourceLine !== undefined ? `${sourceFile}:${sourceLine}` : "-";
 
@@ -152,6 +184,7 @@ export class LogFileWriter {
       totalEntries: this.entryCount,
       byLevel: { ...this.levelCounts },
       fileSizeBytes: this.bytesWritten,
+      ...(this.droppedCount > 0 ? { droppedEntries: this.droppedCount } : {}),
     };
   }
 
@@ -182,17 +215,15 @@ export class LogFileWriter {
     }
   }
 
-  readFiltered(opts: { level?: string; limit?: number }): {
-    entries: RichLogEntry[];
-    total: number;
-  } {
-    const all = this.readAll();
-    let filtered = opts.level ? all.filter((e) => e.level === opts.level) : all;
-    const total = filtered.length;
-    if (opts.limit) {
-      filtered = filtered.slice(-opts.limit);
-    }
-    return { entries: filtered, total };
+  /** The newest `limit` entries (at most TAIL_MAX), of `levels` if given, oldest first. */
+  tail({ levels, limit }: { levels?: readonly string[]; limit: number }): TailEntry[] {
+    const rings = levels
+      ? [...new Set(levels)].map((l) => this.recent.get(l) ?? [])
+      : [...this.recent.values()];
+    return rings
+      .flat()
+      .sort((a, b) => a.id - b.id)
+      .slice(-limit);
   }
 
   /** `keepFile` leaves the log to the sweep, 24h after the close. */
@@ -264,6 +295,14 @@ function cleanSourceUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function cutMessage(message: string, max: number): string {
+  if (message.length <= max) return message;
+  let end = max;
+  const last = message.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end--;
+  return `${message.slice(0, end)}…`;
 }
 
 function parseFlatLine(line: string): RichLogEntry | null {
