@@ -69,7 +69,7 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 ### Diagnostics
 
 - the fact that an error occurred (event type and code only — never the error content or message);
-- when a tool call is rejected because its parameters fail validation: which parameter names failed. These names come exclusively from Argent's own published tool schemas — never the values you supplied, and never key names you typed that are not part of the schema (an unrecognised key is recorded only as the fixed marker "unrecognized_keys", not the key itself);
+- when a tool call is rejected because its parameters fail validation: which parameter names failed, and which validation rules were broken across the call (for example: wrong type, above the permitted maximum, unrecognised key) — a deduplicated set of the schema library's fixed issue codes, not a per-parameter mapping. The names come exclusively from Argent's own published tool schemas — never the values you supplied, and never key names you typed that are not part of the schema (an unrecognised key is recorded only as the fixed marker "unrecognized_keys", not the key itself);
 - the outcome of a debugger connectivity check, recorded as one of a fixed set of coded reasons (for example: connected, Metro not running, no app attached) — never the underlying error text.
 
 ### Identifiers
@@ -81,7 +81,7 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 
 To be explicit, Argent telemetry never includes:
 
-- tool input or argument values (for a rejected call we record only which schema-declared parameter names failed validation, as described under Diagnostics — never their values, and never key names that are not part of Argent's own schemas);
+- tool input or argument values (for a rejected call we record only which schema-declared parameter names failed validation and which of the schema library's fixed rule codes were broken, as described under Diagnostics — never their values, and never key names that are not part of Argent's own schemas);
 - file paths or file names;
 - source code or its contents;
 - application data;

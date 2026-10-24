@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, expectTypeOf } from "vitest";
 import { z } from "zod";
-import { deriveInvalidParams } from "../../src/utils/invalid-params";
+import type { ZodIssueCode } from "@argent/telemetry";
+import { deriveInvalidParams, deriveInvalidParamIssues } from "../../src/utils/invalid-params";
 
 function issuesFor(schema: z.ZodType, input: unknown): z.ZodError {
   const res = schema.safeParse(input);
@@ -95,5 +96,52 @@ describe("deriveInvalidParams", () => {
     const out = deriveInvalidParams(forged, bigDeclared);
     expect(out).toHaveLength(16);
     expect(out).toEqual(names.slice(0, 16));
+  });
+});
+
+describe("deriveInvalidParamIssues", () => {
+  // await-ui-element's timeoutMs schema.
+  const timeoutMs = z.object({ timeoutMs: z.number().int().positive().max(120_000) });
+
+  it("separates a value over the bound from a value of the wrong type", () => {
+    expect(deriveInvalidParamIssues(issuesFor(timeoutMs, { timeoutMs: 300_000 }))).toEqual([
+      "too_big",
+    ]);
+    expect(deriveInvalidParamIssues(issuesFor(timeoutMs, { timeoutMs: "5000" }))).toEqual([
+      "invalid_type",
+    ]);
+    expect(deriveInvalidParamIssues(issuesFor(timeoutMs, { timeoutMs: 0 }))).toEqual(["too_small"]);
+  });
+
+  it("dedupes repeats but keeps distinct codes, in one order whatever the input", () => {
+    const schema = z.object({ a: z.number().max(5), b: z.number().max(5), c: z.string() });
+    expect(deriveInvalidParamIssues(issuesFor(schema, { a: 9, b: 9, c: 1 }))).toEqual([
+      "invalid_type",
+      "too_big",
+    ]);
+    expect(deriveInvalidParamIssues(issuesFor(schema, { a: "x", b: 9, c: "ok" }))).toEqual([
+      "invalid_type",
+      "too_big",
+    ]);
+  });
+
+  it("reports unrecognized_keys without carrying the user-typed key names", () => {
+    const schema = z.object({ port: z.number() }).strict();
+    const err = issuesFor(schema, { port: 1, ssn: "123-45-6789" });
+    const out = deriveInvalidParamIssues(err);
+    expect(out).toEqual(["unrecognized_keys"]);
+    expect(JSON.stringify(out)).not.toMatch(/ssn|123-45/);
+  });
+
+  it("knows exactly the issue codes the installed zod can raise", () => {
+    expectTypeOf<ZodIssueCode>().toEqualTypeOf<z.core.$ZodIssueCode>();
+  });
+
+  it("drops a code outside zod's vocabulary rather than voiding the whole array", () => {
+    const err = issuesFor(z.object({ a: z.number() }), { a: "x" });
+    const forged = {
+      issues: [{ code: "brand_new_zod_code", path: ["a"] }, ...err.issues],
+    } as unknown as z.ZodError;
+    expect(deriveInvalidParamIssues(forged)).toEqual(["invalid_type"]);
   });
 });

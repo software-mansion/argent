@@ -1,4 +1,5 @@
 import type { ZodError } from "zod";
+import { ZOD_ISSUE_CODES, type ZodIssueCode } from "@argent/telemetry";
 
 /**
  * Privacy contract (Telemetry.md): only names declared in Argent's own tool schema
@@ -19,4 +20,14 @@ export function deriveInvalidParams(error: ZodError, declared: Set<string>): str
     if (out.length >= 16) break;
   }
   return out;
+}
+
+/**
+ * The deduped zod issue codes, in ZOD_ISSUE_CODES order so one set always
+ * serializes the same. Codes outside it are dropped: the telemetry allowlist
+ * would void the whole array for one unknown value.
+ */
+export function deriveInvalidParamIssues(error: ZodError): ZodIssueCode[] {
+  const raised = new Set<string>(error.issues.map((issue) => issue.code));
+  return ZOD_ISSUE_CODES.filter((code) => raised.has(code));
 }
