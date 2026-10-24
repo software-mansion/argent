@@ -329,6 +329,28 @@ describe("a debugger session whose app crashed", () => {
     expect(result.note).toContain(`kept at ${file}`);
   });
 
+  it("names the kept file even when the relaunched app has logged since", async () => {
+    const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
+    appRunning = true;
+    // The next debugger call reconnects without debugger-connect, and the
+    // relaunched runtime replays its own startup logs to the new session.
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:${LOGICAL_ID}`
+    );
+    for (const message of ["Running app", "launch warning"]) {
+      api.logWriter.write({ id: 0, timestamp: new Date().toISOString(), level: "log", message });
+    }
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; totalEntries: number; note?: string };
+
+    expect(result.status).toBe("connected");
+    expect(result.totalEntries).toBe(2);
+    expect(result.note).toContain(`kept at ${file}`);
+  });
+
   it("names the kept file to a read by the logicalDeviceId of a udid connect", async () => {
     const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
     await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});

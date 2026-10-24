@@ -69,14 +69,20 @@ export function takeReapedSession(
   return entry;
 }
 
-/** Takes the entry under every id one device answers to, returning the first. */
+/**
+ * Takes the entry under every id one device answers to, returning the first.
+ * An entry `accept` rejects is left in place.
+ */
 export function takeReapedSessionAnyId(
   kind: ReapedSessionKind,
-  ids: Array<string | undefined>
+  ids: Array<string | undefined>,
+  accept: (entry: ReapedSession) => boolean = () => true
 ): ReapedSession | undefined {
   let first: ReapedSession | undefined;
   for (const id of new Set(ids)) {
     if (id === undefined) continue;
+    const found = reaped.get(key(kind, id));
+    if (!found || !accept(found)) continue;
     const entry = takeReapedSession(kind, id); // not `first ??= take(...)`: take every id
     first ??= entry;
   }
