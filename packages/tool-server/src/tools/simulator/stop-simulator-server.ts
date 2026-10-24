@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
-import { isExternalId } from "../../utils/external-devices";
+import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
 import { deviceIdOwningUrn, transportNamespacesForPlatform } from "./device-services";
 
 const zodSchema = z.object({
@@ -42,8 +42,10 @@ export function createStopSimulatorServerTool(
        * a no-op by design. Still drop the cached handles so the next call
        * re-resolves against the provider's state, but report `stopped: false`.
        * A clean no-op beats an error for an agent that calls this on every device.
+       * The plain UDID / serial of a device the provider claims attaches to the
+       * same borrowed server, so it counts too.
        */
-      const external = isExternalId(udid);
+      const external = isExternalId(udid) || externalClaimForNativeId(udid) !== undefined;
 
       const snapshot = registry.getSnapshot();
       let stopped = false;

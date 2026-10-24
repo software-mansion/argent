@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { isExternalDeviceUrn } from "../../utils/external-devices";
+import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
+import { externalClaimForNativeId, isExternalDeviceUrn } from "../../utils/external-devices";
 import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
@@ -110,15 +111,9 @@ Returns { stopped } - the URNs of the services that were actually live and got s
           // is disposed too, but was never a running server, so it is not
           // reported stopped.
           const wasLive = isLiveServiceState(entry.state);
+          const borrowed = isBorrowedSimulatorServerUrn(urn);
           await registry.disposeService(urn);
-          /**
-           * A device from an external provider is disposed (dropping our
-           * cached handle) but never reported as stopped. Its `dispose()` is a
-           * no-op by design, so nothing was actually shut down and claiming
-           * otherwise would tell the agent it had cleaned up a server it does
-           * not own.
-           */
-          if (wasLive && !isExternalDeviceUrn(urn)) stopped.push(urn);
+          if (wasLive && !borrowed) stopped.push(urn);
         } else if (
           scoped &&
           isLiveServiceState(entry.state) &&
@@ -157,4 +152,26 @@ Returns { stopped } - the URNs of the services that were actually live and got s
       return result;
     },
   };
+}
+
+/**
+ * The simulator-server of a device from an external provider is borrowed: it is
+ * disposed (dropping our cached handle) but never reported as stopped. Its
+ * `dispose()` is a no-op by design, so nothing was actually shut down and
+ * claiming otherwise would tell the agent it had cleaned up a server it does
+ * not own. Every other service of that device (AXService, NativeDevtools, ...)
+ * is Argent's own and really is shut down, so it is reported like any other.
+ *
+ * The device can be driven by its `ext:` id or by its plain UDID / serial,
+ * which the simulator-server factory also attaches to the provider's server
+ * while the provider claims it, so both spellings count.
+ */
+function isBorrowedSimulatorServerUrn(urn: string): boolean {
+  const prefix = `${SIMULATOR_SERVER_NAMESPACE}:`;
+
+  if (!urn.startsWith(prefix)) return false;
+
+  return (
+    isExternalDeviceUrn(urn) || externalClaimForNativeId(urn.slice(prefix.length)) !== undefined
+  );
 }

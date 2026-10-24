@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   forgetLogicalKeyedDevice,
   rememberLogicalKeyedDevice,
@@ -9,6 +12,7 @@ import { Registry, ServiceState, zodObjectToJsonSchema } from "@argent/registry"
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../src/tools/simulator/stop-metro";
+import { __resetExternalDeviceCacheForTesting } from "../src/utils/external-devices";
 
 function createMockRegistry(services: Map<string, { state: ServiceState; dependents: string[] }>) {
   return {
@@ -806,6 +810,110 @@ describe("stop-all-simulator-servers device scoping", () => {
 
     expect(result).toEqual({ stopped: [`NativeDevtools:${MINE}`] });
     expect(registry.disposeService).toHaveBeenCalledOnce();
+  });
+
+  it("lists an external device's own services as stopped but not its borrowed simulator-server", async () => {
+    // An `ext:` device's simulator-server belongs to its provider: Argent only
+    // borrows it and its `dispose()` is a no-op, so claiming it stopped would
+    // be false. The AX daemon and devtools client are Argent's own and really
+    // are shut down, so they must be reported like any other device's.
+    const ext = "ext:acme-abc123:39EEA8E5-94DF-4EED-BE6E-586E4BA9AEC8";
+
+    const services = new Map([
+      [`SimulatorServer:${ext}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`AXService:${ext}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`NativeDevtools:${ext}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`AXService:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+    const result = await tool.execute!({}, { devices: [ext] });
+
+    expect(result).toEqual({ stopped: [`AXService:${ext}`, `NativeDevtools:${ext}`] });
+    // The borrowed server is still disposed, which drops Argent's cached
+    // handle.
+    expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${ext}`);
+    expect(registry.disposeService).not.toHaveBeenCalledWith(`AXService:${THEIRS}`);
+  });
+});
+
+/**
+ * A device a provider claims can also be driven by its plain UDID and the
+ * simulator-server factory then attaches to the provider's server just as it
+ * does for the `ext:` id. Neither stop tool may report that borrowed server as
+ * stopped under either spelling.
+ */
+describe("stop tools — a provider's device under its plain UDID", () => {
+  const CLAIMED = "39EEA8E5-94DF-4EED-BE6E-586E4BA9AEC8";
+
+  let temporaryDirectory: string;
+
+  beforeEach(() => {
+    temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-stop-providers-"));
+    const descriptorPath = path.join(temporaryDirectory, "acme.json");
+
+    fs.writeFileSync(
+      descriptorPath,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["ax-service", "simctl", "simulator-server"],
+            deviceSet: "/tmp/acme/Devices/iOS",
+            kind: "simulator",
+            name: "iPhone 16",
+            nativeId: CLAIMED,
+            platform: "ios",
+            simulatorServer: {
+              apiUrl: "http://127.0.0.1:9",
+              streamUrl: "http://127.0.0.1:9/stream.mjpeg",
+            },
+            state: "Booted",
+          },
+        ],
+        id: "acme-abc123",
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
+    __resetExternalDeviceCacheForTesting();
+  });
+
+  afterEach(() => {
+    delete process.env.ARGENT_DEVICE_PROVIDERS;
+    process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+    __resetExternalDeviceCacheForTesting();
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  it("stop-all-simulator-servers does not list the borrowed server as stopped", async () => {
+    const services = new Map([
+      [`SimulatorServer:${CLAIMED}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`AXService:${CLAIMED}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+    const result = await tool.execute!({}, { devices: [CLAIMED] });
+
+    expect(result).toEqual({ stopped: [`AXService:${CLAIMED}`] });
+    expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${CLAIMED}`);
+  });
+
+  it("stop-simulator-server reports stopped: false for the borrowed server", async () => {
+    const services = new Map([
+      [`SimulatorServer:${CLAIMED}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+
+    const registry = createMockRegistry(services);
+    const tool = createStopSimulatorServerTool(registry);
+    const result = await tool.execute!({}, { udid: CLAIMED });
+
+    expect(result).toEqual({ stopped: false, udid: CLAIMED });
+    expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${CLAIMED}`);
   });
 });
 
