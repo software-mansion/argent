@@ -60,7 +60,8 @@ import {
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
+import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { electronLaunchSpec } from "../devices/boot-electron";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
@@ -1558,8 +1559,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // iOS device, which records as the `ios: { app, args }` entry beside a
       // `native` id so the flow still replays elsewhere; other extra args (e.g.
       // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
-      // no args. `launch-app` is NOT rewritten — it foregrounds without
-      // terminating.
+      // no args. On Chromium the bundleId is a tag, so the step records the
+      // relaunched app's path and args instead, and a pinned replay attaches
+      // rather than relaunching (see runChromiumLaunch). `launch-app` is NOT rewritten —
+      // it foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
       const noLaunchArgs =
@@ -1606,9 +1609,20 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         warning = captured?.warning;
       } else if (isLaunch) {
         const bundleId = strippedArgs.bundleId as string;
+        const chromiumPort =
+          platformOf(args.udid) === "chromium" ? parseChromiumCdpPort(args.udid as string) : null;
+        const chromium = chromiumPort === null ? undefined : electronLaunchSpec(chromiumPort);
         step = {
           kind: "launch",
-          app: iosArgs ? { native: bundleId, ios: { app: bundleId, args: iosArgs } } : bundleId,
+          app: chromium
+            ? {
+                chromium: chromium.extraArgs.length
+                  ? { path: chromium.appPath, args: chromium.extraArgs }
+                  : chromium.appPath,
+              }
+            : iosArgs
+              ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }
+              : bundleId,
         };
       } else if (foldStep) {
         step = foldStep;

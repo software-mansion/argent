@@ -16,6 +16,7 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
+import { makeChromiumImpl } from "./platforms/chromium";
 
 // Same alphabet as launch-app's ACTIVITY_PATTERN: leading `.` for shorthand
 // activities like `.MainActivity`, no leading `-` (flag injection).
@@ -26,21 +27,21 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> Android serial, or Chromium id)."
     ),
   bundleId: z
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos>"
+      "App identifier. iOS: bundle id. Android: package name.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos> Chromium: any tag in the same alphabet (letters, digits, '.', '_' and '-'), echoed back."
     ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
     .describe(
-      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS<flag:harmonyos> / HarmonyOS</flag:harmonyos>."
+      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS / Chromium<flag:harmonyos> / HarmonyOS</flag:harmonyos>."
     ),
   launchArgs: z
     .array(z.string())
@@ -56,6 +57,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
 };
@@ -73,11 +75,11 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
         `Failed to restart ${params.bundleId}: ${failureSignal.error_code}`,
     },
     description: `Terminate then relaunch an app by its bundle id (iOS, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega) or package name (Android).
-Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven; use the tv-* tools rather than coordinate taps.
+Use when you need a clean in-memory state without a full reinstall. On Chromium it relaunches an Electron app that boot-device started in this tool-server session, on the same port and device id; any other Chromium runtime cannot be restarted. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven; use the tv-* tools rather than coordinate taps.
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
     alwaysLoad: true,
     searchHint:
-      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv chromium electron<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
     zodSchema,
     capability,
     // Only ios-remote's handler reads `services.nativeDevtools`, so only it
@@ -92,7 +94,6 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       Record<string, unknown>,
       Params,
       RestartAppResult,
-      // No chromium branch.
       Record<string, unknown>,
       RestartAppVegaServices,
       RestartAppIosServices,
@@ -104,6 +105,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       iosDevice: iosDeviceImpl,
       iosRemote: iosRemoteImpl,
       android: androidImpl,
+      chromium: makeChromiumImpl(registry),
       vega: vegaImpl,
       harmony: harmonyImpl,
     }),

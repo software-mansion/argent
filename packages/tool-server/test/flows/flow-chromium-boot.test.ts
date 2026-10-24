@@ -26,6 +26,7 @@ const defaultBoot = async (opts: { appPath: string; extraArgs?: string[] }) => {
 const bootElectronApp = vi.fn(defaultBoot);
 const killChromiumByPort = vi.fn();
 const killChromiumByPortAndWait = vi.fn(async () => {});
+const forgetElectronLaunchSpec = vi.fn();
 vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
     (bootElectronApp as (...a: unknown[]) => unknown)(...args),
@@ -33,6 +34,8 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
     (killChromiumByPort as (...a: unknown[]) => unknown)(...args),
   killChromiumByPortAndWait: (...args: unknown[]) =>
     (killChromiumByPortAndWait as (...a: unknown[]) => unknown)(...args),
+  forgetElectronLaunchSpec: (...args: unknown[]) =>
+    (forgetElectronLaunchSpec as (...a: unknown[]) => unknown)(...args),
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
@@ -175,6 +178,7 @@ beforeEach(() => {
   bootElectronApp.mockReset().mockImplementation(defaultBoot);
   killChromiumByPort.mockReset();
   killChromiumByPortAndWait.mockReset();
+  forgetElectronLaunchSpec.mockReset();
   ensureCdpReachable.mockReset().mockImplementation(async () => ({ Browser: "TestApp/1.0" }));
 });
 
@@ -223,6 +227,8 @@ describe("flow-execute chromium boot", () => {
     // single-instance lock.
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
     expect(killChromiumByPort).not.toHaveBeenCalled();
+    // Torn down for good: restart-app must not relaunch the runner's instance.
+    expect(forgetElectronLaunchSpec).toHaveBeenCalledWith(12345);
   });
 
   it("counts the hoisted boot in the launch that settles it, as a later launch counts its own", async () => {

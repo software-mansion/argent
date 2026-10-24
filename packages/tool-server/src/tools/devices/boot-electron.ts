@@ -181,6 +181,38 @@ function killChildEscalating(child: ChildProcess): void {
  */
 const liveChildren = new Map<number, ChildProcess>();
 
+export interface ElectronLaunchSpec {
+  appPath: string;
+  extraArgs: string[];
+  /**
+   * Group leader of the most recent boot while it runs; see
+   * {@link killChromiumByPort}. Cleared on exit, as the pid may be recycled.
+   */
+  pid?: number;
+}
+
+/**
+ * How the app on each CDP port was last booted. Unlike {@link liveChildren}
+ * an entry outlives the app's exit, so a crashed app can still be relaunched;
+ * a later boot on the same port replaces it.
+ */
+const launchSpecs = new Map<number, ElectronLaunchSpec>();
+
+/** The launch spec of the app this tool-server last booted on `port`, if any. */
+export function electronLaunchSpec(port: number): ElectronLaunchSpec | undefined {
+  return launchSpecs.get(port);
+}
+
+/** Drop `port`'s launch spec, so restart-app no longer relaunches its app. */
+export function forgetElectronLaunchSpec(port: number): void {
+  launchSpecs.delete(port);
+}
+
+/** Throws the boot's own path errors without launching anything. */
+export function assertElectronAppLaunchable(appPath: string): void {
+  resolveLauncher(appPath);
+}
+
 /**
  * Terminate a Chromium/Electron app this tool-server booted on `port`, via the
  * retained handle ({@link liveChildren}) when there is one, else best-effort
@@ -443,9 +475,13 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // listener only clears the map entry, so a natural exit long after boot stays
   // inert; the identity check keeps a stale child's exit from evicting a newer
   // boot that reused the same fixed port.
+  const appPath = path.resolve(options.appPath);
+  const spec: ElectronLaunchSpec = { appPath, extraArgs: extra, pid: child.pid };
+  launchSpecs.set(port, spec);
   liveChildren.set(port, child);
   child.once("exit", () => {
     if (liveChildren.get(port) === child) liveChildren.delete(port);
+    spec.pid = undefined;
   });
 
   trackChromiumPort(port);
@@ -455,7 +491,7 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     id: chromiumIdFromPort(port),
     port,
     pid: child.pid,
-    appPath: path.resolve(options.appPath),
+    appPath,
     booted: true,
   };
 }
