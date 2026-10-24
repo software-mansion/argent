@@ -319,9 +319,10 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   // A probe without the flag rejects a snapshot saved with it ("feature ...
   // missing in the snapshot"), so hot boot must pass it to both.
   it.each([
-    ["darwin", true],
-    ["linux", false],
-  ] as const)("on %s disables guest Vulkan: %s", async (platform, disabled) => {
+    ["darwin", ["-feature", "-Vulkan"]],
+    ["linux", null],
+    ["win32", null],
+  ] as const)("on %s passes the guest Vulkan feature %j", async (platform, expected) => {
     setPlatform(platform);
     hasSnapshotMock.mockResolvedValue(true);
     probeMock.mockResolvedValue({ loadable: true, reason: null });
@@ -334,7 +335,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     const hotArgs = spawnMock.mock.calls[0]![1] as string[];
     for (const args of [(probeOptions as { extraArgs: string[] }).extraArgs, hotArgs]) {
       const featureIdx = args.indexOf("-feature");
-      expect(featureIdx >= 0 && args[featureIdx + 1] === "-Vulkan").toBe(disabled);
+      expect(featureIdx < 0 ? null : args.slice(featureIdx, featureIdx + 2)).toEqual(expected);
     }
   });
 
@@ -350,23 +351,71 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(args[args.indexOf("-feature") + 1]).toBe("-Vulkan");
   });
 
-  it("keeps guest Vulkan on macOS when ARGENT_EMULATOR_GUEST_VULKAN is set", async () => {
+  it.each([
+    ["guestVulkan: true", { guestVulkan: true }, undefined, "Vulkan"],
+    ["ARGENT_EMULATOR_GUEST_VULKAN", {}, " Yes ", "Vulkan"],
+    ["guestVulkan: false over the env var", { guestVulkan: false }, "1", "-Vulkan"],
+  ] as const)("on macOS, %s passes -feature %s", async (_label, extra, env, expected) => {
     setPlatform("darwin");
     hasSnapshotMock.mockResolvedValue(false);
     mockHappyBootChain();
 
     const prev = process.env.ARGENT_EMULATOR_GUEST_VULKAN;
-    process.env.ARGENT_EMULATOR_GUEST_VULKAN = "1";
+    if (env !== undefined) process.env.ARGENT_EMULATOR_GUEST_VULKAN = env;
     try {
       const tool = createBootDeviceTool(registry);
-      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
-      const args = spawnMock.mock.calls[0]![1];
-      expect(args).not.toContain("-feature");
+      await tool.execute!({}, { avdName: "Pixel_7_API_34", ...extra });
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args.filter((a) => a === "-feature")).toHaveLength(1);
+      expect(args[args.indexOf("-feature") + 1]).toBe(expected);
     } finally {
       if (prev === undefined) delete process.env.ARGENT_EMULATOR_GUEST_VULKAN;
       else process.env.ARGENT_EMULATOR_GUEST_VULKAN = prev;
     }
   });
+
+  // A reused emulator keeps the guest Vulkan mode it was started with.
+  it.each([
+    ["darwin", "ranchu", {}, /with guest Vulkan/],
+    ["darwin", "", { guestVulkan: true }, /without guest Vulkan/],
+    ["darwin", "", {}, undefined],
+    ["darwin", "ranchu", { guestVulkan: true }, undefined],
+    ["linux", "ranchu", {}, undefined],
+  ] as const)(
+    "on %s, a reused emulator with ro.boot.hardware.vulkan=%j and %j gets note %s",
+    async (platform, vulkanProp, extra, note) => {
+      setPlatform(platform);
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "adb" && args[0] === "version")
+          return { stdout: "Android Debug Bridge\n", stderr: "" };
+        if (cmd === "emulator" && args[0] === "-list-avds")
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices")
+          return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          const shellCmd = args[3] ?? "";
+          if (shellCmd === "getprop ro.boot.qemu.avd_name")
+            return { stdout: "Pixel_7_API_34\n", stderr: "" };
+          if (shellCmd === "getprop ro.boot.hardware.vulkan")
+            return { stdout: `${vulkanProp}\n`, stderr: "" };
+          if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+          if (shellCmd.startsWith("screencap")) return { stdout: "1\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      const tool = createBootDeviceTool(registry);
+      const result = (await tool.execute!({}, { avdName: "Pixel_7_API_34", ...extra })) as {
+        serial: string;
+        note?: string;
+      };
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result.serial).toBe("emulator-5554");
+      if (note) expect(result.note).toMatch(note);
+      else expect(result).not.toHaveProperty("note");
+    }
+  );
 
   it.each([
     ["empty", ""],

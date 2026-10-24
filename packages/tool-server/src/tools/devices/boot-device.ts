@@ -142,6 +142,12 @@ const zodSchema = z.object({
     .describe(
       "Android only: boot the emulator with audio output enabled. Defaults to false: argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which argent never mutes."
     ),
+  guestVulkan: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android on a macOS host only: boot the emulator with guest Vulkan. Defaults to false: guest Vulkan crashes Chrome's GPU process, which breaks Chrome and Custom Tab sign-in flows. Without it apps find no Vulkan device, although the guest still lists the Vulkan features, so a Vulkan-only renderer such as WebGPU (react-native-wgpu) draws nothing; pass `true` to test one. Takes effect at boot: an emulator already running in the other mode is reused with a `note`, and `force: true` reboots it. A boot snapshot saved in the other mode can't be reused, so the first boot after toggling is a slower cold boot. The `ARGENT_EMULATOR_GUEST_VULKAN` env var flips this default to true. Ignored on other hosts and platforms."
+    ),
   headless: z
     .boolean()
     .optional()
@@ -173,10 +179,18 @@ const zodSchema = z.object({
 
 type BootDeviceParams = z.infer<typeof zodSchema>;
 
+type AndroidBootResult = {
+  platform: "android";
+  serial: string;
+  avdName: string;
+  booted: true;
+  note?: string;
+};
+
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
   | { platform: "ios-remote"; udid: string; booted: true }
-  | { platform: "android"; serial: string; avdName: string; booted: true }
+  | AndroidBootResult
   | VegaBootResult
   | HarmonyBootResult
   | ElectronBootResult
@@ -287,12 +301,28 @@ function selectGpuMode(): string {
   return process.platform === "linux" ? "swiftshader" : "auto";
 }
 
-// macOS: guest Vulkan runs on a CPU driver (SwiftShader or lavapipe) that
-// crashes Chrome's GPU process, breaking Chrome and Custom Tab sign-in flows.
-function guestVulkanArgs(): string[] {
-  return process.platform === "darwin" && !androidGuestVulkanFromEnv()
-    ? ["-feature", "-Vulkan"]
-    : [];
+// macOS: guest Vulkan crashes Chrome's GPU process on every host backend
+// (lavapipe, SwiftShader, MoltenVK). Passed both ways so
+// ~/.android/advancedFeatures.ini cannot override `guestVulkan`.
+function guestVulkanArgs(guestVulkan: boolean): string[] {
+  if (process.platform !== "darwin") return [];
+  return ["-feature", guestVulkan ? "Vulkan" : "-Vulkan"];
+}
+
+// Only `ro.boot.hardware.vulkan` tracks `-feature -Vulkan`; `ro.hardware.vulkan`
+// stays set either way.
+async function runningGuestVulkanNote(
+  serial: string,
+  guestVulkan: boolean
+): Promise<string | undefined> {
+  if (process.platform !== "darwin") return undefined;
+  const prop = await adbShell(serial, "getprop ro.boot.hardware.vulkan", { timeoutMs: 5_000 })
+    .then((out) => out.trim())
+    .catch(() => null);
+  if (prop === null || (prop !== "") === guestVulkan) return undefined;
+  return guestVulkan
+    ? "This emulator was already running without guest Vulkan, so apps find no Vulkan device. Pass `force: true` to reboot it with guest Vulkan."
+    : "This emulator was already running with guest Vulkan, which can crash Chrome's GPU process. Pass `force: true` to reboot it without guest Vulkan.";
 }
 
 // Poll cadences for the boot state machine: they bound latency, not
@@ -945,12 +975,8 @@ async function bootAndroid(params: {
   bootTimeoutMs: number;
   force?: boolean;
   sound: boolean;
-}): Promise<{
-  platform: "android";
-  serial: string;
-  avdName: string;
-  booted: true;
-}> {
+  guestVulkan: boolean;
+}): Promise<AndroidBootResult> {
   const existing = inFlightBoots.get(params.avdName);
   if (existing) return existing;
   const promise = bootAndroidImpl(params).finally(() => {
@@ -965,12 +991,8 @@ async function bootAndroidImpl(params: {
   bootTimeoutMs: number;
   force?: boolean;
   sound: boolean;
-}): Promise<{
-  platform: "android";
-  serial: string;
-  avdName: string;
-  booted: true;
-}> {
+  guestVulkan: boolean;
+}): Promise<AndroidBootResult> {
   // Preflight both Android binaries up front so a missing emulator package
   // surfaces as an install hint, not a misleading "no AVDs" from `listAvds()`.
   // `ensureDep` resolves through `$ANDROID_HOME` as well as PATH.
@@ -981,10 +1003,10 @@ async function bootAndroidImpl(params: {
   // misleading "emulator has been terminated" suffix.
   const gpuMode = selectGpuMode();
   // Opt-in headless mode via ARGENT_EMULATOR_NO_WINDOW (see no-window-env.ts),
-  // and the macOS guest Vulkan opt-out.
+  // and the macOS guest Vulkan choice.
   const extraEmulatorArgs = [
     ...(androidHeadlessFromEnv() ? ["-no-window"] : []),
-    ...guestVulkanArgs(),
+    ...guestVulkanArgs(params.guestVulkan),
   ];
   const hardeningArgs = launchHardeningArgs(params.sound);
 
@@ -1066,11 +1088,13 @@ async function bootAndroidImpl(params: {
       // the emulator and we fall through to the boot pipeline below.
       try {
         await assertScreencapAlive(alreadyRunning.serial);
+        const note = await runningGuestVulkanNote(alreadyRunning.serial, params.guestVulkan);
         return {
           platform: "android",
           serial: alreadyRunning.serial,
           avdName: params.avdName,
           booted: true,
+          ...(note ? { note } : {}),
         };
       } catch (_err) {
         // assertScreencapAlive already killed the emulator; refresh the snapshot
@@ -2063,7 +2087,7 @@ export function createBootDeviceTool(
     description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), <flag:harmonyos>'harmonyInstance' for a HarmonyOS emulator instance (the 'name' of a harmony device from list-devices), </flag:harmonyos>or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
 Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
 HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager itself reports no readiness signal and never names a port, so an instance that is already running is left alone unless you pass 'force: true'; when the key could not be resolved the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
     alwaysLoad: true,
@@ -2145,6 +2169,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
           // the default when the caller left `sound` unset. Read live per call
           // so `argent enable/disable boot-sound` applies without a restart.
           sound: params.sound ?? isFlagEnabled("boot-sound"),
+          guestVulkan: params.guestVulkan ?? androidGuestVulkanFromEnv(),
         });
       }
       if (hasVega) {

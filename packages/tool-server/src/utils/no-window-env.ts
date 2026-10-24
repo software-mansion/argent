@@ -29,8 +29,8 @@ export function androidHeadlessFromEnv(): boolean {
 }
 
 /**
- * ARGENT_EMULATOR_GUEST_VULKAN: keep guest Vulkan on macOS, where boot-device
- * otherwise disables it (see `guestVulkanArgs`).
+ * ARGENT_EMULATOR_GUEST_VULKAN: default of boot-device's `guestVulkan`, which
+ * applies on macOS hosts only.
  */
 export function androidGuestVulkanFromEnv(): boolean {
   return truthyEnv("ARGENT_EMULATOR_GUEST_VULKAN");
