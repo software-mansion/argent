@@ -94,6 +94,6 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
 - The `NSURLProtocol` layer is available on iOS only. On Android, use the JS runtime layer.
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
-- On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a native network log as you protect other data of the app.
+- On the native `NSURLProtocol` layer, the agent gets one short row for each request by default, without headers. The agent can ask for the raw events, which contain the headers. Neither form contains the bodies of responses. The raw events contain the body of a request only if the app does not send the body as a stream, and most iOS requests send it as a stream. When the agent asks for the raw events, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a native network log as you protect other data of the app.
 
 Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.
