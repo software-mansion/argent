@@ -244,10 +244,11 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  * those cases used to be indistinguishable from a landed tap
  * (https://github.com/software-mansion/argent/issues/932).
  *
- * MoQ has no per-command ack, so it reports less: a send the session refuses
- * (a closed session, a released machine) rejects, while a send that goes out is
- * reported as delivered. That is strictly narrower than the WebSocket ack, and
- * it is still the difference between a failed gesture and `{ tapped: true }`.
+ * MoQ has no per-command ack, so it reports less: a send rejects only once the
+ * session is closed - by `close()`, or when its transport is seen to close,
+ * which can lag a released machine by seconds. Any other send is reported as
+ * delivered. That is strictly narrower than the WebSocket ack, and it is still
+ * the difference between a failed gesture and `{ tapped: true }`.
  */
 export async function sendCommand(
   api: SimulatorServerApi,

@@ -19,6 +19,7 @@ interface FakeSessionShape {
   closed: Promise<void>;
   disposed: boolean;
   subscribed: number;
+  sent: number;
   killTransport(): void;
   failTransport(): void;
   close(): void;
@@ -33,6 +34,8 @@ vi.mock("@swmansion/argent-cloud-sdk", () => {
     disposed = false;
     /** How many times a track was subscribed on the server's broadcast. */
     subscribed = 0;
+    /** How many sends reached the SDK. */
+    sent = 0;
     private killed!: () => void;
     private failed!: (reason: Error) => void;
 
@@ -69,6 +72,7 @@ vi.mock("@swmansion/argent-cloud-sdk", () => {
     }
 
     sendControl(): Promise<void> {
+      this.sent += 1;
       return Promise.resolve();
     }
   }
@@ -163,13 +167,16 @@ describe("a MoQ session whose transport died", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     await expect(client.sendControl(new Uint8Array([1]))).rejects.toThrow(/session is closed/i);
+    expect(session().sent).toBe(0);
   });
 
   it("refuses a send after close()", async () => {
     const client = await openMoqClient("remote:AAAA");
     await client.close();
 
+    expect(session().disposed).toBe(true);
     await expect(client.sendControl(new Uint8Array([1]))).rejects.toThrow(/session is closed/i);
+    expect(session().sent).toBe(0);
   });
 
   it("leaves a live session alone", async () => {

@@ -49,7 +49,7 @@ const TOUCH = {
   second_y: null,
 } as const;
 
-/** What `MoqClient.sendControl` throws once the cloud machine is released. */
+/** What `MoqClient.sendControl` throws once its session is closed. */
 const CLOSED = () => new Error("MoQ session is closed");
 
 function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
