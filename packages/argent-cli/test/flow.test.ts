@@ -1526,9 +1526,18 @@ describe("argent e2e run", () => {
     });
 
     await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
-    expect(logs.join("\n")).toContain(
-      "✗ baseline not written: /p/b.png: EACCES: permission denied"
-    );
+    const out = logs.join("\n");
+    expect(out).toContain("✗ baseline not written: /p/b.png: EACCES: permission denied");
+    expect(out).toContain("FAIL — 1 passed, 0 failed");
+  });
+
+  it("reports ok: false with --json when a baseline was not written", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({ baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }] }),
+    });
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
+    expect(JSON.parse(logs.join("\n")).ok).toBe(false);
   });
 
   it("renders legacy warnings with the ⚠ glyph and counts them in the summary", async () => {
