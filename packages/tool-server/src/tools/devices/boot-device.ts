@@ -56,7 +56,12 @@ import {
   harmonyDeviceId,
   harmonyEmulatorId,
 } from "../../utils/device-info";
-import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
+import {
+  externalClaimForNativeId,
+  isExternalId,
+  isIosPhysicalUdid,
+  nativeIdPlatform,
+} from "../../utils/external-devices";
 import { InvalidToolInputError } from "../../utils/capability";
 import {
   simctlBoot as simRemoteBoot,
@@ -2108,6 +2113,16 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
         }
         const platform = classifyDevice(params.udid!);
         if (platform === "ios-remote") {
+          const simUdid = stripRemotePrefix(params.udid!);
+          if (nativeIdPlatform(simUdid) !== "ios" || isIosPhysicalUdid(simUdid)) {
+            throw new InvalidToolInputError(
+              `'${params.udid}' is not \`remote:<simulator udid>\`.`,
+              {
+                error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+                failure_stage: "boot_device_target_selection",
+              }
+            );
+          }
           return bootIosRemote(params.udid!, registry, params.force);
         }
         // The capability gate admits only HarmonyOS emulator instances here.
