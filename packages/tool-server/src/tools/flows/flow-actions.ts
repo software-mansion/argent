@@ -1693,7 +1693,9 @@ async function waitForCondition(
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + timeoutMs;
 
+  // The last TRUSTED read's matches, with the orientation they were read in.
   let lastMatches: ReturnType<typeof findAll> = [];
+  let lastMatchesOrientation: UiOrientation | undefined;
   let fetchError: string | undefined;
   let everMatched = false;
   // Date.now() of the most recent TRUSTED read — undefined until one lands.
@@ -1708,18 +1710,22 @@ async function waitForCondition(
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
       const data = await readFlowTree(env);
-      lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
+      const matches = flowFindAll(data.tree, step.selector, data.uiOrientation);
       fetchError = undefined;
-      everMatched ||= lastMatches.length > 0;
+      everMatched ||= matches.length > 0;
       const blind = isBlindRead(data, everMatched);
-      if (!blind) lastTrustedReadAt = Date.now();
+      if (!blind) {
+        lastMatches = matches;
+        lastMatchesOrientation = data.uiOrientation;
+        lastTrustedReadAt = Date.now();
+      }
       lastReadTrusted = !blind;
       if (
         !blind &&
         evaluateCondition(
           step.condition,
           step.expectedText,
-          lastMatches,
+          matches,
           step.textMatch,
           data.uiOrientation
         )
@@ -1729,7 +1735,7 @@ async function waitForCondition(
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
       // A throw is as blind as an empty tree — `lastMatches` still holds the
-      // previous successful read, which must not pass for current evidence.
+      // previous trusted read, which must not pass for current evidence.
       lastReadTrusted = false;
     }
     if (Date.now() >= deadline) {
@@ -1813,9 +1819,7 @@ async function waitForCondition(
         step.expectedText,
         step.textMatch,
         lastMatches,
-        // The read `lastMatches` came from is the last one that answered, and
-        // only a read that answers writes the orientation.
-        readingOrientation(env)
+        lastMatchesOrientation
       ) + blipNote,
   };
 }
