@@ -241,7 +241,31 @@ The `text` comparators:
 | `equals`   | Case-insensitive full match     |
 | `matches`  | Case-sensitive JavaScript regex |
 
-`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: on a simulator Argent can't read its typed text, so `matches` never reads an iOS text field as empty.
+`matches` reads an element with no text as an empty string. Use `'^$'` to check that an element has no text, or `'^(?!.*@)'` to check that its text does not contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text.
+
+Argent reads text from these elements also when they are empty, so `'^$'` never passes on them:
+
+| Platform | Empty element                                                      | Text that Argent reads  |
+| -------- | ------------------------------------------------------------------ | ----------------------- |
+| Android  | A password field                                                   | `[password]`            |
+| Android  | A field with a hint                                                | The hint                |
+| Android  | A field with a content description                                 | The content description |
+| Chromium | A password `input`                                                 | `[password]`            |
+| Chromium | An element with an `aria-label` or `aria-labelledby`               | The label               |
+| Chromium | An `input` or `textarea` with a `placeholder`                      | The placeholder         |
+| Chromium | An element with a `title`                                          | The title               |
+| Chromium | A `textarea` with default text, which is the text between its tags | The default text        |
+
+On a simulator, Argent cannot read the typed text of an iOS text field. A filled field can read as empty, so `'^$'` never passes on an iOS text field.
+
+When an element holds text, Argent reads it like this:
+
+- A password field on Android or Chromium reads `[password]`.
+- A Chromium `input` or `textarea` with an `aria-label`, `aria-labelledby` or `placeholder` reads that label or placeholder, not the typed text.
+- A Chromium element other than an `input` or `textarea`, with an `aria-label`, `aria-labelledby` or `title`, reads that label or title, and then its text.
+- An Android field with a content description reads the description, and then the typed text.
+
+A Chromium `textarea` also reads its default text. The default text does not change when the user types. React is an exception: for a `textarea` with a `value` prop, React sets the default text to the typed text.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
 

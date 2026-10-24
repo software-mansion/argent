@@ -174,6 +174,16 @@ function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: str
   return node;
 }
 
+// A <textarea>: `text` is its default text (the child text node), `value` the
+// live value the user typed.
+function textareaEl(opts: Opts & { value?: string; placeholder?: string }) {
+  const node = el({ ...opts, tag: "textarea" }) as MockElement & Record<string, unknown>;
+  Object.setPrototypeOf(node, MockHTMLTextAreaElement.prototype);
+  if (opts.value) node.value = opts.value;
+  if (opts.placeholder) node.placeholder = opts.placeholder;
+  return node;
+}
+
 function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean } {
   const root = el({ tag: "html", rect: { x: 0, y: 0, w: W, h: H } }) as MockElement &
     Record<string, unknown>;
@@ -801,6 +811,51 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       inputEl({ type: "text", value: "typed text", attrs: { id: "txt" }, rect: BOX }),
     ]);
     expect(findById(tree, "txt")!.label).toBe("typed text");
+  });
+
+  // reference/e2e-yaml.mdx documents these reads.
+  it("reads a field's aria-label, aria-labelledby or placeholder in place of its value, and an element's title", () => {
+    const labelEl = el({ text: "Email", attrs: { id: "lbl" }, rect: BOX }) as MockElement &
+      Record<string, unknown>;
+    labelEl.__textContent = "Email";
+    const { tree } = run([
+      inputEl({ value: "abc", attrs: { "id": "aria", "aria-label": "Name" }, rect: BOX }),
+      inputEl({ value: "abc", attrs: { "id": "lb", "aria-labelledby": "lbl" }, rect: BOX }),
+      labelEl,
+      inputEl({ value: "abc", placeholder: "Type here", attrs: { id: "ph" }, rect: BOX }),
+      textareaEl({ value: "abc", placeholder: "Notes", attrs: { id: "ta-ph" }, rect: BOX }),
+      inputEl({ attrs: { id: "titled", title: "Hint" }, rect: BOX }),
+      el({
+        attrs: { "id": "editor", "contenteditable": "true", "aria-label": "Compose" },
+        rect: BOX,
+      }),
+      el({ text: "Hello", attrs: { id: "tip", title: "Tip" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "aria")).toMatchObject({ label: "Name" });
+    expect(findById(tree, "lb")).toMatchObject({ label: "Email" });
+    expect(findById(tree, "ph")).toMatchObject({ label: "Type here" });
+    expect(findById(tree, "ta-ph")).toMatchObject({ label: "Notes" });
+    expect(findById(tree, "titled")).toMatchObject({ label: "Hint" });
+    expect(findById(tree, "editor")).toMatchObject({ label: "Compose" });
+    expect(findById(tree, "tip")).toMatchObject({ label: "Tip", value: "Hello" });
+    expect(JSON.stringify(tree)).not.toContain("abc");
+  });
+
+  it("reads a textarea's default text as its value, which typing does not change", () => {
+    const { tree } = run([
+      textareaEl({ text: "Draft", attrs: { id: "cleared" }, rect: BOX }),
+      textareaEl({
+        text: "Draft",
+        value: "Final",
+        placeholder: "Notes",
+        attrs: { id: "edited" },
+        rect: BOX,
+      }),
+    ]);
+    expect(findById(tree, "cleared")).toMatchObject({ value: "Draft" });
+    expect(findById(tree, "cleared")!.label).toBeUndefined();
+    expect(findById(tree, "edited")).toMatchObject({ label: "Notes", value: "Draft" });
+    expect(JSON.stringify(tree)).not.toContain("Final");
   });
 
   // ---- input focus (the flow type directive's focus wait reads this) ----

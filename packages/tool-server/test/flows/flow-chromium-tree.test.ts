@@ -122,6 +122,27 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(assertText(pw[0]!)).not.toContain("hunter2");
   });
 
+  it("reads an empty password input as [password], so '^$' fails on it", () => {
+    // The walker gives an empty, unlabelled password input no text at all.
+    const tree = adaptChromiumTreeForFlows(
+      el({
+        role: "html",
+        children: [
+          el({
+            role: "input",
+            identifier: "pw",
+            password: true,
+            clickable: true,
+            frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.04 },
+          }),
+        ],
+      })
+    );
+    const pw = findAll(tree, { identifier: "pw" });
+    expect(pw[0]!.label).toBe("[password]");
+    expect(evaluateCondition("text", "^$", pw, "matches")).toBe(false);
+  });
+
   it("never emits the root as a leaf, even when <html> carries an identifier", () => {
     // The walker reads id/data-testid off every element including <html>; the
     // iOS/Android adapters iterate children only and never project their root.
