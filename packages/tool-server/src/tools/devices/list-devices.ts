@@ -8,7 +8,11 @@ import {
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import {
+  scanIosSimulators,
+  SIMCTL_LIST_TIMEOUT_MS,
+  type IosSimulator,
+} from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
@@ -117,9 +121,9 @@ type ListDevicesResult = {
   devices: ListedDevice[];
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Rules for a provider's device, present only when one is listed. Most
-   * installs have no provider and the description is read once per session, so
-   * a provider appearing later would miss it. This is re-read per call.
+   * Present only when it applies, unlike the description, which is read once
+   * per session: the rules for a provider's device when one is listed, and a
+   * retry notice when `simctl` timed out.
    */
   hint?: string;
 };
@@ -134,6 +138,12 @@ const EXTERNAL_DEVICES_HINT =
   `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
+
+const IOS_LIST_TIMED_OUT_HINT =
+  `iOS simulators may be missing from this list: \`xcrun simctl list\` did not answer within ` +
+  `${SIMCTL_LIST_TIMEOUT_MS / 1000}s. CoreSimulatorService is probably still starting, which can take ` +
+  `about a minute after a reboot, so call list-devices again shortly. If it keeps timing out, ` +
+  `restart CoreSimulatorService.`;
 
 function sortIos(a: IosDevice, b: IosDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;
@@ -340,7 +350,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       harmonyTargets,
       external,
     ] = await Promise.all([
-      withDeadline(listIosSimulators(), [], "ios"),
+      withDeadline(scanIosSimulators(), { simulators: [], timedOut: true }, "ios"),
       withDeadline(
         listIosPhysicalDevices().catch(() => []),
         [],
@@ -395,7 +405,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
 
     const externalShadows = externalShadowIds(external);
 
-    const iosTagged: IosDevice[] = ios
+    const iosTagged: IosDevice[] = ios.simulators
       .filter((simulator) => !externalShadows.has(simulator.udid))
       .map((simulator) => ({ platform: "ios", ...simulator }));
 
@@ -480,11 +490,15 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     const avdsTagged = avds.map((a) =>
       foldableAvds.has(a.name) ? { ...a, foldable: true as const } : a
     );
+    const hints = [
+      ...(ios.timedOut ? [IOS_LIST_TIMED_OUT_HINT] : []),
+      ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+    ];
 
     return {
       devices,
       avds: avdsTagged,
-      ...(external.length > 0 ? { hint: EXTERNAL_DEVICES_HINT } : {}),
+      ...(hints.length > 0 ? { hint: hints.join("\n\n") } : {}),
     };
   },
 };

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const execFileMock = vi.fn();
+/** Returned from execFileMock: the call never answers. */
+const HANG = Symbol("hang");
 
 // Production spawns `ps` by absolute path (PS_BIN); match on basename so the mock
 // fires regardless.
@@ -20,6 +22,7 @@ vi.mock("node:child_process", async () => {
       const callback = typeof opts === "function" ? opts : cb!;
       const options = typeof opts === "function" ? undefined : opts;
       const result = execFileMock(cmd, args, options);
+      if (result === HANG) return;
       if (result instanceof Error) callback(result, { stdout: "", stderr: "" });
       else callback(null, result ?? { stdout: "", stderr: "" });
     },
@@ -102,7 +105,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
-import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { BRANCH_DEADLINE_MS, listDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import {
   __resetExternalDeviceCacheForTesting,
@@ -241,6 +244,63 @@ describe("list-devices", () => {
     const result = await listDevicesTool.execute!({}, {});
 
     expect(result.devices.length).toBeGreaterThan(0);
+    expect(result).not.toHaveProperty("hint");
+  });
+
+  /**
+   * A cold CoreSimulatorService holds `simctl list` past its timeout, and the
+   * tool-server can be serving by then, so an empty iOS list must not read as
+   * "no simulators".
+   */
+  it("says the iOS list may be incomplete when simctl list is killed at its timeout", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error("Command failed: xcrun simctl list devices --json"), {
+          killed: true,
+          signal: "SIGKILL",
+        });
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
+    expect(result.hint).toContain("did not answer within 10s");
+  });
+
+  it("counts an iOS branch cut off by the deadline as timed out", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      execFileMock.mockImplementation((cmd: string, args: string[]) =>
+        cmd === "xcrun" && args[0] === "simctl" ? HANG : { stderr: "", stdout: "" }
+      );
+
+      const pending = listDevicesTool.execute!({}, {});
+      await vi.advanceTimersByTimeAsync(BRANCH_DEADLINE_MS);
+      const result = await pending;
+
+      expect(result.hint).toContain("did not answer within 10s");
+    } finally {
+      stderr.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("adds no hint when simctl fails without timing out", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error('xcrun: error: unable to find utility "simctl"'), {
+          code: 72,
+          killed: false,
+        });
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
     expect(result).not.toHaveProperty("hint");
   });
 
@@ -746,5 +806,28 @@ describe("list-devices — external provider shadows", () => {
     /** The two rules that differ from a device argent booted itself. */
     expect(result.hint).toContain("boot-device");
     expect(result.hint).toContain("provider.workspace.path");
+  });
+
+  it("keeps the provider rules alongside the iOS timeout notice", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error("Command failed: xcrun simctl list devices --json"), {
+          killed: true,
+        });
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const hints = result.hint!.split("\n\n");
+    expect(hints).toHaveLength(2);
+    expect(hints[0]).toContain("did not answer within 10s");
+    expect(hints[1]).toContain("provider.workspace.path");
   });
 });

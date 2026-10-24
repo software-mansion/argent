@@ -43,16 +43,24 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
-/** List one device set's iOS/tvOS simulators; [] on any failure. */
-async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+export const SIMCTL_LIST_TIMEOUT_MS = 10_000;
+
+interface IosSimulatorScan {
+  simulators: IosSimulator[];
+  /** Some set's `simctl list` timed out, so the list is incomplete. */
+  timedOut: boolean;
+}
+
+/** List one device set's iOS/tvOS simulators; none on any failure. */
+async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulatorScan> {
   // simctl materializes a missing `--set` directory as a side effect, so a
   // config typo would leave a stray directory on disk.
-  if (deviceSet && !fs.existsSync(deviceSet)) return [];
+  if (deviceSet && !fs.existsSync(deviceSet)) return { simulators: [], timedOut: false };
   try {
     const { stdout } = await execFileAsync(
       "xcrun",
       [...simctlPrefix(deviceSet), "list", "devices", "--json"],
-      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+      { timeout: SIMCTL_LIST_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
@@ -84,9 +92,9 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
         if (foldable) sim.foldable = true;
       })
     );
-    return out;
-  } catch {
-    return [];
+    return { simulators: out, timedOut: false };
+  } catch (err) {
+    return { simulators: [], timedOut: (err as { killed?: boolean }).killed === true };
   }
 }
 
@@ -98,11 +106,19 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
  * every set fails, keeping the rest of the tool surface usable off macOS.
  */
 export async function listIosSimulators(): Promise<IosSimulator[]> {
+  return (await scanIosSimulators()).simulators;
+}
+
+/**
+ * {@link listIosSimulators}, plus whether any set's `simctl list` timed out, as it
+ * does on a cold CoreSimulatorService (up to about a minute after a reboot).
+ */
+export async function scanIosSimulators(): Promise<IosSimulatorScan> {
   const sets: DeviceSetPath[] = [null, ...configuredAdditionalDeviceSets()];
   const perSet = await Promise.all(sets.map(listDeviceSetSimulators));
   const out: IosSimulator[] = [];
   const seen = new Set<string>();
-  for (const simulators of perSet) {
+  for (const { simulators } of perSet) {
     for (const sim of simulators) {
       // A UDID lives in exactly one set; first sighting wins, guarding against
       // a set listed twice in the config.
@@ -112,7 +128,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
       out.push(sim);
     }
   }
-  return out;
+  return { simulators: out, timedOut: perSet.some((set) => set.timedOut) };
 }
 
 // A simulator's runtime kind is fixed at creation, so memoize per-UDID and keep
@@ -142,7 +158,7 @@ export async function findIosSimulator(udid: string): Promise<IosSimulator | und
    * match on the native UDID.
    */
   const listing = isExternalId(udid)
-    ? await listDeviceSetSimulators(await deviceSetForUdid(udid))
+    ? (await listDeviceSetSimulators(await deviceSetForUdid(udid))).simulators
     : await listIosSimulators();
   const native = externalNativeId(udid);
   return listing.find((s) => s.udid === native);
