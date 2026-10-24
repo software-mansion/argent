@@ -118,6 +118,7 @@ interface FakeStream {
   error: Error | null;
   waitForFirstFrame: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  subscribe: ReturnType<typeof vi.fn>;
 }
 
 /** One stream per open, keyed by the URL it was opened with. */
@@ -133,6 +134,10 @@ function serveStreams(frameFor: (url: string) => Buffer | Error): void {
       error: null,
       waitForFirstFrame: vi.fn(async () => frame),
       close: vi.fn(),
+      subscribe: vi.fn((listener: (frame: Buffer, receivedAtMs: number) => void) => {
+        listener(frame, performance.now());
+        return vi.fn();
+      }),
     };
     opened.push(stream);
     return stream as never;
@@ -187,7 +192,8 @@ const UNKNOWN: LivePanel = { screen: 1, source: "unknown", reason: "nothing answ
 async function startFollowing(
   api: ScreenRecordingSessionApi,
   resolveLivePanel: PanelFollow["resolveLivePanel"],
-  initial: LivePanel = live(1)
+  initial: LivePanel = live(1),
+  mode: "light" | "debug" = "light"
 ) {
   const follow: PanelFollow = {
     initial,
@@ -200,8 +206,10 @@ async function startFollowing(
     watermark: false,
     trimStatic: false,
     followPanel: follow,
+    mode,
   });
   promise.catch(() => {});
+  if (mode === "debug") await vi.waitFor(() => expect(api.pendingChild).not.toBeNull());
   await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
   return promise;
 }
@@ -428,4 +436,37 @@ describe("a recording of a foldable follows the live panel", () => {
     );
     await stop(plain);
   });
+});
+
+it("closes a panel stream whose first frame arrives after a debug cap", async () => {
+  serveStreams((url) => (url.includes("screen=3") ? INNER : COVER));
+  const child = fakeChild();
+  child.stdin.end.mockImplementation(() => {
+    child.stdin.ended = true;
+    child.stdin.writable = false;
+  });
+  const api = await makeSession();
+  let resolveFrame!: (frame: Buffer) => void;
+  const firstFrame = new Promise<Buffer>((resolve) => {
+    resolveFrame = resolve;
+  });
+  const opening = mockOpenStream.getMockImplementation()!;
+  mockOpenStream.mockImplementation(async (url, timeout) => {
+    const stream = await opening(url, timeout);
+    if (url.includes("screen=3")) vi.mocked(stream.waitForFirstFrame).mockReturnValue(firstFrame);
+    return stream;
+  });
+  await startFollowing(api, async () => live(3), live(1), "debug");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(opened).toHaveLength(2);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(api.recordingActive).toBe(false);
+  resolveFrame(INNER);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(opened[1].close).toHaveBeenCalledOnce();
+  expect(api.frameStream).toBeNull();
+  expect(api.panelSwitches).toBe(0);
+  await api.debugCapture!.finish();
+  child.exit(0);
+  await stop(api);
 });

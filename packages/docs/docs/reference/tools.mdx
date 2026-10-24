@@ -94,6 +94,23 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 `gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
+### Recording modes
+
+Set `mode` on `screen-recording-start`:
+
+- `light` (default): compact clips at 30 fps, with static trimming, touch markers, and the configured watermark.
+- `debug`: every delivered frame, without trimming or a watermark. Touch markers default off. Use it for flicker and animation inspection.
+
+Set `showTouches` in either mode to control touch markers. Debug requires `trimStatic` to be `false` or omitted. Setting `trimStatic: false` in light mode still samples at 30 fps.
+
+`timeLimitSeconds` defaults to 180 seconds in light mode (maximum 600), or 30 seconds in debug mode (maximum 120).
+
+Debug uses host arrival timestamps, not device presentation timestamps. It cannot recover frames omitted by the stream. It encodes at stop, so retrieval can take longer.
+
+Call `screen-recording-stop` to retrieve the video, including after the time limit ends capture. Debug returns `encodingComplete` to indicate whether encoding succeeded.
+
+Both modes require ffmpeg with `libx264`. Debug also requires `-fps_mode` support.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

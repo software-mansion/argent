@@ -56,6 +56,33 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 describe("openMjpegStream", () => {
+  it("notifies subscribers of every frame even when several arrive in one chunk", async () => {
+    let response: http.ServerResponse;
+    const first = jpeg(0x11);
+    const gap = jpeg(0x22);
+    const target = jpeg(0x33);
+    const url = await serveChunks((res) => {
+      response = res;
+      res.write(Buffer.concat([Buffer.from(BOUNDARY), first, Buffer.from(BOUNDARY)]));
+    });
+    stream = await openMjpegStream(url);
+    await stream.waitForFirstFrame(2_000);
+    const frames: Buffer[] = [];
+    const times: number[] = [];
+    const unsubscribe = stream.subscribe((frame, receivedAtMs) => {
+      frames.push(frame);
+      times.push(receivedAtMs);
+    });
+    response!.write(Buffer.concat([gap, Buffer.from(BOUNDARY), target, Buffer.from(BOUNDARY)]));
+    await waitFor(() => frames.length === 3);
+    expect(frames).toEqual([first, gap, target]);
+    expect(times[1]).toBeGreaterThanOrEqual(times[0]);
+    expect(times[2]).toBeGreaterThanOrEqual(times[1]);
+    unsubscribe();
+    response!.write(Buffer.concat([jpeg(0x44), Buffer.from(BOUNDARY)]));
+    await waitFor(() => stream!.frameCount === 4);
+    expect(frames).toHaveLength(3);
+  });
   it("extracts frames delimited the way simulator-server writes them", async () => {
     const first = jpeg(0xa1);
     const second = jpeg(0xb2);

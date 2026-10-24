@@ -21,10 +21,10 @@ export interface StopRecordingFile {
   /** Host path of the finalized video (registered as an artifact by the tool). */
   outputFile: string;
   sizeBytes: number;
+  encodingComplete?: boolean;
   /**
    * With static-frame trimming on, the frame-derived length of the returned
-   * video (never null). Null only when trimming is off and the session lost its
-   * start stamp.
+   * video (never null). Null when the session lost its start stamp or debug encoding failed.
    */
   durationMs: number | null;
   /** Real elapsed recording time. Present only when trimming actually applied. */
