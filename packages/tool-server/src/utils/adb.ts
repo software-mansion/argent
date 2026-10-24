@@ -365,6 +365,11 @@ async function listAndroidSerials(
 // at one ENRICH_TIMEOUT_MS rather than a multiple of it.
 export const ENRICH_TIMEOUT_MS = 5_000;
 
+/** One enrichment shell read, bounded by ENRICH_TIMEOUT_MS; "" when it fails or times out. */
+function readEnrichment(serial: string, shellCommand: string): Promise<string> {
+  return adbShell(serial, shellCommand, { timeoutMs: ENRICH_TIMEOUT_MS }).catch(() => "");
+}
+
 /**
  * Resolve the AVD name of a running emulator. The property moved from
  * `ro.kernel.qemu.avd_name` to `ro.boot.qemu.avd_name` on newer emulator
@@ -375,12 +380,8 @@ export const ENRICH_TIMEOUT_MS = 5_000;
  */
 async function readAvdName(serial: string): Promise<string | null> {
   const [modern, legacy] = await Promise.all([
-    adbShell(serial, "getprop ro.boot.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-      () => ""
-    ),
-    adbShell(serial, "getprop ro.kernel.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-      () => ""
-    ),
+    readEnrichment(serial, "getprop ro.boot.qemu.avd_name"),
+    readEnrichment(serial, "getprop ro.kernel.qemu.avd_name"),
   ]);
   return modern.trim() || legacy.trim() || null;
 }
@@ -402,22 +403,22 @@ async function readAvdName(serial: string): Promise<string | null> {
  * still-booting TV re-probes instead of being pinned to "mobile".
  */
 async function readRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
-  const features = await adbShell(serial, "pm list features", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
+  // Both run concurrently so a device that answers neither costs one
+  // ENRICH_TIMEOUT_MS, not two.
+  const [features, characteristics] = await Promise.all([
+    readEnrichment(serial, "pm list features"),
+    readEnrichment(serial, "getprop ro.build.characteristics"),
+  ]);
   if (/feature:android\.(software\.leanback|hardware\.type\.television)\b/.test(features)) {
     return "tv";
   }
 
   // A populated, non-leanback feature list is determinate: don't let a stray
-  // characteristics token override it, and skip a round-trip on the phone path.
+  // characteristics token override it.
   if (features.trim()) return "mobile";
 
   // Empty feature list (mid-boot / timeout / image without `pm`): fall back to
   // the characteristics token, correct on most physical TV hardware.
-  const characteristics = await adbShell(serial, "getprop ro.build.characteristics", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
   const isTv = characteristics
     .split(",")
     .map((c) => c.trim().toLowerCase())
@@ -447,8 +448,7 @@ export function __resetAndroidRuntimeKindCacheForTesting(): void {
 /**
  * Probe (or return the cached) runtime kind for a serial, keyed by its current
  * avdName so a reclaimed emulator slot can't inherit the prior AVD's verdict.
- * Indeterminate probes are not cached. Shared by the `listAndroidDevices`
- * enrichment and `getAndroidRuntimeKind` so both honor the same cache.
+ * Indeterminate probes are not cached. Used by `getAndroidRuntimeKind`.
  */
 async function resolveRuntimeKindCached(
   serial: string,
@@ -457,6 +457,29 @@ async function resolveRuntimeKindCached(
   const cached = androidRuntimeKindCache.get(serial);
   if (cached && cached.avdName === avdName) return cached.kind;
   const kind = await readRuntimeKind(serial);
+  if (kind === undefined) return undefined;
+  androidRuntimeKindCache.set(serial, { avdName, kind });
+  return kind;
+}
+
+/**
+ * `listAndroidDevices` variant of {@linkcode resolveRuntimeKindCached}, sharing
+ * its cache. On a cache miss the probe starts without waiting for the avd read,
+ * so a wedged device costs one ENRICH_TIMEOUT_MS for the whole enrichment. A
+ * cached device whose avd read fails gets undefined instead of a re-probe: it
+ * may be a new AVD on a reused slot, and a fresh probe would cost a second
+ * window on a device that isn't answering. A new AVD that does answer re-probes.
+ */
+async function resolveRuntimeKindAlongside(
+  serial: string,
+  avdPromise: Promise<string | null>
+): Promise<"mobile" | "tv" | undefined> {
+  const cached = androidRuntimeKindCache.get(serial);
+  const probe = cached ? undefined : readRuntimeKind(serial);
+  const avdName = await avdPromise;
+  if (cached && cached.avdName === avdName) return cached.kind;
+  if (cached && avdName === null) return undefined;
+  const kind = await (probe ?? readRuntimeKind(serial));
   if (kind === undefined) return undefined;
   androidRuntimeKindCache.set(serial, { avdName, kind });
   return kind;
@@ -519,7 +542,7 @@ export function getCachedAndroidRuntimeKind(serial: string): "mobile" | "tv" | u
  * the serial list — it avoids the extra round-trips.
  *
  * `runtimeKind` (TV vs mobile) is resolved only when `opts.runtimeKind` is set:
- * it costs an extra `pm list features` (+ a characteristics fallback) per device,
+ * it costs an extra `pm list features` + characteristics getprop per uncached device,
  * and `pm` often doesn't answer mid-boot, so each probe can block up to
  * ENRICH_TIMEOUT_MS. `list-devices` is the only caller that opts in, because it
  * surfaces the kind to the agent; the tv-* tools go through
@@ -545,20 +568,13 @@ export async function listAndroidDevices(
           sdkLevel: null,
         };
       }
-      const [model, sdk, avd] = await Promise.all([
-        adbShell(d.serial, "getprop ro.product.model", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-          () => ""
-        ),
-        adbShell(d.serial, "getprop ro.build.version.sdk", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-          () => ""
-        ),
-        readAvdName(d.serial),
+      const avdPromise = readAvdName(d.serial);
+      const [model, sdk, avd, runtimeKind] = await Promise.all([
+        readEnrichment(d.serial, "getprop ro.product.model"),
+        readEnrichment(d.serial, "getprop ro.build.version.sdk"),
+        avdPromise,
+        opts.runtimeKind ? resolveRuntimeKindAlongside(d.serial, avdPromise) : undefined,
       ]);
-      // Through the shared cache (serial+avdName) so a re-list of a known
-      // device skips the feature probe and a reclaimed emulator slot re-probes.
-      const runtimeKind = opts.runtimeKind
-        ? await resolveRuntimeKindCached(d.serial, avd)
-        : undefined;
       const sdkLevel = parseInt(sdk.trim(), 10);
       return {
         serial: d.serial,
