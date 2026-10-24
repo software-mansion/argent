@@ -27,12 +27,12 @@ async function captureViaEmulatorConsole(opts: { scale?: number }): Promise<stri
   try {
     // `screenrecord screenshot <dir>` writes the PNG host-side into the
     // directory under a name it picks.
-    await runAdb(["-s", serial, "emu", "screenrecord", "screenshot", outDir], {
+    const { stdout } = await runAdb(["-s", serial, "emu", "screenrecord", "screenshot", outDir], {
       timeoutMs: 20_000,
     });
     const pngName = (await readdir(outDir)).find((f) => f.toLowerCase().endsWith(".png"));
     if (!pngName) {
-      throw new FailureError(`emulator console wrote no PNG to ${outDir} for ${serial}`, {
+      throw new FailureError(`emulator console wrote no PNG for ${serial}: ${stdout.trim()}`, {
         error_code: FAILURE_CODES.VEGA_SCREENSHOT_FAILED,
         failure_stage: "vega_screenshot_no_png",
         failure_area: "tool_server",
