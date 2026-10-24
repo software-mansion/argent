@@ -97,6 +97,13 @@ export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
   return !isFlagEnabled("disable-auto-describe", options);
 }
 
+/**
+ * Appended instead of the screenshot and element tree while a profiler records
+ * on the call's device (the tool-server flags the call's envelope).
+ */
+export const PROFILING_CAPTURE_SKIPPED_NOTE =
+  "Auto-screenshot and element tree skipped while a profiler is recording on this device. Call screenshot or describe if you need to see the screen.";
+
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 

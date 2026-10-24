@@ -15,6 +15,7 @@ import {
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
+import { captureOnDemandDropped } from "./profiling-devices";
 import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel } from "./foldable";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -225,6 +226,8 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
   ws.on("close", () => {
     connections.delete(key);
     failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
+    // The server drops the connection's capture_on_demand with it.
+    if (api.deviceId) captureOnDemandDropped(api.deviceId);
   });
 
   connections.set(key, conn);

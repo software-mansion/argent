@@ -36,6 +36,7 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -256,7 +257,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       args: params.arguments,
     });
     try {
-      const { result, outputHint, note } = await callTool(params.name, params.arguments);
+      const { result, outputHint, note, profiling } = await callTool(params.name, params.arguments);
 
       await spyLog({
         ts: new Date().toISOString(),
@@ -307,6 +308,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
             text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
           },
         ];
+      } else if (udid && (wantScreenshot || wantTree) && profiling) {
+        // The idle wait, screenshot and describe each load the app a profiler
+        // is recording on this device, distorting the profile. `describe` has
+        // already answered with the tree, so it needs no pointer to itself.
+        if (params.name !== "describe") {
+          content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
+        }
       } else if (udid && (wantScreenshot || wantTree)) {
         const screenSettled = await awaitScreenSettled(udid, params.name);
         const screenshot = wantScreenshot ? captureScreenshotBlocks(udid) : Promise.resolve([]);
