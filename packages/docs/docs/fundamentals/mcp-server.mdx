@@ -28,6 +28,19 @@ npx @swmansion/argent@latest init
 
 The wizard detects your editor and writes the MCP server entry to the editor config. See [Installation](/docs/fundamentals/installation) for the prerequisites and the team setup.
 
+Some editors start the MCP server without your shell `PATH`, for example an editor that you open from the Dock. These editors cannot find the `argent` command when a Node version manager such as nvm installed Argent. For a global install, the wizard writes absolute paths to `node` and to the Argent CLI in global config files. These editors then find Argent.
+
+The wizard writes these entries:
+
+| Install | Global config file                           | Project config file                                     |
+| ------- | -------------------------------------------- | ------------------------------------------------------- |
+| Global  | `node` and the Argent CLI, as absolute paths | `argent`                                                |
+| Local   | Not written                                  | `node` and the path to the Argent CLI in `node_modules` |
+
+The wizard cannot find the absolute paths for some installs, for example when Volta or pnpm installed Argent. Then the wizard writes the `argent` command and shows a warning. Project config files do not get absolute paths, because your team shares them.
+
+If you remove the Node version that the global config file names, run `npx @swmansion/argent@latest init` again. At the prompt `Install MCP server globally or locally?`, select **Global**. The wizard writes the new paths to the global config file.
+
 ## Add the MCP server by hand
 
 Install the package and add the server to the MCP config of your editor:
@@ -46,6 +59,8 @@ npm install -g @swmansion/argent
   }
 }
 ```
+
+If the editor shows `Executable not found in $PATH: argent`, the editor does not use your shell `PATH`. Run the wizard and select **Global** at the prompt `Install MCP server globally or locally?`. The wizard writes absolute paths to the global config file. In Claude Code, a project config file with the `argent` command has priority over the global config file. Remove the Argent entry from that project config file too.
 
 The key of the top-level object depends on the editor. Claude Code, Cursor and Windsurf use `mcpServers`. VS Code uses `servers`. See [Supported editors](/docs/reference/editors) for the config file of each editor.
 

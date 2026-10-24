@@ -531,6 +531,131 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(fs.existsSync(windsurfGlobal)).toBe(false);
   });
 
+  it("judges a global-node entry dead by its files, not by PATH", async () => {
+    // #1287 entries name node and cli.js outright; argent being on this
+    // shell's PATH says nothing about them either way.
+    globallyInstalled = true;
+    const nodeBin = path.join(tmpDir, "node", "bin", "node");
+    const cli = path.join(
+      tmpDir,
+      "node",
+      "lib",
+      "node_modules",
+      "@swmansion",
+      "argent",
+      "dist",
+      "cli.js"
+    );
+    fs.mkdirSync(path.dirname(nodeBin), { recursive: true });
+    fs.writeFileSync(nodeBin, "");
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    const windsurfGlobal = path.join(home, ".codeium", "windsurf", "mcp_config.json");
+    writeJsonFile(cursorGlobal, {
+      mcpServers: { argent: { command: nodeBin, args: [cli, "mcp"] } },
+    });
+    writeJsonFile(windsurfGlobal, {
+      mcpServers: { argent: { command: nodeBin, args: [cli, "mcp"] } },
+    });
+    // The cli.js exists for the first sweep and is removed before the second.
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(cli, "");
+
+    const live = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+    // A live global install the user kept: quiet, untouched.
+    expect(live).toEqual({ lines: [], removedCount: 0, warnedCount: 0 });
+    expect(fs.existsSync(cursorGlobal)).toBe(true);
+
+    fs.rmSync(cli);
+    const dead = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [windsurf],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+    expect(dead.removedCount).toBe(1);
+    expect(fs.existsSync(windsurfGlobal)).toBe(false);
+  });
+
+  // A pinned #1287 entry whose node and cli.js exist under tmpDir.
+  function pinnedEntry(): { node: string; cli: string } {
+    const node = path.join(tmpDir, "node", "bin", "node");
+    const cli = path.join(
+      tmpDir,
+      "node",
+      "lib",
+      "node_modules",
+      "@swmansion",
+      "argent",
+      "dist",
+      "cli.js"
+    );
+    for (const file of [node, cli]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "");
+    }
+    return { node, cli };
+  }
+
+  it("names the node binary when that is the missing half of a global-node entry", async () => {
+    const { node, cli } = pinnedEntry();
+    fs.rmSync(node);
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: node, args: [cli, "mcp"] } } });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+
+    expect(result.removedCount).toBe(1);
+    expect(fs.existsSync(cursorGlobal)).toBe(false);
+    expect(result.lines[0]).toContain(`\`${node}\` no longer exists`);
+    expect(result.lines[0]).not.toContain(cli);
+  });
+
+  it("never removes a global-node entry with custom env, and says why it stays", async () => {
+    const { node, cli } = pinnedEntry();
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, {
+      mcpServers: {
+        argent: { command: node, args: [cli, "mcp"], env: { HTTPS_PROXY: "http://proxy:8080" } },
+      },
+    });
+    const sweep = () =>
+      cleanupStaleMcpConfigs({
+        writtenAdapters: [],
+        detectedAdapters: [cursor],
+        installMode: "local",
+        scope: "local",
+        effectiveRoot: root,
+        confirmCrossProjectRemovals: async () => true,
+      });
+
+    // Live: a working global install with a proxy, like a bare one on PATH.
+    expect(await sweep()).toEqual({ lines: [], removedCount: 0, warnedCount: 0 });
+
+    fs.rmSync(cli);
+    const dead = await sweep();
+    expect(dead.removedCount).toBe(0);
+    expect(dead.warnedCount).toBe(1);
+    expect(dead.lines[0]).toContain("custom env vars");
+    expect(dead.lines[0]).toContain(cli);
+    expect(readJsonFile(cursorGlobal).mcpServers).toBeDefined();
+  });
+
   it("does not sweep global entries on a global-mode install", async () => {
     globallyInstalled = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
@@ -581,6 +706,48 @@ describe("cleanupStaleMcpConfigs", () => {
     });
 
     expect(result.lines).toHaveLength(0);
+  });
+
+  it("warns when a bare project entry outranks a freshly pinned global entry", async () => {
+    // The pinned global entry works without the shell PATH; the bare project
+    // entry that outranks it does not (#1287).
+    const { node, cli } = pinnedEntry();
+    writeJsonFile(path.join(home, ".cursor", "mcp.json"), {
+      mcpServers: { argent: { command: node, args: [cli, "mcp"] } },
+    });
+    const cursorProject = path.join(root, ".cursor", "mcp.json");
+    writeJsonFile(cursorProject, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "global",
+      scope: "global",
+      effectiveRoot: root,
+    });
+
+    expect(result.removedCount).toBe(0);
+    expect(result.warnedCount).toBe(1);
+    expect(result.lines[0]).toContain("without your shell PATH");
+    expect(readJsonFile(cursorProject).mcpServers).toBeDefined();
+  });
+
+  it("does not read the global entry back as a project rival when the files coincide", async () => {
+    // Cursor at $HOME: projectPath(home) is globalPath().
+    const { node, cli } = pinnedEntry();
+    writeJsonFile(path.join(home, ".cursor", "mcp.json"), {
+      mcpServers: { argent: { command: node, args: [cli, "mcp"] } },
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "global",
+      scope: "global",
+      effectiveRoot: home,
+    });
+
+    expect(result).toEqual({ lines: [], removedCount: 0, warnedCount: 0 });
   });
 
   it("survives an adapter whose shadow probe throws", async () => {

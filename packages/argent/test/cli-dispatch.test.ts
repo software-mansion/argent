@@ -52,8 +52,8 @@ const FAKE_INSTALLER =
 
 const FAKE_CLI_BUNDLE =
   RECORD_SNIPPET +
+  `export function startMcpServer(rest) { record("startMcpServer", [process.env.PATH]); }` +
   [
-    "startMcpServer",
     "tools",
     "run",
     "e2e",
@@ -75,14 +75,18 @@ interface RunResult {
   stderr: string;
 }
 
-function runCli(args: string[], markerPath: string): Promise<RunResult> {
+function runCli(
+  args: string[],
+  markerPath: string,
+  env: Record<string, string> = {}
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliEntry, ...args], {
       cwd: stageRoot,
       // stdin is /dev/null: a real interactive uninstall prompt would read EOF
       // here, so a regression can't silently hang the suite.
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ARGENT_E2E_MARKER: markerPath },
+      env: { ...process.env, ARGENT_E2E_MARKER: markerPath, ...env },
     });
     let stdout = "";
     let stderr = "";
@@ -178,6 +182,28 @@ describe("cli dispatcher: installer-help guard", () => {
     await runCli(["mcp"], marker);
     expect(fs.existsSync(marker)).toBe(true);
     expect(fs.readFileSync(marker, "utf8")).toContain("startMcpServer");
+  });
+
+  it("`mcp` puts its own node on a PATH that lacks one (pinned entry, #1287)", async () => {
+    // An editor started without the shell PATH launches `<node> cli.js mcp`;
+    // the tool-server spawn and the `node`/`npm` probes must still resolve.
+    const marker = freshMarker();
+    const bare = ["/usr/bin", "/bin"].join(path.delimiter);
+    await runCli(["mcp"], marker, { PATH: bare });
+    const recorded = fs
+      .readFileSync(marker, "utf8")
+      .slice("startMcpServer:".length)
+      .split(path.delimiter);
+    expect(recorded.slice(0, 2)).toEqual(["/usr/bin", "/bin"]);
+    expect(recorded).toContain(path.dirname(process.execPath));
+  });
+
+  it("`mcp` leaves a PATH that already has its node alone", async () => {
+    const marker = freshMarker();
+    const nodeDir = path.dirname(process.execPath);
+    const full = ["/usr/bin", nodeDir].join(path.delimiter);
+    await runCli(["mcp"], marker, { PATH: full });
+    expect(fs.readFileSync(marker, "utf8")).toBe(`startMcpServer:${full}`);
   });
 
   it("`mcp` with a non-help argument still starts the server", async () => {

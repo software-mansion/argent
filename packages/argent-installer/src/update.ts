@@ -10,7 +10,9 @@ import {
   findConfiguredAdapterScopes,
   getMcpEntryForScope,
   isArgentManagedEntry,
+  isGlobalNodeEntry,
   resolveLocalCommandMode,
+  resolveGlobalCommandMode,
   copyRulesAndAgents,
   type McpConfigAdapter,
   type McpServerEntry,
@@ -41,7 +43,7 @@ import {
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
 import { reportSkillRefresh } from "./skills.js";
-import { PACKAGE_NAME } from "./constants.js";
+import { MCP_BINARY_NAME, PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { writeCliRecord } from "./cli-record.js";
 import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
@@ -674,7 +676,9 @@ export async function update(args: string[]): Promise<void> {
       const results: string[] = [];
 
       // Project-scope entries in local mode run the repo-local copy (the bin
-      // path may move across versions); global scopes keep the bare `argent`.
+      // path may move across versions); global scopes of a global install pin
+      // absolute node + cli.js paths when they resolve (#1287), else bare
+      // `argent`.
       const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
       // Never REWRITE existing entries to the degraded npx fallback: local-npx
       // only means the repo-local bin can't be resolved right now (fresh clone,
@@ -682,8 +686,10 @@ export async function update(args: string[]): Promise<void> {
       // once the install materializes. (init still writes the fallback from
       // scratch, with its own warning.)
       const skipEntryRewrite = localCmdMode?.kind === "local-npx";
+      // Resolved after the update, so global entries point at the fresh install.
+      const globalCmdMode = installMode === "global" ? resolveGlobalCommandMode() : undefined;
       const entryFor = (scope: "local" | "global"): McpServerEntry =>
-        getMcpEntryForScope(installMode, scope, localCmdMode);
+        getMcpEntryForScope(installMode, scope, localCmdMode, globalCmdMode);
 
       // Only scopes that already contain an argent entry: a present editor dir
       // (`.gemini`, `.cursor`, ...) is not consent — issue #195.
@@ -714,14 +720,32 @@ export async function update(args: string[]): Promise<void> {
         }
         const isUnreadableSentinel =
           existing !== null && existing.command === "" && existing.args.length === 0;
-        if (existing !== null && !isUnreadableSentinel && !isArgentManagedEntry(existing)) {
+        // argent writes the pinned node + cli.js shape only into global
+        // files; in a project file it is a hand-applied #1287 workaround.
+        const customized =
+          existing !== null &&
+          !isUnreadableSentinel &&
+          (!isArgentManagedEntry(existing) ||
+            (normScope === "local" && isGlobalNodeEntry(existing)));
+        if (customized) {
           results.push(
             `${pc.yellow("!")} ${adapter.name} left a customized entry untouched ${pc.dim(configPath)}`
           );
           continue;
         }
+        const next = entryFor(normScope);
+        // Never downgrade a pinned entry to bare `argent` (a local-mode project,
+        // or no global install on this PATH): that is the #1287 ENOENT again
+        // for an editor started without the shell PATH.
+        if (isGlobalNodeEntry(existing) && next.command === MCP_BINARY_NAME) {
+          results.push(
+            `${pc.yellow("!")} ${adapter.name} kept the pinned global entry (this run can't ` +
+              `re-pin it: a local-mode project, or no global install on PATH) ${pc.dim(configPath)}`
+          );
+          continue;
+        }
         try {
-          adapter.write(configPath, entryFor(normScope));
+          adapter.write(configPath, next);
           results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
         } catch {
           // Skip paths that can't be written.
@@ -789,7 +813,7 @@ export async function update(args: string[]): Promise<void> {
         // Same one-shot confirmation init uses for cross-project removals.
         // --yes passes no confirmer (the sweep goes report-only) — the
         // agent-triggered `update --yes` must never delete cross-project state
-        // on a fallible PATH probe.
+        // on a fallible verdict (a PATH probe for bare `argent`).
         confirmCrossProjectRemovals: nonInteractive
           ? undefined
           : async (items) => {

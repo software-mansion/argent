@@ -3,7 +3,7 @@ import * as path from "node:path";
 import semver from "semver";
 import { argentHomeDir } from "@argent/configuration-core";
 import {
-  argentBinSubpath,
+  cliEntryOf,
   getGloballyInstalledPackageRoot,
   getLocalArgentBinRelPath,
 } from "./topology.js";
@@ -70,12 +70,8 @@ function resolveCliEntry(mode: InstallMode, projectRoot: string): string | null 
     return relative ? path.resolve(projectRoot, relative) : null;
   }
 
-  const packageRoot = getGloballyInstalledPackageRoot();
-  if (!packageRoot) return null;
-  const binSub = argentBinSubpath(packageRoot);
-  if (!binSub) return null;
-  const entry = path.join(packageRoot, binSub);
-  return fs.existsSync(entry) ? entry : null;
+  // Shared with the global-scope MCP entry, so both name the same cli.js.
+  return cliEntryOf(getGloballyInstalledPackageRoot());
 }
 
 /**

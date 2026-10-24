@@ -79,6 +79,45 @@ describe("writeMcpConfigs — global mode over a committed local entry", () => {
     expect(fs.readFileSync(mcpJson, "utf8")).toBe(before);
   });
 
+  it("rewrites a pinned global-node entry even in a still-local project", () => {
+    // That shape is never a committed local-mode entry: only global files get
+    // it, so a project copy is not the team's to keep.
+    fs.mkdirSync(path.join(tmpDir, ".argent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "install.json"),
+      JSON.stringify({ mode: "local", package: "@swmansion/argent" })
+    );
+    const mcpJson = path.join(tmpDir, ".mcp.json");
+    fs.writeFileSync(
+      mcpJson,
+      JSON.stringify({
+        mcpServers: {
+          argent: {
+            type: "stdio",
+            command: "/usr/local/bin/node",
+            args: ["/usr/local/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+          },
+        },
+      })
+    );
+
+    const { lines } = writeMcpConfigs({
+      selectedAdapters: [claude],
+      installMode: "global",
+      scope: "local",
+      effectiveRoot: tmpDir,
+      projectRoot: tmpDir,
+    });
+
+    const entry = (
+      JSON.parse(fs.readFileSync(mcpJson, "utf8")) as {
+        mcpServers: Record<string, { command: string; args: string[] }>;
+      }
+    ).mcpServers.argent;
+    expect(entry.command).toBe("argent");
+    expect(lines.join("\n")).not.toContain("kept the committed");
+  });
+
   it("rewrites the dead local entry when the project ABANDONED local mode", () => {
     // No committed record and no manifest declaration: the devDependency was
     // removed, so the node-path entry is dead and must be rewritten to bare

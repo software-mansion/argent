@@ -109,6 +109,16 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "mcp": {
+      // A pinned `<node> cli.js mcp` entry (#1287) starts us in an editor that
+      // never had the shell PATH, so `node`/`npm` are not resolvable even
+      // though node is running us. Append this binary's dir: the tool-server
+      // spawn and the workspace probes find them, and nothing on the editor's
+      // own PATH is shadowed.
+      const nodeDir = path.dirname(process.execPath);
+      const PATH = process.env.PATH ?? "";
+      if (!PATH.split(path.delimiter).includes(nodeDir)) {
+        process.env.PATH = PATH ? `${PATH}${path.delimiter}${nodeDir}` : nodeDir;
+      }
       const mcp = await loadMcp();
       /**
        * Best-effort heal of `~/.argent/cli.json`, off the startup path. A
