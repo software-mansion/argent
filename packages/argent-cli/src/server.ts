@@ -105,6 +105,13 @@ function logsCmd(follow: boolean): void {
   // the way a terminal user expects.
   const child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
   child.on("exit", (code) => process.exit(code ?? 0));
+  child.on("error", (err) => {
+    console.error(
+      `argent server logs: cannot run \`tail\` to follow the log (${err.message}). ` +
+        "Run `argent server logs` without -f to print it."
+    );
+    process.exit(1);
+  });
 }
 
 interface StartFlags {
