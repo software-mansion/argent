@@ -13,13 +13,14 @@ export interface DecodedRgbaImage {
   data: Buffer;
 }
 
-// Relative tolerance: uniform scalings of one framebuffer (0.3x save vs 1.0x
-// capture) match in theory but pick up rounding error from integer dimensions.
+// Uniform scalings of one framebuffer (0.3x save vs 1.0x capture) match in
+// theory, but integer rounding moves the aspect by less than 2 / shortest side.
+// This caps that bound for images under 200 px.
 const ASPECT_RATIO_TOLERANCE = 0.01;
 
 /**
  * Downscale the larger image to the smaller one's dimensions when both share an
- * aspect ratio within {@link ASPECT_RATIO_TOLERANCE}; never upscales.
+ * aspect ratio within min({@link ASPECT_RATIO_TOLERANCE}, 2 / shortest side); never upscales.
  *
  * @returns `null` when the aspect ratios genuinely differ — a hard dimension
  * mismatch for callers.
@@ -60,7 +61,8 @@ function aspectRatiosMatch(a: DecodedRgbaImage, b: DecodedRgbaImage): boolean {
   const aspectB = b.width / b.height;
   const largest = Math.max(aspectA, aspectB);
   if (largest === 0) return false;
-  return Math.abs(aspectA - aspectB) / largest <= ASPECT_RATIO_TOLERANCE;
+  const shortest = Math.min(a.width, a.height, b.width, b.height);
+  return Math.abs(aspectA - aspectB) / largest <= Math.min(ASPECT_RATIO_TOLERANCE, 2 / shortest);
 }
 
 /**

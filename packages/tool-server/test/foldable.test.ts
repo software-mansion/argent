@@ -507,6 +507,14 @@ describe("foldablePostureHint", () => {
     expect(hint).toContain("699x1017 is the cover panel (closed)");
   });
 
+  it("says nothing when both sizes are of one posture", async () => {
+    // An iPad Pro 11 (M4) baseline against the cover panel: both near its aspect.
+    mockDevicectl([duoPayload(1)]);
+    expect(
+      await foldablePostureHint(DUO, { width: 1668, height: 2420 }, { width: 1398, height: 2034 })
+    ).toBeUndefined();
+  });
+
   it("says nothing for a device that is not foldable", async () => {
     isFoldableSimulatorMock.mockResolvedValue(false);
     expect(
