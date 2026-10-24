@@ -290,7 +290,11 @@ const BOOT_POLL_INTERVALS_MS = {
   serialByAvd: 1_500, // findSerialByAvdName: re-scan when >1 new emulator appeared
   adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
   earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
+  serialGone: 500, // awaitEmulatorsGone: re-scan adb devices for a killed emulator
 } as const;
+
+// How long a killed emulator may stay listed by adb before the next spawn.
+const EMULATOR_GONE_BUDGET_MS = 30_000;
 
 // Probe shared by assertScreencapAlive (hot boot) and awaitFirstRealFrame
 // (cold boot): `screencap -p` emits a PNG of the current frame and awk
@@ -443,20 +447,38 @@ async function findSerialByAvdName(avdName: string, deadline: number): Promise<s
   return null;
 }
 
-async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
+async function listEmulatorSerials(): Promise<string[]> {
   // 3 s per poll — a hung adb daemon on the default 30 s timeout would eat
   // the whole outer stage budget in a single call.
   const { stdout } = await runAdb(["devices"], { timeoutMs: 3_000 }).catch(() => ({
     stdout: "",
     stderr: "",
   }));
-  const lines = stdout.split("\n");
   const now: string[] = [];
-  for (const line of lines) {
+  for (const line of stdout.split("\n")) {
     const m = line.match(/^(emulator-\d+)\s+/);
     if (m) now.push(m[1]!);
   }
-  return now.filter((s) => !before.has(s));
+  return now;
+}
+
+async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
+  return (await listEmulatorSerials()).filter((s) => !before.has(s));
+}
+
+/**
+ * Wait (bounded) for killed emulators to drop off adb. `adb emu kill` returns
+ * before qemu exits, and the next spawn usually takes the freed console port, so
+ * it registers under the killed emulator's serial: snapshotting the device list
+ * before that serial is gone would count the new emulator as pre-existing.
+ */
+async function awaitEmulatorsGone(serials: string[]): Promise<void> {
+  const deadline = Date.now() + EMULATOR_GONE_BUDGET_MS;
+  while (serials.length > 0 && Date.now() < deadline) {
+    const listed = await listEmulatorSerials();
+    if (!serials.some((s) => listed.includes(s))) return;
+    await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialGone));
+  }
 }
 
 async function bootIos(
@@ -1034,14 +1056,18 @@ async function bootAndroidImpl(params: {
   // spawning a second emulator that collides on AVD locks and fails with a
   // misleading "Running multiple emulators" error.
   let hotBootFailureReason: string | null;
+  const dropKilledEmulator = async (serial: string) => {
+    await awaitEmulatorsGone([serial]);
+    const refreshed = await listAndroidDevices().catch(() => existingDevices);
+    existingDevices.splice(0, existingDevices.length, ...refreshed);
+  };
   const alreadyRunning = existingDevices.find(
     (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
   );
   if (alreadyRunning) {
     if (params.force) {
       await killEmulatorQuietly(alreadyRunning.serial);
-      const refreshed = await listAndroidDevices().catch(() => existingDevices);
-      existingDevices.splice(0, existingDevices.length, ...refreshed);
+      await dropKilledEmulator(alreadyRunning.serial);
     } else {
       // A long-running emulator can drift into the same sticky-blank
       // SurfaceFlinger state `assertScreencapAlive` guards against on hot boot:
@@ -1057,11 +1083,8 @@ async function bootAndroidImpl(params: {
           booted: true,
         };
       } catch (_err) {
-        // assertScreencapAlive already killed the emulator; refresh the snapshot
-        // so the killed serial is in serialsBefore and the upcoming spawn's
-        // "new serial" diff stays correct.
-        const refreshed = await listAndroidDevices().catch(() => existingDevices);
-        existingDevices.splice(0, existingDevices.length, ...refreshed);
+        // assertScreencapAlive already killed the emulator.
+        await dropKilledEmulator(alreadyRunning.serial);
       }
     }
   }
@@ -1144,9 +1167,9 @@ async function bootAndroidImpl(params: {
         };
       } catch (err) {
         hotBootFailureReason = err instanceof Error ? err.message : String(err);
-        // attemptBoot already killed the failed child. Refresh the before-set so
-        // the cold-boot attempt doesn't mistake a zombie serial still listed by
-        // `adb devices` for a new one.
+        // attemptBoot already killed the failed child. A serial still listed
+        // past the wait is a zombie the cold boot must not take for its own.
+        await awaitEmulatorsGone(await listNewEmulatorSerials(serialsBefore));
         const refreshed = new Set(
           (await listAndroidDevices().catch(() => [])).map((d) => d.serial)
         );
