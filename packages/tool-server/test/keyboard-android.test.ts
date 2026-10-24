@@ -164,6 +164,23 @@ describe("android-input — injection", () => {
     expect(adbShell.mock.calls.map((c) => c[1])).toEqual(["input text 'Passw0rd!'"]);
   });
 
+  it("targets a display with `input -d <id>` on every `%` segment", async () => {
+    adbShell.mockClear();
+    await injectAndroidText(SERIAL, "100%safe", 117);
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "input -d 117 text '100%'",
+      "input -d 117 text 'safe'",
+    ]);
+  });
+
+  it("targets display 0 explicitly when asked, rather than treating 0 as absent", async () => {
+    adbShell.mockClear();
+    await injectAndroidNamedKey(SERIAL, "enter", 0);
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      `input -d 0 keyevent ${ANDROID_NAMED_KEYCODES.enter}`,
+    ]);
+  });
+
   it("does not shell out for empty text", async () => {
     adbShell.mockClear();
     await injectAndroidText(SERIAL, "");
@@ -406,6 +423,15 @@ describe("android keyboard impl — routing, keys count, result shape", () => {
     expect(res).toEqual({ typed: "100%safe", keys: 8 });
   });
 
+  it("passes `displayId` through to both the text and the key injection", async () => {
+    await impl.handler({}, { udid: SERIAL, text: "hi", displayId: 2 } as KeyboardParams, phone);
+    await impl.handler({}, { udid: SERIAL, key: "tab", displayId: 2 } as KeyboardParams, phone);
+    expect(adbShell.mock.calls.map((c) => c[1])).toEqual([
+      "input -d 2 text 'hi'",
+      "input -d 2 keyevent 61",
+    ]);
+  });
+
   it("presses the key it was asked for, not a hardcoded Enter", async () => {
     // Every other named-key assertion on this backend uses `key:"enter"`, so a
     // path that ignored `params.key` and always pressed Enter would pass them
@@ -483,5 +509,13 @@ describe("keyboard tool — android adb preflight (via dispatchByPlatform)", () 
     });
     expect(ensureDeps).toHaveBeenCalledWith(["adb"]);
     expect(adbShell).toHaveBeenCalledWith(SERIAL, "input text 'hi'", expect.anything());
+  });
+
+  it("keeps `displayId` through schema parsing into the adb command", async () => {
+    const tool = createKeyboardTool(new Registry());
+    const params = { udid: SERIAL, key: "enter", displayId: 117 };
+    expect(tool.zodSchema!.parse(params)).toEqual(params);
+    await tool.execute({}, params);
+    expect(adbShell).toHaveBeenCalledWith(SERIAL, "input -d 117 keyevent 66", expect.anything());
   });
 });

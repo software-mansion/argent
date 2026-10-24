@@ -15,7 +15,11 @@ import {
 } from "../../utils/harmony-uitest";
 import { UnsupportedOperationError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
-import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../../utils/android-input";
+import {
+  ANDROID_BUTTON_KEYCODES,
+  androidDisplayIdSchema,
+  injectAndroidKeycode,
+} from "../../utils/android-input";
 import { ensureDep } from "../../utils/check-deps";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -29,6 +33,7 @@ const zodSchema = z.object({
   button: z
     .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
     .describe("Hardware button to press"),
+  displayId: androidDisplayIdSchema,
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -163,7 +168,11 @@ Fails if the device backend is not reachable: the simulator-server for iOS, <fla
       // The tool declares no global `requires`, so preflight adb here for the
       // clean 424 install hint on a missing binary.
       await ensureDep("adb");
-      await injectAndroidKeycode(params.udid, ANDROID_BUTTON_KEYCODES[params.button]!);
+      await injectAndroidKeycode(
+        params.udid,
+        ANDROID_BUTTON_KEYCODES[params.button]!,
+        params.displayId
+      );
       return { pressed: params.button };
     }
     if (device.platform === "harmony") {

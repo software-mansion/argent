@@ -3,6 +3,7 @@ import { FAILURE_CODES } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../utils/capability";
+import { androidDisplayIdSchema } from "../../utils/android-input";
 import {
   SECRET_PLACEHOLDER_MARKER,
   redactSecretsFromError,
@@ -57,6 +58,7 @@ const zodSchema = z.object({
     .describe(
       "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), <flag:harmonyos>on HarmonyOS (`uitest uiInput text` types the whole string in one shot), </flag:harmonyos>on Vega (text/keys injected in a single shot), on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence), and on physical iOS."
     ),
+  displayId: androidDisplayIdSchema,
 });
 
 type Params = z.infer<typeof zodSchema>;
