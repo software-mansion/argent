@@ -198,6 +198,8 @@ describe("screenshotDiffToMcpContent", () => {
         mimeType: "image/png",
       },
       { type: "text", text: summary },
+      { type: "text", text: `diffPath: ${path.join(dir, "full.diff.png")}` },
+      { type: "text", text: `contextDiffPath: ${contextDiffPath}` },
     ]);
   });
 
@@ -245,6 +247,55 @@ describe("toMcpContent with artifact ctx", () => {
   afterEach(async () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("renders a screenshot-diff's path handles as their downloaded local paths", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const content = await screenshotDiffToMcpContent(
+      {
+        summary: "Screenshot diff summary",
+        diffPath: artifactHandle("d1", "current-diff.png", "image/png"),
+        contextDiffPath: artifactHandle("c1", "current-context-diff.png", "image/png"),
+      },
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) }
+    );
+
+    expect(content.map((b) => b.type)).toEqual(["image", "text", "text", "text"]);
+    const [, , diffBlock, contextBlock] = content as { type: "text"; text: string }[];
+    expect(diffBlock!.text).toMatch(/^diffPath: /);
+    expect(contextBlock!.text).toMatch(/^contextDiffPath: /);
+    const diffPath = diffBlock!.text.replace(/^diffPath: /, "");
+    const contextDiffPath = contextBlock!.text.replace(/^contextDiffPath: /, "");
+    expect(diffPath.startsWith(root)).toBe(true);
+    expect(path.basename(diffPath)).toBe("current-diff.png");
+    expect(path.basename(contextDiffPath)).toBe("current-context-diff.png");
+    expect([...(await fs.readFile(diffPath))]).toEqual(pngBytes);
+  });
+
+  it("marks a screenshot-diff path whose download failed as unavailable", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const fetchImpl = (async (url: string) =>
+      url.endsWith("/artifacts/d1")
+        ? { ok: false }
+        : {
+            ok: true,
+            arrayBuffer: async () => new Uint8Array(pngBytes).buffer,
+          }) as unknown as typeof fetch;
+    const content = await screenshotDiffToMcpContent(
+      {
+        summary: "Screenshot diff summary",
+        diffPath: artifactHandle("d1", "current-diff.png", "image/png"),
+        contextDiffPath: artifactHandle("c1", "current-context-diff.png", "image/png"),
+      },
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl }
+    );
+
+    expect(content.map((b) => b.type)).toEqual(["image", "text", "text", "text"]);
+    const [, summary, diffBlock, contextBlock] = content as { type: "text"; text: string }[];
+    expect(summary!.text).toBe("Screenshot diff summary");
+    expect(diffBlock!.text).toBe("diffPath: (unavailable)");
+    expect(contextBlock!.text).toMatch(/^contextDiffPath: /);
+    expect(path.basename(contextBlock!.text)).toBe("current-context-diff.png");
   });
 
   it("materializes an image artifact and renders image + local Saved path", async () => {
