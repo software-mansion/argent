@@ -3,6 +3,7 @@ import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../contract";
 import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
 import { resolveDevice } from "../../../../utils/device-info";
+import { withKeyedLock } from "../../../../utils/keyed-lock";
 import {
   getAndroidScreenSize,
   orientScreenSize,
@@ -99,7 +100,15 @@ async function awaitWebViewPublished(
   return tree;
 }
 
-async function uiautomatorDump(serial: string): Promise<string> {
+// A dump started while another runs on the same device kills it, so dumps on
+// one serial are serialized.
+const dumpLocks = new Map<string, Promise<unknown>>();
+
+function uiautomatorDump(serial: string): Promise<string> {
+  return withKeyedLock(dumpLocks, serial, () => runUiautomatorDump(serial));
+}
+
+async function runUiautomatorDump(serial: string): Promise<string> {
   // Per-call dump path so concurrent describes on the same serial don't cat each
   // other's half-written dump.
   const randomSuffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;

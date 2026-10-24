@@ -44,7 +44,8 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-tap": 1500,
   "gesture-pinch": 1500,
   "gesture-rotate": 1500,
-  "run-sequence": 15000,
+  // Only the settle after the last step; each step is an in-app action.
+  "run-sequence": 3000,
   "button": 1500,
   "rotate": 1000,
   // The fold tool already waits for the panel hand-over; the cap covers the

@@ -222,6 +222,14 @@ describe("getAutoScreenshotDelayMs", () => {
     }
   });
 
+  it("caps every in-app settle wait at 3s", () => {
+    const appLaunchTools = new Set(["launch-app", "restart-app", "open-url"]);
+    for (const [tool, ms] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
+      if (appLaunchTools.has(tool)) continue;
+      expect(ms, tool).toBeLessThanOrEqual(3000);
+    }
+  });
+
   it("returns default 1400ms for an unknown tool", () => {
     expect(getAutoScreenshotDelayMs("some-new-tool")).toBe(1400);
   });
