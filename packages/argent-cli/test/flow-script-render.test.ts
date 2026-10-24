@@ -5,7 +5,7 @@ import {
   renderScriptLogLines,
   type FlowReport,
   type StepReport,
-} from "../src/flow.js";
+} from "../src/e2e.js";
 
 function report(steps: StepReport[]): FlowReport {
   const counted = steps.filter((s) => s.kind !== "echo");

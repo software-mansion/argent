@@ -95,9 +95,10 @@ export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_M
    * How the tool-server looks the member up. For `flow`: the directory of the
    * file that names the target, a NUL, and the target as written, which is
    * exactly the pair the runner resolves; for the flow of a nested
-   * `tool: flow-execute` step, `<project_root>/.argent/flows`, a NUL and
-   * `<name>.yaml`. For `baseline`: the absolute client
-   * path `<dir>/__baselines__/<key>/<name>.png`. For `tool`: a file argument
+   * `tool: flow-execute` step, each directory of its `paths`
+   * (`NestedFlowTarget`) the client looked in, a NUL and `<name>.yaml`. For
+   * `baseline`: the absolute client path
+   * `<dir>/__baselines__/<key>/<name>.png`. For `tool`: a file argument
    * of a `tool:` step ({@link isClientFileArgument}), as the step spells it.
    * One path is sent once: a `tool` member also serves as the baseline at
    * that path.
@@ -145,6 +146,12 @@ export interface FileInputSpec {
   target: string;
   /** Client-side path template; `${param}` substitutes the tool's string args. */
   path: string;
+  /**
+   * Client-DERIVED `file` targets only: templates tried in order in place of
+   * `path`. The client wraps the first whose file exists, or the first when
+   * none does. Clients that do not know the field use `path`.
+   */
+  paths?: string[];
   kind: FileInputKind;
   optional?: boolean;
   /**

@@ -2,6 +2,7 @@ import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { runAdb } from "../../../utils/adb";
+import { assertApk } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 export const androidImpl: PlatformImpl<
@@ -13,6 +14,7 @@ export const androidImpl: PlatformImpl<
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
+    await assertApk(absolute, bundleId);
 
     // Match iOS semantics: uninstall first so the reinstall is a clean wipe.
     try {

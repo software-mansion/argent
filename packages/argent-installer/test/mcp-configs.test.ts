@@ -959,6 +959,26 @@ describe("Codex adapter", () => {
     expect(content).toContain('command = "argent"');
   });
 
+  it("remove drops approval tables for tool ids the current server no longer lists", () => {
+    // Uninstall runs remove() before removeAllowlist(); approvals written by an
+    // older release (e.g. 0.29.0 flow-* ids) must not survive it.
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      'model = "o3"\n\n[mcp_servers.other]\ncommand = "npx"\n\n' +
+        '[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n\n' +
+        '[mcp_servers.argent.tools.flow-execute]\napproval_mode = "approve"\n\n' +
+        '[mcp_servers.argent.tools.tool-a]\napproval_mode = "approve"\n'
+    );
+
+    expect(adapter.remove(configPath)).toBe(true);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).not.toContain("mcp_servers.argent");
+    expect(content).toContain('model = "o3"');
+    expect(content).toContain("[mcp_servers.other]");
+  });
+
   it("removeAllowlist is a no-op when no tools section exists", () => {
     const configPath = path.join(tmpDir, ".codex", "config.toml");
     adapter.write(configPath, getMcpEntry());
@@ -1261,6 +1281,7 @@ describe("opencode adapter", () => {
   });
 
   it("globalPath returns ~/.config/opencode/opencode.json", () => {
+    homedirOverride = path.join(tmpDir, "home");
     expect(adapter.globalPath()).toBe(
       path.join(os.homedir(), ".config", "opencode", "opencode.json")
     );
@@ -1640,6 +1661,28 @@ describe("getManagedContentTargets", () => {
       expect.arrayContaining(["~/.config/opencode/skills"])
     );
     expect(targets.agentTargets.map((t) => t.label)).toEqual(["~/.config/opencode/agents"]);
+  });
+
+  it("lists .kiro/skills as a Kiro skill target (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Kiro");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([".agents/skills", ".kiro/skills"]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists ~/.kiro/skills as a Kiro skill target (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Kiro");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([
+      "~/.agents/skills",
+      "~/.kiro/skills",
+    ]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
   });
 });
 

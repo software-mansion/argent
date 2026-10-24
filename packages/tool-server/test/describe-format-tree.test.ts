@@ -387,6 +387,13 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).toMatch(/\[clickable,long-clickable,checked,disabled\]/);
     expect(out).toMatch(/\[scrollHidden=7\]/);
+
+    // `uitest` reports `longClickable`, but HarmonyOS has no long-press tool.
+    const harmony = formatDescribeTree(root, { source: "harmony-uitest" });
+    expect(harmony).toMatch(/\[clickable,checked,disabled\]/);
+    expect(harmony).not.toContain("long-clickable");
+    // Suppressed at render: most of those nodes carry no other flag.
+    expect(harmony).toMatch(/\[scrollHidden=7\]/);
   });
 
   // scrollHidden=0 is the "no clipped children" signal from the Android

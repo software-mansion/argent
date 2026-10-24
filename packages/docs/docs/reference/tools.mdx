@@ -12,36 +12,53 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                   |
-| ---------------------------- | --------------------------------------------------------------------------------------------- |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, and Vega (Fire TV) devices |
-| `boot-device`                | Boot a simulator, emulator, or Vega Virtual Device, or spawn an Electron app                  |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                      |
-| `restart-app`                | Terminate then relaunch an app                                                                |
-| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                            |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                        |
-| `open-url`                   | Open a URL or URL scheme on the device                                                        |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                 |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                    |
-| `fold`                       | Fold or unfold a foldable iOS simulator to a posture or a hinge angle                         |
-| `shake`                      | Shake the device                                                                              |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                 |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                            |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                              |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons              |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                              |
+| Tool                         | Description                                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators |
+| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, or spawn an Electron app                              |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                      |
+| `restart-app`                | Terminate then relaunch an app                                                                                                |
+| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                            |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                        |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                                        |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                 |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                                                    |
+| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                     |
+| `shake`                      | Shake the device                                                                                                              |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                 |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                            |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                              |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons                                              |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                              |
 
 `launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
 
-Argent drives a foldable iOS simulator, for example the iPhone Duo. `list-devices` marks it with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
+`reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
+
+- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).
+- `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
+
+Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
 - Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. The panel that shows the UI is the active panel.
 - All tools use the active panel. This is also true after a fold made outside Argent.
 - The coordinates and the screenshot size change with the panel.
+- `fold` returns when the device accepts input again.
+
+On an iOS simulator:
+
 - A video keeps the size of the panel where the recording started. Argent keeps the proportions of the other panel and adds black bars.
 - A fold between two angles that are not 0 or 180 can keep the current panel. To change panels, fold to `closed` or `open`.
 - Unfolded, the UI is landscape. `rotate` sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI.
 - If Argent cannot find the active panel, it uses the cover panel. The tool result then has a warning.
+
+On an Android emulator:
+
+- The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.
+- Argent dismisses a lock screen that the fold to closed shows, if it has no PIN or password.
+- The result has a warning if the screen is off or the lock screen shows after the fold.
+- On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
+- A physical device and an emulator without a hinge reject the call.
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
@@ -74,6 +91,8 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `run-sequence`           | Execute several interaction steps in a single call              |
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
+
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
 ## JavaScript runtime debugging
 
@@ -130,17 +149,21 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
 
-## Flows
+<a id="flows" />
 
-| Tool                     | Description                                                       |
-| ------------------------ | ----------------------------------------------------------------- |
-| `flow-start-recording`   | Start recording a new flow, resetting `.argent/flows/<name>.yaml` |
-| `flow-add-step`          | Execute a tool call and record it as a step in the open recording |
-| `flow-add-echo`          | Record an echo step that prints a message during replay           |
-| `flow-add-script`        | Run a local `.mjs` file and add it to the open recording          |
-| `flow-finish-recording`  | Finish the recording and write the flow to disk                   |
-| `flow-execute`           | Run a saved flow                                                  |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it           |
+## E2E
+
+The old `flow-*` names, for example `flow-execute`, still call these tools. See [Record and replay e2e tests](/docs/features/e2e).
+
+| Tool                    | Description                                                         |
+| ----------------------- | ------------------------------------------------------------------- |
+| `e2e-start-recording`   | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml` |
+| `e2e-add-step`          | Execute a tool call and record it as a step in the open recording   |
+| `e2e-add-echo`          | Record an echo step that prints a message during replay             |
+| `e2e-add-script`        | Run a local `.mjs` file and add it to the open recording            |
+| `e2e-finish-recording`  | Finish the recording and write the e2e test to disk                 |
+| `e2e-execute`           | Run a saved e2e test                                                |
+| `e2e-read-prerequisite` | Read the execution prerequisite of an e2e test without running it   |
 
 ## Design variants
 

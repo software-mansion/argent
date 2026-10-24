@@ -212,8 +212,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // Bootstrap it ourselves via react-devtools-core before giving up.
       if (!("rendererInterfaceFound" in state) || !state.rendererInterfaceFound) {
         const bootstrapJson = (await cdp.evaluate(BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT)) as
-          | string
-          | undefined;
+          string | undefined;
         if (!bootstrapJson) {
           throw new FailureError(
             "Failed to attach React DevTools backend (no value returned from runtime).",
@@ -313,8 +312,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       await cdp.send("Profiler.start", { interval: params.sample_interval_us });
 
       const startJson = (await cdp.evaluate(buildStartScript(JSON.stringify(ownerPayload)))) as
-        | string
-        | undefined;
+        string | undefined;
       if (!startJson) {
         throw new FailureError("Failed to start React profiler (no value returned from runtime).", {
           error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,

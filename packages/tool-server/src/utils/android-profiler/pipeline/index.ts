@@ -216,10 +216,7 @@ export async function loadAndroidCombinedData(
 // Drill-down (profiler-stack-query Android branch)
 
 export type AndroidStackQueryMode =
-  | "hang_stacks"
-  | "function_callers"
-  | "thread_breakdown"
-  | "leak_stacks";
+  "hang_stacks" | "function_callers" | "thread_breakdown" | "leak_stacks";
 
 interface AndroidStackQueryOptions {
   tracePath: string;

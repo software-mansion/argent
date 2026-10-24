@@ -401,7 +401,7 @@ const ASSETS = [
         required: true,
         copiedLabel: name,
         missLabel: name,
-        hint: "This file is required for flow `script` steps.",
+        hint: "This file is required for e2e test `script` steps.",
       })
   ),
 ];

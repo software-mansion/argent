@@ -13,7 +13,7 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
-Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. Pick the first entry that matches the platform you need; if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly; no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
+Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. For a `harmony` target, read `references/harmonyos.md` before driving it. Pick the first entry that matches the platform you need; if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly; no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred: their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
@@ -36,7 +36,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 { "udid": "<UDID>", "bundleId": "com.apple.MobileSMS" }
 ```
 
-Common IDs: `com.apple.MobileSMS` (Messages), `com.apple.mobilesafari` (Safari), `com.apple.Preferences` (Settings), `com.apple.Maps`, `com.apple.Photos`, `com.apple.mobilemail`, `com.apple.mobilenotes`, `com.apple.MobileAddressBook` (Contacts)
+Common IDs: `com.apple.MobileSMS` (Messages), `com.apple.mobilesafari` (Safari), `com.apple.Preferences` (Settings), `com.apple.Maps`, `com.apple.mobileslideshow` (Photos), `com.apple.MobileAddressBook` (Contacts)
 
 ### open-url: by URL scheme
 
@@ -67,7 +67,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Type text         | `keyboard`          | Every platform. Text or one named key per call, never both        |
 | Paste text        | `paste`             | Only where a user would paste (OTP code, long link). Sim/emu only |
 | Rotate device     | `rotate`            | Orientation changes                                               |
-| Fold device       | `fold`              | Foldable iOS simulator: closed / half-open / open, or an angle    |
+| Fold device       | `fold`              | Foldable simulator/emulator: closed / half-open / open, or angle  |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
 | Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
@@ -169,9 +169,11 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 
 One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8): `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
 
+**React Native: the first tap after typing may only close the keyboard.** Inside a scroll view with the default `keyboardShouldPersistTaps="never"`, React Native uses a tap outside the focused field to dismiss the keyboard and does not pass it on (with `"handled"` or `"always"` the tap reaches the button), so a button tapped right after typing may need a second tap; check the returned tree. When the field submits on return, `{ "key": "enter" }` avoids the extra tap.
+
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms); applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
-**Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and flow `type` steps):
+**Typing secrets.** To enter a credential without its plaintext ever entering your context, transcript, or logs, use a secret placeholder in `text` (works in `keyboard`, `paste`, `run-sequence` keyboard steps, and e2e `type` steps):
 
 ```json
 { "udid": "<UDID>", "text": "{{secret:APP_PASSWORD}}" }
@@ -201,7 +203,7 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
 On an unfolded foldable simulator, the value sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI. `LandscapeLeft` gives a portrait UI.
 
-### fold: Fold or unfold a foldable simulator
+### fold: Fold or unfold a foldable device
 
 ```json
 { "udid": "<UDID>", "posture": "open" }
@@ -209,7 +211,7 @@ On an unfolded foldable simulator, the value sets the orientation of the device,
 
 Give `posture` (`closed`, `half-open` or `open`) or `angle` (0–180). Do not give both.
 
-Use `fold` only on a foldable iOS simulator. `list-devices` marks it with `foldable: true`, for example the iPhone Duo. Other devices reject the call.
+Use `fold` only on a foldable iOS simulator (the iPhone Duo) or Android emulator (a Pixel Fold or generic foldable AVD). `list-devices` marks them with `foldable: true`. Other devices reject the call.
 
 Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. All tools use the active panel (the panel that shows the UI), also after a fold made outside argent. `fold` returns when the device accepts input again, so the next tap lands. This is also true for the next step in `run-sequence`.
 
@@ -217,10 +219,12 @@ Rules:
 
 - The coordinates change with the panel. Before you tap, read the element tree in the `fold` result, or run `describe` again. Do not use frames from before the fold.
 - The screenshot size changes with the panel. Keep one screenshot-diff baseline for each posture.
-- Unfolded, the UI is landscape. The screenshot shows the UI turned 90 degrees, and the `describe` frames use the same axes, as on a rotated iPhone.
-- A fold between two angles that are not 0 or 180 can keep the current panel. The result names the active panel. To change panels, fold to `closed` or `open`.
+- iOS: unfolded, the UI is landscape. The screenshot shows the UI turned 90 degrees, and the `describe` frames use the same axes, as on a rotated iPhone.
+- iOS: a fold between two angles that are not 0 or 180 can keep the current panel. The result names the active panel. To change panels, fold to `closed` or `open`.
 - Fold between gestures, not during a gesture. A gesture stays on the panel where it started.
-- If argent cannot find the active panel, it uses the cover panel. The tool result then has a `warning`, and a screenshot-diff summary has a `panel:` line. Take a screenshot to see what the device shows, then do the check that the warning gives.
+- Android: the result gives `deviceState` (`CLOSED`, `HALF_OPENED`, `OPENED`). A lock screen that the fold to closed shows is dismissed; a `warning` says when it cannot be, or when a lock screen is up after the fold. Unlock the device before the next action.
+- Android: only a Pixel Fold AVD has a cover panel. When a generic foldable AVD is closed, the emulator shows only the left part of the display. `describe` frames do not match tap coordinates. Argent can reliably tap only an element that covers the visible part, for example a full-width row. Use a Pixel Fold AVD to test the cover panel.
+- iOS: if argent cannot find the active panel, it uses the cover panel. The tool result then has a `warning`, and a screenshot-diff summary has a `panel:` line. Take a screenshot to see what the device shows, then do the check that the warning gives.
 
 ### await-ui-element: Block until a UI element reaches a state
 
@@ -247,7 +251,7 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 
 On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
 
-Use it only for live diagnosis. Do not record it or put it in `run-sequence`. Flows use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
+Use it only for live diagnosis. Do not record it or put it in `run-sequence`. E2E tests use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 
 ---
 

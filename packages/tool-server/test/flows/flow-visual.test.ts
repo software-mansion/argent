@@ -36,9 +36,7 @@ const h = vi.hoisted(() => ({
   diffNormalizeSizes: undefined as boolean | undefined,
   /** What the waitForFrame mock resolves a cropOn selector to. */
   cropFrame: undefined as
-    | undefined
-    | "aborted"
-    | { x: number; y: number; width: number; height: number },
+    undefined | "aborted" | { x: number; y: number; width: number; height: number },
   /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
   cropFrameError: null as null | Error,
   dimensionMismatch: null as null | {
@@ -403,6 +401,40 @@ describe("runSnapshot settle", () => {
     expect(r.status).toBe("skip");
     expect(r.reason).toContain("aborted");
     expect(vi.mocked(invokeOnDevice)).not.toHaveBeenCalled();
+  });
+
+  it("settles a tree-sourced platform before capturing", async () => {
+    vi.mocked(settleTree).mockClear();
+    vi.mocked(invokeOnDevice).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    await runSnapshot(env, opts());
+
+    expect(vi.mocked(settleTree)).toHaveBeenCalledOnce();
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", expect.anything());
+  });
+
+  it("skips the settle on a platform with no flow tree source, and still captures", async () => {
+    // Flows have no harmony tree source, so a settle read would always fail.
+    vi.mocked(settleTree).mockClear();
+    vi.mocked(invokeOnDevice).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(path.join(tmpDir, "__baselines__", "checkout", "home__harmony-390x844.png"));
+    const harmonyEnv = {
+      ...env,
+      device: { platform: "harmony", kind: "device", id: "harmony-127.0.0.1:5555" },
+    } as unknown as ActionEnv;
+
+    const r = await runSnapshot(harmonyEnv, opts());
+
+    expect(r.status).toBe("pass");
+    expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(
+      harmonyEnv,
+      "screenshot",
+      expect.anything()
+    );
   });
 });
 

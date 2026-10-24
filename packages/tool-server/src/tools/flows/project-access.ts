@@ -5,6 +5,7 @@ import {
   FAILURE_CODES,
   FailureError,
   FLOW_FILE_NAME_PATTERN,
+  e2eRunFallbackDirs,
   flowMemberKey,
   resolveFlowRelativeFile,
   type ClientFileDirective,
@@ -51,6 +52,81 @@ export interface ProjectAccess {
    * `replaced` says whether a file was there before.
    */
   writeBaseline(filePath: string, bytes: Buffer): Promise<{ replaced: boolean }>;
+}
+
+/**
+ * A `run:` target, resolved beside the file that names it, as
+ * {@link ProjectAccess.resolveFlowFile} does. When nothing is there and that
+ * file is in an e2e test dir, the first of the project's other e2e test dirs
+ * that has the target ({@link e2eRunFallbackDirs}) is used instead, so a test
+ * in `.argent/e2e` can `run:` a fragment still in `.argent/flows`. A fallback
+ * the client did not send, or cannot read, is skipped. `anchorDir` in the
+ * result is the directory the target resolved against.
+ */
+export async function resolveRunTarget(
+  project: ProjectAccess,
+  anchorDir: string,
+  target: string
+): Promise<ResolvedFlowFile & { anchorDir: string }> {
+  const hop = await project.resolveFlowFile(anchorDir, target);
+  if (hop.spelling.state !== "absent") return { ...hop, anchorDir };
+  for (const dir of e2eRunFallbackDirs(anchorDir, target)) {
+    try {
+      const other = await project.resolveFlowFile(dir, target);
+      if (other.spelling.state === "absent") continue;
+      // A mis-cased target there is reported as one, as it is beside the file:
+      // on a case-sensitive filesystem nothing is at its canonical path, so the
+      // check below would drop it for the missing hop's ENOENT.
+      if (other.spelling.state === "case_folded") return { ...other, anchorDir: dir };
+      const found =
+        project.mode === "host"
+          ? await fs.stat(other.canonical).then(
+              () => true,
+              () => false
+            )
+          : (await other.read()) !== null;
+      if (found) return { ...other, anchorDir: dir };
+    } catch {
+      // Not sent by an older client, or unreadable: the target stays missing.
+    }
+  }
+  return { ...hop, anchorDir };
+}
+
+/**
+ * The saved test a `name` names, among `candidates` in lookup order
+ * (`NestedFlowTarget.paths`): the first one that has a file, with that
+ * candidate as `path`. A candidate the client did not send is skipped. When none has a file, the first candidate,
+ * so a missing test is reported where a new one would be saved.
+ */
+export async function resolveSavedTest(
+  project: ProjectAccess,
+  candidates: readonly string[]
+): Promise<ResolvedFlowFile & { path: string }> {
+  let first: (ResolvedFlowFile & { path: string }) | undefined;
+  let refusal: unknown;
+  for (const candidate of candidates) {
+    let hop: ResolvedFlowFile & { path: string };
+    try {
+      const resolved = await project.resolveFlowFile(
+        path.dirname(candidate),
+        path.basename(candidate)
+      );
+      hop = { ...resolved, path: candidate };
+    } catch (err) {
+      refusal ??= err;
+      continue;
+    }
+    first ??= hop;
+    try {
+      if ((await hop.read()) !== null) return hop;
+    } catch {
+      // There, but refused: the caller's read reports why.
+      return hop;
+    }
+  }
+  if (first === undefined) throw refusal;
+  return first;
 }
 
 /**
@@ -172,10 +248,33 @@ export class ClientProjectAccess implements ProjectAccess {
     return Object.hasOwn(this.members, key) ? this.members[key] : undefined;
   }
 
+  /** The member of a `run:` target, with the e2e test dir fallback of {@link resolveRunTarget}. */
+  runMember(anchorDir: string, target: string): ResolvedMember | undefined {
+    const member = this.member(anchorDir, target);
+    if (member?.spelling?.state !== "absent") return member;
+    for (const dir of e2eRunFallbackDirs(anchorDir, target)) {
+      const other = this.member(dir, target);
+      if (other?.role === "flow" && other.state === "present") return other;
+    }
+    return member;
+  }
+
+  /** The member of the saved test among `candidates`, as {@link resolveSavedTest} picks it. */
+  savedTestMember(candidates: readonly string[]): ResolvedMember | undefined {
+    let first: ResolvedMember | undefined;
+    for (const candidate of candidates) {
+      const member = this.member(path.dirname(candidate), path.basename(candidate));
+      if (member?.role !== "flow" || member.canonical === undefined) continue;
+      first ??= member;
+      if (member.state === "present" || member.state === "refused") return member;
+    }
+    return first;
+  }
+
   async resolveFlowFile(anchorDir: string, target: string): Promise<ResolvedFlowFile> {
     const member = this.member(anchorDir, target);
     if (member?.role !== "flow" || member.canonical === undefined) {
-      throw clientRefusal(target, `${target} is not a run: target of a flow this client sent`);
+      throw clientRefusal(target, `${target} is not a run: target of an e2e test this client sent`);
     }
     const text = member.state === "present" ? (member.text ?? "") : null;
     return {

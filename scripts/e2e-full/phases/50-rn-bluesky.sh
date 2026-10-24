@@ -69,7 +69,7 @@ run_phase() {
     if [ "$STARTED_METRO" -ne 1 ]; then
       skip "$P" stop-metro stop "Metro was already running on :$MPORT; left as found"
     elif _metro_ready "$MPORT"; then
-      assert_ok "$P" stop-metro stop "{}"
+      assert_ok "$P" stop-metro stop "{\"port\":$MPORT}"
     else
       # The pid is still held in E2E_METRO_PID, which 90-cleanup kills.
       skip "$P" stop-metro stop "the Metro this tier started is not serving :$MPORT; pid reaped in cleanup"

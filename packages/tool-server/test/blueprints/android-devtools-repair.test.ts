@@ -86,9 +86,16 @@ vi.mock("@argent/native-devtools-android", () => ({
   bundledHelperApkPath: () => "/tmp/argent-android-devtools.apk",
 }));
 
+// `am instrument` exits once the helper has answered `shutdown`.
 vi.mock("../../src/utils/android-devtools-client", () => ({
   connectAndroidDevtoolsClient: vi.fn(async () => ({
-    request: vi.fn(async () => ({ ok: true })),
+    request: vi.fn(async (method: string) => {
+      if (method === "shutdown") {
+        const proc = spawned.at(-1);
+        setImmediate(() => proc?.emit("exit", 0, null));
+      }
+      return { ok: true };
+    }),
     close: vi.fn(),
   })),
 }));

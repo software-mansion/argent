@@ -63,6 +63,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
   },
   {
+    name: "harmonyos",
+    description:
+      "HarmonyOS support: list, boot and drive HarmonyOS phones and DevEco Studio emulators over `hdc`. Off by default while the platform is experimental.",
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",

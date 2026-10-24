@@ -27,6 +27,7 @@ import {
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
+import { renderFlagGated } from "./utils/flag-gated-text";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
@@ -383,6 +384,7 @@ export function start(): void {
     recordFailure: (toolId, meta, signal, durationMs) => {
       telemetryTrack("tool:fail", {
         tool: toolId,
+        ...(meta.alias_used ? { alias_used: true } : {}),
         ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
         ...(meta.platform ? { platform: meta.platform } : {}),
         ...(meta.device_kind ? { device_kind: meta.device_kind } : {}),
@@ -542,7 +544,10 @@ export function getAvailableTools(): Array<{
   const registry = createRegistry();
   return registry.getSnapshot().tools.map((id) => {
     const def = registry.getTool(id)!;
-    return { id: def.id, description: def.description, inputSchema: def.inputSchema };
+    return renderFlagGated(
+      { id: def.id, description: def.description, inputSchema: def.inputSchema },
+      isFlagEnabled
+    );
   });
 }
 

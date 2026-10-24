@@ -251,6 +251,21 @@ describe("createToolsClient options", () => {
     );
   });
 
+  it("tells the server it writes recordings under .argent/e2e, linked or not", async () => {
+    for (const remote of [true, false]) {
+      const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote }),
+        fetchImpl,
+      });
+      await callTool("reinstall-app", {});
+      const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+      const headers = init.headers as Record<string, string>;
+      expect(headers["x-argent-e2e-dir"]).toBe("1");
+      expect(headers["x-argent-linked"]).toBe(remote ? "1" : undefined);
+    }
+  });
+
   it("names the proxy body limit when POST /upload refuses a large run: fragment", async () => {
     // Past the inline budget, so the fragment goes through POST /upload.
     writeFileSync(join(TEST_HOME, "big.yaml"), `steps: []\n#${"x".repeat(300 * 1024)}\n`);

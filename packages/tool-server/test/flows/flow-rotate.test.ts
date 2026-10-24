@@ -361,7 +361,7 @@ describe("rotate: gating", () => {
     expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "fail" });
     expect(result.steps[0].reason).toMatch(/rotate is unsupported on a physical iOS device/);
     expect(result.steps[0].reason).toMatch(/no two-finger coordinate API on hardware/);
-    expect(result.steps[0].reason).toMatch(/run this flow on a simulator/);
+    expect(result.steps[0].reason).toMatch(/run this e2e test on a simulator/);
     expect(result.steps[0].reason).not.toMatch(/simulator-server/);
     expect(result.calls).toHaveLength(0);
     expect(reads).toBe(0);
