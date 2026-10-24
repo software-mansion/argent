@@ -507,6 +507,14 @@ describe("foldablePostureHint", () => {
     expect(hint).toContain("699x1017 is the cover panel (closed)");
   });
 
+  it("says nothing for one panel at two scales", async () => {
+    mockDevicectl([duoPayload(1)]);
+    expect(
+      await foldablePostureHint(DUO, { width: 350, height: 509 }, { width: 1398, height: 2034 })
+    ).toBeUndefined();
+    expect(devicectlCalls()).toBe(0);
+  });
+
   it("says nothing for a device that is not foldable", async () => {
     isFoldableSimulatorMock.mockResolvedValue(false);
     expect(

@@ -524,7 +524,7 @@ function sameAspect(a: Size, b: Size): boolean {
 }
 
 /**
- * The posture that produced a capture of `size`, for the aspect-mismatch
+ * The posture that produced a capture of `size`, for the dimension-mismatch
  * message of the visual tools: `the cover panel (closed)` or `the inner panel
  * (half-open or open)`. Undefined when the size matches no panel.
  */
@@ -537,10 +537,11 @@ function postureForSize(size: Size, panels: readonly FoldablePanel[]): string | 
 }
 
 /**
- * The sentence the visual tools add to their aspect-mismatch failure on a
+ * The sentence the visual tools add to their dimension-mismatch failure on a
  * foldable simulator: baselines are per posture, and here is which posture
  * produced each size. Undefined for any device that is not foldable, so the
- * message is unchanged everywhere else.
+ * message is unchanged everywhere else, and for two sizes of one aspect, which
+ * are one panel at two scales rather than two postures.
  *
  * The panel list comes from one CoreDevice read (the pure-PNG diff of a
  * foldable's screenshots touches no simulator-server, which is where argent
@@ -551,6 +552,7 @@ export async function foldablePostureHint(
   expected: Size,
   actual: Size
 ): Promise<string | undefined> {
+  if (sameAspect(expected, actual)) return undefined;
   if (!(await isFoldableSimulator(udid))) return undefined;
   const panels = (await readCoreDeviceDisplays(udid)).displays?.panels;
   const base =
