@@ -497,6 +497,37 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ flow: "login", message: "inside the shared fragment" });
   });
 
+  it("reports a run step's target on one line whether the fragment loads or not", async () => {
+    // Only a target's basename is pattern-checked, so its directory can carry a line break.
+    const oddDir = path.join(tmpDir, ".argent", "flows", "sub\nok");
+    await fs.mkdir(oddDir, { recursive: true });
+    await fs.writeFile(
+      path.join(oddDir, "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("checkout", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "sub\nok/frag.yaml" },
+        { kind: "run", flow: "sub\nmissing/frag.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "checkout", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.target}`)).toEqual([
+      "run:pass:sub\\nok/frag.yaml",
+      "echo:pass:undefined",
+      "run:error:sub\\nmissing/frag.yaml",
+    ]);
+  });
+
   it("qualifies a nested fragment's bare same-stem spelling as ./<stem>", async () => {
     // Root login.yaml → helpers/steps.yaml → run: login.yaml. The bare
     // spelling resolves against the CONTAINING file's directory, so it names
@@ -1496,6 +1527,34 @@ describe("flow composition (run:)", () => {
         }
       )
     ).rejects.toThrow("step 1 of the when: block at step 1: run: login.yaml");
+  });
+
+  it("keeps each refused uploaded step on its own line", async () => {
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      'steps:\n  - run: "sub\\nok/login.yaml"\n  - script: { path: "sub\\nok/seed.mjs" }\n',
+      "utf8"
+    );
+
+    await expect(
+      createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(
+      /step 1: run: sub\\nok\/login\.yaml\n.*step 2: script: \{ path: sub\\nok\/seed\.mjs \}/
+    );
   });
 
   it("rejects an uploaded flow whose run: sits two when: blocks deep", async () => {

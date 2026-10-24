@@ -37,6 +37,7 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
+  escapeInline,
   flowNameCasingError,
   iosLaunchArgs,
   isBlockStep,
@@ -1422,11 +1423,14 @@ function assertUploadSelfContained(
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
     for (const { step, where } of walkSteps(file.flow.steps, file.within)) {
       if (step.kind === "run") {
-        const line = `${where}: run: ${step.flow}`;
+        const line = `${where}: run: ${escapeInline(step.flow)}`;
         if (!closure) offending.push({ kind: "run", line });
         else follow(file, path.dirname(file.canonical), step.flow, { kind: "run", line });
       } else if (step.kind === "script") {
-        offending.push({ kind: "script", line: `${where}: script: { path: ${step.path} }` });
+        offending.push({
+          kind: "script",
+          line: `${where}: script: { path: ${escapeInline(step.path)} }`,
+        });
       } else if (step.kind === "snapshot") {
         if (closure) continue;
         offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
@@ -2556,7 +2560,7 @@ async function execRunStep(
       kind: "run",
       status: "error",
       flow: display,
-      target,
+      target: stepTarget(step),
       reason,
       ...depthOf(scope),
       durationMs: Date.now() - startedAt,
@@ -2665,7 +2669,7 @@ async function execRunStep(
     kind: "run",
     status: "pass",
     flow: display,
-    target,
+    target: stepTarget(step),
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
   });
