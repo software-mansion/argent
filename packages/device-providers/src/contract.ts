@@ -332,6 +332,10 @@ const jsDebuggerSchema = z.object({
  * The socket speaks the same newline-delimited JSON envelope Argent's own
  * agent does (`{ type: "Control" | "ViewInspector" | "CDP", payload }`),
  * opening with a `Control` frame naming the connected `bundleId`.
+ *
+ * Send that frame promptly after accepting: Argent waits up to about two
+ * seconds for it before it uses the connection. If it has not arrived by then,
+ * calls fail as "not connected" until it does.
  */
 const nativeDevtoolsSchema = z.object({
   /**
