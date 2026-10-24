@@ -15,6 +15,7 @@ import {
   writeToolsServerState,
   writeToolsServerStateSync,
   clearToolsServerState,
+  stateFileForBundle,
   formatToolsServerUrl,
   formatLinkUrl,
   generateAuthToken,
@@ -394,7 +395,8 @@ async function runForeground(
   });
 
   // The child has its own SIGINT/SIGTERM handlers that drain HTTP and dispose the
-  // registry, so forwarding lets a supervisor stop us cleanly.
+  // registry, so forwarding lets a supervisor stop us cleanly. SIGHUP (terminal
+  // closed) stops it the same way and keeps us alive to run cleanup.
   const forward = (signal: NodeJS.Signals) => () => {
     try {
       child.kill(signal);
@@ -404,8 +406,10 @@ async function runForeground(
   };
   const onInt = forward("SIGINT");
   const onTerm = forward("SIGTERM");
+  const onHup = forward("SIGTERM");
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
+  process.on("SIGHUP", onHup);
 
   // Register state synchronously so a fast child exit (e.g. EADDRINUSE) cannot
   // race the write and leave a stale file pointing at a dead pid.
@@ -437,10 +441,17 @@ async function runForeground(
     const cleanup = () => {
       process.removeListener("SIGINT", onInt);
       process.removeListener("SIGTERM", onTerm);
+      process.removeListener("SIGHUP", onHup);
       if (stateWritten) {
-        clearToolsServerState(paths.bundlePath).catch(() => {
-          /* non-fatal */
-        });
+        // Only while it still names our child: an auto-spawn or another `server
+        // start` may have replaced it, and deleting theirs orphans that server.
+        const file = stateFileForBundle(paths.bundlePath);
+        try {
+          const cur = JSON.parse(fs.readFileSync(file, "utf8")) as { pid?: number };
+          if (cur.pid === childPid) fs.unlinkSync(file);
+        } catch {
+          /* gone, unreadable or unlink failed: the exit code must still mirror the child's */
+        }
       }
     };
     // Spawn-level failures (ENOENT, EACCES) emit `error` instead of `exit`; report
