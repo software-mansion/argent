@@ -192,6 +192,21 @@ describe("parseRunArgs", () => {
     );
   });
 
+  it("throws on a --platform value outside the platforms the help lists", () => {
+    for (const bad of ["iOS", "macos", "web", "android-tv"]) {
+      expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(FlagParseException);
+      expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(
+        `--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "${bad}"`
+      );
+      expect(() => parseRunArgs(["checkout.yaml", `--platform=${bad}`])).toThrow(
+        FlagParseException
+      );
+    }
+    for (const good of ["ios", "android", "chromium", "vega", "ios-remote"]) {
+      expect(parseRunArgs(["checkout.yaml", "--platform", good]).platform).toBe(good);
+    }
+  });
+
   it("treats a following flag as a missing value, not as the value", () => {
     expect(() => parseRunArgs(["checkout.yaml", "--device", "--json"])).toThrow(
       "--device requires a value"
@@ -202,10 +217,13 @@ describe("parseRunArgs", () => {
   });
 
   it("throws on a separately supplied empty value, like the --flag= form", () => {
-    for (const flag of ["--device", "--platform", "--output"]) {
+    for (const flag of ["--device", "--output"]) {
       expect(() => parseRunArgs(["checkout.yaml", flag, ""])).toThrow(FlagParseException);
       expect(() => parseRunArgs(["checkout.yaml", flag, ""])).toThrow(`${flag} requires a value`);
     }
+    expect(() => parseRunArgs(["checkout.yaml", "--platform", ""])).toThrow(
+      '--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got ""'
+    );
   });
 
   it("accepts the --flag=value form for every value-taking flag", () => {
@@ -2433,6 +2451,31 @@ describe("argent e2e run <dir>", () => {
     expect(errs.join("\n")).toContain(
       "--json-stream supports a single e2e test; directory runs are not supported"
     );
+  });
+
+  it("rejects a misspelled --platform before running any flow in the batch", async () => {
+    await expect(flow(["run", flowsDir, "--platform", "iOS"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain(
+      '--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "iOS"'
+    );
+  });
+
+  it("rejects a misspelled --platform under --json with one error record and no aggregate", async () => {
+    await expect(flow(["run", flowsDir, "--platform", "iOS", "--json"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    expect(errs.join("\n").split("\n")).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error: '--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "iOS"',
+    });
   });
 
   it("forwards run flags to every flow in the batch", async () => {
