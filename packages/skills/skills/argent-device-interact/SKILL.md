@@ -316,6 +316,8 @@ Do **not** use `run-sequence` when any step depends on observing the result of a
 
 The `udid` is shared; do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 
+After a step that can start an animation (a tap, swipe, button press, `enter`/`escape`, or a met `await-ui-element`), the sequence waits until two reads of the element tree match, for at most 1s, before the next step. This catches a sheet or screen whose elements are already moving. It does not see motion that starts more than about 100ms after the step (a sheet that opens after a fetch) or animations that leave the tree unchanged (a native iOS push), so it does not replace an `await-ui-element` gate. If one wait hits the 1s cap (a spinner, a slow tree read), the rest of the sequence skips it. `delayMs` is added after this wait. For back-to-back timing, such as a game or a double-tap split across two steps, pass `"settle": false` at the top level, next to `udid` and `steps`; a `settle` key inside a step is ignored.
+
 Add an `await-ui-element` step to gate a later tap on a screen transition (e.g. tap → wait for the next screen's button → tap it). If its condition is **not** met before the timeout, the sequence stops at that step and the following steps do **not** run, so a mistimed tap can't fire against a screen that never settled.
 
 ### Examples

@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
+import type {
+  DeviceInfo,
+  Registry,
+  ToolCapability,
+  ToolContext,
+  ToolDefinition,
+} from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
@@ -56,15 +62,57 @@ const zodSchema = z.object({
           .number()
           .optional()
           .describe(
-            `Wait time in ms after this step before the next (default ${DEFAULT_INTER_STEP_DELAY_MS})`
+            `Wait time in ms after this step before the next (default ${DEFAULT_INTER_STEP_DELAY_MS}). Added after the settle wait, so 0 means no extra wait, not back-to-back dispatch; for that pass the top-level settle:false (next to udid and steps, not inside a step).`
           ),
       })
     )
     .min(1)
     .describe("Ordered list of interaction steps to execute sequentially"),
+  settle: z
+    .boolean()
+    .optional()
+    .describe(
+      "Top-level, applies to the whole sequence (a per-step settle key is ignored). Default true: after a step that can start a transition (tap, swipe, button, rotate, enter/escape, a met await-ui-element) wait until two reads of the element tree match (max 1s) before the next step. This catches sheets and screens whose elements are already moving, but not motion that starts more than ~100ms after the step (a sheet opened after a fetch) or animations that leave the tree unchanged (a native iOS push), so keep await-ui-element gates for those. If one wait hits the 1s cap (a spinner, a slow tree read), the rest of the sequence skips it. Set false for timing-critical input (games, double-taps split across steps)."
+    ),
 });
 
+const SETTLE_AFTER = new Set([
+  "gesture-tap",
+  "gesture-swipe",
+  "gesture-scroll",
+  "gesture-drag",
+  "gesture-custom",
+  "gesture-pinch",
+  "gesture-rotate",
+  "button",
+  "keyboard",
+  "paste",
+  "rotate",
+  "fold",
+  // `visible` holds as soon as an element has a frame, which can be mid slide-in.
+  AWAIT_UI_ELEMENT_TOOL_ID,
+]);
+const SETTLE_KEYS = new Set(["enter", "return", "escape", "esc"]);
+const SETTLE_IDLE_TOOL_ID = "await-screen-idle";
+const SETTLE_TIMEOUT_MS = 1000;
+
 type Params = z.infer<typeof zodSchema>;
+
+function keyMayMoveUi(args: Record<string, unknown> | undefined): boolean {
+  const key = args?.key;
+  if (typeof key === "string" && SETTLE_KEYS.has(key.toLowerCase())) return true;
+  const text = args?.text;
+  return typeof text === "string" && /[\r\n]/.test(text);
+}
+
+function canSettle(registry: Registry, device: DeviceInfo): boolean {
+  try {
+    assertSupported(SETTLE_IDLE_TOOL_ID, registry.getTool(SETTLE_IDLE_TOOL_ID)?.capability, device);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
 
@@ -175,6 +223,10 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
+      // Cleared once a wait fails or hits its cap: a screen that never goes
+      // still (a spinner) or a tree read slower than the cap would otherwise
+      // add the full timeout to every remaining step and buy nothing.
+      let settle = params.settle !== false;
       // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
       // drops the MCP adapter's own fetch timeout — so honour the signal between
       // steps and on the inter-step delay instead of running the rest of the
@@ -235,6 +287,26 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
             error: reframed ?? (err instanceof Error ? err.message : String(err)),
           });
           break;
+        }
+
+        const next = steps[results.length];
+        if (
+          settle &&
+          next &&
+          next.tool !== AWAIT_UI_ELEMENT_TOOL_ID &&
+          next.tool !== "shake" &&
+          SETTLE_AFTER.has(step.tool) &&
+          (step.tool !== "keyboard" || keyMayMoveUi(step.args)) &&
+          canSettle(registry, device)
+        ) {
+          // Best effort: a failed or capped wait never fails the sequence.
+          const idle = await invokeSubTool<{ settled?: boolean }>(
+            registry,
+            ctx,
+            SETTLE_IDLE_TOOL_ID,
+            { udid, timeoutMs: SETTLE_TIMEOUT_MS, pollIntervalMs: 50, minStableMs: 100 }
+          ).catch(() => undefined);
+          if (!idle || idle.settled === false) settle = false;
         }
 
         const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;

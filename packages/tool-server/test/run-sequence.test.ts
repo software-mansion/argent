@@ -38,6 +38,22 @@ function mockRegistry(invokeImpl?: (id: string, args: unknown) => unknown): Regi
   } as unknown as Registry;
 }
 
+function invokedTools(registry: Registry): string[] {
+  return (registry.invokeTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+}
+
+async function settledAfter(
+  steps: Array<{ tool: string; args: Record<string, unknown> }>,
+  udid = IOS
+): Promise<string[]> {
+  const registry = mockRegistry();
+  await createRunSequenceTool(registry).execute(
+    {},
+    { udid, steps: steps.map((s) => ({ ...s, delayMs: 0 })) }
+  );
+  return invokedTools(registry);
+}
+
 const TVOS_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 // iOS-shaped udid so `resolveDevice` classifies it as an iOS simulator without
 // touching a real device (classification is purely shape-based).
@@ -159,7 +175,181 @@ describe("run-sequence", () => {
       y: 0.3,
       udid: IOS,
     });
+    expect(registry.invokeTool).toHaveBeenNthCalledWith(2, "await-screen-idle", {
+      udid: IOS,
+      timeoutMs: 1000,
+      pollIntervalMs: 50,
+      minStableMs: 100,
+    });
+    expect(registry.invokeTool).toHaveBeenNthCalledWith(3, "keyboard", { text: "hi", udid: IOS });
+  });
+
+  it("skips the settle wait with settle:false", async () => {
+    const registry = mockRegistry();
+    const tool = createRunSequenceTool(registry);
+
+    await tool.execute(
+      {},
+      {
+        udid: IOS,
+        settle: false,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.3 }, delayMs: 0 },
+          { tool: "keyboard", args: { text: "hi" }, delayMs: 0 },
+        ],
+      }
+    );
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(2);
     expect(registry.invokeTool).toHaveBeenNthCalledWith(2, "keyboard", { text: "hi", udid: IOS });
+  });
+
+  it("settles after a key or text that submits or dismisses, not after editing keys", async () => {
+    const tap = { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } };
+    expect(await settledAfter([{ tool: "keyboard", args: { text: "query\n" } }, tap])).toContain(
+      "await-screen-idle"
+    );
+    expect(await settledAfter([{ tool: "keyboard", args: { key: "enter" } }, tap])).toContain(
+      "await-screen-idle"
+    );
+    expect(await settledAfter([{ tool: "keyboard", args: { key: "escape" } }, tap])).toContain(
+      "await-screen-idle"
+    );
+    expect(
+      await settledAfter([
+        { tool: "keyboard", args: { key: "backspace" } },
+        { tool: "keyboard", args: { key: "backspace" } },
+      ])
+    ).toEqual(["keyboard", "keyboard"]);
+    expect(await settledAfter([{ tool: "keyboard", args: { text: "hi" } }, tap])).toEqual([
+      "keyboard",
+      "gesture-tap",
+    ]);
+  });
+
+  it.each([{ key: "return" }, { key: "esc" }, { key: "ENTER" }, { text: "query\r" }])(
+    "settles after keyboard %o",
+    async (args) => {
+      expect(
+        await settledAfter([
+          { tool: "keyboard", args },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+        ])
+      ).toEqual(["keyboard", "await-screen-idle", "gesture-tap"]);
+    }
+  );
+
+  it.each([
+    "paste",
+    "rotate",
+    "fold",
+    "gesture-tap",
+    "gesture-swipe",
+    "gesture-scroll",
+    "gesture-drag",
+    "gesture-custom",
+    "gesture-pinch",
+    "gesture-rotate",
+    "button",
+  ])("settles after %s", async (step) => {
+    expect(
+      await settledAfter([
+        { tool: step, args: {} },
+        { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+      ])
+    ).toEqual([step, "await-screen-idle", "gesture-tap"]);
+  });
+
+  it("does not settle before a shake, so a shake can race a dismissal", async () => {
+    expect(
+      await settledAfter([
+        { tool: "gesture-swipe", args: {} },
+        { tool: "shake", args: {} },
+      ])
+    ).toEqual(["gesture-swipe", "shake"]);
+  });
+
+  it("does not settle on a device the idle tool does not support", async () => {
+    const registry = {
+      getTool: vi.fn((id: string) =>
+        id === "await-screen-idle" ? { capability: { apple: { simulator: true } } } : undefined
+      ),
+      invokeTool: vi.fn(async () => ({ ok: true })),
+    } as unknown as Registry;
+
+    const result = await createRunSequenceTool(registry).execute(
+      {},
+      {
+        udid: "amazon-0123456789",
+        steps: [
+          { tool: "keyboard", args: { key: "enter" }, delayMs: 0 },
+          { tool: "tv-remote", args: { button: "select" }, delayMs: 0 },
+        ],
+      }
+    );
+
+    expect(invokedTools(registry)).toEqual(["keyboard", "tv-remote"]);
+    expect(result.completed).toBe(2);
+  });
+
+  it("keeps going when the settle wait fails", async () => {
+    const registry = mockRegistry((id) => {
+      if (id === "await-screen-idle") throw new Error("no tree");
+      return { tapped: true };
+    });
+
+    const result = await createRunSequenceTool(registry).execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.3 }, delayMs: 0 },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.6 }, delayMs: 0 },
+        ],
+      }
+    );
+
+    expect(result).toMatchObject({ completed: 2, total: 2 });
+    expect(result.steps.every((s) => "result" in s)).toBe(true);
+  });
+
+  it.each([
+    ["hits its cap", () => ({ settled: false, waitedMs: 1000, polls: 3 })],
+    [
+      "fails",
+      () => {
+        throw new Error("no tree");
+      },
+    ],
+  ])("stops settling for the rest of the sequence once a wait %s", async (_label, idle) => {
+    const registry = mockRegistry((id) => (id === "await-screen-idle" ? idle() : { ok: true }));
+    const tap = { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 };
+
+    await createRunSequenceTool(registry).execute({}, { udid: IOS, steps: [tap, tap, tap] });
+
+    expect(invokedTools(registry)).toEqual([
+      "gesture-tap",
+      "await-screen-idle",
+      "gesture-tap",
+      "gesture-tap",
+    ]);
+  });
+
+  it("keeps settling while each wait settles", async () => {
+    const registry = mockRegistry((id) =>
+      id === "await-screen-idle" ? { settled: true, waitedMs: 150, polls: 4 } : { ok: true }
+    );
+    const tap = { tool: "gesture-tap", args: { x: 0.5, y: 0.5 }, delayMs: 0 };
+
+    await createRunSequenceTool(registry).execute({}, { udid: IOS, steps: [tap, tap, tap] });
+
+    expect(invokedTools(registry)).toEqual([
+      "gesture-tap",
+      "await-screen-idle",
+      "gesture-tap",
+      "await-screen-idle",
+      "gesture-tap",
+    ]);
   });
 
   it("stops at an unrecognized tool without invoking it", async () => {
@@ -240,7 +430,12 @@ describe("run-sequence", () => {
       }
     );
 
-    expect(registry.invokeTool).toHaveBeenCalledTimes(3);
+    expect(invokedTools(registry)).toEqual([
+      "gesture-tap",
+      "await-ui-element",
+      "await-screen-idle",
+      "gesture-tap",
+    ]);
     expect(result.completed).toBe(3);
     expect(result.steps.every((s) => "result" in s)).toBe(true);
   });
@@ -254,6 +449,7 @@ describe("run-sequence", () => {
       {},
       {
         udid: IOS,
+        settle: false,
         steps: [
           { tool: "gesture-tap", args: { x: 0.5, y: 0.9 } },
           { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
@@ -312,6 +508,7 @@ describe("run-sequence", () => {
       {},
       {
         udid: IOS,
+        settle: false,
         steps: [
           { tool: "gesture-tap", args: { x: 0.5, y: 0.3 }, delayMs: 0 },
           { tool: "gesture-swipe", args: { fromX: 0.5 }, delayMs: 0 },
