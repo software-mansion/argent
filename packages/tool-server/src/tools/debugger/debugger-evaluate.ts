@@ -31,7 +31,7 @@ export const debuggerEvaluateTool: ToolDefinition<
       `Failed to run JavaScript in the app: ${failureSignal.error_code}`,
   },
   description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega, V8 on Chromium.
-Returns the evaluation result as a JSON-serializable value, along with deviceName, appName, and logicalDeviceId for context. Use when you need to read app state, call app functions, or test logic at runtime. The result is serialized by value, so cyclic objects (many RN runtime values, such as fiber nodes, navigation refs and global, are cyclic) fail with a serialization error rather than returning silently. Fails if the expression throws or the runtime is not connected.`,
+Returns the evaluation result as a JSON-serializable value, along with deviceName, appName, and logicalDeviceId for context. A returned Promise is awaited and its resolved value returned, e.g. \`fetch(url).then(r => r.status)\`; a rejection fails the call like a throw, and a Promise still pending after 10 s fails with DEBUGGER_CDP_REQUEST_TIMEOUT although the expression has already run, so do not re-run it for its side effects. To run something for its side effect without waiting, evaluate \`void (expr)\`. Use when you need to read app state, call app functions, or test logic at runtime. The result is serialized by value, so cyclic objects (many RN runtime values, such as fiber nodes, navigation refs and global, are cyclic) fail with a serialization error rather than returning silently. Fails if the expression throws or the runtime is not connected.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params) => ({
@@ -41,7 +41,7 @@ Returns the evaluation result as a JSON-serializable value, along with deviceNam
     const api = services.debugger as JsRuntimeDebuggerApi;
     let result: unknown;
     try {
-      result = await api.cdp.evaluate(params.expression);
+      result = await api.cdp.evaluateAwaited(params.expression);
     } catch (err) {
       // The agent's expression throwing is not a tool malfunction, so re-code it
       // to keep it separable from genuine CDP faults in telemetry. getFailureSignal
