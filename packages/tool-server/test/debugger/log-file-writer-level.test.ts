@@ -5,19 +5,17 @@ import { scopeTempHome } from "../helpers/temp-home";
 scopeTempHome("argent-log-level-home-");
 
 /**
- * Regression for level truncation: CDP emits console levels longer than 5 chars
- * ("warning" from console.warn, "assert" from console.assert) that are not in
- * LEVEL_DISPLAY. The old fallback `.padEnd(5).slice(0, 5)` truncated them to
- * "warni"/"asser", so readAll()/readFiltered() returned the wrong level and
- * filtering by the canonical level found nothing. The level must round-trip
- * exactly for levels of any length while short levels keep working as before.
+ * The log file stores the level uppercased and padded to 5 chars. readAll() and
+ * readFiltered() must still return the exact CDP level: longer ones such as
+ * "warning" (console.warn) and "assert" are never truncated, and camelCase ones
+ * such as "startGroup" keep their casing.
  */
 let w: LogFileWriter;
 afterEach(() => {
   if (w) w.close();
 });
 
-describe("LogFileWriter round-trips levels of any length", () => {
+describe("LogFileWriter round-trips levels of any length and casing", () => {
   it("preserves 'warning' through readAll()", () => {
     w = new LogFileWriter(59231);
     w.write({
@@ -30,9 +28,6 @@ describe("LogFileWriter round-trips levels of any length", () => {
   });
 
   it("filters by the canonical multi-char level 'warning'", () => {
-    // The exact behavior this change restores: filtering by the full CDP level.
-    // With the old `.slice(0, 5)` the persisted level was "warni", so a filter
-    // for "warning" matched nothing (total === 0).
     w = new LogFileWriter(59234);
     w.write({
       id: 0,
@@ -59,10 +54,7 @@ describe("LogFileWriter round-trips levels of any length", () => {
     expect(entries).toHaveLength(1);
   });
 
-  it("still preserves short levels that hit the padEnd fallback", () => {
-    // "trace" is a real CDP level (console.trace) that is NOT in LEVEL_DISPLAY, so
-    // it exercises the changed `.toUpperCase().padEnd(5)` fallback — unlike "warn",
-    // which the map short-circuits. A <=5-char level must still round-trip exactly.
+  it("preserves short levels padded to 5 chars", () => {
     w = new LogFileWriter(59233);
     w.write({
       id: 0,
@@ -71,5 +63,17 @@ describe("LogFileWriter round-trips levels of any length", () => {
       message: "z",
     });
     expect(w.readAll()[0]!.level).toBe("trace");
+  });
+
+  it("preserves camelCase CDP levels through readAll() and readFiltered()", () => {
+    const levels = ["startGroup", "startGroupCollapsed", "endGroup", "profileEnd", "timeEnd"];
+    w = new LogFileWriter(59235);
+    levels.forEach((level, id) =>
+      w.write({ id, timestamp: new Date(1710000000000).toISOString(), level, message: "c" })
+    );
+    expect(w.readAll().map((e) => e.level)).toEqual(levels);
+    for (const level of levels) {
+      expect(w.readFiltered({ level }).total).toBe(1);
+    }
   });
 });
