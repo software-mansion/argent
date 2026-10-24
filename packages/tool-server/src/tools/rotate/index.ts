@@ -3,6 +3,9 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
+import { isAndroidTv } from "../../utils/adb";
+import { UnsupportedOperationError } from "../../utils/capability";
+import { ANDROID_TV_PROBE_BUDGET_MS } from "../screenshot";
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -23,6 +26,23 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
+/**
+ * Rotating needs no adb, so a wedged adb must not hold a phone's rotate for the
+ * 30 s `adb devices` timeout and then fail it. A probe that errors or overruns
+ * counts as not a TV.
+ */
+async function isAndroidTvWithinBudget(serial: string): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ANDROID_TV_PROBE_BUDGET_MS);
+  });
+  try {
+    return await Promise.race([isAndroidTv(serial).catch(() => false), budget]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const rotateTool: ToolDefinition<Params, Result> = {
   id: "rotate",
   interaction: {
@@ -33,7 +53,7 @@ export const rotateTool: ToolDefinition<Params, Result> = {
   description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
 Use to test layout in a different orientation. Re-run \`describe\` afterwards: frame coordinates change with the orientation.
 On an unfolded foldable iOS simulator (the iPhone Duo), the value sets the orientation of the device, not of the UI: \`Portrait\` gives a landscape UI and \`LandscapeLeft\` gives a portrait UI. To fold or unfold the device, use \`fold\`.
-Returns { orientation }. Fails if the target device is not booted.`,
+Returns { orientation }. Fails on an Android TV, or if the target device is not booted.`,
   zodSchema,
   capability,
   services: (params) => ({
@@ -41,6 +61,9 @@ Returns { orientation }. Fails if the target device is not booted.`,
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;
+    const device = resolveDevice(params.udid);
+    if (device.platform === "android" && (await isAndroidTvWithinBudget(device.id)))
+      throw new UnsupportedOperationError("rotate", device, "Android TV has a fixed orientation");
     await sendCommand(api, { cmd: "rotate", direction: params.orientation });
     return { orientation: params.orientation };
   },
