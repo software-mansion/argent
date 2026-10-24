@@ -6,6 +6,8 @@ export interface CDPTarget {
   description: string;
   webSocketDebuggerUrl: string;
   deviceName?: string;
+  /** The app's bundle id / package name; absent on older inspector-proxies. */
+  appId?: string;
   /** Legacy inspector-proxy only. Its synthetic reload page reports "don't use". */
   vm?: string;
   reactNative?: {

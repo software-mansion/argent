@@ -27,6 +27,11 @@ import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
 import { scopeTempHome } from "../helpers/temp-home";
 
+// A UUID-shaped device_id would otherwise run the host's `xcrun simctl`.
+vi.mock("../../src/utils/debugger/metro-device-name", () => ({
+  metroDeviceNamesFor: async () => undefined,
+}));
+
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
 // developer's real home.
@@ -39,6 +44,8 @@ let registry: Registry;
 let appRunning = true;
 
 const LOGICAL_ID = "logical-only-device";
+/** The udid some cases connect with; its session holds the same app. */
+const UDID_CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
   const { id } = JSON.parse(raw) as { id: number; method: string };
@@ -103,7 +110,9 @@ afterAll(async () => {
 beforeEach(async () => {
   // The registry caches the service, so a session a previous case left
   // connected would be reused — carrying its entry count into the next case.
+  // A live session on the app, under either id, refuses a connect by the other.
   await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${LOGICAL_ID}`).catch(() => {});
+  await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${UDID_CONNECT_ID}`).catch(() => {});
   __resetReapedSessionsForTesting();
   appRunning = true;
 });

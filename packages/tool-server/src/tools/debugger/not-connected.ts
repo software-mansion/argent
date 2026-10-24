@@ -44,8 +44,10 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "the RN app on the target device (launch-app / restart-app), wait a few seconds for the " +
     "bundle to load, then retry once.",
   device_mismatch:
-    "The device_id does not match any debugger target on this Metro. Re-target with the " +
-    "logicalDeviceId listed in the detail message, or give the device its own Metro port.",
+    "The device_id could not be matched to one debugger target on this Metro. Do what the " +
+    "detail message says: re-target with the logicalDeviceId it names, or, when it says " +
+    "simulators share a name, rename them and relaunch the app. A legacy-inspector device " +
+    "(no logicalDeviceId) needs its own Metro port.",
   cdp_unreachable:
     "The runtime's CDP endpoint could not be reached. Verify the app is running " +
     "(launch-app), then call debugger-connect and retry once.",

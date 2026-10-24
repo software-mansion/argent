@@ -12,11 +12,14 @@ import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
+import { metroDeviceNamesFor } from "../utils/debugger/metro-device-name";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
   rememberLogicalKeyedDevice,
   forgetLogicalKeyedDevice,
+  isLogicalKeyedDevice,
+  canonicalDeviceId,
 } from "../utils/debugger/device-alias";
 import { recordReapedSession } from "../utils/reaped-sessions";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
@@ -137,6 +140,19 @@ export interface JsRuntimeDebuggerApi {
   consoleSocketUrl: string;
 }
 
+/**
+ * The device_id of the live debugger session on the target Metro lists as
+ * `logicalDeviceId`: the logicalDeviceId itself, or the id it was connected
+ * with (another spelling of the same UDID, its case or `ext:` form, keys a
+ * separate service). Undefined when nothing is connected to it.
+ */
+function liveSessionOn(logicalDeviceId: string | undefined): string | undefined {
+  if (!logicalDeviceId) return undefined;
+  if (isLogicalKeyedDevice(logicalDeviceId)) return logicalDeviceId;
+  const connectId = canonicalDeviceId(logicalDeviceId);
+  return connectId !== logicalDeviceId ? connectId : undefined;
+}
+
 export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
   namespace: JS_RUNTIME_DEBUGGER_NAMESPACE,
 
@@ -218,10 +234,28 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
       throw error;
     });
+    const isLogicalId = metro.targets.some((t) => t.reactNative?.logicalDeviceId === deviceId);
+    const deviceNames = isLogicalId ? undefined : await metroDeviceNamesFor(deviceId);
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
+      deviceNames,
     });
+    const liveSessionId = liveSessionOn(selected.target.reactNative?.logicalDeviceId);
+    // inspector-proxy keeps one debugger per device, so a second session on
+    // this target would evict the live one, whichever id keys it.
+    if (liveSessionId && liveSessionId !== deviceId) {
+      throw new FailureError(
+        `device_id "${deviceId}" is the app already connected as "${liveSessionId}" on ` +
+          `Metro port ${port}. Pass device_id "${liveSessionId}" to keep using that session.`,
+        {
+          error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+          failure_stage: "debugger_select_target",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
 
     /**
      * React Native's inspector-proxy keeps one debugger per device and
