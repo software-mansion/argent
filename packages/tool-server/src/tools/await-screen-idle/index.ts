@@ -58,7 +58,7 @@ const zodSchema = z
       .max(10_000)
       .optional()
       .describe(
-        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
+        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}); 0 settles on the first non-empty read, confirming content, not stillness.`
       ),
   })
   .strict();
@@ -66,7 +66,7 @@ const zodSchema = z
 type Params = z.infer<typeof zodSchema>;
 
 interface IdleResult {
-  /** Screen rendered content and went still before the timeout. */
+  /** Screen rendered content and held it for minStableMs (0: content alone) before the timeout. */
   settled: boolean;
   waitedMs: number;
   polls: number;
@@ -136,12 +136,12 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for screen to settle: ${failureSignal.error_code}`,
     },
-    description: `Block until the screen has rendered content and stopped changing, or a timeout elapses.
+    description: `Block until the screen has rendered content and held it for minStableMs, or a timeout elapses.
 
 Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it
 has content and that content holds identical for minStableMs (default ${DEFAULT_MIN_STABLE_MS}ms), or timeoutMs (default
-${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls<flag:harmonyos>, note?</flag:harmonyos> }; settled=false means the screen never went
-still before the timeout. <flag:harmonyos>A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS
+${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls<flag:harmonyos>, note?</flag:harmonyos> }; settled=false means that was
+not seen before the timeout, which includes a tree that could not be read. <flag:harmonyos>A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS
 panel settles instantly on its last frame, and taps land nowhere until it is woken.
 </flag:harmonyos>Use after a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
     searchHint:
