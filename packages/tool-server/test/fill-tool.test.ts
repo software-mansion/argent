@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getFailureSignal } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  ServiceInitializationError,
+  type FailureCode,
+} from "@argent/registry";
 import type { AXFillResponse } from "../src/blueprints/ax-service";
 import type { SetTextResult } from "../src/blueprints/android-devtools";
 
@@ -55,7 +61,7 @@ interface Services {
   ax?: { fill: ReturnType<typeof vi.fn> };
   helper?: { setText: ReturnType<typeof vi.fn> } | Error;
   sim?: ReturnType<typeof simulatorServer>;
-  cdp?: { send: ReturnType<typeof vi.fn> };
+  cdp?: { send: ReturnType<typeof vi.fn> } | Error;
 }
 
 function registryWith(services: Services) {
@@ -67,7 +73,10 @@ function registryWith(services: Services) {
         return services.helper;
       }
       if (urn.startsWith("SimulatorServer:")) return services.sim?.api;
-      if (urn.startsWith("ChromiumCdp:")) return { cdp: services.cdp };
+      if (urn.startsWith("ChromiumCdp:")) {
+        if (services.cdp instanceof Error) throw services.cdp;
+        return { cdp: services.cdp };
+      }
       if (urn.startsWith("IosDeviceRunner:")) return {};
       throw new Error(`unexpected service ${urn}`);
     }),
@@ -339,12 +348,85 @@ describe("fill: Chromium", () => {
     return { send: vi.fn(async () => ({ result: { value } })) };
   }
 
-  it("answers with the page's verdict", async () => {
+  function cdpError(code: FailureCode) {
+    return new FailureError("cdp failed", {
+      error_code: code,
+      failure_stage: "debugger_cdp_send",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    });
+  }
+
+  it("answers with the page's verdict, after a no-op the page answered", async () => {
     const cdp = cdpAnswering({ status: "ok", verified: true });
     await expect(run({ cdp }, CHROMIUM, "hello")).resolves.toEqual({ verified: true });
-    const [method, params] = cdp.send.mock.calls[0] as unknown as [string, unknown];
-    expect(method).toBe("Runtime.evaluate");
-    expect(params).toMatchObject({ awaitPromise: true, returnByValue: true });
+    const calls = cdp.send.mock.calls as unknown as Array<
+      [string, Record<string, unknown>, number]
+    >;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(["Runtime.evaluate", { expression: "0" }, 2_000]);
+    expect(calls[1]![0]).toBe("Runtime.evaluate");
+    expect(calls[1]![1]).toMatchObject({ awaitPromise: true, returnByValue: true });
+    expect(calls[1]![1].expression).toContain('"hello"');
+    expect(calls[1]![2]).toBe(10_000);
+  });
+
+  it("sends nothing that writes to a page that does not answer the no-op", async () => {
+    const cdp = {
+      send: vi.fn().mockRejectedValue(cdpError(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT)),
+    };
+    const err = await failure({ cdp }, CHROMIUM, "hello");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "FILL_NOT_VERIFIED",
+      error_kind: "timeout",
+      failure_stage: "fill_chromium_page_blocked",
+    });
+    expect(err.message).toContain("fill changed nothing");
+    expect(cdp.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the field may still change when the page does not finish the fill in time", async () => {
+    const cdp = { send: vi.fn() };
+    cdp.send.mockResolvedValueOnce({ result: { value: 0 } });
+    cdp.send.mockRejectedValueOnce(cdpError(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT));
+    const err = await failure({ cdp }, CHROMIUM, "hello");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "FILL_NOT_VERIFIED",
+      error_kind: "timeout",
+      failure_stage: "fill_chromium_timeout",
+    });
+    expect(err.message).toContain("may still change when the page resumes");
+  });
+
+  function connectError(code: FailureCode) {
+    return new ServiceInitializationError("ChromiumCdp:x", "connect failed", {
+      cause: cdpError(code),
+    });
+  }
+
+  it("maps a connect timeout, which wrote nothing", async () => {
+    const cdp = connectError(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT);
+    const err = await failure({ cdp }, CHROMIUM, "hello");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "FILL_NOT_VERIFIED",
+      error_kind: "timeout",
+      failure_stage: "fill_chromium_connect",
+    });
+    expect(err.message).toContain("fill changed nothing");
+  });
+
+  it("passes any other connect failure through", async () => {
+    const cdp = connectError(FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED);
+    const err = await failure({ cdp }, CHROMIUM, "hello");
+    expect(getFailureSignal(err)?.error_code).toBe("DEBUGGER_CDP_NOT_CONNECTED");
+  });
+
+  it("passes any other CDP failure through", async () => {
+    const cdp = {
+      send: vi.fn().mockRejectedValue(cdpError(FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED)),
+    };
+    const err = await failure({ cdp }, CHROMIUM, "hello");
+    expect(getFailureSignal(err)?.error_code).toBe("DEBUGGER_CDP_NOT_CONNECTED");
   });
 
   it.each([

@@ -1,7 +1,13 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { noFocusedFieldError, notVerifiedError, unsupportedFieldError } from "./errors";
+import {
+  noFocusedFieldError,
+  notVerifiedError,
+  pageNotAnsweringError,
+  pageNotFinishedError,
+  unsupportedFieldError,
+} from "./errors";
 import type { FillResult } from "./types";
 
 /** What the page script answers. Never text: only a verdict. */
@@ -16,8 +22,11 @@ interface PageFillAnswer {
  * and same-origin frames — selects its content and replaces it with the
  * page's own editing commands, so the page sees a user edit: `beforeinput`
  * and `input` fire, React's value tracker and rich-text editors update. A text
- * control whose page refused the command (or that has no selection API, like
- * `type=number`) gets the native value setter and an `input` event instead.
+ * control whose page refused the command, so it fired no `input` and still
+ * holds its old text, gets the native value setter and `input` and `change`
+ * events instead. A control the browser keeps from holding the text
+ * (maxlength, the value sanitization of a number or email input) is refused
+ * before anything changes.
  *
  * The comparison happens in the page, after a task boundary so an editor that
  * restores its model on a microtask has done so. Only a boolean comes
@@ -37,10 +46,13 @@ export function buildChromiumFillScript(text: string): string {
       return el;
     };
     let el = deepActive(document);
-    while (el && String(el.tagName).toLowerCase() === "iframe") {
+    while (el && /^(i?frame|object)$/.test(String(el.tagName).toLowerCase())) {
+      // An <object> showing an image or a plugin has no document to descend into.
+      if (!el.contentWindow) break;
       let inner = null;
       try { inner = el.contentDocument; } catch (e) { inner = null; }
-      if (!inner) return { status: "no_focus" };
+      // A cross-origin or sandboxed frame hides its document.
+      if (!inner) return { status: "unsupported", detail: "focus is in a cross-origin frame, which fill cannot reach" };
       el = deepActive(inner);
     }
     if (!el || el.tagName === undefined) return { status: "no_focus" };
@@ -60,6 +72,28 @@ export function buildChromiumFillScript(text: string): string {
     // An <input> holds one line and drops a newline.
     if (tag === "input" && /[\\r\\n]/.test(text)) {
       return { status: "unsupported", detail: "a single-line input cannot hold a newline" };
+    }
+    // Typed text stops at maxlength, which the value setter ignores. A
+    // textarea stores CRLF as one LF.
+    const limited = tag === "textarea" || /^(text|search|url|tel|email|password)$/.test(type);
+    const length = tag === "textarea" ? text.replace(/\\r\\n/g, "\\n").length : text.length;
+    if (limited && el.maxLength >= 0 && length > el.maxLength) {
+      return { status: "unsupported", detail: "the text is longer than its maxlength of " + el.maxLength };
+    }
+    // A number input holds only a valid number and an email input drops the
+    // whitespace around an address, typed or set. A detached input of the
+    // same type applies the browser's own sanitization.
+    if (type === "number" || type === "email") {
+      const probe = doc.createElement("input");
+      probe.type = type;
+      probe.multiple = el.multiple === true;
+      probe.value = text;
+      if (probe.value !== text) {
+        return {
+          status: "unsupported",
+          detail: type === "number" ? "a number input holds only a valid number" : "an email input drops the whitespace around an address",
+        };
+      }
     }
     if (!control) {
       // designMode or <body contenteditable>: the whole document is the field.
@@ -81,22 +115,39 @@ export function buildChromiumFillScript(text: string): string {
       return false;
     };
 
-    if (control) {
-      try { el.select(); } catch (e) { /* no selection API */ }
-    } else {
-      const sel = doc.getSelection();
-      const range = doc.createRange();
-      range.selectNodeContents(el);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    if (text === "") {
-      if (read() !== "") doc.execCommand("delete");
-    } else {
-      doc.execCommand("insertText", false, text);
+    const before = read();
+    // The browser fires input synchronously for an edit it performed.
+    let edited = false;
+    const onInput = () => { edited = true; };
+    el.addEventListener("input", onInput);
+    try {
+      if (control) {
+        try { el.select(); } catch (e) { /* no selection API */ }
+      } else {
+        const sel = doc.getSelection();
+        const range = doc.createRange();
+        range.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      try {
+        if (text === "") {
+          if (read() !== "") doc.execCommand("delete");
+        } else {
+          doc.execCommand("insertText", false, text);
+        }
+      } catch (e) {
+        // An SVG document has no editing commands; a control still has its setter.
+        if (!control) throw e;
+      }
+    } finally {
+      el.removeEventListener("input", onInput);
     }
     let verified = await settle();
-    if (!verified && control) {
+    // A refused edit fires no input and leaves the old text. Anything else is
+    // the browser's or the page's own rewrite, which the setter must not
+    // override, even when the rewrite equals the old text.
+    if (!verified && control && !edited && read() === before) {
       const proto = tag === "textarea" ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
       setter.call(el, text);
@@ -111,17 +162,46 @@ export function buildChromiumFillScript(text: string): string {
 })()`;
 }
 
+/** How long a no-op evaluation may take before fill decides the page is blocked. */
+const PAGE_ANSWER_TIMEOUT_MS = 2_000;
+const FILL_TIMEOUT_MS = 10_000;
+
+async function withTimeoutError<T>(send: () => Promise<T>, timeoutError: () => Error): Promise<T> {
+  try {
+    return await send();
+  } catch (err) {
+    if (getFailureSignal(err)?.error_code === FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT) {
+      throw timeoutError();
+    }
+    throw err;
+  }
+}
+
 export async function fillChromium(
   registry: Registry,
   device: DeviceInfo,
   text: string
 ): Promise<FillResult> {
   const ref = chromiumCdpRef(device);
-  const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-  const out = (await api.cdp.send(
-    "Runtime.evaluate",
-    { expression: buildChromiumFillScript(text), awaitPromise: true, returnByValue: true },
-    10_000
+  // A page under a JavaScript dialog queues every evaluation and runs it when
+  // the dialog closes. Connecting touches no field, and a no-op goes first, so
+  // a blocked page is sent nothing that edits a field.
+  const api = await withTimeoutError(
+    () => registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options),
+    () => pageNotAnsweringError("fill_chromium_connect")
+  );
+  await withTimeoutError(
+    () => api.cdp.send("Runtime.evaluate", { expression: "0" }, PAGE_ANSWER_TIMEOUT_MS),
+    () => pageNotAnsweringError("fill_chromium_page_blocked")
+  );
+  const out = (await withTimeoutError(
+    () =>
+      api.cdp.send(
+        "Runtime.evaluate",
+        { expression: buildChromiumFillScript(text), awaitPromise: true, returnByValue: true },
+        FILL_TIMEOUT_MS
+      ),
+    () => pageNotFinishedError("fill_chromium_timeout")
   )) as { result?: { value?: PageFillAnswer } };
   const answer = out.result?.value;
   switch (answer?.status) {
