@@ -22,7 +22,9 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; count: number; events: NetworkEvent[] };
+type Result =
+  | NativeDevtoolsPrecheckBlock
+  | { status: "ok"; count: number; events: NetworkEvent[]; note?: string };
 
 export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
   id: "native-network-logs",
@@ -37,6 +39,7 @@ export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
 Unlike the JS-level network inspector (view-network-logs), this captures ALL network traffic from the app including native modules, Swift/Objective-C networking, and background transfers that never pass through JS XMLHttpRequest or fetch. 
 Use when you need to inspect native-level HTTP traffic that is invisible to the JS-level capture. 
 Returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
+Capture for an app starts on the first call for it, and stays on across relaunches (except on a device whose devtools agent argent attached to, where a relaunch ends it). So the first ok answer after capture started for an app that was already running carries a note that requests made before that, including the app's launch, were not recorded, so count 0 there does not mean the app made no requests. To capture the launch, restart-app and call again, unless the note says the launch cannot be recorded on that device.
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
 A not-running app comes back as one of those statuses rather than a failure. An app that is not connected does too, except on a device whose devtools agent argent attached to rather than armed itself: there it fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\`, since no restart of ours can complete a handshake we do not own. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), while a missing host dependency or a udid that is not an Apple device is not.`,
   zodSchema,
@@ -50,6 +53,7 @@ A not-running app comes back as one of those statuses rather than a failure. An 
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+    api.activateNetworkInspection(params.bundleId);
     if (blocked) return blocked;
 
     /**
@@ -69,10 +73,21 @@ A not-running app comes back as one of those statuses rather than a failure. An 
       );
     }
 
-    api.activateNetworkInspection(params.bundleId);
-
     const events = api.getNetworkLog(params.bundleId).slice(-params.limit);
     if (params.clear) api.clearNetworkLog(params.bundleId);
-    return { status: "ok", count: events.length, events };
+    return {
+      status: "ok",
+      count: events.length,
+      events,
+      ...(api.takeCaptureGap(params.bundleId) && {
+        note:
+          `Network capture for ${params.bundleId} started while the app was already running. ` +
+          `Requests made before that, including the app's launch, were not recorded. ` +
+          (api.armsEnv
+            ? `To capture the launch, restart-app and call again.`
+            : `On this device the app's lifecycle belongs to its provider and a relaunch ends ` +
+              `capture, so its launch cannot be recorded here. Do not restart the app for it.`),
+      }),
+    };
   },
 };
