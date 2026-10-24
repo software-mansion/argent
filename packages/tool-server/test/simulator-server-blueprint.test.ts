@@ -210,6 +210,69 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     });
   });
 
+  it.each([
+    [
+      "the discovery file is missing",
+      'Error: emulator "emulator-5570" not found among running emulators (a token-less `-grpc` launch omits grpc.token; check avd/running/*.ini)\n',
+    ],
+    ["no discovery directory exists (Linux)", "Error: Failed to find any running emulator\n"],
+  ])("falls back to `android_device` when %s", async (_case, discoveryError) => {
+    // An emulator launched outside argent under another HOME has no discovery
+    // file where argent looks, so the gRPC controller cannot find it; the adb
+    // screen-sharing controller still drives it.
+    const grpcLess = makeFakeProc();
+    const fallback = makeFakeProc();
+    spawnMock.mockReturnValueOnce(grpcLess).mockReturnValueOnce(fallback);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const serial = "emulator-5570";
+    const device = androidDevice(serial);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      grpcLess.stderr.push(discoveryError);
+      setTimeout(() => {
+        grpcLess.emit("exit", 1);
+        signalReady(fallback, 55570);
+      }, 20);
+    });
+    await factoryPromise;
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
+    expect(spawnMock.mock.calls[1]![1]).toEqual(["android_device", "--id", serial]);
+  });
+
+  it("surfaces the emulator controller's error when the `android_device` fallback fails too", async () => {
+    // With no emulator running at all, both controllers fail; the original
+    // discovery error explains it better than the phone controller's.
+    const grpcLess = makeFakeProc();
+    const fallback = makeFakeProc();
+    spawnMock.mockReturnValueOnce(grpcLess).mockReturnValueOnce(fallback);
+
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5572");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => {
+      grpcLess.stderr.push("Error: Failed to find any running emulator\n");
+      grpcLess.stderr.push(null);
+      grpcLess.emit("exit", 1, null);
+      setTimeout(() => {
+        fallback.stderr.push("Error: device emulator-5572 not found\n");
+        fallback.stderr.push(null);
+        fallback.emit("exit", 1, null);
+      }, 20);
+    });
+
+    const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(error.message).toContain("Error: Failed to find any running emulator");
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: "SIMULATOR_SERVER_READY_EXITED",
+    });
+  });
+
   it("spawns the `android_device` subcommand for a physical Android device", async () => {
     // A physical phone (kind 'device') is driven by a different simulator-server
     // controller than an emulator — the screen-sharing-agent path. The blueprint
@@ -293,7 +356,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
       fakeProc.stderr.push(
         "[2026-09-23T16:23:35Z INFO  simulator_server::media_handler::screenshot_service] Screenshot service stopped\n"
       );
-      fakeProc.stderr.push("Error: Failed to find any running emulator\n");
+      fakeProc.stderr.push("Error: Failed to connect to the emulator gRPC endpoint\n");
       // `exit` can fire before stderr drains; the reason must still make it in.
       fakeProc.emit("exit", 1, null);
       setImmediate(() => fakeProc.stderr.push(null));
@@ -301,7 +364,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
     expect(error.message).toMatch(/^simulator-server exited with code 1 before becoming ready/);
-    expect(error.message).toContain("Error: Failed to find any running emulator");
+    expect(error.message).toContain("Error: Failed to connect to the emulator gRPC endpoint");
     expect(error.message).not.toContain("Screenshot service stopped");
     expect(getFailureSignal(error)).toMatchObject({
       error_code: "SIMULATOR_SERVER_READY_EXITED",
@@ -337,7 +400,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     const device = androidDevice("emulator-5554");
     const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     setImmediate(() => {
-      fakeProc.stderr.push("Error: Failed to find any running emulator\n");
+      fakeProc.stderr.push("Error: Failed to connect to the emulator gRPC endpoint\n");
       for (let i = 0; i < 12; i++) {
         fakeProc.stderr.push(
           `[2026-09-23T16:23:35Z INFO  simulator_server::media_handler] shutdown step ${i}\n`
@@ -348,7 +411,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     });
 
     const error = (await factoryPromise.catch((e: unknown) => e)) as Error;
-    expect(error.message).toContain("Error: Failed to find any running emulator");
+    expect(error.message).toContain("Error: Failed to connect to the emulator gRPC endpoint");
     expect(error.message).not.toContain("shutdown step");
   });
 
