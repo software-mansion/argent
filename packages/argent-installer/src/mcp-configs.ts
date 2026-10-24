@@ -46,7 +46,16 @@ export interface McpServerEntry {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /**
+   * The switch-off keys the entry carries (`enabled: false` / `disabled: true`).
+   * Each editor honours at most one of them (McpConfigAdapter.switchOffKey).
+   */
+  switchedOffBy?: SwitchOffKey[];
+  /** The directory the editor starts the command in, when the entry sets one. */
+  cwd?: string;
 }
+
+type SwitchOffKey = "enabled" | "disabled";
 
 // Argent config or client state outside the scope init just wrote that can keep
 // that entry from taking effect. Adapters only report; init-stale-config.ts
@@ -74,6 +83,8 @@ export interface McpConfigAdapter {
   globalPath(): string | null;
   write(configPath: string, entry: McpServerEntry): void;
   remove(configPath: string): boolean;
+  /** The key this editor honours to switch the entry off; absent when it starts it regardless. */
+  switchOffKey?: SwitchOffKey;
   // Lets `update` skip adapters/scopes the user never opted into during `init`,
   // instead of re-creating configs for any editor whose dir happens to exist
   // (issue #195). Implementations must read the same key `remove()` checks.
@@ -84,7 +95,11 @@ export interface McpConfigAdapter {
   getArgentEntry(configPath: string): McpServerEntry | null;
   // Report argent state outside the projectPath/globalPath pair that can keep
   // the entry written at `writtenScope` from taking effect.
-  findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
+  findShadowingConfigs?(
+    root: string,
+    writtenScope: "local" | "global",
+    options?: ProjectKeyOptions
+  ): ShadowingConfigFinding[];
   addAllowlist?(root: string, scope: "local" | "global"): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
@@ -205,19 +220,36 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
       rawEnv && Object.keys(rawEnv).length > 0
         ? Object.fromEntries(Object.entries(rawEnv).map(([key, value]) => [key, String(value)]))
         : undefined;
+    const switchedOffBy = [
+      ...(raw.enabled === false ? ["enabled" as const] : []),
+      ...(raw.disabled === true ? ["disabled" as const] : []),
+    ];
+    const extra = {
+      ...(env ? { env } : {}),
+      ...(switchedOffBy.length > 0 ? { switchedOffBy } : {}),
+      ...(typeof raw.cwd === "string" && raw.cwd ? { cwd: raw.cwd } : {}),
+    };
     // opencode stores the command as a single array: { command: [cmd, ...args] }.
     if (Array.isArray(raw.command) && raw.command.every((c) => typeof c === "string")) {
       const [command = "", ...args] = raw.command as string[];
-      return { command, args, ...(env ? { env } : {}) };
+      return { command, args, ...extra };
     }
     if (typeof raw.command === "string") {
       const args = Array.isArray(raw.args)
         ? raw.args.filter((a): a is string => typeof a === "string")
         : [];
-      return { command: raw.command, args, ...(env ? { env } : {}) };
+      return { command: raw.command, args, ...extra };
     }
   }
   return { command: "", args: [] };
+}
+
+/** Whether the editor itself keeps this entry from starting (keys it ignores don't count). */
+export function isSwitchedOffInEditor(
+  adapter: McpConfigAdapter,
+  entry: McpServerEntry | null
+): boolean {
+  return !!adapter.switchOffKey && !!entry?.switchedOffBy?.includes(adapter.switchOffKey);
 }
 
 // A shape argent itself writes; anything else is a customization that
@@ -225,7 +257,8 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
 // RELATIVE path into a node_modules copy of the package (everything
 // getLocalArgentBinRelPath can emit); absolute or out-of-tree is hand-tuned.
 export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
-  if (entry === null || hasCustomizingEnv(entry)) return false;
+  // argent never writes a cwd, so one is a customization too.
+  if (entry === null || hasCustomizingEnv(entry) || entry.cwd) return false;
   const { command, args } = entry;
   switch (command) {
     case MCP_BINARY_NAME:
@@ -626,6 +659,7 @@ function codexDirLooksArgentOnly(dir: string): boolean {
 
 const cursorAdapter: McpConfigAdapter = {
   name: "Cursor",
+  switchOffKey: "disabled",
 
   detect(): boolean {
     return (
@@ -700,10 +734,23 @@ const cursorAdapter: McpConfigAdapter = {
 
 // MARK: Claude
 
+interface ProjectKeyOptions {
+  /**
+   * Match the ~/.claude.json project key exactly, as Claude Code reads it.
+   * init and update match loosely so they also clean up stale keys.
+   */
+  exactProjectKey?: boolean;
+}
+
 // ~/.claude.json keys its per-project entries by absolute path, so match
 // loosely: realpathSync.native canonicalizes symlinks and, on case-insensitive
 // filesystems, on-disk case.
-function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: string): string[] {
+function claudeProjectKeysForRoot(
+  projects: Record<string, unknown>,
+  root: string,
+  { exactProjectKey = false }: ProjectKeyOptions = {}
+): string[] {
+  if (exactProjectKey) return root in projects ? [root] : [];
   const canonical = (value: string): string => {
     try {
       return fs.realpathSync.native(value);
@@ -713,6 +760,23 @@ function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: strin
   };
   const target = canonical(root);
   return Object.keys(projects).filter((key) => key === root || canonical(key) === target);
+}
+
+/**
+ * True when Claude Code's `/mcp` toggle has switched argent off for this
+ * project (`projects[<root>].disabledMcpServers` in ~/.claude.json).
+ */
+export function isArgentDisabledInClaudeProject(
+  root: string,
+  options: ProjectKeyOptions = {}
+): boolean {
+  const projects = readJson(path.join(homedir(), ".claude.json")).projects;
+  if (!isRecord(projects)) return false;
+  return claudeProjectKeysForRoot(projects, root, options).some((key) => {
+    const project = projects[key];
+    const disabled = isRecord(project) ? project.disabledMcpServers : undefined;
+    return Array.isArray(disabled) && disabled.includes(MCP_SERVER_KEY);
+  });
 }
 
 // A recorded "reject" for the argent .mcp.json server: a rejection made before
@@ -822,12 +886,16 @@ const claudeAdapter: McpConfigAdapter = {
   // Scans the scope outside the projectPath/globalPath pair —
   // projects["<abs path>"].mcpServers in ~/.claude.json — plus recorded
   // .mcp.json rejections (see claudeDisabledListFinding).
-  findShadowingConfigs(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[] {
+  findShadowingConfigs(
+    root: string,
+    writtenScope: "local" | "global",
+    options?: ProjectKeyOptions
+  ): ShadowingConfigFinding[] {
     const findings: ShadowingConfigFinding[] = [];
     const claudeJsonPath = path.join(homedir(), ".claude.json");
     const projects = readJson(claudeJsonPath).projects;
     if (isRecord(projects)) {
-      for (const key of claudeProjectKeysForRoot(projects, root)) {
+      for (const key of claudeProjectKeysForRoot(projects, root, options)) {
         const project = projects[key];
         if (!isRecord(project)) continue;
         const servers = project.mcpServers;
@@ -995,6 +1063,7 @@ function vscodeUserDirs(): string[] {
 
 const windsurfAdapter: McpConfigAdapter = {
   name: "Windsurf",
+  switchOffKey: "disabled",
 
   detect(): boolean {
     return dirHasEditorEvidence(
@@ -1068,6 +1137,7 @@ const windsurfAdapter: McpConfigAdapter = {
 
 const zedAdapter: McpConfigAdapter = {
   name: "Zed",
+  switchOffKey: "enabled",
 
   detect(): boolean {
     return dirHasEditorEvidence(path.join(homedir(), ".config", "zed"), zedDirLooksArgentOnly);
@@ -1223,6 +1293,7 @@ const CODEX_FILENAME = ".codex";
 
 const codexAdapter: McpConfigAdapter = {
   name: "Codex",
+  switchOffKey: "enabled",
 
   detect(): boolean {
     return (
@@ -1328,6 +1399,7 @@ const codexAdapter: McpConfigAdapter = {
 
 const hermesAdapter: McpConfigAdapter = {
   name: "Hermes",
+  switchOffKey: "enabled",
 
   detect(): boolean {
     return dirHasEditorEvidence(path.join(homedir(), ".hermes"), hermesDirLooksArgentOnly);
@@ -1419,6 +1491,7 @@ function pickOpencodeConfig(dir: string, candidates: readonly string[]): string 
 
 const openCodeAdapter: McpConfigAdapter = {
   name: "opencode",
+  switchOffKey: "enabled",
 
   detect(): boolean {
     return hasOpenCodeBinary();
@@ -1488,6 +1561,7 @@ const KIRO_AUTO_APPROVE_ALL = ["*"];
 
 const kiroAdapter: McpConfigAdapter = {
   name: "Kiro",
+  switchOffKey: "disabled",
 
   detect(): boolean {
     return (
@@ -1857,6 +1931,16 @@ export function injectCodexRules(configPath: string, rulesDir: string): string |
   config.developer_instructions = injectArgentSection(existing, rules);
   writeToml(configPath, config);
   return configPath;
+}
+
+/** Whether a Codex config.toml carries argent's rules in `developer_instructions`. */
+export function hasCodexRules(configPath: string): boolean {
+  try {
+    const existing = readToml(configPath).developer_instructions;
+    return typeof existing === "string" && existing.includes(ARGENT_RULES_START);
+  } catch {
+    return false;
+  }
 }
 
 export function removeCodexRules(configPath: string): boolean {

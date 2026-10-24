@@ -371,6 +371,33 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     );
   });
 
+  it("leaves an entry switched off in the editor untouched", async () => {
+    // Rewriting it would drop `disabled: true` and silently turn argent back on.
+    const kiroJson = path.join(projDir, ".kiro", "settings", "mcp.json");
+    fs.mkdirSync(path.dirname(kiroJson), { recursive: true });
+    fs.writeFileSync(
+      kiroJson,
+      JSON.stringify({
+        mcpServers: { argent: { command: "argent", args: ["mcp"], disabled: true } },
+      })
+    );
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
+        topologyState.globalVersion = "99.0.0";
+      }
+      return undefined;
+    }) as never);
+
+    await update(["--yes"]);
+
+    const entry = (
+      JSON.parse(fs.readFileSync(kiroJson, "utf8")) as {
+        mcpServers: Record<string, { disabled?: boolean }>;
+      }
+    ).mcpServers.argent;
+    expect(entry.disabled).toBe(true);
+  });
+
   it("repairs a corrupted (unparseable) argent entry instead of skipping it as customized", async () => {
     // A mangled entry (merge-conflict remnant, url form) normalizes to
     // getArgentEntry's { command: "" } sentinel — the classification must

@@ -37,6 +37,52 @@ function writeCommittedLocalEntry(): { mcpJson: string; before: string } {
   return { mcpJson, before: fs.readFileSync(mcpJson, "utf8") };
 }
 
+describe("writeMcpConfigs — switched-off entries", () => {
+  it("keeps an entry the editor has switched off", () => {
+    const kiro = getAdapterByName("Kiro")!;
+    const file = path.join(tmpDir, ".kiro", "settings", "mcp.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: { argent: { command: "argent", args: ["mcp"], disabled: true } },
+      })
+    );
+    const before = fs.readFileSync(file, "utf8");
+
+    const { lines } = writeMcpConfigs({
+      selectedAdapters: [kiro],
+      installMode: "global",
+      scope: "local",
+      effectiveRoot: tmpDir,
+      projectRoot: tmpDir,
+    });
+
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(lines.join("\n")).toContain("left a switched-off entry untouched");
+  });
+
+  it("rewrites an entry whose switch-off key the editor ignores", () => {
+    const file = path.join(tmpDir, ".mcp.json");
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        mcpServers: { argent: { command: "argent", args: ["mcp"], disabled: true } },
+      })
+    );
+
+    writeMcpConfigs({
+      selectedAdapters: [claude],
+      installMode: "global",
+      scope: "local",
+      effectiveRoot: tmpDir,
+      projectRoot: tmpDir,
+    });
+
+    expect(fs.readFileSync(file, "utf8")).not.toContain("disabled");
+  });
+});
+
 describe("writeMcpConfigs — global mode over a committed local entry", () => {
   it("keeps the committed local-mode entry when the project is STILL local (record present)", () => {
     // Coexistence: the project keeps its local devDependency (marked by the

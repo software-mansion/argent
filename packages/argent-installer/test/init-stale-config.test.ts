@@ -116,6 +116,17 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(after.oauthAccount).toEqual({ email: "user@example.com" });
   });
 
+  it("ignores a local-scope entry keyed to another project", () => {
+    const other = path.join(tmpDir, "other-project");
+    fs.mkdirSync(other);
+    writeJsonFile(claudeJsonPath(), {
+      projects: { [other]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY } } },
+    });
+
+    expect(claude.findShadowingConfigs!(root, "local")).toHaveLength(0);
+    expect(claude.findShadowingConfigs!(other, "local")).toHaveLength(1);
+  });
+
   it("prunes an mcpServers object left empty by the removal", () => {
     writeJsonFile(claudeJsonPath(), {
       projects: { [root]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY }, trusted: true } },

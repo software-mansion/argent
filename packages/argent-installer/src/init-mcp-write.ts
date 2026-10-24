@@ -3,6 +3,7 @@ import pc from "picocolors";
 import {
   getMcpEntryForScope,
   isArgentManagedEntry,
+  isSwitchedOffInEditor,
   resolveLocalCommandMode,
   type McpConfigAdapter,
   type McpCommandMode,
@@ -94,6 +95,20 @@ export function writeMcpConfigs(args: {
 
   const lines: string[] = [];
 
+  // Rewriting an entry the editor has switched off would drop the switch and
+  // silently turn argent back on.
+  const keepsSwitchOff = (adapter: McpConfigAdapter, configPath: string): boolean => {
+    try {
+      if (!isSwitchedOffInEditor(adapter, adapter.getArgentEntry(configPath))) return false;
+    } catch {
+      return false;
+    }
+    lines.push(
+      `${pc.yellow("!")} ${adapter.name} left a switched-off entry untouched ${pc.dim(configPath)}`
+    );
+    return true;
+  };
+
   for (const adapter of adapters) {
     const configPath =
       scope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
@@ -107,6 +122,7 @@ export function writeMcpConfigs(args: {
           );
           continue;
         }
+        if (keepsSwitchOff(adapter, fallback)) continue;
         try {
           adapter.write(fallback, entryFor("local"));
           lines.push(`${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`);
@@ -115,6 +131,7 @@ export function writeMcpConfigs(args: {
         }
       } else if (scope !== "global" && adapter.globalPath()) {
         const fallback = adapter.globalPath()!;
+        if (keepsSwitchOff(adapter, fallback)) continue;
         try {
           adapter.write(fallback, entryFor("global"));
           lines.push(
@@ -137,6 +154,7 @@ export function writeMcpConfigs(args: {
       );
       continue;
     }
+    if (keepsSwitchOff(adapter, configPath)) continue;
     try {
       adapter.write(configPath, entryFor(normalizedScope));
       lines.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);

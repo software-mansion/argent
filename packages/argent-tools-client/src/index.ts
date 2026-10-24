@@ -3,6 +3,7 @@ export {
   killToolServer,
   killToolServerForInstallDir,
   readAllToolsServerStates,
+  couldBeOurToolServer,
   stateFileForBundle,
   buildToolsServerEnv,
   spawnToolsServer,
