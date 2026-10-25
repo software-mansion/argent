@@ -234,6 +234,11 @@ async function runGlobal(opts: {
     const packageActionStartedAt = performance.now();
     try {
       await runShellCommand(cmd);
+      if (!isGloballyInstalled()) {
+        throw new Error(
+          "The package manager completed, but Argent is not available on PATH. Add the global install bin directory to PATH and retry."
+        );
+      }
       spinner.stop(pc.green("Installed globally."));
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
