@@ -25,25 +25,34 @@ export function trackProfilingRun(deviceId: string, run: ProfilingRun): void {
     runs.set(deviceId, set);
   }
   set.add(run);
-  isProfiling(deviceId);
+  syncCaptureOnDemand();
 }
 
-/** Also sets the capture_on_demand mode of the device's simulator-server to match. */
+/**
+ * Also sets the capture_on_demand mode of every device's simulator-server to
+ * match, not only this device's: a run can be registered under two ids (a React
+ * profile keyed by Metro's logicalDeviceId, and the device's own id), and its
+ * stop names only one of them.
+ */
 export function isProfiling(deviceId: string): boolean {
-  const set = runs.get(deviceId);
-  if (set) {
+  syncCaptureOnDemand();
+  return runs.has(deviceId);
+}
+
+function syncCaptureOnDemand(): void {
+  for (const [deviceId, set] of runs) {
     for (const run of set) {
       if (!run.profilingActive) set.delete(run);
     }
     if (set.size === 0) runs.delete(deviceId);
   }
-  const profiling = (set?.size ?? 0) > 0;
-  const server = servers.get(deviceId);
-  if (server && server.onDemand !== profiling) {
-    server.onDemand = profiling;
-    server.send(profiling);
+  for (const [deviceId, server] of servers) {
+    const profiling = runs.has(deviceId);
+    if (server.onDemand !== profiling) {
+      server.onDemand = profiling;
+      server.send(profiling);
+    }
   }
-  return profiling;
 }
 
 /**
@@ -56,9 +65,14 @@ export function registerCaptureOnDemandSender(
 ): () => void {
   const entry = { send, onDemand: false };
   servers.set(deviceId, entry);
-  isProfiling(deviceId);
+  syncCaptureOnDemand();
   return () => {
-    if (servers.get(deviceId) === entry) servers.delete(deviceId);
+    if (servers.get(deviceId) !== entry) return;
+    servers.delete(deviceId);
+    // The server holds the mode for as long as the WebSocket that set it. An
+    // attached server's WebSocket outlives this instance, so release the hold
+    // here. A spawned server is about to exit, which releases it anyway.
+    if (entry.onDemand) entry.send(false);
   };
 }
 
