@@ -1,8 +1,8 @@
 # Phase 1: Lint Rules
 
 Run once at the project root. Catches mechanical issues deterministically.
-Install missing plugins before running. They support ESLint 9 at most (`eslint-plugin-react-native` crashes on 10), so on an ESLint 10 project install them with `--legacy-peer-deps` and run `npx eslint@9`.
-With React Compiler active, leave out the react-perf rules, `react/jsx-no-bind` and `react-native/no-inline-styles`: the compiler handles what they flag.
+Install missing plugins before running. On ESLint 10, `eslint-plugin-react-native` crashes: install with `--legacy-peer-deps` (npm; pnpm only warns) and run `npx eslint@9`.
+With React Compiler active, leave out the react-perf rules, `react/jsx-no-bind` and `react-native/no-inline-styles`, unless the compiler skips some components (`compilationMode: "annotation"`, `"use no memo"`, a `sources` filter).
 
 ## Rules
 
@@ -49,6 +49,6 @@ With React Compiler active, leave out the react-perf rules, `react/jsx-no-bind` 
 
 ## Procedure
 
-1. If the project has an ESLint config, extend it with the missing rules above; otherwise create a temporary flat config, `eslint.config.mjs`, with all of them.
-2. Run: `npx eslint --format json <src_dir>`; replace `<src_dir>` with the project's JS/TS source root (check `package.json` scripts or look for `src/`, `app/`, `lib/`)
+1. Add the rules above for this run only: extend the project's ESLint config, or on ESLint 10 use a temporary flat config that spreads it. With no project config, create a temporary `eslint.config.mjs`; on a TypeScript project give it `typescript-eslint`'s parser, or every `.tsx` file fails to parse.
+2. Run: `npx eslint --format json <src_dir>` (`npx eslint@9 -c <temp config>` on ESLint 10); replace `<src_dir>` with the project's JS/TS source root (check `package.json` scripts or look for `src/`, `app/`, `lib/`)
 3. Parse output into: `file:line -> rule -> message`.
