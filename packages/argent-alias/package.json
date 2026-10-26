@@ -27,6 +27,6 @@
     "preinstall.cjs"
   ],
   "dependencies": {
-    "@swmansion/argent": "0.0.0"
+    "@swmansion/argent": "0.30.1"
   }
 }
