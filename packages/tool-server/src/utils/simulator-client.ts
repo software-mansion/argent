@@ -109,6 +109,19 @@ interface CommandAck {
   message?: string;
 }
 
+/**
+ * The outstanding command an id-less parse error names, if it names one. serde
+ * reports a `cmd` the server has no variant for as "unknown variant `<cmd>`".
+ */
+function pendingIdNamedBy(conn: Connection, message: string | undefined): string | undefined {
+  const named = message?.match(/unknown variant `([^`]+)`/)?.[1];
+  if (named === undefined) return undefined;
+  for (const [id, entry] of conn.pending) {
+    if (entry.cmd === named) return id;
+  }
+  return undefined;
+}
+
 function failAllPending(conn: Connection, makeError: (cmd: string) => FailureError): void {
   const entries = [...conn.pending.values()];
   conn.pending.clear();
@@ -191,7 +204,10 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
     if (ack.id != null && !conn.pending.has(ack.id)) return;
     // Only an id-less reply (i.e. an error) is matched positionally, against
     // the oldest outstanding command, which is what an in-order server means by it.
-    const id = ack.id ?? conn.pending.keys().next().value;
+    // One that names the command it could not parse goes to that command: an
+    // older server rejects `capture_on_demand` that way while a slow command
+    // sent before it (a foldable's `rotate`) still waits for its reply.
+    const id = ack.id ?? pendingIdNamedBy(conn, ack.message) ?? conn.pending.keys().next().value;
     if (id == null) return;
     const entry = conn.pending.get(id);
     if (entry == null) return;

@@ -17,7 +17,8 @@ type Reply = "ok" | "error" | "silent" | "withhold";
 async function startServer(): Promise<{
   api: SimulatorServerApi;
   received: Record<string, unknown>[];
-  setReply: (r: Reply) => void;
+  /** One reply for every command, or one picked per command name. */
+  setReply: (r: Reply | ((cmd: unknown) => Reply)) => void;
   /** Release every reply the server withheld, late and out of step. */
   flushWithheld: () => void;
   dropConnections: () => void;
@@ -26,7 +27,7 @@ async function startServer(): Promise<{
 }> {
   const received: Record<string, unknown>[] = [];
   const sockets = new Set<WsSocket>();
-  let reply: Reply = "ok";
+  let pickReply: (cmd: unknown) => Reply = () => "ok";
   let connectionCount = 0;
 
   const wss = await new Promise<WebSocketServer>((resolve) => {
@@ -42,9 +43,15 @@ async function startServer(): Promise<{
     sock.on("message", (raw) => {
       const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
       received.push(msg);
+      const reply = pickReply(msg.cmd);
       if (reply === "ok") sock.send(JSON.stringify({ id: msg.id, status: "ok" }));
       else if (reply === "error")
-        sock.send(JSON.stringify({ status: "error", message: "parse error: unknown variant" }));
+        sock.send(
+          JSON.stringify({
+            status: "error",
+            message: `parse error: unknown variant \`${String(msg.cmd)}\`, expected one of \`touch\`, \`rotate\``,
+          })
+        );
       else if (reply === "withhold")
         withheld.push(() => sock.send(JSON.stringify({ id: msg.id, status: "ok" })));
     });
@@ -60,7 +67,7 @@ async function startServer(): Promise<{
     },
     received,
     setReply: (r) => {
-      reply = r;
+      pickReply = typeof r === "function" ? r : () => r;
     },
     flushWithheld: () => {
       for (const send of withheld.splice(0)) send();
@@ -121,6 +128,19 @@ describe("sendCommand — command acknowledgement", () => {
     server.setReply("ok");
     await sendCommand(server.api, { ...TOUCH });
     expect(server.connectionCount()).toBe(1);
+    await server.close();
+  });
+
+  it("rejects the command an older server names, not a slower one sent before it", async () => {
+    const server = await startServer();
+    server.setReply((cmd) => (cmd === "rotate" ? "withhold" : "error"));
+    const rotate = sendCommand(server.api, { cmd: "rotate", direction: "LandscapeLeft" });
+    const err = await sendCommand(server.api, { cmd: "capture_on_demand", enabled: true }).catch(
+      (e: unknown) => e
+    );
+    expect(String(err)).toContain("rejected the 'capture_on_demand' command");
+    server.flushWithheld();
+    await expect(rotate).resolves.toEqual({});
     await server.close();
   });
 
