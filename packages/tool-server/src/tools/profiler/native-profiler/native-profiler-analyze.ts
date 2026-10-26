@@ -48,7 +48,7 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
   // the 30s MCP fetch timeout, and an aborted call is replayed, not cancelled.
   longRunning: true,
   description: `Analyze exported native trace data and return an LLM-optimized markdown report.
-iOS: parses CPU time profile, UI hangs, and memory leaks (Xcode 26.3 or older) from the exported XML files.
+iOS: parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
 Android: queries the Perfetto .pftrace via the in-process Perfetto trace-processor engine for CPU hotspots, UI hangs with jank reason + main-thread state breakdown, GC annotation, and an RSS-growth weak signal.
 Returns a structured markdown report with severity indicators, tables, and actionable suggestions.
 After presenting the report, ask the user whether to investigate further (drill-down with
