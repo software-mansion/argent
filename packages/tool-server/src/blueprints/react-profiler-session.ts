@@ -50,6 +50,8 @@ export interface ReactProfilerSessionApi {
   profileStartWallMs: number | null;
   sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId while we own the run
   ownerToolServerPid: number | null; // process.pid while this tool-server owns the run
+  /** Set by the teardown, so a start that was awaiting the app knows its session is gone. */
+  disposed: boolean;
   disposeSession: () => void;
 }
 
@@ -125,6 +127,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       profileStartWallMs: null,
       sessionId: null,
       ownerToolServerPid: null,
+      disposed: false,
       disposeSession: () => events.emit("terminated"),
     };
 
@@ -206,6 +209,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     return {
       api: state,
       dispose: async () => {
+        state.disposed = true;
         // `cdp.events` belongs to the JsRuntimeDebugger dependency and
         // outlives every dispose but its own teardown; `react-profiler-stop`
         // disposes only this node, once per run.
