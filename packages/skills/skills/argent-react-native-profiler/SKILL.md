@@ -7,162 +7,100 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Profile on a simulator.
 
-## 2. Tool Overview
+## 1. Tools
 
 ### React Profiler (Hermes / React commits)
 
-| Tool                              | Purpose                                                                                                                                                                                                                                                           |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Optional: `sample_interval_us` (default 100).                                                                                                                                                              |
-| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                                                                                                                                                                        |
-| `react-profiler-status`           | **Call if you were interrupted in the middle of the flow, never in another scenario** (debugger drop, Metro reload, pause, subagent handoff, any doubt). Returns `session_status: "active" \| "taken_over" \| "stopped" \| "no_react_runtime"`. Side-effect free. |
-| `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits, sorted by `totalRenderMs` DESC. Saves raw data to disk.                                                                                                                                                     |
-| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                                                                                                                                                                                   |
-| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                                                                                                                                                                         |
-| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                                                                                                                                                                                |
+- `react-profiler-start` / `react-profiler-stop`: record CPU samples and React commits around an interaction.
+- `react-profiler-analyze`: turn the recording into a ranked report: hot commits with the JS functions that ran during each.
+- `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. A debugger drop also ends the recording; check status before stopping or restarting.
+- `react-profiler-component-source`: source, location and memoization status of a component the report flagged.
+- `react-profiler-renders`: live render counts and durations per component, no session needed. A quick look before a full profile.
+- `react-profiler-fiber-tree`: live component hierarchy, no session needed. Traces ancestry, or checks `useMemoCache` (see the React Compiler rule in Step 8).
 
-### Drill-Down Query Tools (call after analyze)
+### Drill-down queries (after analyze)
 
-| Tool                       | Purpose                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------- |
-| `profiler-cpu-query`       | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU. |
-| `profiler-commit-query`    | Targeted commit investigation: by component, time range, commit index, or cascade tree.      |
-| `profiler-stack-query`     | iOS Instruments drill-down: hang stacks, function callers, thread breakdown, leak details.   |
-| `profiler-combined-report` | Cross-correlated report when both React Profiler and native profiler ran in parallel.        |
-| `profiler-load`            | List and reload previous profiling sessions from disk for re-investigation with query tools. |
+- `profiler-cpu-query`: JS CPU: top functions, a time window, a function's call tree, CPU during a component's commits.
+- `profiler-commit-query`: React commits by component, time range, commit index, or cascade tree.
+- `profiler-stack-query`: native data: hang stacks, function callers, thread breakdown, leak details.
+- `profiler-combined-report`: correlates native hangs with React commits when both profilers ran.
+- `profiler-load`: reload an earlier session from disk for the query tools.
 
-For native profiling (CPU hotspots, UI hangs, memory leaks), see the `argent-native-profiler` skill.
+For native profiling on its own, see the `argent-native-profiler` skill.
 
----
+## 2. Guidelines
 
-## 3. Agent Behavior Guidelines
+- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message), with the same `device_id` so their data can be correlated. Skip `native-profiler-start` only if the user has **already explicitly said** they don't want native profiling in this session. If the user wants only native profiling, follow `argent-native-profiler`.
+- **Never move on silently after a report.** The report is the starting point: ask the user whether to investigate further with the query tools, implement fixes and re-profile, or stop.
+- **Record the interaction as an e2e test** (`argent-create-e2e` skill) before the first run when profiling needs a specific interaction sequence (scroll a list, navigate screens, trigger an animation), then replay it for every later run. This removes interaction variance from before/after comparisons. It matters most when re-profiling after a fix, comparing several sessions, or when the path is more than 2-3 steps.
 
-Follow these rules throughout the profiling workflow:
-
-- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message). Both need `device_id`; use the same UDID for both so their data can be correlated later. This gives best coverage.
-- If the user only wants native profiling, use the `argent-native-profiler` skill workflow. Only skip `native-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
-
-### After analysis: ask about next steps
-
-After presenting the analysis report, always ask the user what they want to do next. Present these options:
-
-1. **Investigate further**: drill down into specific findings using query tools (CPU call trees, commit cascades, hang stacks, etc.) to identify root causes with confidence before making changes.
-2. **Implement fixes**: apply changes based on the current findings, then re-profile to measure whether the metric changed (improved, regressed, or stayed flat).
-3. **Done for now**: accept the report as-is.
-
-Do NOT silently move on after the report. The report is the starting point, not the end; query tools exist specifically to let you dig deeper into anything the report flags.
-
-### During investigation: use query tools proactively
-
-When drilling down, chain query tool calls based on what you find:
-
-- A hot commit -> `profiler-commit-query` mode=`by_index` to see all components -> `profiler-cpu-query` mode=`component_cpu` for the slowest one -> `profiler-cpu-query` mode=`call_tree` for the hot function -> read the source file -> propose a fix.
-- A memory leak -> `profiler-stack-query` mode=`leak_stacks` to identify the responsible module -> read the native source if actionable.
-- A native hang -> `profiler-stack-query` mode=`hang_stacks` to get the native call chain -> correlate with React commit timing.
-
-### After fixes: always re-profile
-
-When you apply a fix, always re-profile the same scenario afterward. Compare before/after metrics (commit durations, CPU time, render counts) and report honestly: did the target metric improve, stay flat, or regress? Did any _other_ metric get worse? If you need to reference the original data, use `profiler-load` to reload the pre-fix session. If the fix showed no improvement or introduced a regression, say so explicitly and reconsider the approach.
-
-### Use e2e tests for reproducible profiling
-
-When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as an e2e test** using the `argent-create-e2e` skill before the first profiling run. Then replay the same e2e test for every subsequent run. This eliminates interaction variance as a confounder and makes before/after comparisons meaningful. Especially important when:
-
-- You are about to re-profile after applying a fix (Step 8).
-- The user asks you to compare multiple profiling sessions.
-- The interaction path is more than 2-3 steps long.
-
----
-
-## 4. Standard Profiling Workflow
+## 3. Workflow
 
 **Complete all steps in order; do not break mid-flow.**
 
 ### Step 1: Start profiling
 
-Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response**: you will need it for annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
+Before starting, define lightweight success criteria with the user: which metric matters most (e.g. `totalRenderMs`, a specific commit's duration, a component's render count) and what change would be meaningful.
 
-- if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-device-interact` skill.
-- if the user stated they wish to perform the interaction themselves, suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
-  If you received information about **existing profiling session** being owned by another agent:
-- if session is marked as "stale", you may overtake it without prompting the user for allowance
-- if session is NOT "stale" - before taking action and terminating the other session, **stop and ask user what you should do**, explaining the situation.
+Start the profilers as described in §2. **Save `startedAtEpochMs` from the response** for annotations. Every later profiler and query call in this session must use the same `device_id`. Then:
+
+- If the user asked you to profile, drive the interaction yourself (`argent-device-interact` skill).
+- If the user wants to interact themselves, suggest what to do (e.g. "scroll the list", "switch tabs") and wait for their reply.
+
+If the start reports a session owned by another agent: when it is marked stale, you may take it over without asking; otherwise **stop and ask the user** before terminating it, explaining the situation.
 
 While a profiler records, interaction tools return no automatic screenshot or element tree, so the capture does not load the app. Call `screenshot` or `describe` when you need to see the screen; interaction tools still wait for the screen to settle before they return, so add no wait of your own; on an Android emulator each screenshot during a profile takes one frame in about 100 ms and does not wake the screen capture; on a physical Android device it takes about 150–200 ms and briefly wakes the device screen capture, so take them sparingly there.
 
 #### Annotate every interaction
 
-After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction, including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 3.
+After each `gesture-tap` or `gesture-swipe`, record an annotation with `offsetMs = timestampMs - startedAtEpochMs`, using the `timestampMs` the gesture returned. Never use `Date.now()`; only the server-side timestamps. Annotate _every_ interaction, back-navigation swipes included, and pass them all to `react-profiler-analyze` in Step 3.
 
 ### Step 2: Stop and collect
 
-Call `react-profiler-stop` **and** `native-profiler-stop` in parallel. Only skip `native-profiler-stop` if you did not start it in Step 1. Note `duration_ms` and `fiber_renders_captured`.
-If `fiber_renders_captured: 0`, warn the user: React commit data may be missing.
+Call `react-profiler-stop` **and** `native-profiler-stop` in parallel (skip the native one only if you did not start it). If `fiber_renders_captured` is 0, warn the user that React commit data may be missing.
 
 ### Step 3: Analyze
 
-Call `react-profiler-analyze` with `port`, `device_id`, `project_root`, `platform`, and `rn_version`. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode`; check these in the returned markdown report.
+Call `react-profiler-analyze` with your annotations. Check the report's React Compiler and build-mode lines before proposing fixes.
 
-If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the gesture-tap/gesture-swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation; only server-side timestamps from the tool return values.
-
-If dual profiling, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report` for the cross-correlated view; do not skip this step when both profilers ran; the combined report surfaces correlations that individual reports miss.
-
-The analyze report includes **CPU hotspots per commit**, showing exactly which JS functions ran during each slow React commit. Raw data is saved to disk automatically for later reload.
+If both profilers ran, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report`: it surfaces correlations the individual reports miss.
 
 ### Step 4: Assess results
 
-Analyze whether the results give you a proper image of what is wrong with the application - **do not assume improvement always exists**, verify results logically with reference to how react-native works. Make sure to give honest feedback and be ready to change the approach if needed.
+Judge whether the results actually explain what is wrong. **Do not assume an improvement always exists**; check the findings against how React Native works, give honest feedback, and be ready to change approach.
 
 ### Step 5: Present findings and ask about next steps
 
-Present a concise summary of the key findings - present whether possibilities for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline: ask whether to investigate further, implement fixes (if available), or stop.
+Summarize the key findings, whether there is room for improvement, and how further work could affect performance. Then ask the user how to proceed (§2).
 
 ### Step 6: Drill-down investigation (iterative)
 
-Based on findings from the report, use query tools to investigate deeper:
+Chain the query tools from what the report flags:
 
-- **Slow component?** -> `profiler-cpu-query` mode=`component_cpu` component_name=`AppNavigator`: shows what JS functions ran during that component's commits.
-- **Want to see the call tree?** -> `profiler-cpu-query` mode=`call_tree` function_name=`expensiveFunction`: shows callers and callees.
-- **What happened during a time window?** -> `profiler-commit-query` mode=`by_time_range`: lists all commits in a range.
-- **Full commit detail?** -> `profiler-commit-query` mode=`by_index` commit_index=38: all components, props changes, parent cascade.
-- **Who triggered whom?** -> `profiler-commit-query` mode=`cascade_tree`: visual parent-child cascade.
-- **iOS hang details?** -> `profiler-stack-query` mode=`hang_stacks`: native call stacks during a hang.
+- **Slow commit** → `profiler-commit-query` `by_index` (every component, props changes, parent cascade) or `cascade_tree` (who triggered whom).
+- **Slow component** → `profiler-cpu-query` `component_cpu` → `call_tree` for the hot function → read the source → propose a fix.
+- **A time range** → `profiler-commit-query` `by_time_range`, or `profiler-cpu-query` `time_window`.
+- **Native hang or leak** → `profiler-stack-query` `hang_stacks` / `leak_stacks`; correlate the hang's timing with React commits.
 
-Repeat as needed until you identify the root cause function and file, referring to step 4 for honest evaluation. After each round of investigation, ask the user if they want to continue digging or move to fixing.
+Pass component names exactly as the report prints them; the wrapped name (`Memo(...)`, `Forget(...)`, `ForwardRef(...)`) resolves too. Repeat until you find the root-cause function and file, judging the evidence as in Step 4. After each round, ask the user whether to keep digging or move to fixing.
 
 ### Step 7: Reload a previous session
 
-If you profiled multiple scenarios and need to revisit earlier data:
-
-1. Call `profiler-load` mode=`list` to see all saved sessions with timestamps (the list now also shows Runtime / Device / Metro bundle columns to help identify the right session).
-2. Call `profiler-load` mode=`load_react` session_id=`<timestamp>` device_id=`<UDID>` to reload React data. `device_id` scopes the reload into the `port:device_id` cache slot.
-3. Call `profiler-load` mode=`load_native` session_id=`<timestamp>` device_id=`<UDID>` to reload native profiler data.
-4. Query tools now operate on the reloaded session data; **pass the same `device_id` you loaded with**, otherwise they will miss the cache.
-
-This is useful for before/after comparisons: profile, fix, re-profile, then reload the original session to compare metrics side by side.
+To revisit earlier data, e.g. to compare before and after a fix: `profiler-load` mode `list`, then `load_react` and/or `load_native` with the `session_id` and the `device_id`. **Pass that same `device_id` to the query tools afterwards**, or they miss the reloaded data.
 
 ### Step 8: Apply fix and re-profile
 
-If fix is present, read the source code of the identified bottleneck using `react-profiler-component-source` or the Read tool. Apply the fix, then re-profile (Step 1 -> user interaction -> Step 2 -> Step 3 -> Step 4). Report whether the target metric improved, stayed flat, or regressed. Also check whether the fix introduced regressions in other metrics (e.g., render count dropped but CPU time increased, or a different component now re-renders more). If the fix showed no net benefit or unacceptable tradeoffs, revert and reconsider.
+Read the bottleneck's source (`react-profiler-component-source` or the Read tool), apply the fix, then re-profile the same scenario (Step 1 → interaction → Steps 2-4). Report honestly whether the target metric improved, stayed flat, or regressed, and whether any _other_ metric got worse (e.g. fewer renders but more CPU time, or a different component now re-renders more). If the fix brought no net benefit or unacceptable tradeoffs, revert and reconsider.
 
-**Tip:** If the interaction sequence was recorded as an e2e test (see "Use e2e tests for reproducible profiling" above), replay it with `e2e-execute` instead of manually repeating the steps. This guarantees identical interaction conditions for the comparison. If the e2e test fails during replay (e.g., a UI fix changed the layout), follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure) to repair the e2e test before retrying the profiling cycle.
+If the interaction was recorded as an e2e test, replay it with `e2e-execute` instead of repeating the steps by hand. If the replay fails (e.g. a UI fix changed the layout), follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure) before retrying the profiling cycle.
 
-If the user stated that they do not wish for changes, present the profiling report and skip the fix but suggest it to the user.
+If the user does not want changes, present the report and suggest the fix without applying it.
 
-**React Compiler rule:** If the analyze report indicates React Compiler is enabled, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out (check `react-profiler-fiber-tree` for absent `useMemoCache` on that component).
+**React Compiler rule:** if the report shows React Compiler enabled, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed the compiler bailed out on that component (`react-profiler-fiber-tree` shows no `useMemoCache` on it).
 
----
+## 4. Caveats
 
-## 5. Important Caveats
-
-- **Dev mode inflation**: `buildMode: "dev"` renders are ~3x slower than production. Prioritize high `normalizedRenderCount`; it scales to prod.
-- **Re-run after fixes**: Always re-profile after changes. Report honestly whether the metric improved, regressed, or stayed flat; do not assume improvement.
-- **`excluded` is informational**: Components in `animatedSubtrees` and `recyclerChildren` re-render by design.
-- **Strict Mode**: Double-invokes renders. The pipeline halves `normalizedRenderCount` automatically when detected.
-- **Debugger connection**: If interrupted, started profiling also closes. Before attempting recovery, call `react-profiler-status`: it tells you whether the session is `active`, `taken_over`, `stopped`, or `no_react_runtime`, so you can decide whether to stop, restart, or reconnect first.
-- **Confounders to watch for**:
-  - Live API data may differ between runs (different payload sizes, content counts), which shifts render counts and durations independently of your fix. Note when data-dependent components show variance.
-  - Profiler overhead inflates CPU measurements. If iOS Instruments shows `JSLexer`, `JSONEmitter`, or Hermes internals dominating the JS thread, that reflects profiler instrumentation cost, not app work. Discount those entries.
-  - Runs are not perfectly reproducible. Small variations (under ~10-15%) in commit duration may be noise; only treat consistent, directional changes as signal.
-
-For standalone diagnostic tools (live render stats, fiber tree, CPU summary), see `references/diagnostic-tools.md`.
+- **Dev builds** render ~3x slower than production (the report notes it). Prioritize render counts over durations: counts carry over to production. They are already halved when Strict Mode double-invokes renders.
+- **Live API data** may differ between runs (payload sizes, item counts) and shift render counts and durations independently of your fix. Note when data-dependent components vary.
+- **Run-to-run noise:** variations under ~10-15% in commit duration may be noise; only treat consistent, directional changes as signal.
+- **Profiler overhead:** if the native profile shows `JSLexer`, `JSONEmitter` or Hermes internals dominating the JS thread, that is instrumentation cost, not app work. Discount those entries.

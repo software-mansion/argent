@@ -23,28 +23,17 @@ Read this file before creating or changing an e2e test. Exercise the saved path 
 
 ## Recorder contract
 
-`e2e-add-step.command` is an MCP tool name. `args` is a JSON string, not an object. Omit `args` for a no-argument tool.
-
-```text
-command: "gesture-tap"
-args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
-```
-
 A recorded `e2e-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling test captured as `run:`.
-
-When the user requests a script, call `e2e-add-script` at the point where it must run. Read [E2E YAML: Local scripts](e2e-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
 
 Over a link, `e2e-add-step` refuses a call whose step a replay over the same link rejects, and runs nothing. It also refuses an `e2e-execute` call whose test does not pass. That test can have changed the device before it stopped. In both cases the recorder records no step. See [Replay](#replay) for the steps that a replay over a link rejects.
 
 Obey these lifecycle rules:
 
-1. Pass the same `name` and absolute `project_root` to every recording tool.
-2. Choose a name unique to the task. Another caller can take over the same pair without an ownership check. The pair is keyed by the file the filesystem resolves to, not the spelling you passed, so a differently-cased name or a symlinked `.argent/e2e` collides too. That collision is reported: the second start says `restarted`, and the first recording's next call fails naming both spellings.
-3. Give concurrent recordings separate devices. Their files are isolated, but their live device actions are not.
-4. Treat `e2e-start-recording` as destructive. It always truncates the named YAML, including a finished or committed test. `restarted` reports only a displaced live take.
-5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
-6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `e2e-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `e2e-start-recording` and `e2e-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` (one summary line for the step it appended) plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `e2e-finish-recording` returns `flowFile` regardless.
-7. Edit or reorder the YAML only after `e2e-finish-recording`. A recording over a link, also to 127.0.0.1, overwrites edits made during the recording.
+1. Choose a name unique to the task: another caller can take over the same `name` + `project_root` pair without an ownership check. The pair is keyed by the file the filesystem resolves to, not the spelling you passed, so a differently-cased name or a symlinked `.argent/e2e` collides too. That collision is reported: the second start says `restarted`, and the first recording's next call fails naming both spellings.
+2. Treat `e2e-start-recording` as destructive. It truncates the named YAML even when it holds a finished or committed test. `restarted` reports only a displaced live take.
+3. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
+4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. A call that returns normally while reporting an unmet condition **does** append the step; `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `flowFile` regardless.
+5. Edit or reorder the YAML only after `e2e-finish-recording`. Over a link, also to 127.0.0.1, the next recorded step overwrites your edit; without one, an edit that renumbers steps drops the warnings the finish would report.
 
 ## Start in the correct order
 
@@ -64,7 +53,7 @@ On iOS, only `restart-app` guarantees an instrumented launch. `launch-app` can f
 
 **The app sets the window size; no boot argument overrides it.** Electron ignores `--window-size`: the size comes from the app's own `BrowserWindow` options, and Argent never resizes the window. Boot a fresh target with `boot-device` and `electronAppPath`, then take one `screenshot` and record its pixel dimensions: that capture size is the snapshot device class ([E2E YAML: Snapshots](e2e-yaml.md#snapshots-and-cli-runs)) and must match when CI replays. If the app sizes its window from host or session state, say so in the report.
 
-After boot, start the recorder before the first in-app action. Record the first-screen wait. `restart-app` has no Chromium support, so the call errors and records nothing, and a recorded Chromium test is always a fragment: its launch is written in during polish rather than captured, and any `executionPrerequisite` the recording declared must go with it. A launch-first test must not carry one. During polish, add the matching launch:
+After boot, start the recorder before the first in-app action. Record the first-screen wait. `restart-app` has no Chromium support, so a recorded Chromium test is a fragment until polish writes its launch in (and removes any `executionPrerequisite` the recording declared). During polish, add the matching launch:
 
 ```yaml
 steps:
@@ -126,7 +115,7 @@ Never tap the on-screen keyboard through the recorder. Some platforms expose it 
 
 ### Typing
 
-Record the focus tap, then record `keyboard` with `text`. A `keyboard` call carries `text` or `key`, never both. To submit, record a second `keyboard` step with `key: "enter"`. Verify the complete value with `describe` or an app validation marker.
+Record the focus tap, then record `keyboard` with `text`. To submit, record a second `keyboard` step with `key: "enter"`. Verify the complete value with `describe` or an app validation marker.
 
 **Never `describe` or `screenshot` a non-secure field you just filled from `{{secret:…}}`.** Only a password field is redacted; a plain text input hands the resolved value back into your context, and an API key or token typed into one is the ordinary case. Submit or navigate away first, then verify the resulting screen.
 
@@ -146,17 +135,17 @@ For every retained raw gesture, add an echo and a recorded result check.
 
 ### Live waits and checks
 
-Record `await-ui-element` through `e2e-add-step`. The recorder writes the step even when `toolResult.success` is false. Read `success` and `cause` after each check:
+Record `await-ui-element` through `e2e-add-step`. The recorder writes the step even when `toolResult.success` is false, so act on its `cause`:
 
-- `unmet`: The tree was readable, but the condition was false. Restore the expected state or correct the selector or timeout. Record the check again, then delete the failed step after `e2e-finish-recording`.
-- `unreadable`: The wait ended without a trustworthy read. Restore the tree source and record the check again. Keep the failed step: the condition is unknown, not false.
-- `cancelled`: The caller stopped the wait. Record the check again. Keep the failed step: the condition is unknown, not false.
+- `unmet`: Restore the expected state or correct the selector or timeout. Record the check again, then delete the failed step after `e2e-finish-recording`.
+- `unreadable`: Restore the tree source and record the check again. Keep the failed step: the condition is unknown, not false.
+- `cancelled`: Record the check again. Keep the failed step: the condition is unknown, not false.
 
-Only `unmet` disproves the condition. Never delete a step during the recording.
+Never delete a step during the recording.
 
-A stale `hidden` whose selector matches nothing replays as a silent pass: the unfalsifiable gate that [Record absence in three steps](#record-absence-in-three-steps) exists to prevent. Never proceed as though the gate passed. See the `await-ui-element` section of `argent-device-interact` for the full live condition and selector reference.
+A stale `hidden` whose selector matches nothing replays as a silent pass: the unfalsifiable gate that [Record absence in three steps](#record-absence-in-three-steps) exists to prevent. Never proceed as though the gate passed.
 
-A wait inside `run-sequence` gets no recorder warning. Inspect the nested result. Any `success: false` fails the sequence during replay.
+A wait inside a recorded `run-sequence` gets no recorder warning, so inspect the nested result: any `success: false` there fails the sequence during replay.
 
 The live tool and e2e runner use [different trees](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree:
 
@@ -164,9 +153,7 @@ The live tool and e2e runner use [different trees](e2e-yaml.md#the-runner-tree-i
 - Mismatch: For `text`, first rule out a selector that matches more than one element. Then rule out a changed screen. If the trees really differ, keep the raw `await-ui-element` step: it replays on the tree it passed on.
 - Unreadable, slow, or cancelled check: The conversion is unknown. Restore the source or re-record before conversion.
 
-A warning does not reject the step. `e2e-finish-recording` repeats each warning below its step and reports dropped warnings.
-
-Do not edit YAML before finishing because edits can drop recorded verdicts. If the finish reports drops, record the waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs`, `bundleId`, or a cross-tree mismatch.
+A warning does not reject the step. If `e2e-finish-recording` reports dropped warnings, record those waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs`, `bundleId`, or a cross-tree mismatch.
 
 ### Wrong turns
 
@@ -268,30 +255,15 @@ Resolve every hit and confirm:
 
 Run `e2e-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
 
-`e2e-execute` takes exactly one test source: `name`, for a test saved under `.argent/e2e/` (or the legacy `.argent/flows/`), or `flow_path`, an absolute path to any test `.yaml`.
+Over `argent link` or `ARGENT_TOOLS_URL`, the client uploads the test and the files its steps need. `e2e-execute`'s `flow_path` parameter lists what travels and which steps a linked run rejects (`script:`, recording tools, directory, app or output-directory arguments such as `reinstall-app`'s, relative or non-`.png`/`.yaml` file arguments, file paths built from several arguments). Beyond that list:
 
-Over `argent link` or `ARGENT_TOOLS_URL`, the client sends the test file, its `run:` fragments, the tests that its `tool: e2e-execute` steps name, the snapshot baselines of each run and the file arguments of its `tool:` steps with the call. These steps work over a link:
-
-- `run:` fragments and the tests that `tool: e2e-execute` steps name, when they are under `project_root`, under its `.argent/e2e/` or `.argent/flows/`, or beside the test file. Keep them there.
-- `snapshot:` steps in the test and in its fragments. The baselines stay in the project. With `updateBaselines: true`, the client writes each new baseline when the run ends. A `baseline not written` line in the report means that the client did not save that baseline: fix the reason in the line and run again.
-- A `tool:` step whose file argument is an absolute path to a `.png` or `.yaml` file, such as `baselinePath` of `screenshot-diff`. Keep the real file under the project root or beside the test file, not behind a symlink to another place. Otherwise the step reports `error` when it runs, after the earlier steps acted.
-- A `tool: e2e-execute` step that names its test with `name` and an absolute `project_root` without a `..` segment. Keep the test that the step names under the project on the client, and spell `name` in the letter case of its file. That test uses its own baselines. A replay with `updateBaselines` also updates them, unless the step sets `updateBaselines` itself.
-
-These steps do not work over a link, in the test or in a fragment or test that it runs:
-
-- `script:`
-- a `tool:` step that takes a directory, an app or an output directory, such as `reinstall-app`, `gather-workspace-data`, or `screenshot-diff` with `outputDir`
-- a `tool:` step with a relative file path, or a file other than `.png` or `.yaml`
-- a `tool:` step whose tool builds the file path from several arguments, such as `e2e-read-prerequisite` with `name`
-- a `tool: e2e-execute` step with `flow_path`, or with `name` and a relative `project_root` or one with a `..` segment
-- a `tool:` step that records an e2e test
-
-The tool-server checks the test, its fragments and the tests that it runs before the first step. The error lists each step that does not work over a link, and each `run:` or `tool: e2e-execute` step whose test the client could not send, with the reason. A fragment or a test that does not exist fails its step when the step runs. Run a test that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
+- Keep every file a step needs (`run:` fragments, tests named by `tool: e2e-execute`, `.png`/`.yaml` arguments such as `screenshot-diff`'s `baselinePath`) as a real file under `project_root`, its `.argent/e2e/` or `.argent/flows/`, or beside the test file, not behind a symlink to another place. Otherwise the step reports `error` when it runs, after the earlier steps acted.
+- A `tool: e2e-execute` step works over a link only with `name` and an absolute `project_root` without a `..` segment. Spell `name` in the letter case of its file.
+- A `baseline not written` line in the report means that the client did not save that baseline: fix the reason in the line and run again.
+- The tool-server rejects unsupported steps before the first step, listing each with the reason; a fragment or test that does not exist fails only when its step runs. Run a test that needs a rejected step with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.
 
 Manual rescue invalidates the pass. An `errored` step was never evaluated: an `idle` wait whose tree source could not be read, a step that threw, an unresolvable `run:` target, or a `launch:` that did not start the app. Read the reason: most name the environment, but a failed `launch:` is a verdict about the app. Unconfirmed focus is not in this class at all: the replay focus poll has no failure return, so a `type:` step whose focus was never confirmed is scored a **pass**, and only the value check after typing catches it.
 
-**A passing step that carries a `warning` is a finding, not noise.** `await: { idle: true }` raises [six different warnings](e2e-yaml.md#idle-readiness) and they do not share one meaning. Two say the screen was moving; one says the wait ran out mid-hold and is repaired by raising the step's `timeout:`; one says the tree stayed empty; one says the tree did hold still and only the screenshot pairs were missing, so the capture path is what to check; one says the step ended with no evidence either way. No report separates intended motion from a load that never finished. Read which one it is, look at that screen, disclose what you found, and confirm the following step targets a stable element rather than stillness.
+**A passing step that carries a `warning` is a finding, not noise.** `await: { idle: true }` raises [six different warnings](e2e-yaml.md#idle-readiness) and they do not share one meaning or one repair. No report separates intended motion from a load that never finished. Read which one it is, look at that screen, disclose what you found, and confirm the following step targets a stable element rather than stillness.
 
-A [selector-less gesture](e2e-yaml.md#directives) raises a warning of a different shape, not one of those six: a tree-source outage left it unsettled, so it dispatched blind and the green says only that the gesture was sent. Restore the source, usually by relaunching the app so the instrumentation loads. Accept it only where the app serves no tree at all, such as the [injection-free iOS form](reliability-and-recovery.md#terminally-non-injectable-ios-apps).
-
-One uninterrupted full pass completes a normal e2e test. `argent-qa-e2e` requires two consecutive passes of unchanged YAML. For CI, use `argent e2e run <name> [--platform ...]`; it exits non-zero on failure.
+A [selector-less gesture](e2e-yaml.md#directives) warns in a different shape: it dispatched blind during a tree-source outage, so the green says only that the gesture was sent. Restore the source, usually by relaunching the app. Accept it only where the app serves no tree at all, such as the [injection-free iOS form](reliability-and-recovery.md#terminally-non-injectable-ios-apps).

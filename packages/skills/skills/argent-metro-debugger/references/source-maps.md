@@ -1,16 +1,10 @@
-# Source Resolution for `inspect-element`
+# Missing source locations in `debugger-inspect-element`
 
-`debugger-inspect-element` tries to resolve each component in the hierarchy to its source file and line. It uses a fallback chain:
+`debugger-inspect-element` resolves each component to its source from the fiber's `_debugStack` (symbolicated through Metro) or, failing that, its `_debugSource`. With neither, every item comes back with `source: null` and `code: null`; the component names are still useful.
 
-1. **`_debugStack`** (React fiber property): a stack trace string from the bundled code. When available, the tool symbolicates it via Metro's `/symbolicate` endpoint to resolve to the original source file, then reads a code fragment from disk. Set `resolveSourceMaps: false` to skip symbolication and return raw bundled locations instead.
-2. **`_debugSource`** (React fiber property): contains `{ fileName, lineNumber, columnNumber }` pointing directly to the original source file. No symbolication needed. The tool reads the code fragment from disk automatically.
-3. **Neither available**: the tool returns the component hierarchy with `source: null` and `code: null` for all items. The hierarchy (component names) is still useful.
+All items `source: null` means the project's Babel configuration does not inject source information into JSX elements. This is common with the **automatic JSX transform** (Expo SDK 50+ and React Native 0.73+).
 
-## When Source Info Is Missing
-
-If `debugger-inspect-element` returns all items with `source: null`, the React Native project's Babel configuration does not inject source information into JSX elements. This is common with the **automatic JSX transform** (used by Expo SDK 50+ and React Native 0.73+).
-
-**To enable source resolution**, inform the user that they can add `@babel/plugin-transform-react-jsx-source` to their project's Babel config. For example, in `babel.config.js`:
+**To enable source resolution**, tell the user they can add `@babel/plugin-transform-react-jsx-source` to the project's Babel config. For example, in `babel.config.js`:
 
 ```js
 module.exports = function (api) {
@@ -24,4 +18,4 @@ module.exports = function (api) {
 };
 ```
 
-After adding the plugin, restart Metro (`npx react-native start --reset-cache` or `npx expo start --clear`) and reload the app. No extra `npm install` needed; the plugin ships with `babel-preset-expo` and `@babel/preset-env`.
+After adding the plugin, restart Metro with a cache reset (`npx react-native start --reset-cache` or `npx expo start --clear`) and reload the app. No extra `npm install` is needed; the plugin ships with `babel-preset-expo` and `@babel/preset-env`.

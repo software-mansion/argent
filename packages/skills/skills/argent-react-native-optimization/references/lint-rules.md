@@ -48,8 +48,6 @@ Install missing plugins before running: `npm install --save-dev eslint-plugin-re
 
 ## Procedure
 
-1. Check if the project has an existing ESLint config.
-   2a. If yes, extend it with missing rules from above.
-   2b. If no config, create a temporary `.eslintrc.json` with all rules above.
+1. If the project has an ESLint config, extend it with the missing rules above; otherwise create a temporary `.eslintrc.json` with all of them.
 2. Run: `npx eslint --format json <src_dir>`; replace `<src_dir>` with the project's JS/TS source root (check `package.json` scripts or look for `src/`, `app/`, `lib/`)
 3. Parse output into: `file:line -> rule -> message`.

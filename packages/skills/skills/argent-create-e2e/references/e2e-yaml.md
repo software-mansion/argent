@@ -74,7 +74,7 @@ YAML selectors and live discovery use different screen projections:
 
 On iOS, Android, and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
-The recorder rechecks each successful `await-ui-element` against the runner tree. Follow any `message` warning and replay each conversion. On Vega, a mismatch usually means the screen changed. A `text` check can also select different elements from the same source. See [Live waits and checks](live-authoring.md#live-waits-and-checks).
+For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element.
 
 **On iOS, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later runner-tree reads to that app, so a read probes only that app instead of fanning out over every connected one to find the frontmost. A pinned read still refuses, naming the reason, when the app has no foreground presence left, when it stops answering after an earlier read got through, when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app.
 
@@ -156,9 +156,9 @@ Only the direction presets carry OS-edge margins. A resolved `from` point is use
 
 On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`, an `<a href>` or a `draggable="true"` node starts the browser's native drag-and-drop: the page gets `pointerdown` then `pointercancel` and sees no travel. On Vega, `swipe` fails upfront like the other touch directives.
 
-`type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. Over a link with `forward-secrets` on, the same sources on the client's machine come first. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
+`type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`; the runner resolves them from the same sources as the `keyboard` tool. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
-A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict, which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
+A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition: after the first such gesture, later ones skip the settle window until a tree read succeeds again or the app relaunches.
 
 ## Verification conditions
 
@@ -209,7 +209,7 @@ It **never fails a run.** Every outcome short of a clean settle passes with a wa
 - **a small part of it was still changing**: a spinner, caret, or progress dot moved through the hold. Too small to count as the screen moving, so the settle completed anyway.
 - **the screen was still for the last Nms**: the wait ran out mid-hold, so no settle was confirmed. It names the term that was short: a second agreeing interval, or the rest of `stableFor`. Raise this step's `timeout:`, because the wait was too short rather than the screen too busy.
 - **the tree stayed empty**: the screen rendered no accessible content: a canvas or video surface, or a screen that never arrived.
-- **settled on the UI tree alone**: no screenshot pair could be read, so presentation-layer animation was never waited out.
+- **settled on the UI tree alone**: no screenshot pair could be read, so presentation-layer animation was never waited out. Inspect the capture path rather than the app's rendering.
 - **too few reads**: a settle needs three reads across two intervals and this step got fewer, so it ended with no evidence either way.
 
 Only a tree source this step could not read stops the run, as an errored step: one still failing when the wait ends, one that wedges after answering, one that answers with an empty tree it flags as degraded (an unattached Vega toolkit, an AX service asking to be relaunched), or one that never answers (raise `timeout` before suspecting the app). The run is then not ok and every later step is skipped. A single failed read is not that: the hold restarts from the next good read. The same outage stops no [selector-less gesture](#directives), which needs no frame and passes with its own warning instead.
@@ -241,8 +241,6 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 
 ## Local scripts
 
-Use a local `.mjs` script only when the user requests one. Record it with `e2e-add-script` at the point where it must run.
-
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
@@ -250,12 +248,9 @@ Use a local `.mjs` script only when the user requests one. Record it with `e2e-a
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-- **`path`** is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case.
-- **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
+`path` is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
-
-If a script fails, check its changes before you retry.
 
 ## Snapshots and CLI runs
 
