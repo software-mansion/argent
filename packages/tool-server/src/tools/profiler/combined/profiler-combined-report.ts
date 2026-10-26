@@ -60,6 +60,7 @@ Requires both react-profiler-analyze and native-profiler-analyze to have been ca
 Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
 Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
+  readOnly: true,
   zodSchema,
   // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
   // loadAndroidCombinedData. Chromium has no native trace capture.

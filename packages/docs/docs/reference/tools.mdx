@@ -184,6 +184,8 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 ## Footnotes
 
+Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
+
 `terminate-app`, `ui-tree`, `foreground-app` and `fill` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.

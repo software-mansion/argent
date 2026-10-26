@@ -685,6 +685,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           searchHint?: string;
           longRunning?: boolean;
           hideFromMcp?: boolean;
+          readOnly?: boolean;
           aliasOf?: string;
         } = {
           name: def.id,
@@ -700,6 +701,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
         if (def.longRunning) entry.longRunning = true;
         if (def.hideFromMcp) entry.hideFromMcp = true;
+        if (def.readOnly) entry.readOnly = true;
         // A former id is listed too, so a client that calls by it finds the
         // tool's file inputs. Hidden from MCP, so agents see one name.
         const aliases = (def.aliases ?? []).map((alias) => ({

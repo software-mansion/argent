@@ -56,6 +56,8 @@ The `project_root` input of `e2e-add-step` carries `"collect": "step"`:
 
 `"collect": "step"` tells the client to send the files that the recorded step makes the tool-server read. See [Members of a recorded step](#members-of-a-recorded-step).
 
+An entry with `"readOnly": true` is a tool that only reads state. The MCP adapter sends it with the `readOnlyHint` annotation.
+
 `GET /tools` also lists each old `flow-*` name as an entry with `"hideFromMcp": true` and `aliasOf`, the new name. A call to the old name runs the new tool.
 
 <a id="the-flow-file-input" />

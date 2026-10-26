@@ -213,6 +213,7 @@ Each entry includes a requestId that can be passed to view-network-request-detai
 On React Native (iOS / Android / Vega) interception is injected into the JS runtime: it records each request once: XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module itself, such as react-native-fetch-api (found in a Metro development build). Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
+  readOnly: true,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {

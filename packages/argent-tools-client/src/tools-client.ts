@@ -38,6 +38,7 @@ export interface ToolMeta {
   longRunning?: boolean;
   /** Listed for programmatic callers only; the MCP adapter skips it. */
   hideFromMcp?: boolean;
+  readOnly?: boolean;
   /** Set on a former id of a tool: the tool's current id. */
   aliasOf?: string;
 }
