@@ -21,7 +21,7 @@ import {
   simctlTargetForWithdrawal,
 } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
-import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
+import { clearAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
   proxyStart as simRemoteProxyStart,
   proxyStop as simRemoteProxyStop,
@@ -573,7 +573,7 @@ export const localIosHost: IosHost = {
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
   inspectRunningApp: inspectRunningAppLocal,
   async bootstrapAx(udid) {
-    await ensureAutomationEnabled(udid);
+    await clearAutomationEnabled(udid);
     return { entitlementBypassActive: await isEntitlementBypassActive(udid) };
   },
   spawnAxDaemon: spawnAxDaemonLocal,

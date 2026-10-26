@@ -43,11 +43,11 @@ vi.mock("node:fs", async () => {
 
 // Mock the AX-bypass helpers at the module boundary so this file asserts
 // boot-device's dispatch (state probe → pre-boot if shutdown → boot →
-// ensureAutomationEnabled fallback → native-devtools → open) without pulling
+// clearAutomationEnabled → native-devtools → open) without pulling
 // plist/kickstart internals into the exec-call sequence.
 const scannedSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
-const ensureAutomationEnabledMock = vi.fn();
+const clearAutomationEnabledMock = vi.fn();
 const isEntitlementBypassActiveMock = vi.fn();
 
 let scanTimedOut = false;
@@ -62,7 +62,7 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
 
 vi.mock("../src/blueprints/ax-service", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
-  ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
+  clearAutomationEnabled: (...args: unknown[]) => clearAutomationEnabledMock(...args),
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
@@ -116,7 +116,7 @@ describe("boot-device — iOS path", () => {
       { udid: "33333333-3333-3333-3333-333333333333", state: "Shutdown" },
     ]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
@@ -142,8 +142,7 @@ describe("boot-device — iOS path", () => {
     });
 
     // Pre-boot write must precede `simctl boot` so SB inherits the bypass at
-    // first init; ensureAutomationEnabled then runs as a defense-in-depth
-    // no-op (pref already cached, kickstart branch skipped).
+    // first init.
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledTimes(1);
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
@@ -151,10 +150,8 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock.mock.invocationCallOrder[0]).toBeLessThan(
       mockExecFile.mock.invocationCallOrder[0]
     );
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledTimes(1);
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111"
-    );
+    expect(clearAutomationEnabledMock).toHaveBeenCalledTimes(1);
+    expect(clearAutomationEnabledMock).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
 
     expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
       ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
@@ -374,7 +371,7 @@ describe("boot-device — iOS path", () => {
     });
   });
 
-  it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {
+  it("skips pre-boot plist write when the sim is already Booted and still clears AutomationEnabled", async () => {
     const resolveService = vi.fn(async () => ({
       getInitFailure: () => null,
       reverifyEnv: async () => {},
@@ -385,17 +382,14 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
 
     // Already-Booted sim: in-sim cfprefsd would overwrite the host write, so
-    // skip it. ensureAutomationEnabled writes prefs best-effort (no kickstart).
+    // skip it.
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
-      "22222222-2222-2222-2222-222222222222"
-    );
+    expect(clearAutomationEnabledMock).toHaveBeenCalledWith("22222222-2222-2222-2222-222222222222");
   });
 
-  it("still runs the fallback ensureAutomationEnabled when the state probe fails", async () => {
+  it("still clears AutomationEnabled when the state probe fails", async () => {
     // The scan lists nothing on an unknown udid or an xcrun failure other than
-    // a timeout; boot must not block on the probe — fall through to
-    // ensureAutomationEnabled which writes prefs best-effort.
+    // a timeout; boot must not block on the probe.
     scannedSimulatorsMock.mockResolvedValueOnce([]);
 
     const resolveService = vi.fn(async () => ({
@@ -408,9 +402,7 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "44444444-4444-4444-4444-444444444444" });
 
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
-      "44444444-4444-4444-4444-444444444444"
-    );
+    expect(clearAutomationEnabledMock).toHaveBeenCalledWith("44444444-4444-4444-4444-444444444444");
   });
 
   it("refuses to boot when the state probe times out without finding the simulator", async () => {
@@ -431,7 +423,7 @@ describe("boot-device — iOS path", () => {
     });
     expect((err as Error).message).toContain("call boot-device again shortly");
     expect(mockExecFile).not.toHaveBeenCalled();
-    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
+    expect(clearAutomationEnabledMock).not.toHaveBeenCalled();
     expect(resolveService).not.toHaveBeenCalled();
   });
 
@@ -452,8 +444,7 @@ describe("boot-device — iOS path", () => {
   });
 
   it("does not block boot on a pre-boot plist write failure", async () => {
-    // plutil missing / data container read-only: log and continue;
-    // ensureAutomationEnabled writes prefs best-effort post-boot.
+    // plutil missing / data container read-only: log and continue.
     setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("plutil missing"));
 
     const resolveService = vi.fn(async () => ({
@@ -471,7 +462,7 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    expect(ensureAutomationEnabledMock).toHaveBeenCalled();
+    expect(clearAutomationEnabledMock).toHaveBeenCalled();
   });
 
   it("returns a structured init_failed result when native-devtools has given up", async () => {
@@ -1106,7 +1097,7 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
     scanTimedOut = false;
     scannedSimulatorsMock.mockReset().mockResolvedValue([]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 

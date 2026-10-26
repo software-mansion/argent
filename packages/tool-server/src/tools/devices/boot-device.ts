@@ -32,7 +32,7 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
-import { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../../blueprints/ax-service";
+import { clearAutomationEnabled, setAccessibilityPrefsPreBoot } from "../../blueprints/ax-service";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -635,7 +635,7 @@ async function bootIos(
       process.stderr.write(
         `[boot-device ${udid.slice(0, 8)}] pre-boot AX pref write failed (${
           err instanceof Error ? err.message : String(err)
-        }); ensureAutomationEnabled will write prefs post-boot but SB won't pick them up until next restart.\n`
+        }); describe may miss SpringBoard-hosted dialogs until a later boot writes them.\n`
       );
     });
   }
@@ -682,10 +682,7 @@ async function bootIos(
     });
   }
 
-  // Covers the sim that was already Booted without force, where no pre-boot
-  // write happened: SB won't pick these prefs up until the next restart, but
-  // describe surfaces a degraded-quality hint.
-  await ensureAutomationEnabled(udid).catch(() => undefined);
+  await clearAutomationEnabled(udid).catch(() => undefined);
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);

@@ -13,7 +13,7 @@ import { toSimulatorNetworkError } from "../src/utils/format-error";
 // specific (argv, stdio).
 
 const spawnMock = vi.fn();
-const ensureAutomationEnabledMock = vi.fn();
+const clearAutomationEnabledMock = vi.fn();
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -24,7 +24,7 @@ vi.mock("node:child_process", async () => {
 });
 
 vi.mock("../src/blueprints/ax-service", () => ({
-  ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
+  clearAutomationEnabled: (...args: unknown[]) => clearAutomationEnabledMock(...args),
 }));
 
 // `android.sdkRoot` reaches the binary as ANDROID_HOME; stub the config read
@@ -113,7 +113,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
   beforeEach(async () => {
     spawnMock.mockReset();
     androidSdkRootMock.mockReturnValue(null);
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(false);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
@@ -529,7 +529,7 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
 
   beforeEach(async () => {
     spawnMock.mockReset();
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(true);
     fetchMock.mockReset();
     globalThis.fetch = fetchMock as unknown as typeof fetch;
