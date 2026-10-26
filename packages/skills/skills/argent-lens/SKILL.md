@@ -19,7 +19,7 @@ Decide, before touching code, exactly which elements you are redesigning and the
 
 ### Step 1: Get a precise matcher
 
-For each element, run `describe` (or `debugger-component-tree` for RN) on its screen and read its exact `identifier` / `label` / `role`. Prefer `match: { by: "identifier", … }` (stable testID), then an exact `label`; the default `text` match is fine only when the element's visible text is unique. A wrong `match` makes the card point at the wrong element or float unanchored.
+For each element, run `describe` on its screen and read its exact `identifier` / `label` / `role`. Prefer `match: { by: "identifier", … }` (stable testID), then an exact `label`; the default `text` match is fine only when the element's visible text is unique. A wrong `match` makes the card point at the wrong element or float unanchored.
 
 ### Step 2: For each variant: build → navigate → screenshot → propose → revert
 

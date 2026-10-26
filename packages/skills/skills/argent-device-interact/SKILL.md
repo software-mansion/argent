@@ -43,12 +43,13 @@ After an action moves you to a different screen, or whenever you don't know an e
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Any screen: app, system dialog, Home screen    | `describe`                                                                                                                     |
-| React Native component names, testIDs          | `debugger-component-tree`                                                                                                      |
 | App-scoped UIKit properties (iOS simulator)    | `native-describe-screen` (needs `bundleId`)                                                                                    |
 | What sits at a known raw point (iOS simulator) | `native-user-interactable-view-at-point` (the view that receives touch) or `native-view-at-point` (the visually deepest view)  |
 | Final visual fallback                          | `screenshot`, only when the tools above cannot expose the control. Do not derive routine in-app navigation targets from pixels |
 
 If `describe` returns an empty tree, follow its `hint`; with no hint, the screen is blank, loading or unlabeled: check the attached screenshot and retry once content has loaded.
+
+For a React Native testID or component name that `describe` does not show, use `debugger-component-tree`; take tap points from `describe`.
 
 **React Native:** LogBox toasts sit over the bottom of the screen and catch taps meant for what is under them. Argent hides them when a `debugger-*` tool connects and after `debugger-reload-metro`; after `restart-app`, call a `debugger-*` tool again. After any other reload they come back: close each by tapping the right end of its `describe` frame (the X), not its middle.
 

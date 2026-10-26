@@ -7,7 +7,7 @@ description: Compare saved or live app screenshots with the argent screenshot-di
 
 Use `screenshot-diff` as supporting visual evidence for UI QA and visual regression checks. It highlights pixel-visible change or stability; it does not replace visual inspection, accessibility/component-tree state, frame/attribute checks, logs, network evidence, or app behavior. Its description covers the input combinations, physical-iPhone captures and the result.
 
-Do not use screenshot diffing for tap-coordinate discovery. Use `describe`, `debugger-component-tree`, or `native-describe-screen` to find targets first.
+Do not use screenshot diffing for tap-coordinate discovery. Use `describe` or `native-describe-screen` to find targets first.
 
 ## 2. When To Use
 

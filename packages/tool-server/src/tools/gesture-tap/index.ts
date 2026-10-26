@@ -171,7 +171,7 @@ Set clickCount: 2 for a double-tap / double-click: the taps are dispatched as on
 Use when you need to tap a button, link, or any tappable element on the screen.
 Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP <flag:harmonyos>/ \`hdc\` </flag:harmonyos>is not reachable for the given device.
 On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
-Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native and RN-specific discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos>. More information in \`argent-device-interact\` skill`,
+Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\` (on an iOS simulator, also \`native-describe-screen\`); Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos>. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
   zodSchema,

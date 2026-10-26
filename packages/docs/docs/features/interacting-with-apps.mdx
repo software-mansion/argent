@@ -24,7 +24,6 @@ The agent uses the same tools on iOS, Android, TV and Chromium. Argent reads the
 The agent does not read coordinates from a screenshot. Before a tap, the agent has the elements on the screen with their roles, labels and positions. Each interaction tool returns these elements together with the screenshot. The agent reads the screen separately only before the first action on a new screen. The source depends on the app:
 
 - the accessibility tree on iOS, Android and TV,
-- the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
 After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.

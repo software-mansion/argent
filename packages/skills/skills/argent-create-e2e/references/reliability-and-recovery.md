@@ -27,7 +27,7 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 Work this gate as soon as capture warns that it kept a raw point or recorded a role-only selector. Keep the source screen available and do these checks:
 
 1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no YAML selector exists.
-2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
+2. **Other platforms:** use `describe`; for React Native on Android, also `debugger-component-tree`, for testIDs `describe` omits. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
 3. Test each candidate in a scratch fragment with `assert: { visible: <candidate> }` on the valid screen. Inspect every failure before trying a better id, label, app, or container.
 4. If source is available, inspect its `testID`, `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
 

@@ -22,13 +22,13 @@ Pass the same `device_id`, the id from `list-devices`, to every call. With two o
 | `debugger-connect`                                   | Connecting to the runtime's CDP (Metro on iOS / Android / Vega; the page session on Chromium)                          |
 | `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                             |
 | `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                  |
-| `debugger-component-tree`                            | What is on screen and where: component names, text and tap coordinates                                                 |
+| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
 | `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
 | `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
 | `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
 | `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request                                                        |
 
-A component missing from `debugger-component-tree`? `includeSkipped` only counts what was pruned, by name, and names no node; use `onScreenOnly: false` or `debugger-inspect-element` instead.
+A component missing from `debugger-component-tree`? `includeSkipped` only adds counts of what was pruned. Use `onScreenOnly: false` for one off screen, or `debugger-inspect-element` at its point for one on screen.
 
 ## 3. Rules and recovery
 

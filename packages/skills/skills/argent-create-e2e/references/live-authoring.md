@@ -77,8 +77,8 @@ Reach each screen through the app's UI. Do not replace tested navigation with `o
 
 For every action:
 
-1. **Discover without mutation.** Use `describe`, iOS native discovery, `debugger-component-tree`, or `screenshot`. Do not record discovery or `debugger-*` calls: `port` is not a device-bind key, so a recorded one replays against whatever Metro owns that port.
-2. **Choose a durable target.** Prefer a stable id, then stable text or an accessibility label. On iOS, use native discovery for ids that trimmed accessibility output omits.
+1. **Discover without mutation.** Use `describe`, iOS native discovery, or `screenshot`. Do not record discovery or `debugger-*` calls: `port` is not a device-bind key, so a recorded one replays against whatever Metro owns that port.
+2. **Choose a durable target.** Prefer a stable id, then stable text or an accessibility label. On iOS, use native discovery for ids that trimmed accessibility output omits; on Android React Native, `debugger-component-tree`.
 3. **Add an echo.** Name the current state, action, and expected outcome before the action can fail.
 4. **Execute through `e2e-add-step`.** Inspect the result and the `recorded` line immediately.
 5. **Verify immediately.** Record outcome checks when their states first appear. After navigation, prove identity then readiness: record the identity check live, and add the readiness gate during polish.

@@ -15,8 +15,7 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 
 1. **Baseline screenshot**: call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: get element coordinates from a discovery tool before tapping:
-   - **React Native apps**: `debugger-component-tree` returns component names with (tap: x,y) coordinates and is the preferred tool for RN apps on either platform. It can list a screen hidden under the visible one, so check its coordinates against `describe` before tapping. Set it up with the `argent-react-native-app-workflow` skill.
-   - **Standard app screens, in-app modals and system dialogs**: `describe`. Fall back to `screenshot` only if an overlay is not exposed reliably. When the app raises its own permission dialog, answer it here; that's the real flow under test. To take a prompt _out_ of the flow, use `argent-settings-permissions` during setup.
+   - **App screens (React Native included), in-app modals and system dialogs**: `describe`. Fall back to `screenshot` only if an overlay is not exposed reliably. When the app raises its own permission dialog, answer it here; that's the real flow under test. To take a prompt _out_ of the flow, use `argent-settings-permissions` during setup.
    - **Fallback**: use `screenshot` to estimate where the component is, then verify immediately after the action.
 3. **Interact**: perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...); you receive a screenshot automatically.
 4. **Verify**: check the returned screenshot. If it shows a loading/transitional state, block with `await-ui-element` (expected element `visible`, or a spinner `hidden`) rather than a guessed delay (its result carries the new screenshot and element tree), but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
@@ -44,8 +43,8 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 ## 3. Recovery Pattern
 
 - Screen mid-transition or loading: wait with `await-ui-element` as in step 4, then re-check. Fall back to a fixed wait + `screenshot` only when no element reliably marks the transition. Don't poll with repeated screenshots.
-- Tap misses the target: re-run discovery (`describe` / `debugger-component-tree`) and retry once with new coordinates. If it fails twice, stop and report that the element was not found.
-- Permission dialog or modal visible: re-run `describe` first. Stay in screenshot-driven navigation only while the overlay is not exposed reliably: tap one visible button at a time, verify with the returned screenshot, and switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
+- Tap misses the target: re-run `describe` and retry once with new coordinates. If it fails twice, stop and report that the element was not found.
+- Permission dialog or modal visible: re-run `describe` first. Stay in screenshot-driven navigation only while the overlay is not exposed reliably: tap one visible button at a time, verify with the returned screenshot, and switch back to `describe` as soon as it is dismissed.
 - A **saved e2e test** fails during `e2e-execute` replay (as opposed to the live steps above): follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure): classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full e2e test.
 
 **Record for replay**: if a tested flow is likely to be repeated, use the `argent-create-e2e` skill to record it as a `.yaml` test, so it can be replayed later with a single `e2e-execute` call.
