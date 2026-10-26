@@ -44,6 +44,8 @@ A screen capture uses CPU on the device. On a phone, it also raises the clock sp
   - On a physical device, a screenshot takes about 150 ms to 200 ms. It starts the capture for a short time.
   - Taps and swipes do not start the capture.
 
+When two or more devices use one Metro, Argent finds the device of the React profile from a line that the app writes to the device log. Argent reads this log on Android devices and iOS simulators. On other devices, Argent keeps the screenshot and the element tree after each interaction.
+
 When no profiler records, a screenshot does not wait for the screen capture.
 
 When the agent runs both profilers, the agent can also ask for a combined report. Argent aligns the native hangs with the React commits on the wall clock. Thus the report tells you which React commit caused which hang.
