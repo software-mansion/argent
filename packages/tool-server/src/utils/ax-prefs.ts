@@ -33,20 +33,15 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await accessibilityDefaults(udid, "write", "AutomationEnabled", "-bool", "true");
 }
 
-function isMissingDefault(err: unknown): boolean {
-  const stderr = (err as { stderr?: unknown }).stderr;
-  return typeof stderr === "string" && stderr.includes("does not exist");
-}
-
 /**
  * `AutomationEnabled` persists on the sim's disk and leaves Full Keyboard Access
  * unable to move focus, even across reboots. The iOS ax-service does not need
- * it, so remove it, including from sims an older argent wrote it to.
+ * it, so remove it, including from sims an older argent wrote it to. Best
+ * effort: `defaults delete` also fails when the key or the whole domain is
+ * absent, which is the state we want.
  */
 export async function clearAutomationEnabled(udid: string): Promise<void> {
-  await accessibilityDefaults(udid, "delete", "AutomationEnabled").catch((err: unknown) => {
-    if (!isMissingDefault(err)) throw err;
-  });
+  await accessibilityDefaults(udid, "delete", "AutomationEnabled").catch(() => undefined);
 }
 
 /**
@@ -59,7 +54,7 @@ export async function isEntitlementBypassActive(udid: string): Promise<boolean> 
   try {
     const { stdout } = await execFileAsync(
       "xcrun",
-      /** Same reasoning as {@linkcode ensureAutomationEnabled}. */
+      /** Same reasoning as {@linkcode accessibilityDefaults}. */
       await simctlArgsForUdid(
         udid,
         [

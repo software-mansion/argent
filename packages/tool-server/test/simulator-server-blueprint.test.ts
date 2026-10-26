@@ -23,7 +23,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-vi.mock("../src/blueprints/ax-service", () => ({
+vi.mock("../src/utils/ax-prefs", () => ({
   clearAutomationEnabled: (...args: unknown[]) => clearAutomationEnabledMock(...args),
 }));
 

@@ -608,9 +608,8 @@ export const remoteIosHost: IosHost = {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
   },
-  // The same accessibility `defaults write`s the local host performs, routed
-  // through the remote generic spawn. The entitlement-bypass plist is assumed
-  // active on cloud sims.
+  // Accessibility `defaults write`s routed through the remote generic spawn.
+  // The entitlement-bypass plist is assumed active on cloud sims.
   async bootstrapAx(udid) {
     for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
       await simRemoteSpawn(udid, {

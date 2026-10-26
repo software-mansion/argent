@@ -60,7 +60,7 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("../src/blueprints/ax-service", () => ({
+vi.mock("../src/utils/ax-prefs", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
   clearAutomationEnabled: (...args: unknown[]) => clearAutomationEnabledMock(...args),
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
@@ -697,6 +697,22 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: TV_UDID });
 
     expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+  });
+
+  it("leaves AutomationEnabled in place on a tvOS sim, where tv-control writes it", async () => {
+    listIosSimulatorsMock.mockResolvedValueOnce([
+      { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
+    ]);
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: TV_UDID });
+
+    expect(clearAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
   it("disposes the cached TvControl service on a tvOS force reboot", async () => {

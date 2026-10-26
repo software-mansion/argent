@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -44,6 +44,10 @@ beforeEach(() => {
   nextError = null;
 });
 
+afterAll(() => {
+  fs.rmSync(deviceSetDir, { recursive: true, force: true });
+});
+
 describe("AutomationEnabled, which leaves Full Keyboard Access unable to move focus", () => {
   it("clearAutomationEnabled deletes the pref inside the simulator", async () => {
     await clearAutomationEnabled("UDID-1");
@@ -64,18 +68,14 @@ describe("AutomationEnabled, which leaves Full Keyboard Access unable to move fo
     ]);
   });
 
-  it("clearAutomationEnabled treats an absent pref as already cleared", async () => {
-    nextError = defaultsError(
-      "The domain/default pair of (com.apple.Accessibility, AutomationEnabled) does not exist"
-    );
+  it.each([
+    "Key AutomationEnabled does not exist in domain com.apple.Accessibility; leaving defaults unchanged",
+    "Domain 'com.apple.Accessibility' not found.",
+    "Invalid device: UDID-2",
+  ])("clearAutomationEnabled never fails the caller (%s)", async (stderr) => {
+    nextError = defaultsError(stderr);
 
     await expect(clearAutomationEnabled("UDID-2")).resolves.toBeUndefined();
-  });
-
-  it("clearAutomationEnabled still reports a failed spawn", async () => {
-    nextError = defaultsError("Invalid device: UDID-3");
-
-    await expect(clearAutomationEnabled("UDID-3")).rejects.toThrow("Command failed");
   });
 
   it("setAccessibilityPrefsPreBoot never writes AutomationEnabled", async () => {
