@@ -15,7 +15,7 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 
 1. **Baseline screenshot**: call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: get element coordinates from a discovery tool before tapping:
-   - **React Native apps**: `debugger-component-tree` returns component names with (tap: x,y) coordinates and is the preferred tool for RN apps on either platform. Set it up with the `argent-react-native-app-workflow` skill; on Android also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
+   - **React Native apps**: `debugger-component-tree` returns component names with (tap: x,y) coordinates and is the preferred tool for RN apps on either platform. It can list a screen hidden under the visible one, so check its coordinates against `describe` before tapping. Set it up with the `argent-react-native-app-workflow` skill.
    - **Standard app screens, in-app modals and system dialogs**: `describe`. Fall back to `screenshot` only if an overlay is not exposed reliably. When the app raises its own permission dialog, answer it here; that's the real flow under test. To take a prompt _out_ of the flow, use `argent-settings-permissions` during setup.
    - **Fallback**: use `screenshot` to estimate where the component is, then verify immediately after the action.
 3. **Interact**: perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...); you receive a screenshot automatically.

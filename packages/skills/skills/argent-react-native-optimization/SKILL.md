@@ -9,7 +9,7 @@ description: Optimizes a React Native app by profiling first to find real bottle
 - **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
 - **Verify before fixing:** recollect the evidence and conclude whether the fix is worth undertaking. Validate a fix with `debugger-evaluate` before committing it.
 - **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped; re-profile once after the batch. When the measurement involves device interaction, record it as an e2e test (`argent-create-e2e` skill) before the first run so every cycle replays identical steps.
-- **React Compiler**: if the profiler report shows React Compiler enabled, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed the compiler bailed out on that component (`react-profiler-fiber-tree` shows no `useMemoCache`).
+- **React Compiler**: if the project uses it (`babel-plugin-react-compiler` in the Babel config, or `experiments.reactCompiler: true` in the Expo config), skip memoization fixes (`React.memo`, `useMemo`, `useCallback`, hoisting inline objects and functions) in every phase; the compiler does them. Where the profiler report marks a component ⚠️ (bailout suspected), fix what stops the compiler.
 - **Sub-agents**: Phases 1–2 dispatch sub-agents: one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the device - all profiling and E2E verification must happen in the main agent.
 
 ## Pipeline
@@ -39,10 +39,10 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 
 ### Phase 3: Profiling
 
-1. For a quick look, `react-profiler-renders` gives a live render-count table without a session.
+1. For a quick look without a session, `react-profiler-renders` lists how many instances of each component are mounted (not how often they re-render).
 2. Load the `argent-react-native-profiler` skill and follow its workflow (React and native profiling together) on the key user flows: the screens the user named, or all major flows. It covers analysis, drill-down, and re-profiling after each fix.
 3. Cross-reference the profiling results with the Phase 1–2 findings, and fix the highest-impact issues top-down. Re-profile after architectural changes; batch mechanical fixes.
 
 ### Phase 4: Verify no regressions
 
-Navigate every screen and UI flow within scope (the entire app if no scope was given, via `argent-device-interact`) and confirm each renders without errors. Check `debugger-log-registry` for runtime errors (`Grep` its log file) and take screenshots to catch red/yellow error screens. Look for regressions the fixes introduced (e.g. fewer re-renders but higher CPU, or new jank on a different screen). Main agent only.
+Navigate every screen and UI flow within scope (the entire app if no scope was given, via `argent-device-interact`) and confirm each renders without errors. Check `debugger-log-registry` for warnings and errors (`Grep` its log file). Argent hides LogBox toasts once a `debugger-*` tool connects, so screenshots catch only full-screen red errors. Look for regressions the fixes introduced (e.g. fewer re-renders but higher CPU, or new jank on a different screen). Main agent only.

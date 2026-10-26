@@ -458,7 +458,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
         `ARGENT_IOS_CAPTURE="${reason.rawValue}" forces the "${reason.strategyName}" capture ` +
         `strategy, which attaches host-wide and cannot \`--launch\` a cold start. Unset ` +
         `ARGENT_IOS_CAPTURE (or set it to "device") to use malloc_stack_logging, or re-run without ` +
-        `malloc_stack_logging (leaks are still detected, just unattributed).`,
+        `malloc_stack_logging (that capture records CPU and hangs, but no leak data).`,
       {
         error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE,
         failure_stage: "native_profiler_start_malloc_capability",
@@ -472,8 +472,8 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
   return new FailureError(
     `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but ` +
       `${versionNote} has the --device recording-start deadlock (Xcode 26.4 and later), so it would ` +
-      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
-      `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
+      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging for ` +
+      `CPU and hang data only (this Xcode records no leak data), profile on Xcode 26.3 or older, or set ` +
       `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
     {
       error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE,

@@ -9,7 +9,7 @@ Load `argent-create-e2e` as the authoring engine. Follow its required references
 
 **Vega** supports every item below: `launch: { vega: ... }`, `await:`/`assert:` selectors, `snapshot:`, and `idle` all run there. Only the touch directives are missing, because Vega is remote-driven. Navigate with recorded `tool: tv-remote` steps and type with `tool: keyboard`, which leaves item 5 with nothing to govern. A D-pad path is relative to where focus already is, so gate every move with item 4's identity check rather than assuming the cursor landed. Read `argent-tv-interact` for focus reading and remote navigation.
 
-**Apple TV and Android TV are out of scope.** The runner does not reject touch directives there, so they fail at the gesture layer instead of with authoring guidance. Use `argent-tv-interact` and report the limitation.
+**Apple TV and Android TV are out of scope.** The runner does not reject touch directives there: on Apple TV they fail at the gesture layer, and on Android TV a `tap:` can pass without doing anything. Use `argent-tv-interact` and report the limitation.
 
 **Physical iPhones** run QA e2e tests under the hardware limits listed in `argent-create-e2e`. Drive the app's own zoom UI instead of `pinch`/`rotate`, and expect a selector authored on a simulator to miss on the phone's `describe`-based runner tree.
 

@@ -159,7 +159,7 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible, including
 system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
-covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
+covers only the app registered by launch-app. On Android, reads the tree through Argent's UiAutomation helper, falling back to \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol: every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries

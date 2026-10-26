@@ -5,7 +5,7 @@ description: Set up and connect to an iOS simulator using argent MCP tools. Use 
 
 ## 1. Setup Steps
 
-1. **Find a booted simulator.** Use `list-devices`. Filter for entries with `platform: "ios"` and skip any with `kind: "device"` (a physical iPhone, never a simulator target): booted simulators are listed first. If none are booted, call `boot-device` with `udid: <chosen UDID>`.
+1. **Find a booted simulator.** Use `list-devices`. Filter for entries with `platform: "ios"` and skip `kind: "device"` (a physical iPhone) and `runtimeKind: "tv"` (an Apple TV): booted simulators are listed first. If none are booted, call `boot-device` with `udid: <chosen UDID>`.
 2. **No connect step.** Interaction tools (`gesture-tap`, `describe`, `screenshot`, …) auto-start the simulator server on first use.
 
 ## 2. Notes

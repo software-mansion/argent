@@ -7,7 +7,7 @@ See [fix-reference.md](fix-reference.md) for concrete fix patterns per finding.
 
 ### Memoization
 
-Check every exported function component: is it rendered in a list, a frequently-updating parent, or a context consumer? If yes and props are stable, wrap in `React.memo`. Check context providers for unstable `value` props. Skip `React.memo` if React Compiler is active.
+Check every exported function component: is it rendered in a list, a frequently-updating parent, or a context consumer? If yes and props are stable, wrap in `React.memo`. Check context providers for unstable `value` props. If React Compiler is active, skip this item.
 
 ### List rendering
 
@@ -27,7 +27,7 @@ Check all `useEffect` hooks that create timers, listeners, or subscriptions. Ver
 
 ### State hygiene
 
-Check for unused state (set but never rendered), unbounded state growth (arrays/objects that grow without cap), and derived state that should be computed with `useMemo` instead.
+Check for unused state (set but never rendered), unbounded state growth (arrays/objects that grow without cap), and derived state that should be computed during render instead.
 
 ### Monolithic context
 

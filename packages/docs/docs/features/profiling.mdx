@@ -84,5 +84,6 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 - One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
 - A component that unmounts before the session stops can lose its name in the report. The report shows the duration of this work under "unattributed".
 - The memory leak data is available on iOS only. On Android, Argent reports memory growth as a weak signal.
+- On iOS, the memory leak data needs Xcode 26.3 or older. Newer Xcode versions record no leak data.
 
 Argent does this with the `react-profiler-*`, `native-profiler-*` and `profiler-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

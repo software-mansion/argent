@@ -15,8 +15,8 @@ Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Prof
 - `react-profiler-analyze`: turn the recording into a ranked report: hot commits with the JS functions that ran during each.
 - `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. A debugger drop also ends the recording; check status before stopping or restarting.
 - `react-profiler-component-source`: source, location and memoization status of a component the report flagged.
-- `react-profiler-renders`: live render counts and durations per component, no session needed. A quick look before a full profile.
-- `react-profiler-fiber-tree`: live component hierarchy, no session needed. Traces ancestry, or checks `useMemoCache` (see the React Compiler rule in Step 8).
+- `react-profiler-renders`: how many instances of each component are mounted in the top 30 levels of the tree, with their last render time; no session needed. It does not count re-renders: record a profile for that.
+- `react-profiler-fiber-tree`: live component hierarchy, no session needed, for tracing a component's ancestry.
 
 ### Drill-down queries (after analyze)
 
@@ -46,8 +46,6 @@ Start the profilers as described in §2. **Save `startedAtEpochMs` from the resp
 
 - If the user asked you to profile, drive the interaction yourself (`argent-device-interact` skill).
 - If the user wants to interact themselves, suggest what to do (e.g. "scroll the list", "switch tabs") and wait for their reply.
-
-If the start reports a session owned by another agent: when it is marked stale, you may take it over without asking; otherwise **stop and ask the user** before terminating it, explaining the situation.
 
 While a profiler records, interaction tools return no automatic screenshot or element tree, so the capture does not load the app. Call `screenshot` or `describe` when you need to see the screen; interaction tools still wait for the screen to settle before they return, so add no wait of your own; on an Android emulator each screenshot during a profile takes one frame in about 100 ms and does not wake the screen capture; on a physical Android device it takes about 150–200 ms and briefly wakes the device screen capture, so take them sparingly there.
 
@@ -96,7 +94,7 @@ If the interaction was recorded as an e2e test, replay it with `e2e-execute` ins
 
 If the user does not want changes, present the report and suggest the fix without applying it.
 
-**React Compiler rule:** if the report shows React Compiler enabled, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed the compiler bailed out on that component (`react-profiler-fiber-tree` shows no `useMemoCache` on it).
+**React Compiler rule:** do NOT propose `useCallback`/`useMemo`/`React.memo` for a component the report marks ✓ (compiled). For a component in your source marked ⚠️ (bailout suspected), fix what stops the compiler instead.
 
 ## 4. Caveats
 

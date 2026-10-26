@@ -9,7 +9,7 @@ Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject i
 
 ### 1.1 Read the project's configuration first
 
-**Before running commands**, read the project's build and run setup: every `package.json` script (custom scripts such as `start:local`, `start:dev`, `ios`, `build:ios` or flavors take priority over the defaults) and `metro.config.js` (a non-default port or `watchFolders`). Do NOT default to `npx react-native start` or `npx react-native run-ios` without checking. Before the first build, install dependencies if `node_modules` or `ios/Pods` is missing.
+**Before running commands**, read the project's build and run setup: every `package.json` script (custom scripts such as `start:local`, `start:dev`, `ios`, `build:ios` or flavors take priority over the defaults) and `metro.config.js` (a non-default port or `watchFolders`). Do NOT default to `npx react-native …` or `npx expo …` without checking. Before the first build, install dependencies if `node_modules` or `ios/Pods` is missing.
 
 **If the project structure is convoluted, ask the user before proceeding.**
 
@@ -18,7 +18,7 @@ Once you know how the project starts Metro, builds and runs the app, and what en
 ### 1.2 Start Metro
 
 1. If Metro is already running on the project's port, do not start another (§2).
-2. Start it in the background with the project's start script (e.g. `npm run start:local`, `yarn start:dev`), or `npx react-native start` when there is none.
+2. Start it in the background with the project's start script (e.g. `npm run start:local`, `yarn start:dev`). With none: `npx expo start` in an Expo project, `npx react-native start` otherwise.
 3. Verify with `debugger-status`: `status: "connected"` or `reason: "no_app_connected"` both mean Metro is up (the app just hasn't attached yet); `reason: "metro_not_running"` means Metro is not reachable.
 
 ### 1.3 Run the App
@@ -28,11 +28,11 @@ Start the app only once Metro is ready, from the project root. Use the project's
 **Pass the target device explicitly**, taken from `list-devices`: use the platform the user named, and do not pick a cabled physical phone just because it is listed. If the device isn't booted yet, boot it with `boot-device` (see `argent-ios-simulator-setup` / `argent-android-emulator-setup`).
 
 ```bash
-npx react-native run-ios --simulator="<name>"        # iOS (or --udid <UDID>)
-npx react-native run-android --deviceId=<adb-serial> # Android
+npx expo run:ios --device <UDID>                     # Expo
+npx expo run:android --device <avdName from list-devices>
+npx react-native run-ios --udid <UDID>               # bare RN (needs @react-native-community/cli)
+npx react-native run-android --deviceId=<adb-serial>
 ```
-
-**Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops. If `list-devices` returns a `hint` about the adb server, prefix this and every other `adb` command that you run yourself, as the hint shows.
 
 ---
 
@@ -60,12 +60,12 @@ When a build fails (e.g. xcodebuild exit code 65), try the simplest fix first: c
 
 ## 4. Runtime Problems in the App
 
-| Problem type                      | Where to look                                                                                              |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | `debugger-log-registry` for a summary and the log file path, then `Grep` the file                          |
-| **React component hierarchy**     | `debugger-component-tree`, or `debugger-inspect-element` at logical pixel coordinates (not normalized 0-1) |
-| **App state**                     | `debugger-evaluate` to run JavaScript in the app's runtime                                                 |
-| **Native crashes / native stack** | `npx react-native log-ios` / `npx react-native log-android`, or `adb -s <serial> logcat`                   |
+| Problem type                      | Where to look                                                                                                    |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **JavaScript errors / logs**      | `debugger-log-registry` for a summary and the log file path, then `Grep` the file                                |
+| **React component hierarchy**     | `debugger-component-tree`, or `debugger-inspect-element` at logical pixel coordinates (not normalized 0-1)       |
+| **App state**                     | `debugger-evaluate` to run JavaScript in the app's runtime                                                       |
+| **Native crashes / native stack** | iOS: `~/Library/Logs/DiagnosticReports/`. Android: `adb -s <serial> logcat -d`, with `-b crash` for crashes only |
 
 For connection failures, component inspection and searching the console log file, use the `argent-metro-debugger` skill.
 

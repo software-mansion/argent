@@ -1,7 +1,8 @@
 # Phase 1: Lint Rules
 
 Run once at the project root. Catches mechanical issues deterministically.
-Install missing plugins before running: `npm install --save-dev eslint-plugin-react-perf`.
+Install missing plugins before running. They support ESLint 9 at most (`eslint-plugin-react-native` crashes on 10), so on an ESLint 10 project install them with `--legacy-peer-deps` and run `npx eslint@9`.
+With React Compiler active, leave out the react-perf rules, `react/jsx-no-bind` and `react-native/no-inline-styles`: the compiler handles what they flag.
 
 ## Rules
 
@@ -48,6 +49,6 @@ Install missing plugins before running: `npm install --save-dev eslint-plugin-re
 
 ## Procedure
 
-1. If the project has an ESLint config, extend it with the missing rules above; otherwise create a temporary `.eslintrc.json` with all of them.
+1. If the project has an ESLint config, extend it with the missing rules above; otherwise create a temporary flat config, `eslint.config.mjs`, with all of them.
 2. Run: `npx eslint --format json <src_dir>`; replace `<src_dir>` with the project's JS/TS source root (check `package.json` scripts or look for `src/`, `app/`, `lib/`)
 3. Parse output into: `file:line -> rule -> message`.

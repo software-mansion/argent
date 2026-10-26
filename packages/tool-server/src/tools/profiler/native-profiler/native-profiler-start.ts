@@ -37,8 +37,8 @@ const zodSchema = z.object({
     .describe(
       "iOS-only. When true, cold-launches the app under the profiler with Malloc Stack Logging " +
         "enabled so memory leaks carry an allocation backtrace (responsible frame + library). " +
-        "Without it, leaks are still detected but unattributable: Instruments reports " +
-        "'<Call stack limit reached>'. Trade-offs: this RESTARTS the app (current state is lost), " +
+        "Without it, leaks carry no backtrace (Instruments reports '<Call stack limit reached>'), and " +
+        "on Xcode 26.4 and later no leak data is recorded at all. Trade-offs: this RESTARTS the app (current state is lost), " +
         "adds memory/CPU overhead, and makes the app noticeably slow to launch (every startup " +
         "allocation records a backtrace), so leave it off for pure CPU/hang profiling. Requires a " +
         "non-degraded Xcode: on Xcode 26.4 and later the cold-launch path is broken, so the call is " +
@@ -69,7 +69,7 @@ export const nativeProfilerStartTool: ToolDefinition<
       `Failed to start native profiler: ${failureSignal.error_code}`,
   },
   capability,
-  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: Perfetto (CPU, jank, RSS-growth weak signal).
+  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory leaks; leak data needs Xcode 26.3 or older). Android: Perfetto (CPU, jank, RSS-growth weak signal).
 Auto-detects the running app process unless app_process is explicitly provided.
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.

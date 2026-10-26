@@ -5,4 +5,4 @@ Read this for a device `list-devices` marks `foldable: true`: a foldable iOS sim
 - Keep one screenshot-diff baseline per posture: the screenshot size changes with the panel.
 - Fold between gestures, not during one. A gesture stays on the panel where it started.
 - iOS: if argent cannot find the active panel, it uses the cover panel and sets `warning` (a screenshot-diff summary gets a `panel:` line). Take a screenshot to see what the device shows, then do the check the warning names.
-- Android: a closed generic foldable AVD shows only the left part of the display, so argent can reliably tap only an element that covers that part, such as a full-width row. Use a Pixel Fold AVD to test the cover panel.
+- Android: on a closed generic foldable AVD, tap only full-width rows; test the cover panel on a Pixel Fold AVD.

@@ -1,15 +1,15 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
+description: Interact with an iOS simulator or iPhone, Android emulator or phone, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
 ---
 
 Each tool's own description carries its parameters, defaults, return shape and examples. This skill covers choosing between tools and the gotchas those descriptions don't state.
 
 ## 1. Before You Start
 
-- Get a target id from `list-devices`; if none is ready, `boot-device` one. Full setup flow: `argent-ios-simulator-setup` / `argent-android-emulator-setup`. The same tool names drive iOS, Android and Chromium; each takes the `udid` from `list-devices`.
+- Get a target id from `list-devices`; if none is ready, `boot-device` one. Full setup flow: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`. The same tool names drive iOS, Android and Chromium; each takes the `udid` from `list-devices`.
 - Read the matching reference before driving these targets: `references/chromium.md` for a `chromium` target, `references/harmonyos.md` for a `harmony` target, `references/foldables.md` for a device `list-devices` marks `foldable: true` (or before calling `fold`).
-- Tools that are not loaded upfront (e.g. `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred: load their schema with ToolSearch before the first call, or numeric parameters can be sent as strings and fail validation.
+- Load a deferred tool's schema with ToolSearch before its first call (e.g. `gesture-pinch`, `gesture-rotate`, `gesture-custom`); without it, numbers go out as strings and fail validation.
 - If you delegate device tasks to sub-agents, make sure they have MCP permissions.
 
 ## 2. Choosing the Right Tool
@@ -48,13 +48,9 @@ After an action moves you to a different screen, or whenever you don't know an e
 | What sits at a known raw point (iOS simulator) | `native-user-interactable-view-at-point` (the view that receives touch) or `native-view-at-point` (the visually deepest view)  |
 | Final visual fallback                          | `screenshot`, only when the tools above cannot expose the control. Do not derive routine in-app navigation targets from pixels |
 
-If `describe` fails, act on the error:
+If `describe` returns an empty tree, follow its `hint`; with no hint, the screen is blank, loading or unlabeled: check the attached screenshot and retry once content has loaded.
 
-- `ax-service` not available, or daemon startup failure: check that the simulator is booted. Meanwhile use `screenshot`, or `native-describe-screen` if the app has native devtools injected.
-- Empty element list: the screen may be blank, loading, or unlabeled. Check with `screenshot`, then retry once the content has loaded.
-- Not detailed enough for a React Native app: use `debugger-component-tree`.
-
-**React Native:** before tapping near the bottom of the screen, close any "Open Debugger to View Warnings" banner with its X. Tapping the banner itself breaks the debugger connection.
+**React Native:** LogBox toasts sit over the bottom of the screen and catch taps meant for what is under them. Argent hides them when a `debugger-*` tool connects and after `debugger-reload-metro`; after `restart-app`, call a `debugger-*` tool again. After any other reload they come back: close each by tapping the right end of its `describe` frame (the X), not its middle.
 
 **System and permission dialogs:** `describe` returns a visible dialog's buttons with tap coordinates; keep using it for in-app modals too. Fall back to `screenshot` only if it does not expose the controls: then tap one obvious button (`Allow`, `OK`, `Don't Allow`, `Not Now`, `Continue`) at a time, check the returned screenshot, and go back to `describe` once the dialog is gone.
 
@@ -87,9 +83,7 @@ Gate a step that depends on a screen transition with an `await-ui-element` step 
 - Tap the field first. Typing or pasting with no focused field is a silent no-op.
 - **React Native: the first tap after typing may only close the keyboard.** Inside a scroll view with the default `keyboardShouldPersistTaps="never"`, React Native uses a tap outside the focused field to dismiss the keyboard and does not pass it on (with `"handled"` or `"always"` the tap reaches the button), so a button tapped right after typing may need a second tap; check the returned tree. When the field submits on return, `{ "key": "enter" }` avoids the extra tap.
 - `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry. Use `paste` only where a real user would paste: a 2FA / OTP code from another app, a long link or token, or testing how the app handles pasted input. That it can carry text `keyboard` can't type on a platform (multi-line text, non-ASCII on Android) is not a reason on its own.
-- **Credentials:** put a `{{secret:<NAME>}}` placeholder in `text` (`keyboard`, `paste`, `run-sequence` keyboard steps, e2e `type` steps). `keyboard`'s description lists where the value is read from. Then:
-  - Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret: submit or navigate away first, then verify the resulting screen. Keep the text step and the `enter` step in **one `run-sequence`**; a second bare `keyboard` call gets its own screenshot of the filled field.
-  - An unknown name fails with the available names and every source it looked in; read that before asking the user anything. Never ask for the value in the conversation: ask the user to add it to a secrets file. Project files are found by walking up from the tool-server's working directory; `~/.argent/secrets.env` always applies.
+- **Credentials:** type them as a `{{secret:<NAME>}}` placeholder in `text` (`keyboard`, `paste`, `run-sequence` keyboard steps, e2e `type` steps), never as plaintext, and never ask the user for the value. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret: submit or navigate away first, then verify the resulting screen.
 
 ## 7. Screenshots
 
@@ -101,5 +95,4 @@ If `screenshot` times out, restart the device transport with `stop-simulator-ser
 
 ## 8. Android notes
 
-- **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` before the RN app starts, or Metro won't be reachable from the device. Re-run it if the device restarts. See `argent-metro-debugger`.
 - **First-launch permission prompts**: `reinstall-app` on Android installs with `-g`, so runtime permissions are pre-granted on first launch.

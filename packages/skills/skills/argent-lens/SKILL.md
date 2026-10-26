@@ -3,11 +3,11 @@ name: argent-lens
 description: Propose multiple visual design variants for on-screen elements and let the human pick in the Argent Lens window. Use when the user asks for design alternatives / options / A-B choices for a screen or component, or any time you have produced more than one candidate look for an element and want a human decision before committing.
 ---
 
-> **Prerequisite: feature flag.** This workflow is gated behind the `argent-lens` flag (off by default). Run `argent enable argent-lens` once before using it. If `propose_variant` / `await_user_selection` come back not-found, the flag is off; enable it and retry.
+> **Prerequisite: feature flag.** This workflow is gated behind the `argent-lens` flag (off by default). Run `argent enable argent-lens` once before using it. If `propose_variant` comes back not-found, the flag is off; enable it and retry.
 
 ## 1. Overview
 
-You implement several candidate designs, capture each one running on the device, and stage them with `propose_variant` (non-blocking, once per variant). The Argent Lens window opens on its own and shows each element as a card beside the live device stream; the human picks per element, may pin comments, and presses **Complete selection**. `await_user_selection` is the single blocking call that returns their decision. Both tools' descriptions cover their parameters and return shapes.
+You implement several candidate designs, capture each one running on the device, and stage them with `propose_variant` (non-blocking, once per variant). The Argent Lens window opens on its own and shows each element as a card beside the live device stream; the human picks per element, may pin comments, and presses **Complete**. `await_user_selection` is the single blocking call that returns their decision. Both tools' descriptions cover their parameters and return shapes.
 
 Resolve a simulator/emulator first (`argent-ios-simulator-setup` / `argent-android-emulator-setup`) and, for React Native, `argent-react-native-app-workflow` to run the app and reload the bundle.
 
@@ -32,7 +32,7 @@ For each element, run `describe` (or `debugger-component-tree` for RN) on its sc
 
 ### Step 3: Await the human's decision
 
-After every variant for every element is staged, call `await_user_selection` once. A `pending` result is normal: the proposals stay live, call it again.
+After every variant for every element is staged, call `await_user_selection` once. A `pending` result is normal: the proposals stay live, call it again. In an `argent lens` session that tool is hidden: end your turn instead, and the user's choice arrives as a message.
 
 ### Step 4: Apply the outcome
 

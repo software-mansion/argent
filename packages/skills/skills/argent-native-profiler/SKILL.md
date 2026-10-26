@@ -9,7 +9,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 - `profiler-stack-query`: drill into the analyzed data (hang stacks, function callers, thread breakdown, leaks).
 - `profiler-load`: reload an earlier session from disk.
 
-**iOS** (Instruments via `xctrace`): simulator only; a physical iPhone is not supported. Needs the Xcode command-line tools (`xcrun xctrace version`). Reports CPU hotspots, UI hangs, and memory leaks.
+**iOS** (Instruments via `xctrace`): simulator only; a physical iPhone is not supported. Needs full Xcode (`xcrun xctrace version`). Reports CPU hotspots and UI hangs. Memory leaks need Xcode 26.3 or older: on newer Xcode, Argent records with Time Profiler, which has no leak data.
 
 **Android** (Perfetto): emulator or physical device. Reports CPU hotspots and UI hangs (with jank reasons and the main thread's blocking function), plus an RSS-growth signal for memory pressure: treat it as a hint to confirm, not a confirmed leak. The app must be debuggable or declare `<profileable android:shell="true"/>` in its manifest, or no `perf_sample` callstacks are captured.
 
@@ -30,7 +30,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 
 - **Hang** → mode `hang_stacks` for the native call chain → `function_callers` for the suspected function → read the native source.
 - **CPU hotspot** → `thread_breakdown` for the per-thread split → `function_callers` for the dominant function.
-- **Memory leak** (iOS) → `leak_stacks`, filtered by `object_type`, for the responsible frames and libraries. Leaks reported as unattributed (`<Call stack limit reached>`) are usually benign system allocations. When you do need attribution, re-run `native-profiler-start` with `malloc_stack_logging: true`; it restarts the app and adds overhead, so not for CPU or hang passes.
+- **Memory leak** (iOS, Xcode 26.3 or older) → `leak_stacks`, filtered by `object_type`, for the responsible frames and libraries. To attribute leaks shown as `<Call stack limit reached>`, re-run `native-profiler-start` with `malloc_stack_logging: true`; it restarts the app and adds overhead, so not for CPU or hang passes.
 
 ## 3. Caveats
 

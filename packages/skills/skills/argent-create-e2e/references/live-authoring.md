@@ -33,7 +33,7 @@ Obey these lifecycle rules:
 2. Treat `e2e-start-recording` as destructive. It truncates the named YAML even when it holds a finished or committed test. `restarted` reports only a displaced live take.
 3. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. A call that returns normally while reporting an unmet condition **does** append the step; `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `flowFile` regardless.
-5. Edit or reorder the YAML only after `e2e-finish-recording`. Over a link, also to 127.0.0.1, the next recorded step overwrites your edit; without one, an edit that renumbers steps drops the warnings the finish would report.
+5. Edit or reorder the YAML only after `e2e-finish-recording`.
 
 ## Start in the correct order
 
@@ -63,7 +63,7 @@ steps:
         args: ["--enable-feature-flag"]
 ```
 
-The path is relative to `.argent/e2e/`. Copy the live boot arguments verbatim, and omit `args` when the boot passed none. This packaging exception represents the boot already exercised live. It does not permit a rehearsed UI path.
+A relative path resolves from the folder of the test being run. Copy the live boot arguments verbatim, and omit `args` when the boot passed none. This packaging exception represents the boot already exercised live. It does not permit a rehearsed UI path.
 
 ### Fragments
 
@@ -103,10 +103,10 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 ### Taps
 
-`e2e-add-step` cannot receive a YAML selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap, because only two of them warn. It names the derived form (a selector map, or the kept point):
+`e2e-add-step` cannot receive a YAML selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap. It names the derived form (a selector map, or the kept point):
 
 1. **`tap: { id: ... }` or `tap: { text: ... }`**: the good case.
-2. **`tap: { role: ... }`, appended with no warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.
+2. **`tap: { role: ... }`, with a warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.
 3. **A kept raw point**, with a warning naming the reason and the retarget.
 
 Treat outcomes 2 and 3 alike. Restore the source screen with direct MCP calls, record a corrected tap, then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate).
@@ -119,7 +119,7 @@ Record the focus tap, then record `keyboard` with `text`. To submit, record a se
 
 **Never `describe` or `screenshot` a non-secure field you just filled from `{{secret:…}}`.** Only a password field is redacted; a plain text input hands the resolved value back into your context, and an API key or token typed into one is the ordinary case. Submit or navigate away first, then verify the resulting screen.
 
-**`describe` reports focus on Chromium only.** iOS and Android leave it unset (it is a Vega/D-pad signal there), so those platforms have no live pre-typing focus check, and the value check afterwards is what proves the keys landed. On Chromium, read `focused` before recording `keyboard`.
+**`describe` marks the field being typed into as `focused` on Chromium and the iOS simulator.** There, read it before recording `keyboard`. Elsewhere, the value check afterwards is what proves the keys landed.
 
 If characters are lost, restore the field with direct calls. Do not record a duplicate typing step. Polish the valid pair into `type:`. Its replay focus wait reads the runner's own tree, which does report focus on iOS, Android, and Chromium, but an unconfirmed poll falls through to typing rather than failing, so retain the committed-value check. Store credentials as `{{secret:NAME}}`. Never record a literal credential.
 
@@ -135,23 +135,11 @@ For every retained raw gesture, add an echo and a recorded result check.
 
 ### Live waits and checks
 
-Record `await-ui-element` through `e2e-add-step`. The recorder writes the step even when `toolResult.success` is false, so act on its `cause`:
-
-- `unmet`: Restore the expected state or correct the selector or timeout. Record the check again, then delete the failed step after `e2e-finish-recording`.
-- `unreadable`: Restore the tree source and record the check again. Keep the failed step: the condition is unknown, not false.
-- `cancelled`: Record the check again. Keep the failed step: the condition is unknown, not false.
-
-Never delete a step during the recording.
+Record `await-ui-element` through `e2e-add-step`. The recorder writes the step even when `toolResult.success` is false, and its warning names the cause and what to do. Delete a failed wait only when the cause is `unmet`, after `e2e-finish-recording`; never during the recording.
 
 A stale `hidden` whose selector matches nothing replays as a silent pass: the unfalsifiable gate that [Record absence in three steps](#record-absence-in-three-steps) exists to prevent. Never proceed as though the gate passed.
 
-A wait inside a recorded `run-sequence` gets no recorder warning, so inspect the nested result: any `success: false` there fails the sequence during replay.
-
-The live tool and e2e runner use [different trees](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree:
-
-- No warning: The condition holds on both trees.
-- Mismatch: For `text`, first rule out a selector that matches more than one element. Then rule out a changed screen. If the trees really differ, keep the raw `await-ui-element` step: it replays on the tree it passed on.
-- Unreadable, slow, or cancelled check: The conversion is unknown. Restore the source or re-record before conversion.
+The live tool and e2e runner use [different trees](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree and warns when it does not hold there or could not be checked; the warning says what to rule out. If the trees really differ, keep the raw `await-ui-element` step: it replays on the tree it passed on.
 
 A warning does not reject the step. If `e2e-finish-recording` reports dropped warnings, record those waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs`, `bundleId`, or a cross-tree mismatch.
 
@@ -240,7 +228,7 @@ The condition grep matches a condition key with a scalar after it (`visible: Sav
 Resolve every hit and confirm:
 
 - Every element action uses a stable selector unless the fallback gate cleared and documented it.
-- **No `role:` stands as the only key under a `tap:`/`long-press:`.** That is the recorder's silent fallback, which warned about nothing. Replace it, or clear it through the fallback gate. A `role:` beside another field or a scope (`within`, `after`, `next`) is deliberate and needs no defence.
+- **No `role:` stands as the only key under a `tap:`/`long-press:`.** It comes from the recorder's last-resort fallback or a hand edit. Replace it, or clear it through the fallback gate. A `role:` beside another field or a scope (`within`, `after`, `next`) is deliberate and needs no defence.
 - Every element-seeking gesture became `scroll-to`.
 - No device id or literal credential remains.
 - Every selector-bearing condition uses an explicit selector map without positional or data-derived values.

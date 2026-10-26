@@ -24,7 +24,7 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 ### Run the gate when capture warns
 
-Work this gate as soon as capture warns that it kept a raw point, and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
+Work this gate as soon as capture warns that it kept a raw point or recorded a role-only selector. Keep the source screen available and do these checks:
 
 1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no YAML selector exists.
 2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
@@ -39,7 +39,7 @@ QA e2e tests are stricter. They can keep a coordinate only for a genuinely unlab
 
 ## iOS selector recovery
 
-The full iOS runner tree exists only for an app launched by Argent with instrumentation.
+On an iOS simulator, the full runner tree exists only for an app launched by Argent with instrumentation.
 
 1. If Metro, Expo, Xcode, an icon, or a prior process launched the app, call `restart-app`. Restore the source screen and retry capture. `launch-app` can only foreground the existing process.
 2. Tap capture does **not** wait for that connection. It makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so the first tap after a restart can warn transiently. Re-record that tap once before escalating; only a warning that survives the retry is evidence of a real fault.
@@ -120,7 +120,7 @@ Classify before editing:
 Then:
 
 1. Record the first failure or divergence index and message.
-2. Capture `screenshot` and `describe`. Use native or React Native discovery when needed.
+2. Look at the failed step's `screen` capture, then `describe` the current screen. Use native or React Native discovery when needed. After a `{{secret:…}}` step there is no capture: move off the field that holds the secret before you `describe` or take a `screenshot`.
 3. Compare actual state with the preceding echo and expected destination.
 4. Classify the cause: selector, screen, missing element, readiness, stale data, optional interstitial, or product behavior.
 5. State the diagnosis in one sentence before correcting it.

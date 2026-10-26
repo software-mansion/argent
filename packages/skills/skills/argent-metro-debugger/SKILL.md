@@ -8,7 +8,7 @@ description: Debug a JS runtime via CDP using argent debugger tools. Primary pat
 Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`.
 
 - **React Native (iOS / Android)**: Metro running (default `localhost:8081`) and the app connected to it. Verify with `debugger-status`.
-- **Android**: the device does not resolve the host's `localhost`, so forward Metro's port before the app starts: `adb -s <serial> reverse tcp:8081 tcp:8081` (`<serial>` from `list-devices`). Re-run it after a device restart or an adb drop. A failing Metro connection on Android almost always means this is missing.
+- **Android**: a physical device, a TV emulator, or a dev client that loads from `localhost` needs `adb -s <serial> reverse tcp:<port> tcp:<port>` (default 8081). Run it again after a reboot or an adb restart; Argent doesn't restore it. A bare RN app on a phone emulator uses `10.0.2.2` and doesn't need it; `react-native run-android` and `expo run:android` set it up themselves.
 - **Vega (Fire TV)**: a **Debug `.vpkg`** (a Release build never attaches) and Metro reachable from the device (`vega device start-port-forwarding --port 8081 --forward false`). `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are unavailable there; see `references/vega.md` of the `argent-tv-interact` skill.
 - **Chromium (CDP)**: an Electron app booted with `boot-device` `electronAppPath`, or a Chromium browser exposing a CDP port (`list-devices` finds it). Pass its `chromium-cdp-<port>` id as `device_id`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs` and `view-network-request-details` work there; the other debugger and profiler tools are React Native only.
 
@@ -42,7 +42,7 @@ What the `guidance` does not tell you:
 - **No app connected**: relaunch with `restart-app`. `debugger-reload-metro` cannot fix this; it needs an attached app too.
 - **Was connected, then tools fail**: the app may have crashed or closed. `restart-app`, then `debugger-connect` again; if you were using a `logicalDeviceId`, use the fresh one it returns.
 - **`projectRoot` is `""` and source lookups report no file:line**: not a failure. Legacy Metro (RN 0.72 and older, e.g. Vega) sends no project root. `debugger-evaluate`, console logs and the network inspector still work; do not restart Metro to "fix" it.
-- **`debugger-inspect-element` returns `source: null` for every item**: see `references/source-maps.md`.
+- **`debugger-inspect-element` returns `source: null` for every item**: the app's React build records no source locations. Component names still work: search the code for them.
 
 ## 4. Reading Console Logs (Log Registry)
 
@@ -57,12 +57,12 @@ One entry per line: fields (whitespace-separated, `|` delimiter before message)
 | `[L:<id>]`    | `[L:42]`                                                | Unique anchor; search it literally (see below)                    |
 | `<timestamp>` | `2026-03-17T14:30:00.000Z`                              | ISO 8601                                                          |
 | `<LEVEL>`     | `ERROR`, `WARNING`, `LOG  `, `INFO `, `DEBUG`, `ASSERT` | Uppercased CDP level, padded to at least 5 chars, never truncated |
-| `<source>`    | `src/api/user.ts:42` or `-`                             | Relative path from source map; `-` if unavailable                 |
+| `<source>`    | `src/api/user.ts:42` or `-`                             | Caller's script and line; always `-` on React Native              |
 | `<message>`   | `Failed login attempt`                                  | Full message; embedded newlines replaced with space               |
 
 Log files and messages can be large: **always scope your search**, and treat the file like a database, not a document.
 
 - Never `Read` the log file directly. Use `grep` or shell commands with limits; default to `-m 50` unless you need more.
-- `clusters[].message` gives you the exact text to search for; `clusters` also carries each group's source file and line.
+- `clusters[].message` gives you the exact text to search for.
 - Search bracketed text such as `[L:42]` or `[object Object]` with `grep -F`, or escape the brackets (`\[L:42\]`). Unescaped, `[...]` is a character class: `grep '[L:42]'` matches every line in the file.
 - If `totalEntries` exceeds 10 000, delegate the search to an `Explore` subagent: pass it the file path, the format above, the patterns you need, and rule 3's untrusted-data caveat.

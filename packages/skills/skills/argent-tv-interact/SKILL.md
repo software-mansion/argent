@@ -28,22 +28,17 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 
 ### Apple TV (tvOS simulator)
 
-- Boot like any iOS sim (`boot-device`); the AX + HID daemons auto-start on the first `describe` / `tv-remote` (first call may take a few seconds). Give the RN bundle a few seconds to render before the first `describe`.
+- Boot like any iOS sim (`boot-device`); the AX + HID daemons auto-start on the first `describe` / `tv-remote` (first call may take a few seconds).
 - Dev build: `open-url {udid, url:"<scheme>://expo-development-client/?url=http%3A%2F%2F<HOST_IP>%3A8081"}` (`<HOST_IP>` = your Mac's LAN IP, shown on the launcher).
 
 ### Android TV (leanback emulator)
 
 - Boot the leanback AVD like any emulator; see `argent-android-emulator-setup`.
-- **`describe` may report zero focusables on a screen with visible tiles**: many `react-native-tvos` screens use RN's own focus engine, invisible to the OS accessibility tree. `describe` auto-falls-back to the full UI tree (and says so in the hint); `tv-remote` still moves focus, so drive blind + `screenshot` to confirm.
-- Dev build: `adb -s <serial> reverse tcp:8081 tcp:8081`, deep-link `<pkg>://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081`, dismiss the first dev-menu with `adb shell input keyevent KEYCODE_DPAD_CENTER` (not Back: Back exits the app). If `list-devices` returns a `hint` about the adb server, prefix these `adb` commands as the hint shows.
-
-## Common gotchas
-
-- **Empty focus right after `launch-app` / `restart-app`** is the splash / loading window; `describe` retries internally; wait ~2-3s and retry on a cold start.
+- Dev build: `open-url` `<scheme>://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081` (`<scheme>`: the app's URL scheme, or its package name if it sets none), then dismiss the first dev menu with `tv-remote` `select` (not `back`: it exits the app).
 
 ## Fast Refresh (dev builds)
 
-Needs a Debug build + Metro running. argent only _connects_ to Metro; start Metro and port-forward yourself (any platform). Metro is fixed on **:8081**.
+Needs a Debug build + Metro running. argent only _connects_ to Metro: start Metro yourself, and forward the port where the app needs it (Android: `argent-metro-debugger` §1; Vega: `references/vega.md`).
 
 - **Apple TV / Android TV:** use the dev-build deep-links above; `npm start` for Metro.
 - **Vega:** see `references/vega.md`.
