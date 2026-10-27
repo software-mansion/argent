@@ -105,8 +105,10 @@ async function logcatHolds(serial: string, marker: string): Promise<string | und
   }
 }
 
-// `process != "log"` matters: `log show` logs its own arguments, the marker
-// among them.
+// `--info` matters: React Native writes the marker at info level (RCTLog maps
+// `nativeLoggingHook`'s level 1 to OS_LOG_TYPE_INFO), and `log show` leaves
+// info entries out without it. `process != "log"` matters too: `log show` logs
+// its own arguments, the marker among them.
 async function simulatorLogHolds(udid: string, marker: string): Promise<string | undefined> {
   try {
     const args = await simctlArgsForUdid(udid, [
@@ -114,6 +116,7 @@ async function simulatorLogHolds(udid: string, marker: string): Promise<string |
       udid,
       "log",
       "show",
+      "--info",
       "--last",
       "1m",
       "--style",

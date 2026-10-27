@@ -38,6 +38,12 @@ vi.mock("node:child_process", async (importOriginal) => ({
       callback: (err: Error | null, out: { stdout: string; stderr: string }) => void
     ) => {
       const udid = args[2]!;
+      // React Native logs the marker at info level, which `log show` prints
+      // only with `--info`.
+      if (!args.includes("--info")) {
+        callback(null, { stdout: "", stderr: "" });
+        return;
+      }
       const predicate = args.at(-1)!;
       const marker = JSON.parse(
         predicate.slice("eventMessage CONTAINS ".length).split(" AND ")[0]!
