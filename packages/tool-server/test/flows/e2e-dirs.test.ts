@@ -530,6 +530,40 @@ describe("a nested tool: e2e-execute step that names a test", () => {
     ]);
   });
 
+  it("names each step of the nested tests by its file on the client, co-located and over a link", async () => {
+    const project = JSON.stringify(root);
+    await write(
+      e2e("outer.yaml"),
+      `steps:\n  - tool: e2e-execute\n    args: { name: inner, project_root: ${project} }\n`
+    );
+    await write(
+      e2e("inner.yaml"),
+      "steps:\n  - run: helpers/frag.yaml\n" +
+        `  - tool: flow-execute\n    args: { name: inner2, project_root: ${project} }\n`
+    );
+    await write(e2e("helpers/frag.yaml"), echoes("frag"));
+    await write(legacy("inner2.yaml"), echoes("inner2"));
+    const where = (result: FlowRunResult) => result.steps.map((s) => [s.kind, s.line, s.file]);
+
+    for (const result of [
+      await runColocated({ name: "outer" }),
+      (await runLinked({ name: "outer" })).result,
+    ]) {
+      expect(result.ok).toBe(true);
+      expect(where(result)).toEqual([["tool", 2, undefined]]);
+      // The client's paths, not the copies this server runs over a link.
+      const inner = result.steps[0]!.result as FlowRunResult;
+      expect(where(inner)).toEqual([
+        ["run", 2, e2e("inner.yaml")],
+        ["echo", 2, e2e("helpers/frag.yaml")],
+        ["tool", 3, e2e("inner.yaml")],
+      ]);
+      expect(where(inner.steps[2]!.result as FlowRunResult)).toEqual([
+        ["echo", 2, legacy("inner2.yaml")],
+      ]);
+    }
+  });
+
   it("takes the .argent/e2e test over a same-named legacy one over a link", async () => {
     await write(
       e2e("outer.yaml"),

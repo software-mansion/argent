@@ -8,6 +8,7 @@ import { e2e as flow, exitAfterFlush, parseRunArgs } from "../src/e2e.js";
 import { e2e, flow as flowAlias } from "../src/index.js";
 import { ToolInvocationError } from "@argent/tools-client";
 import { FlagParseException } from "../src/flag-parser.js";
+import { MAX_RUN_DEPTH } from "@argent/registry";
 import type { ResolvedToolsUrl } from "@argent/tools-client";
 
 const toolsClientMock = vi.hoisted(() => ({
@@ -56,6 +57,10 @@ interface StepFixture {
   artifacts?: Record<string, unknown>;
   /** Tool-step payload; a nested run's report for e2e-execute. */
   result?: unknown;
+  /** A string only as a malformed wire value the CLI must not trust. */
+  line?: number | string;
+  /** Null only as a malformed wire value the CLI must not trust. */
+  file?: string | null;
 }
 
 /** A wire artifact handle as the tool-server emits it (image/png). */
@@ -137,6 +142,40 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
     steps,
     ...overrides,
   };
+}
+
+/** A flow whose step on line 3 is the one LOGIN_STEPS fails. */
+const LOGIN_YAML = [
+  "steps:",
+  "  - launch: com.acme.shop",
+  "  - assert: { visible: { text: Home } }",
+  "  - tap: { text: Profile }",
+  "",
+].join("\n");
+
+/** LOGIN_YAML's frame around line 3, indented as a recap prints it. */
+const LOGIN_FRAME = [
+  "      2 |   - launch: com.acme.shop",
+  "    > 3 |   - assert: { visible: { text: Home } }",
+  "      4 |   - tap: { text: Profile }",
+];
+
+/** The steps of a LOGIN_YAML run, each on the line the tool-server reports. */
+const LOGIN_STEPS: StepFixture[] = [
+  { index: 0, kind: "launch", status: "pass", line: 2 },
+  {
+    index: 1,
+    kind: "assert",
+    status: "fail",
+    target: 'visible "Home"',
+    reason: 'no element matched selector text="Home"',
+    line: 3,
+  },
+  { index: 2, kind: "tap", status: "skip", target: '"Profile"', line: 4 },
+];
+
+function loginReport(flow: string): Record<string, unknown> {
+  return report({ flow, ok: false, passed: 1, failed: 1, skipped: 1, steps: LOGIN_STEPS });
 }
 
 describe("parseRunArgs", () => {
@@ -509,6 +548,408 @@ describe("argent e2e run", () => {
       "",
       "FAIL (started on SIM-1) — 0 passed, 1 failed, 0 errored, 1 skipped",
     ]);
+  });
+
+  it("shows where a single run's failing step is written, framed from the file, in its recap", async () => {
+    const dir = path.join(tempRoot, "frame");
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, "login.yaml"), LOGIN_YAML);
+    toolsClientMock.callTool.mockResolvedValue({ data: loginReport("login") });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", path.join("frame", "login.yaml")], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // No progress events, so the buffered renderer prints the whole report.
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "login" on SIM-1',
+      "  ✓  1 launch",
+      '  ✗  2 assert visible "Home" — no element matched selector text="Home"',
+      '  ·  3 tap "Profile"',
+      "",
+      '  ✗ step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    at ${path.join("frame", "login.yaml")}:3`,
+      ...LOGIN_FRAME,
+      "",
+      "FAIL — 1 passed, 1 failed, 0 errored, 1 skipped",
+    ]);
+  });
+
+  it("frames an errored step in a single run's recap, as it frames a failed one", async () => {
+    const dir = path.join(tempRoot, "frame-error");
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(
+      path.join(dir, "err.yaml"),
+      [
+        "steps:",
+        "  - launch: com.acme.shop",
+        "  - tap: { text: Profile }",
+        "  - tool: flow-read-prerequisite",
+        "    args: { name: missing }",
+        "  - tap: { text: Sign out }",
+        "",
+      ].join("\n")
+    );
+    const reason =
+      'Invalid params for tool "flow-read-prerequisite": `project_root` is required (string) ' +
+      "and was not provided. You sent: `name`.";
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        flow: "err",
+        ok: false,
+        passed: 2,
+        skipped: 1,
+        errored: 1,
+        steps: [
+          { index: 0, kind: "launch", status: "pass", line: 2 },
+          { index: 1, kind: "tap", status: "pass", target: '"Profile"', line: 3 },
+          {
+            index: 2,
+            kind: "tool",
+            status: "error",
+            tool: "flow-read-prerequisite",
+            reason,
+            line: 4,
+          },
+          { index: 3, kind: "tap", status: "skip", target: '"Sign out"', line: 6 },
+        ],
+      }),
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", path.join("frame-error", "err.yaml")], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "err" on SIM-1',
+      "  ✓  1 launch",
+      '  ✓  2 tap "Profile"',
+      `  ✗  3 tool flow-read-prerequisite — ${reason}`,
+      '  ·  4 tap "Sign out"',
+      "",
+      "  ✗ step 3 tool flow-read-prerequisite",
+      `    ${reason}`,
+      `    at ${path.join("frame-error", "err.yaml")}:4`,
+      "      3 |   - tap: { text: Profile }",
+      "    > 4 |   - tool: flow-read-prerequisite",
+      "      5 |     args: { name: missing }",
+      "",
+      "FAIL — 2 passed, 0 failed, 1 errored, 1 skipped",
+    ]);
+  });
+
+  it("frames the failing step in a live run's final recap, by absolute path outside the working directory", async () => {
+    const dir = path.join(tempRoot, "frame-live");
+    await fsp.mkdir(dir, { recursive: true });
+    const flowFile = path.join(dir, "login.yaml");
+    await fsp.writeFile(flowFile, LOGIN_YAML);
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of LOGIN_STEPS) opts?.onProgress?.(step);
+        return { data: loginReport("login") };
+      }
+    );
+
+    // The working directory is the package's, so the temp flow is outside it.
+    await expect(flow(["run", flowFile], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "login"',
+      "  ✓  1 launch",
+      '  ✗  2 assert visible "Home" — no element matched selector text="Home"',
+      '  ·  3 tap "Profile"',
+      "",
+      '  ✗ step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    at ${flowFile}:3`,
+      ...LOGIN_FRAME,
+      "",
+      "FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
+    ]);
+  });
+
+  it("frames a fragment step by the file its symlink points to, whatever that file is named", async () => {
+    const dir = path.join(tempRoot, "frame-link");
+    await fsp.mkdir(path.join(dir, "fragsrc"), { recursive: true });
+    await fsp.mkdir(path.join(dir, "shared"), { recursive: true });
+    await fsp.writeFile(path.join(dir, "main.yaml"), "steps:\n  - run: shared/sign-in.yaml\n");
+    await fsp.writeFile(
+      path.join(dir, "fragsrc", "real.yml"),
+      "steps:\n  - tap: { text: Sign in }\n  - type: { into: Password, text: hunter2 }\n"
+    );
+    // The runner accepts the link's `.yaml` name, then names the file the link points to.
+    await fsp.symlink(
+      path.join("..", "fragsrc", "real.yml"),
+      path.join(dir, "shared", "sign-in.yaml")
+    );
+    const real = await fsp.realpath(path.join(dir, "fragsrc", "real.yml"));
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        flow: "main",
+        ok: false,
+        passed: 1,
+        failed: 1,
+        steps: [
+          { index: 0, kind: "run", status: "pass", line: 2 },
+          {
+            index: 1,
+            kind: "tap",
+            status: "fail",
+            target: '"Sign in"',
+            reason: 'no element matched selector text="Sign in"',
+            line: 2,
+            file: real,
+          },
+        ],
+      }),
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", path.join("frame-link", "main.yaml")], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const lines = logs.join("\n").split("\n");
+    const at = lines.indexOf(`    at ${path.join("frame-link", "fragsrc", "real.yml")}:2`);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.slice(at + 1, at + 4)).toEqual([
+      "      1 | steps:",
+      "    > 2 |   - tap: { text: Sign in }",
+      "      3 |   - type: { into: Password, text: hunter2 }",
+    ]);
+  });
+
+  /** A failed `tool: e2e-execute` step on `line`, with the nested run's report. */
+  function nestedStep(
+    index: number,
+    line: number,
+    result: unknown,
+    tool = "e2e-execute"
+  ): StepFixture {
+    return {
+      index,
+      kind: "tool",
+      tool,
+      status: "fail",
+      reason: 'e2e test failed (assert: no element matched selector text="Nope")',
+      line,
+      result,
+    };
+  }
+
+  /** A failed run's report with `step` as its one step. */
+  function nestedReport(flowName: string, step: StepFixture): Record<string, unknown> {
+    return report({ flow: flowName, ok: false, passed: 0, failed: 1, steps: [step] });
+  }
+
+  /** Runs `relPath` under tempRoot as the working directory, expecting exit 1. */
+  async function runFailing(relPath: string): Promise<string[]> {
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", relPath], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+    return logs.join("\n").split("\n");
+  }
+
+  it("frames the step that failed in a nested run under the tool: flow-execute step that ran it", async () => {
+    const dir = path.join(tempRoot, "frame-nested");
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(
+      path.join(dir, "outer.yaml"),
+      [
+        "steps:",
+        "  - tap: { text: Shop }",
+        "  - tool: flow-execute",
+        "    args: { name: inner }",
+        "",
+      ].join("\n")
+    );
+    await fsp.writeFile(
+      path.join(dir, "inner.yaml"),
+      [
+        "steps:",
+        "  - tap: { text: Sign in }",
+        "  - assert: { visible: { text: Nope } }",
+        "  - tap: { text: Done }",
+        "",
+      ].join("\n")
+    );
+    // The tool-server names each step of a nested run by its resolved path.
+    const inner = await fsp.realpath(path.join(dir, "inner.yaml"));
+    const innerReport = report({
+      flow: "inner",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      skipped: 1,
+      steps: [
+        { index: 0, kind: "tap", status: "pass", target: '"Sign in"', line: 2, file: inner },
+        {
+          index: 1,
+          kind: "assert",
+          status: "fail",
+          target: 'visible "Nope"',
+          reason: 'no element matched selector text="Nope"',
+          line: 3,
+          file: inner,
+        },
+        { index: 2, kind: "tap", status: "skip", target: '"Done"', line: 4, file: inner },
+      ],
+    });
+    const reason =
+      'e2e test "inner" failed: 1 passed, 1 failed, 0 errored (assert: no element matched selector text="Nope")';
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        flow: "outer",
+        ok: false,
+        passed: 1,
+        failed: 1,
+        steps: [
+          { index: 0, kind: "tap", status: "pass", target: '"Shop"', line: 2 },
+          {
+            index: 1,
+            kind: "tool",
+            tool: "flow-execute",
+            status: "fail",
+            reason,
+            line: 3,
+            result: innerReport,
+          },
+        ],
+      }),
+    });
+
+    expect(await runFailing(path.join("frame-nested", "outer.yaml"))).toEqual([
+      'E2E test "outer" on SIM-1',
+      '  ✓  1 tap "Shop"',
+      `  ✗  2 tool flow-execute — ${reason}`,
+      "",
+      "  ✗ step 2 tool flow-execute",
+      `    ${reason}`,
+      `    at ${path.join("frame-nested", "outer.yaml")}:3`,
+      "      2 |   - tap: { text: Shop }",
+      "    > 3 |   - tool: flow-execute",
+      "      4 |     args: { name: inner }",
+      `    at ${path.join("frame-nested", "inner.yaml")}:3`,
+      "      2 |   - tap: { text: Sign in }",
+      "    > 3 |   - assert: { visible: { text: Nope } }",
+      "      4 |   - tap: { text: Done }",
+      "",
+      "FAIL — 1 passed, 1 failed, 0 errored, 0 skipped",
+    ]);
+  });
+
+  it("frames each level of a chain of nested runs, outermost first", async () => {
+    const dir = path.join(tempRoot, "frame-chain");
+    await fsp.mkdir(path.join(dir, "fragments"), { recursive: true });
+    const write = async (rel: string, lines: string[]) => {
+      await fsp.writeFile(path.join(dir, rel), [...lines, ""].join("\n"));
+      return fsp.realpath(path.join(dir, rel));
+    };
+    await write("outer.yaml", ["steps:", "  - tool: e2e-execute", "    args: { name: mid }"]);
+    const mid = await write("mid.yaml", [
+      "steps:",
+      "  - echo: mid",
+      "  - tool: flow-execute",
+      "    args: { name: inner }",
+    ]);
+    // The step that failed in the innermost run is in a fragment it runs.
+    const frag = await write("fragments/pay.yaml", [
+      "steps:",
+      "  - tap: { text: Pay }",
+      "  - assert: { visible: { text: Nope } }",
+    ]);
+    const innermost = nestedReport("inner", {
+      index: 0,
+      kind: "assert",
+      status: "fail",
+      target: 'visible "Nope"',
+      reason: 'no element matched selector text="Nope"',
+      line: 3,
+      file: frag,
+    });
+    const midReport = report({
+      flow: "mid",
+      ok: false,
+      passed: 0,
+      failed: 1,
+      steps: [
+        { index: 0, kind: "echo", status: "pass", message: "mid", line: 2, file: mid },
+        { ...nestedStep(1, 3, innermost, "flow-execute"), file: mid },
+      ],
+    });
+    toolsClientMock.callTool.mockResolvedValue({
+      data: nestedReport("outer", nestedStep(0, 2, midReport)),
+    });
+
+    const lines = await runFailing(path.join("frame-chain", "outer.yaml"));
+
+    const at = lines.indexOf("  ✗ step 1 tool e2e-execute");
+    expect(at).toBeGreaterThan(0);
+    expect(lines.slice(at + 2)).toEqual([
+      `    at ${path.join("frame-chain", "outer.yaml")}:2`,
+      "      1 | steps:",
+      "    > 2 |   - tool: e2e-execute",
+      "      3 |     args: { name: mid }",
+      `    at ${path.join("frame-chain", "mid.yaml")}:3`,
+      "      2 |   - echo: mid",
+      "    > 3 |   - tool: flow-execute",
+      "      4 |     args: { name: inner }",
+      `    at ${path.join("frame-chain", "fragments", "pay.yaml")}:3`,
+      "      2 |   - tap: { text: Pay }",
+      "    > 3 |   - assert: { visible: { text: Nope } }",
+      "",
+      "FAIL — 0 passed, 1 failed, 0 errored, 0 skipped",
+    ]);
+  });
+
+  it("frames no more nested runs than a chain can have", async () => {
+    const dir = path.join(tempRoot, "frame-deep");
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(
+      path.join(dir, "deep.yaml"),
+      "steps:\n  - tool: e2e-execute\n    args: { name: deep }\n"
+    );
+    const file = await fsp.realpath(path.join(dir, "deep.yaml"));
+    // Deeper than the tool-server's run depth guard lets a chain go.
+    let nested: unknown = nestedReport("deep", {
+      index: 0,
+      kind: "tap",
+      status: "fail",
+      line: 1,
+      file,
+    });
+    for (let level = 0; level < MAX_RUN_DEPTH * 2; level++) {
+      nested = nestedReport("deep", { ...nestedStep(0, 2, nested), file });
+    }
+    toolsClientMock.callTool.mockResolvedValue({ data: nested });
+
+    const lines = await runFailing(path.join("frame-deep", "deep.yaml"));
+
+    // One frame for each run of the longest chain.
+    const frames = lines.filter((line) => line.startsWith("    at "));
+    expect(frames).toEqual(
+      Array(MAX_RUN_DEPTH).fill(`    at ${path.join("frame-deep", "deep.yaml")}:2`)
+    );
+    expect(lines.at(-1)).toBe("FAIL — 0 passed, 1 failed, 0 errored, 0 skipped");
   });
 
   it("exits 2 without calling the tool when --device is missing its value", async () => {
@@ -1604,6 +2045,42 @@ describe("argent e2e run", () => {
     expect(JSON.parse(logs.join("\n"))).toEqual(report());
   });
 
+  it("passes a step's line and fragment through --json and --json-stream, printing no source frame", async () => {
+    const dir = path.join(tempRoot, "frame-json");
+    await fsp.mkdir(dir, { recursive: true });
+    const flowFile = path.join(dir, "login.yaml");
+    await fsp.writeFile(flowFile, "steps:\n  - launch: com.acme.shop\n  - run: sign-in.yaml\n");
+    await fsp.writeFile(
+      path.join(dir, "sign-in.yaml"),
+      "steps:\n  - assert: { visible: { text: Home } }\n"
+    );
+    // The tool-server names a fragment by its resolved path.
+    const fragment = await fsp.realpath(path.join(dir, "sign-in.yaml"));
+    const steps: StepFixture[] = [
+      LOGIN_STEPS[0]!,
+      { index: 1, kind: "run", status: "pass", flow: "sign-in", target: "sign-in.yaml", line: 3 },
+      { ...LOGIN_STEPS[1]!, index: 2, depth: 1, flow: "sign-in", line: 2, file: fragment },
+    ];
+    const failed = report({ flow: "login", ok: false, passed: 2, failed: 1, steps });
+
+    toolsClientMock.callTool.mockResolvedValue({ data: failed });
+    await expect(flow(["run", flowFile, "--json"], opts)).rejects.toThrow("process.exit:1");
+    expect(JSON.parse(logs.join("\n"))).toEqual(failed);
+
+    logs.length = 0;
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of steps) opts?.onProgress?.(step);
+        return { data: failed };
+      }
+    );
+    await expect(flow(["run", flowFile, "--json-stream"], opts)).rejects.toThrow("process.exit:1");
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      ...steps.map((data) => ({ event: "progress", data })),
+      { event: "result", data: failed },
+    ]);
+  });
+
   it("prints each progress step followed by one final result with --json-stream", async () => {
     let finish!: () => void;
     const finalGate = new Promise<void>((resolve) => (finish = resolve));
@@ -2320,6 +2797,7 @@ describe("argent e2e run", () => {
       "filename (minus .yaml) names the run's report and artifacts"
     );
     expect(logs.join("\n")).toContain('contain only letters, numbers, "_", or "-"');
+    expect(logs.join("\n")).toContain('its "at <path>:<line>" location and the lines around it');
     expect(logs.join("\n")).toContain("the one that `argent link` or ARGENT_TOOLS_URL names");
     expect(logs.join("\n")).toContain("--json-stream");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
@@ -2405,6 +2883,67 @@ describe("argent e2e run <dir>", () => {
     logSpy.mockRestore();
     errSpy.mockRestore();
   });
+
+  /** A flow whose line 2 runs the SIGN_IN_YAML fragment. */
+  const CHECKOUT_YAML = [
+    "steps:",
+    "  - run: fragments/sign-in.yaml",
+    "  - tap: { text: Pay }",
+    "",
+  ].join("\n");
+  const SIGN_IN_YAML = [
+    "steps:",
+    "  - tap: { text: Sign in }",
+    "  - type: { into: Password, text: hunter2 }",
+    "",
+  ].join("\n");
+
+  /**
+   * A suite of two flows under `name` in tempRoot: a-login fails on its own
+   * line 3, b-checkout on line 2 of the fragment its line 2 runs. The
+   * fragment sits in a subdirectory, so a non-recursive run does not list it.
+   */
+  async function writeFramedSuite(name: string) {
+    const suite = path.join(tempRoot, name);
+    await fsp.mkdir(path.join(suite, "fragments"), { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(suite, "a-login.yaml"), LOGIN_YAML),
+      fsp.writeFile(path.join(suite, "b-checkout.yaml"), CHECKOUT_YAML),
+      fsp.writeFile(path.join(suite, "fragments", "sign-in.yaml"), SIGN_IN_YAML),
+    ]);
+    // The tool-server names a fragment by its resolved path.
+    const fragment = await fsp.realpath(path.join(suite, "fragments", "sign-in.yaml"));
+    const checkout = report({
+      flow: "b-checkout",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      skipped: 1,
+      steps: [
+        {
+          index: 0,
+          kind: "run",
+          status: "pass",
+          flow: "sign-in",
+          target: "fragments/sign-in.yaml",
+          line: 2,
+        },
+        {
+          index: 1,
+          kind: "tap",
+          status: "fail",
+          depth: 1,
+          flow: "sign-in",
+          target: '"Sign in"',
+          reason: 'no element matched selector text="Sign in"',
+          line: 2,
+          file: fragment,
+        },
+        { index: 2, kind: "tap", status: "skip", target: '"Pay"', line: 3 },
+      ],
+    });
+    return { suite, fragment, login: loginReport("a-login"), checkout };
+  }
 
   it("runs each top-level flow in order without live progress and exits 0 when all pass", async () => {
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
@@ -3044,6 +3583,263 @@ describe("argent e2e run <dir>", () => {
     ]);
   });
 
+  it("shows in the recap where each failed step is written: its flow, or the fragment it runs", async () => {
+    const { login, checkout } = await writeFramedSuite("framed");
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: login })
+      .mockResolvedValueOnce({ data: checkout });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./framed"], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // A flow's own block keeps its step lines alone; only the recap says where.
+    expect(logs.join("\n").split("\n")).toEqual([
+      "[1/2] a-login.yaml",
+      '  ✗  2 assert visible "Home" — no element matched selector text="Home"',
+      "  FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
+      "[2/2] b-checkout.yaml",
+      '  ✗  2   tap "Sign in" [sign-in] — no element matched selector text="Sign in"',
+      "  FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
+      "",
+      "Failed e2e tests (2)",
+      "",
+      '  ✗ a-login.yaml › step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    at ${path.join("framed", "a-login.yaml")}:3`,
+      ...LOGIN_FRAME,
+      `    re-run: argent e2e run ${path.join("framed", "a-login.yaml")}`,
+      "",
+      '  ✗ b-checkout.yaml › step 2 tap "Sign in" [sign-in]',
+      '    no element matched selector text="Sign in"',
+      `    at ${path.join("framed", "fragments", "sign-in.yaml")}:2`,
+      "      1 | steps:",
+      "    > 2 |   - tap: { text: Sign in }",
+      "      3 |   - type: { into: Password, text: hunter2 }",
+      `    re-run: argent e2e run ${path.join("framed", "b-checkout.yaml")}`,
+      "",
+      "FAIL — 2 e2e tests: 0 passed, 2 failed, 0 skipped (0.0s)",
+    ]);
+  });
+
+  it("shows no source for a step without a usable line or fragment, and never the flow's own file instead", async () => {
+    const suite = path.join(tempRoot, "unframed");
+    await fsp.mkdir(path.join(suite, "fragments"), { recursive: true });
+    await fsp.writeFile(path.join(suite, "fragments", "sign-in.yaml"), SIGN_IN_YAML);
+    // Every file named here is readable and has the line, so any frame in the
+    // output would come from a value the CLI should have refused.
+    const variants: [string, Pick<StepFixture, "line" | "file">][] = [
+      // A tool-server older than the field sends no line.
+      ["a-no-line", {}],
+      // The fragment path is wire data: only an absolute path is read.
+      ["b-relative-file", { line: 2, file: path.join("unframed", "fragments", "sign-in.yaml") }],
+      ["c-null-file", { line: 2, file: null }],
+      ["d-zero-line", { line: 0 }],
+      ["e-fractional-line", { line: 2.5 }],
+      ["f-string-line", { line: "4" }],
+    ];
+    await Promise.all(
+      variants.map(([name]) => fsp.writeFile(path.join(suite, `${name}.yaml`), LOGIN_YAML))
+    );
+    const where = new Map(variants);
+    toolsClientMock.callTool.mockImplementation(async (_tool: string, payload: unknown) => {
+      const name = path.basename((payload as { flow_path: string }).flow_path, ".yaml");
+      const step = { index: 0, kind: "tap", status: "fail", target: '"Home"', reason: "gone" };
+      return {
+        data: report({
+          flow: name,
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ ...step, ...where.get(name) }],
+        }),
+      };
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./unframed"], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(variants.length);
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf(`Failed e2e tests (${variants.length})`))).toEqual([
+      `Failed e2e tests (${variants.length})`,
+      ...variants.flatMap(([name]) => [
+        "",
+        `  ✗ ${name}.yaml › step 1 tap "Home"`,
+        "    gone",
+        `    re-run: argent e2e run ${path.join("unframed", `${name}.yaml`)}`,
+      ]),
+      "",
+      `FAIL — ${variants.length} e2e tests: 0 passed, ${variants.length} failed, 0 skipped (0.0s)`,
+    ]);
+  });
+
+  it("names the file and line alone when the file cannot be read or no longer has the line", async () => {
+    const suite = path.join(tempRoot, "unreadable-source");
+    await fsp.mkdir(path.join(suite, "fragments", "dir.yaml"), { recursive: true });
+    const realSuite = await fsp.realpath(suite);
+    const denied = path.join(realSuite, "fragments", "denied.yaml");
+    await fsp.writeFile(denied, SIGN_IN_YAML);
+    const variants: [string, Pick<StepFixture, "line" | "file">, string][] = [
+      [
+        "a-missing-fragment",
+        { line: 2, file: path.join(realSuite, "fragments", "gone.yaml") },
+        `${path.join("unreadable-source", "fragments", "gone.yaml")}:2`,
+      ],
+      [
+        "b-directory-fragment",
+        { line: 2, file: path.join(realSuite, "fragments", "dir.yaml") },
+        `${path.join("unreadable-source", "fragments", "dir.yaml")}:2`,
+      ],
+      // Removed while it ran, before the recap reads it.
+      ["c-deleted", { line: 4 }, `${path.join("unreadable-source", "c-deleted.yaml")}:4`],
+      // Edited while it ran, and now shorter than the reported line.
+      ["d-shrunk", { line: 40 }, `${path.join("unreadable-source", "d-shrunk.yaml")}:40`],
+    ];
+    // Root reads a file whatever its mode, so only elsewhere is this one unreadable.
+    if (canDenyRead) {
+      variants.push([
+        "e-denied-fragment",
+        { line: 2, file: denied },
+        `${path.join("unreadable-source", "fragments", "denied.yaml")}:2`,
+      ]);
+    }
+    await Promise.all(
+      variants.map(([name]) => fsp.writeFile(path.join(suite, `${name}.yaml`), LOGIN_YAML))
+    );
+    await fsp.chmod(denied, 0o000);
+    const where = new Map(variants.map(([name, at]) => [name, at]));
+    toolsClientMock.callTool.mockImplementation(async (_tool: string, payload: unknown) => {
+      const flowPath = (payload as { flow_path: string }).flow_path;
+      const name = path.basename(flowPath, ".yaml");
+      if (name === "c-deleted") await fsp.rm(flowPath);
+      const step = { index: 0, kind: "tap", status: "fail", target: '"Home"', reason: "gone" };
+      return {
+        data: report({
+          flow: name,
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ ...step, ...where.get(name) }],
+        }),
+      };
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./unreadable-source"], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.chmod(denied, 0o600);
+    }
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf(`Failed e2e tests (${variants.length})`))).toEqual([
+      `Failed e2e tests (${variants.length})`,
+      ...variants.flatMap(([name, , at]) => [
+        "",
+        `  ✗ ${name}.yaml › step 1 tap "Home"`,
+        "    gone",
+        `    at ${at}`,
+        `    re-run: argent e2e run ${path.join("unreadable-source", `${name}.yaml`)}`,
+      ]),
+      "",
+      `FAIL — ${variants.length} e2e tests: 0 passed, ${variants.length} failed, 0 skipped (0.0s)`,
+    ]);
+  });
+
+  it("frames only the tool: e2e-execute step when the nested run's failing step has no usable line or file", async () => {
+    const suite = path.join(tempRoot, "nested-unframed");
+    await fsp.mkdir(suite, { recursive: true });
+    const outer = ["steps:", "  - tool: e2e-execute", "    args: { name: inner }", ""].join("\n");
+    // Not .yaml, so the directory run does not list it as an e2e test.
+    await fsp.writeFile(path.join(suite, "inner.yml"), "steps:\n  - tap: { text: Home }\n");
+    const inner = await fsp.realpath(path.join(suite, "inner.yml"));
+    // The inner file is readable and has the line, so an inner frame in the
+    // output would come from a value the CLI should have refused.
+    const failing = { index: 0, kind: "tap", status: "fail", reason: "gone" };
+    const nested = (steps: unknown[]) => ({ flow: "inner", ok: false, steps });
+    const variants: [string, Pick<StepFixture, "tool" | "result">][] = [
+      // A tool-server that names no file for a step of the nested run's own flow.
+      ["a-no-file", { result: nested([{ ...failing, line: 2 }]) }],
+      ["b-no-line", { result: nested([{ ...failing, file: inner }]) }],
+      ["c-relative-file", { result: nested([{ ...failing, line: 2, file: "inner.yml" }]) }],
+      ["d-string-line", { result: nested([{ ...failing, line: "2", file: inner }]) }],
+      // Only a nested run's report is read: another tool's result is not.
+      [
+        "e-other-tool",
+        { tool: "run-sequence", result: nested([{ ...failing, line: 2, file: inner }]) },
+      ],
+      ["f-no-steps", { result: { flow: "inner", notice: "acknowledge first" } }],
+      ["g-string-result", { result: "inner failed" }],
+      ["h-entries-not-steps", { result: nested([null, 7, { ...failing, line: 2 }]) }],
+      [
+        "i-passing-steps",
+        { result: nested([{ ...failing, status: "pass", line: 2, file: inner }]) },
+      ],
+    ];
+    await Promise.all(
+      variants.map(([name]) => fsp.writeFile(path.join(suite, `${name}.yaml`), outer))
+    );
+    const where = new Map(variants);
+    toolsClientMock.callTool.mockImplementation(async (_tool: string, payload: unknown) => {
+      const name = path.basename((payload as { flow_path: string }).flow_path, ".yaml");
+      const step = {
+        index: 0,
+        kind: "tool",
+        tool: "e2e-execute",
+        status: "fail",
+        reason: "inner failed",
+        line: 2,
+      };
+      return {
+        data: report({
+          flow: name,
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ ...step, ...where.get(name) }],
+        }),
+      };
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./nested-unframed"], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(variants.length);
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf(`Failed e2e tests (${variants.length})`))).toEqual([
+      `Failed e2e tests (${variants.length})`,
+      ...variants.flatMap(([name, { tool = "e2e-execute" }]) => [
+        "",
+        `  ✗ ${name}.yaml › step 1 tool ${tool}`,
+        "    inner failed",
+        `    at ${path.join("nested-unframed", `${name}.yaml`)}:2`,
+        "      1 | steps:",
+        "    > 2 |   - tool: e2e-execute",
+        "      3 |     args: { name: inner }",
+        `    re-run: argent e2e run ${path.join("nested-unframed", `${name}.yaml`)}`,
+      ]),
+      "",
+      `FAIL — ${variants.length} e2e tests: 0 passed, ${variants.length} failed, 0 skipped (0.0s)`,
+    ]);
+  });
+
   it("re-runs a flow outside the working directory by its absolute path, quoted", async () => {
     const suiteDir = path.join(tempRoot, "night suite");
     await fsp.mkdir(suiteDir, { recursive: true });
@@ -3357,6 +4153,26 @@ describe("argent e2e run <dir>", () => {
         { path: path.join("sub", "c-search.yaml"), status: "skip" },
       ],
     });
+  });
+
+  it("prints no source frame with --json, passing each step's line and fragment through", async () => {
+    const { suite, fragment, login, checkout } = await writeFramedSuite("framed-json");
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: login })
+      .mockResolvedValueOnce({ data: checkout });
+
+    await expect(flow(["run", suite, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    // The whole of stdout parses as the one aggregate object.
+    const parsed = JSON.parse(logs.join("\n")) as { flows: unknown[] };
+    expect(parsed.flows).toEqual([
+      { path: "a-login.yaml", status: "fail", report: login },
+      { path: "b-checkout.yaml", status: "fail", report: checkout },
+    ]);
+    expect(parsed.flows[1]).toMatchObject({
+      report: { steps: [{ line: 2 }, { line: 2, file: fragment }, { line: 3 }] },
+    });
+    expect(errs).toEqual([]);
   });
 
   it("keys --output exports by the flow's subdirectory in recursive runs", async () => {

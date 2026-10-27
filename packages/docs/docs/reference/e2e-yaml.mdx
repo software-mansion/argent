@@ -466,6 +466,7 @@ The `Failed e2e tests` section has one entry for each e2e test that failed. Each
 - The first step that failed or errored, with its number. An e2e test without a report gives its outcome line instead.
 - The reason of that step, or the error message of an e2e test without a report.
 - The `expected:`, `actual:`, `indeterminate:` and `hint:` lines of that step that apply to the failure.
+- The location of that step in its YAML file. For a `tool: e2e-execute` step, also the location of the step that failed in each nested e2e test. An e2e test without a report has no location.
 - A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
 
 The section does not include the e2e tests that Argent skipped.
@@ -477,6 +478,10 @@ Failed e2e tests (2)
 
   ✗ a-login.yaml › step 3 assert visible "Dashboard"
     no element matched selector text="Dashboard"
+    at e2e/a-login.yaml:6
+      5 |   - tap: { text: Sign in }
+    > 6 |   - assert: { visible: { text: Dashboard } }
+      7 |   - tap: { text: Profile }
     re-run: argent e2e run e2e/a-login.yaml --platform chromium
 
   ✗ sub/c-search.yaml › not run (invalid e2e test)
@@ -486,13 +491,36 @@ Failed e2e tests (2)
 FAIL — 4 e2e tests: 2 passed, 2 failed, 0 skipped (10.2s)
 ```
 
-When a single e2e test run fails its steps, Argent prints the first step that failed or errored again above the last line. Under that step, Argent prints its reason and its `expected:`, `actual:`, `indeterminate:` and `hint:` lines again.
+When a single e2e test run fails its steps, Argent prints the first step that failed or errored again above the last line. Under that step, Argent prints its reason and its `expected:`, `actual:`, `indeterminate:` and `hint:` lines again. Then Argent prints the location of the step.
 
-`--json` and `--json-stream` print no header, no outcome line, no `Failed e2e tests` section and no summary.
+The location starts with an `at <path>:<line>` line. `<line>` is the line where the step starts in its YAML file. For a step in a fragment that a `run:` step loaded, `<path>` and `<line>` point to the fragment file. `<path>` is relative to the current directory. When the file is outside the current directory, `<path>` is absolute. Thus a terminal or an editor can open the location.
+
+Under the `at` line, Argent prints the line of the step, marked with `>`. Argent also prints the line before and the line after the step, when the file has them. Argent prints each line of the file on one line. An invisible character becomes an escape, as in a value. Argent shows the first 300 characters of a longer line, then the number of characters that it does not show.
+
+Argent reads the file when the e2e test ends. If the file changed during the run, the lines show the changed file. Argent prints only the `at` line when it cannot read the file, or when the file has fewer lines than `<line>`.
+
+For a `tool: e2e-execute` step, Argent then prints the location of the first step that failed or errored in the nested e2e test. If that step is also a `tool: e2e-execute` step, Argent continues in the same way. Each location starts with its own `at` line. The location of the outermost step is first. Argent prints no location for a nested step that has no `line` or no `file` in the report.
+
+This is part of the output of `argent e2e run checkout`. Step 2 of `checkout` runs the e2e test `sign-in`:
+
+```text
+  ✗ step 2 tool e2e-execute
+    e2e test "sign-in" failed: 1 passed, 1 failed, 0 errored (assert: no element matched selector text="Welcome")
+    at .argent/e2e/checkout.yaml:3
+      2 |   - tap: { text: Cart }
+    > 3 |   - tool: e2e-execute
+      4 |     args: { name: sign-in, project_root: /home/me/shop }
+    at .argent/e2e/sign-in.yaml:4
+      3 |   - tap: { text: Sign in }
+    > 4 |   - assert: { visible: { text: Welcome } }
+      5 |   - tap: { text: Continue }
+```
+
+`--json` and `--json-stream` print no header, no outcome line, no `Failed e2e tests` section, no location and no summary.
 
 A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each e2e test. Each entry holds the `path` and the `status`. An entry holds `report` when the e2e test produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report: a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. An entry with the status `skip` holds neither, because Argent made no call for that e2e test. `--json-stream` puts the same two fields on its `error` record.
 
-A single e2e test run with `--json` writes the report of that e2e test. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. A step that did not pass can also hold `hint`, `expected` and `actual`, with the content of the lines above. `actual` holds all of the text that the check found. A step whose `expected` holds a regular expression also holds `expectedKind: "pattern"`. The `expected` field of such a step holds the source of the pattern, without the slashes. A step holds `indeterminate: true`, shown as the `indeterminate:` line, when the step did not do its check because Argent could not read the UI tree. A `tool: e2e-execute` step copies these fields from the first step that failed in the composed e2e test, with two exceptions. If the failed step is a `snapshot:` step, Argent does not copy `expected` and `actual`. The reason of the `tool: e2e-execute` step holds these values. Argent copies `hint` only if the failed step holds `indeterminate: true`. Otherwise, the reason of the `tool: e2e-execute` step holds the hint. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` writes the same object on stdout.
+A single e2e test run with `--json` writes the report of that e2e test. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. A step that did not pass can also hold `hint`, `expected` and `actual`, with the content of the lines above. `actual` holds all of the text that the check found. A step whose `expected` holds a regular expression also holds `expectedKind: "pattern"`. The `expected` field of such a step holds the source of the pattern, without the slashes. A step holds `indeterminate: true`, shown as the `indeterminate:` line, when the step did not do its check because Argent could not read the UI tree. A `tool: e2e-execute` step copies these fields from the first step that failed in the composed e2e test, with two exceptions. If the failed step is a `snapshot:` step, Argent does not copy `expected` and `actual`. The reason of the `tool: e2e-execute` step holds these values. Argent copies `hint` only if the failed step holds `indeterminate: true`. Otherwise, the reason of the `tool: e2e-execute` step holds the hint. A step holds `line`, the line where the step starts in its YAML file. The first line of a file is line 1. A step in a fragment that a `run:` step loaded also holds `file`, the absolute path of the fragment file. Argent resolves symbolic links in this path. The `line` of a `run:` step is in the file that holds the `run:` step. Thus a `run:` step in the e2e test that you ran holds no `file`. The `result` of a `tool: e2e-execute` step holds the report of the nested e2e test. In that report, each step that holds `line` also holds `file`. For a step of the nested e2e test itself, `file` is the absolute path of the nested e2e test file. Over a link, each `file` is a path on the client. A step in a `when:` block holds its own `line`. If a `steps:` list is a YAML alias, each step in it holds the line of the same step in the list that the alias repeats. A step that did not run also holds `line`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`, `line` and `file`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` writes the same object on stdout.
 
 With `--json`, Argent writes these objects on stderr, one on each line. Argent writes one object for each of these errors:
 

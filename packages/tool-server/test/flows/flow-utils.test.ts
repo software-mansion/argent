@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseDocument } from "yaml";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   countStepsOnDisk,
@@ -216,6 +217,34 @@ describe("parseFlow", () => {
     // locate the syntax error.
     expect((thrown as Error).message).toContain("Invalid e2e test file:");
     expect((thrown as Error).message).toContain("line 1");
+  });
+
+  it("logs a YAML warning as the yaml package's parse does, and still parses the flow", async () => {
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      const flow = parseFlow("steps:\n  - echo: !foo hi\n");
+
+      expect(flow.steps).toEqual([{ kind: "echo", message: "hi" }]);
+      expect(emitWarning).toHaveBeenCalledTimes(1);
+      expect(emitWarning).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "YAMLWarning",
+          code: "TAG_RESOLVE_FAILED",
+          message: expect.stringContaining("Unresolved tag: !foo at line 2"),
+        })
+      );
+    } finally {
+      emitWarning.mockRestore();
+    }
+  });
+
+  it("reports the first of several YAML errors, as the yaml package's parse does", async () => {
+    const content = "steps:\n  - tap: [\n  - echo: }";
+    expect(parseDocument(content).errors).toHaveLength(2);
+
+    expect(() => parseFlow(content)).toThrow(
+      "Invalid e2e test file: Flow sequence in block collection must be sufficiently indented and end with a ] at line 3, column 3"
+    );
   });
 
   // `step must be an object` is spelled twice — here for a top-level entry, and

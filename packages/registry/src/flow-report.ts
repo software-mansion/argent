@@ -33,7 +33,7 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu;
 /**
  * Escape only the invisible characters of a value, each in its JSON spelling
  * (`\n`, `\t`, `\u0007`, `\u00a0`). Everything else — a backslash above all —
- * stays as the device reported it.
+ * stays as it is.
  *
  * U+0008 is the exception: it is spelled `\u0008`, not JSON's `\b`. Between the
  * slashes of a pattern, `\b` reads as a word boundary, so a pattern that holds

@@ -9,7 +9,17 @@ import {
   LEGACY_E2E_DIRS,
   e2eDirFor,
 } from "@argent/registry";
-import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+import {
+  stringify as yamlStringify,
+  parseDocument,
+  isAlias,
+  isMap,
+  isNode,
+  isScalar,
+  isSeq,
+  LineCounter,
+  type Document,
+} from "yaml";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
@@ -3764,6 +3774,81 @@ export function validateFlow(flow: FlowFile): void {
   }
 }
 
+/**
+ * The line each parsed step starts on in the file it was read from. A side
+ * table rather than a field, so a step stays exactly what
+ * {@link serializeFlow} writes and what two parses of one file compare equal on.
+ */
+const stepLines = new WeakMap<FlowStep, number>();
+
+/** The 1-based line `step` starts on in its flow file; undefined for a step not parsed from one. */
+export function flowStepLine(step: FlowStep): number | undefined {
+  return stepLines.get(step);
+}
+
+/** The node an alias repeats, or `node` itself when it is not an alias. */
+function unalias(node: unknown, doc: Document): unknown {
+  return isAlias(node) ? node.resolve(doc) : node;
+}
+
+/**
+ * Whether `key` is the merge key `<<`: plain, or the symbol a merge tag makes
+ * of it. A `<<` that the schema does not merge stays a key that neither a
+ * file's top level nor a step accepts, so its flow never parses.
+ */
+function isMergeKey(key: unknown): boolean {
+  return (
+    isScalar(key) &&
+    (key.value === "<<" || (typeof key.value === "symbol" && key.value.description === "<<"))
+  );
+}
+
+/**
+ * The node a YAML map holds under `key`, with merge keys applied as the yaml
+ * package's toJS applies them: the map's own pair wins, then each merged map
+ * in the order written. A merge value is a map or a list of maps, and any of
+ * them can be an alias.
+ */
+function mapValue(node: unknown, key: string, doc: Document): unknown {
+  const map = unalias(node, doc);
+  if (!isMap(map)) return undefined;
+  if (map.has(key)) return map.get(key, true);
+  for (const pair of map.items) {
+    if (!isMergeKey(pair.key)) continue;
+    const merged = unalias(pair.value, doc);
+    for (const source of isSeq(merged) ? merged.items : [merged]) {
+      const value = mapValue(source, key, doc);
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Record the line of each step in `steps` and of its block's children, read
+ * off the YAML sequence the steps were parsed from. An alias has no items of
+ * its own, so a list or a block the file spells as one is read from the node
+ * the alias repeats, and a `steps:` that a merge key supplies is read from the
+ * map it merges in. A step spelled as an alias starts on the alias's line.
+ */
+function recordStepLines(
+  steps: FlowStep[],
+  node: unknown,
+  doc: Document,
+  lineCounter: LineCounter,
+  lineOffset: number
+): void {
+  const seq = unalias(node, doc);
+  if (!isSeq(seq)) return;
+  steps.forEach((step, i) => {
+    const item = seq.items[i];
+    if (!isNode(item) || !item.range) return;
+    stepLines.set(step, lineCounter.linePos(item.range[0]).line + lineOffset);
+    const inner = blockSteps(step);
+    if (inner) recordStepLines(inner, mapValue(item, "steps", doc), doc, lineCounter, lineOffset);
+  });
+}
+
 /** Parse a YAML flow file into a FlowFile. */
 export function parseFlow(content: string): FlowFile {
   const trimmed = content.trim();
@@ -3774,8 +3859,14 @@ export function parseFlow(content: string): FlowFile {
   // A raw YAMLParseError carries no failure signal, so a syntax error would
   // abort a whole batch run instead of failing this file alone.
   let parsed: YamlFlowFile;
+  const lineCounter = new LineCounter();
+  let doc: ReturnType<typeof parseDocument>;
   try {
-    parsed = yamlParse(trimmed) as YamlFlowFile;
+    doc = parseDocument(trimmed, { lineCounter });
+    // What the yaml package's `parse` does with the document.
+    for (const warning of doc.warnings) process.emitWarning(warning);
+    if (doc.errors.length > 0) throw doc.errors[0];
+    parsed = doc.toJS() as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
       `Invalid e2e test file: ${err instanceof Error ? err.message : String(err)}`,
@@ -3830,6 +3921,11 @@ export function parseFlow(content: string): FlowFile {
     steps,
   };
   validateFlow(flow);
+  // The trim above dropped the file's leading blank lines, which the lines
+  // counted in `trimmed` must add back.
+  const leading = content.slice(0, content.length - content.trimStart().length);
+  const leadingLines = leading.split("\n").length - 1;
+  recordStepLines(steps, mapValue(doc.contents, "steps", doc), doc, lineCounter, leadingLines);
   return flow;
 }
 

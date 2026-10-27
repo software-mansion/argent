@@ -120,7 +120,7 @@ Classify before editing:
 
 Then:
 
-1. Record the first failure or divergence index and message. Also record its `expected:`, `actual:`, `indeterminate:` and `hint:` lines.
+1. Record the first failure or divergence index and message. Also record its `expected:`, `actual:`, `indeterminate:` and `hint:` lines. To find the step in the YAML, use the `at <path>:<line>` line from `argent e2e run`.
 2. Capture `screenshot` and `describe`. Use native or React Native discovery when needed.
 3. Compare actual state with the preceding echo and expected destination. If the step has a hint, read it now. A hint is only one possible cause.
 4. Classify the cause: selector, screen, missing element, readiness, stale data, optional interstitial, or product behavior.
