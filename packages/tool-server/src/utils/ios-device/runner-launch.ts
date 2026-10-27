@@ -9,8 +9,9 @@ import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { scheduleGroupSigkill, signalGroupThenPid } from "../process-kill";
 import { sleep } from "../timing";
-import { goIosInstallApp, goIosInstalledBundleIds, spawnGoIosXctest } from "./go-ios";
 import { iosRelayFor, type IosRelay } from "./relay";
+import { iosRelayDriver } from "./relay-driver";
+import { readXctestrun, runnerAppsFromXctestrun, runnerBundleIdFromXctestrun } from "./xctestrun";
 
 const execFileAsync = promisify(execFile);
 
@@ -133,7 +134,7 @@ export async function launchRunner(opts: {
 }
 
 /**
- * The device-side port a relayed runner binds. go-ios does not forward the
+ * The device-side port a relayed runner binds. Neither driver forwards the
  * runner's NSLog line, so the port is chosen here and pinned through the
  * runner's `ARGENT_RUNNER_PORT` environment variable; it only has to be free
  * on the phone, where nothing else of Argent's listens.
@@ -141,9 +142,10 @@ export async function launchRunner(opts: {
 const RELAY_RUNNER_PORT = 27042;
 
 /**
- * Launch the runner through the relay with go-ios. The xctestrun gets a copy
- * with the pinned port in the runner's environment, kept beside the logs so
- * the stale-runner sweep recognises the command line.
+ * Launch the runner through the relay with the selected driver. xcodebuild
+ * installs the apps an xctestrun names before testing; the relay drivers do
+ * not, and a shared phone may lose them between sessions, so whatever is
+ * missing is installed on every launch.
  */
 async function launchRelayedRunner(
   relay: IosRelay,
@@ -151,66 +153,46 @@ async function launchRelayedRunner(
   logPath: string,
   resultBundlePath: string
 ): Promise<LaunchedRunner> {
-  const relayDir = path.join(os.homedir(), ".argent", "ios-device-runner", "relay");
-  await fsp.mkdir(relayDir, { recursive: true });
+  const driver = await iosRelayDriver();
+  const document = await readXctestrun(xctestrunPath);
+  const runnerBundleId = runnerBundleIdFromXctestrun(document);
 
-  const pinnedPath = path.join(relayDir, `${relay.udid}.xctestrun`);
-  const document = await writeXctestrunWithRunnerPort(xctestrunPath, pinnedPath, RELAY_RUNNER_PORT);
+  if (!runnerBundleId) {
+    throw new FailureError(
+      `${xctestrunPath} names no test host bundle id, so the runner cannot be launched.`,
+      {
+        error_code: FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY,
+        failure_stage: "ios_device_runner_spawn",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 
-  // xcodebuild installs the apps an xctestrun names before testing; go-ios
-  // does not. A shared phone may also lose them between sessions, so install
-  // what is missing on every launch.
-  const installed = await goIosInstalledBundleIds(relay);
+  const installed = await driver.installedBundleIds(relay);
 
   for (const app of runnerAppsFromXctestrun(document, path.dirname(xctestrunPath))) {
     const bundleId = app.bundleId ?? (await readBundleIdentifier(app.path));
 
     if (bundleId && installed.has(bundleId)) continue;
 
-    await goIosInstallApp(relay, app.path);
+    await driver.installApp(relay, app.path);
   }
 
   const logFd = fs.openSync(logPath, "w");
 
   try {
-    const child = await spawnGoIosXctest(relay, pinnedPath, logFd);
+    const child = await driver.launchRunner(relay, {
+      xctestrunPath,
+      runnerBundleId,
+      port: RELAY_RUNNER_PORT,
+      logFd,
+    });
 
     return { child, logPath, resultBundlePath, port: RELAY_RUNNER_PORT };
   } finally {
     fs.closeSync(logFd);
   }
-}
-
-/**
- * The apps an xctestrun expects on the phone: the test host (the runner app,
- * whose bundle id the xctestrun states) and the UI target it launches.
- * `__TESTROOT__` is the directory of the xctestrun. Exported for the test.
- */
-export function runnerAppsFromXctestrun(
-  document: Record<string, unknown>,
-  testRoot: string
-): Array<{ path: string; bundleId?: string }> {
-  const apps: Array<{ path: string; bundleId?: string }> = [];
-
-  for (const [key, value] of Object.entries(document)) {
-    if (key.startsWith("__") || typeof value !== "object" || value === null) continue;
-
-    const target = value as Record<string, unknown>;
-    const resolve = (raw: unknown) =>
-      typeof raw === "string" ? raw.replace("__TESTROOT__", testRoot) : undefined;
-
-    const host = resolve(target.TestHostPath);
-    const uiTarget = resolve(target.UITargetAppPath);
-
-    if (host) {
-      const bundleId = target.TestHostBundleIdentifier;
-      apps.push({ path: host, ...(typeof bundleId === "string" ? { bundleId } : {}) });
-    }
-
-    if (uiTarget) apps.push({ path: uiTarget });
-  }
-
-  return apps;
 }
 
 /** `CFBundleIdentifier` from an app bundle's Info.plist, or undefined. */
@@ -228,45 +210,6 @@ async function readBundleIdentifier(appPath: string): Promise<string | undefined
   } catch {
     return undefined;
   }
-}
-
-/**
- * Copy an xctestrun, adding `ARGENT_RUNNER_PORT` to the runner's environment.
- * The file is a plist; plutil does the round trip, so no plist writer is
- * needed here. Returns the document. Exported for the test.
- */
-export async function writeXctestrunWithRunnerPort(
-  sourcePath: string,
-  targetPath: string,
-  port: number
-): Promise<Record<string, unknown>> {
-  const { stdout } = await execFileAsync("plutil", ["-convert", "json", "-o", "-", sourcePath], {
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const document = JSON.parse(stdout) as Record<string, unknown>;
-
-  for (const [key, value] of Object.entries(document)) {
-    // Every non-metadata key is a test target; the runner is the only one.
-    if (key.startsWith("__") || typeof value !== "object" || value === null) continue;
-
-    const target = value as Record<string, unknown>;
-
-    for (const envKey of ["EnvironmentVariables", "TestingEnvironmentVariables"]) {
-      const env = (target[envKey] ??= {}) as Record<string, string>;
-      env.ARGENT_RUNNER_PORT = String(port);
-    }
-  }
-
-  const jsonPath = `${targetPath}.json`;
-  await fsp.writeFile(jsonPath, JSON.stringify(document));
-
-  try {
-    await execFileAsync("plutil", ["-convert", "xml1", "-o", targetPath, jsonPath]);
-  } finally {
-    await fsp.rm(jsonPath, { force: true });
-  }
-
-  return document;
 }
 
 /** The runner's NSLog line once its listener is ready, with the port it actually bound. */

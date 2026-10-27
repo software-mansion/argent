@@ -40,6 +40,7 @@ export const FAILURE_COMMANDS = [
   "devicectl",
   "xcodebuild",
   "go_ios",
+  "pymobiledevice3",
 ] as const;
 
 export type FailureCommand = (typeof FAILURE_COMMANDS)[number];

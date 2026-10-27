@@ -10,6 +10,8 @@ import { FAILURE_CODES, FailureError, withFailureSignal } from "@argent/registry
 import { scheduleGroupSigkill, signalGroupThenPid } from "../process-kill";
 import { sleep } from "../timing";
 import type { IosRelay } from "./relay";
+import type { IosRelayDriver } from "./relay-driver";
+import { writeXctestrunWithRunnerPort } from "./xctestrun";
 
 /**
  * go-ios (`ios`) for a relayed phone: install, launch and kill an app, and run
@@ -77,7 +79,7 @@ export async function resolveGoIosBinary(): Promise<string> {
     `go-ios is needed to drive a relayed iPhone and no \`ios\` binary was found` +
       `${override ? ` at ${override}` : " on PATH"}. ${INSTALL_HINT}`,
     {
-      error_code: FAILURE_CODES.IOS_RELAY_GO_IOS_MISSING,
+      error_code: FAILURE_CODES.IOS_RELAY_DRIVER_MISSING,
       failure_stage: "ios_relay_go_ios_resolve",
       failure_area: "tool_server",
       error_kind: "not_found",
@@ -444,3 +446,32 @@ export async function spawnGoIosXctest(
 
   return child;
 }
+
+/** go-ios as the driver for a relayed iPhone. */
+export const goIosDriver: IosRelayDriver = {
+  name: "go-ios",
+  installedBundleIds: goIosInstalledBundleIds,
+  installApp: goIosInstallApp,
+  uninstallApp: goIosUninstallApp,
+  launchApp: goIosLaunchApp,
+
+  async launchRunner(relay, opts) {
+    // go-ios takes no environment for `runxctest`, so the port is pinned in
+    // a copy of the xctestrun, kept beside the logs so the stale-runner sweep
+    // recognises the command line.
+    const relayDir = path.join(os.homedir(), ".argent", "ios-device-runner", "relay");
+    await fsp.mkdir(relayDir, { recursive: true });
+    const pinnedPath = path.join(relayDir, `${relay.udid}.xctestrun`);
+    await writeXctestrunWithRunnerPort(opts.xctestrunPath, pinnedPath, opts.port);
+
+    return spawnGoIosXctest(relay, pinnedPath, opts.logFd);
+  },
+
+  isRunnerProcessLine(line, udid) {
+    return (
+      line.includes("runxctest") &&
+      line.includes(`--udid ${udid}`) &&
+      line.includes(path.join(".argent", "ios-device-runner"))
+    );
+  },
+};
