@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
+import { setFlag } from "@argent/configuration-core";
 import { getAutoScreenshotDelayMs } from "../src/auto-capture.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
@@ -45,6 +46,29 @@ interface Recorded {
   url: string;
   headers: http.IncomingHttpHeaders;
   body: string;
+  /** When the request arrived and when its answer was sent (ms since epoch). */
+  at: number;
+  doneAt?: number;
+}
+
+/** Knobs for the stub's gesture-tap and warm-up routes; reset after each case. */
+const stubBehavior = {
+  tapDelayMs: 0,
+  warmDelayMs: 0,
+  warmFails: false,
+};
+
+const WARM_ROUTE = /^\/ax-service\/[^/]+\/warm$/;
+
+// A profiler records on this device, so the stub flags its calls with `profiling`.
+const PROFILED_UDID = "emulator-5554";
+
+function isProfiledDevice(body: string): boolean {
+  try {
+    return (JSON.parse(body) as { udid?: unknown }).udid === PROFILED_UDID;
+  } catch {
+    return false;
+  }
 }
 
 interface Stub {
@@ -108,11 +132,20 @@ async function startStub({
     req.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf8");
       const reqUrl = req.url ?? "";
-      requests.push({ method: req.method ?? "", url: reqUrl, headers: req.headers, body });
+      const record: Recorded = {
+        method: req.method ?? "",
+        url: reqUrl,
+        headers: req.headers,
+        body,
+        at: Date.now(),
+      };
+      requests.push(record);
       const json = (status: number, payload: unknown) => {
+        record.doneAt = Date.now();
         res.writeHead(status, { "Content-Type": "application/json" });
         res.end(JSON.stringify(payload));
       };
+      const later = (ms: number, fn: () => void) => (ms > 0 ? setTimeout(fn, ms) : fn());
       if (token !== undefined && req.headers.authorization !== `Bearer ${token}`) {
         return json(401, { error: "unauthorized" });
       }
@@ -133,15 +166,30 @@ async function startStub({
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
       }
-      // Both made while a profiler records on the device.
-      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
-        return json(200, { data: { done: true }, profiling: true });
+      if (req.method === "POST" && isProfiledDevice(body)) {
+        if (reqUrl === "/tools/gesture-tap") {
+          return json(200, { data: { done: true }, profiling: true });
+        }
+        if (reqUrl === "/tools/describe") {
+          return json(200, { data: { description: "Button 'OK'" }, profiling: true });
+        }
+        if (reqUrl === "/tools/await-screen-idle") {
+          return json(200, { data: { settled: true, waitedMs: 450, polls: 3 }, profiling: true });
+        }
       }
-      if (req.method === "POST" && reqUrl === "/tools/describe") {
-        return json(200, { data: { description: "Button 'OK'" }, profiling: true });
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return later(stubBehavior.tapDelayMs, () => json(200, { data: { tapped: true } }));
       }
       if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
-        return json(200, { data: { settled: true, waitedMs: 450, polls: 3 }, profiling: true });
+        return json(200, { data: { settled: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, { data: { description: "ROOT AXGroup" } });
+      }
+      if (req.method === "POST" && WARM_ROUTE.test(reqUrl)) {
+        return later(stubBehavior.warmDelayMs, () =>
+          stubBehavior.warmFails ? json(502, { error: "boom" }) : json(200, {})
+        );
       }
       json(404, { error: "not found" });
     });
@@ -319,6 +367,170 @@ describe("startMcpServer tool calls", () => {
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
     expect(textOf(result)).toContain('"ok": true');
+  });
+});
+
+describe("startMcpServer warming the screen reader", () => {
+  const SIM = "A1B2C3D4-0000-4000-8000-000000000001";
+  const SIM2 = "A1B2C3D4-0000-4000-8000-000000000002";
+  let stub: Stub;
+  let client: Client | undefined;
+
+  const tap = (udid: string, extra: Record<string, unknown> = {}) =>
+    client!.callTool({ name: "gesture-tap", arguments: { udid, x: 0.5, y: 0.5, ...extra } });
+  const warmRequests = () => stub.requests.filter((r) => WARM_ROUTE.test(r.url));
+  const warms = () => warmRequests().length;
+  const describes = () => stub.requests.filter((r) => r.url === "/tools/describe").length;
+  const settle = () => new Promise((r) => setTimeout(r, 100));
+
+  async function start(flags: { autoDescribe: boolean }): Promise<void> {
+    // Off: the screenshot is not under test, and the stub has no screenshot route.
+    setFlag("disable-auto-screenshot", true, "global", { homeDir: TEST_HOME });
+    setFlag("disable-auto-describe", !flags.autoDescribe, "global", { homeDir: TEST_HOME });
+    client = await connect({
+      bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+      simulatorServerDir: "",
+      nativeDevtoolsDir: "",
+    });
+  }
+
+  beforeEach(async () => {
+    stub = await startStub();
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+  });
+
+  afterEach(async () => {
+    await client?.close();
+    client = undefined;
+    Object.assign(stubBehavior, { tapDelayMs: 0, warmDelayMs: 0, warmFails: false });
+    setFlag("disable-auto-screenshot", false, "global", { homeDir: TEST_HOME });
+    setFlag("disable-auto-describe", false, "global", { homeDir: TEST_HOME });
+    vi.unstubAllEnvs();
+    await stub.close();
+  });
+
+  it("warms a simulator's screen reader on its first action only", async () => {
+    await start({ autoDescribe: true });
+
+    const first = await tap(SIM);
+    expect(textOf(first)).toContain("ROOT AXGroup");
+    await vi.waitFor(() => expect(warms()).toBe(1));
+    // Only the element tree attached to the result goes through describe.
+    expect(describes()).toBe(1);
+
+    await tap(SIM);
+    expect(warms()).toBe(1);
+
+    await tap(SIM2);
+    await vi.waitFor(() => expect(warms()).toBe(2));
+  });
+
+  it("warms the tapped device, alongside the action", async () => {
+    stubBehavior.tapDelayMs = 300;
+    stubBehavior.warmDelayMs = 300;
+    await start({ autoDescribe: true });
+
+    await tap(SIM);
+
+    const tapReq = stub.requests.find((r) => r.url === "/tools/gesture-tap")!;
+    const warm = warmRequests()[0]!;
+    expect(warm.url).toBe(`/ax-service/${SIM}/warm`);
+    // Overlapping, neither awaited before the other started.
+    expect(warm.at).toBeLessThan(tapReq.doneAt!);
+    expect(tapReq.at).toBeLessThan(warm.doneAt!);
+  });
+
+  it.each([
+    ["an Android emulator", "emulator-5554"],
+    ["a physical Android phone", "R58M123ABC"],
+    ["a physical iPhone", "00008110-000978540290401E"],
+    ["a Vega device", "amazon-abc123"],
+    ["a Chromium app", "chromium-cdp-9222"],
+    ["an attached simulator", `ext:prov:${SIM}`],
+    ["a remote simulator", `remote:${SIM}`],
+  ])("does not warm %s", async (_label, udid) => {
+    await start({ autoDescribe: true });
+
+    await tap(udid);
+    await settle();
+
+    expect(warms()).toBe(0);
+  });
+
+  it("does not warm on a tool that gets no element tree", async () => {
+    await start({ autoDescribe: true });
+
+    await client!.callTool({ name: "boot-device", arguments: { udid: SIM } });
+    await client!.callTool({ name: "stop-simulator-server", arguments: { udid: SIM } });
+    await settle();
+
+    expect(warms()).toBe(0);
+  });
+
+  it("does not warm a call that types a secret", async () => {
+    await start({ autoDescribe: true });
+
+    await client!.callTool({
+      name: "keyboard",
+      arguments: { udid: SIM, text: "{{secret:PASSWORD}}" },
+    });
+    await settle();
+
+    expect(warms()).toBe(0);
+  });
+
+  it("warms a simulator named by a lowercase UDID", async () => {
+    await start({ autoDescribe: true });
+
+    await tap(SIM.toLowerCase());
+
+    await vi.waitFor(() => expect(warms()).toBe(1));
+  });
+
+  it.each(["describe", "await-ui-element"])(
+    "does not warm a device the agent already read with %s",
+    async (name) => {
+      await start({ autoDescribe: true });
+
+      await client!.callTool({ name, arguments: { udid: SIM } });
+      await tap(SIM);
+      await settle();
+
+      expect(warms()).toBe(0);
+    }
+  );
+
+  it("still warms a device first read with native-describe-screen", async () => {
+    await start({ autoDescribe: true });
+
+    await client!.callTool({ name: "native-describe-screen", arguments: { udid: SIM } });
+    await tap(SIM);
+
+    await vi.waitFor(() => expect(warms()).toBe(1));
+  });
+
+  it("survives a failed warm-up and does not retry it", async () => {
+    stubBehavior.warmFails = true;
+    await start({ autoDescribe: true });
+
+    const first = await tap(SIM);
+    expect(first.isError).toBeFalsy();
+    await vi.waitFor(() => expect(warms()).toBe(1));
+
+    const second = await tap(SIM);
+    expect(second.isError).toBeFalsy();
+    await settle();
+    expect(warms()).toBe(1);
+  });
+
+  it("does not warm when the element tree is turned off", async () => {
+    await start({ autoDescribe: false });
+
+    await tap(SIM);
+    await settle();
+
+    expect(warms()).toBe(0);
   });
 });
 

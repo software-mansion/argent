@@ -36,6 +36,8 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  isIosSimulatorUdid,
+  startsScreenReader,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
@@ -139,7 +141,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   }
 
-  const { fetchTools, callTool } = createToolCaller({
+  const { fetchTools, callTool, warmScreenReader } = createToolCaller({
     getHandle: () => ({ url: TOOLS_URL, token: AUTH_TOKEN }),
     remote,
     reconnect,
@@ -248,6 +250,29 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
+  const warmedDevices = new Set<string>();
+
+  async function warmDevice(udid: string): Promise<void> {
+    const t1 = Date.now();
+    try {
+      await warmScreenReader(udid);
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "warm_screen_reader",
+        udid,
+        durationMs: Date.now() - t1,
+      });
+    } catch (e) {
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "warm_screen_reader",
+        udid,
+        durationMs: Date.now() - t1,
+        error: String(e instanceof Error ? e.message : e),
+      });
+    }
+  }
+
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     const t0 = Date.now();
     await spyLog({
@@ -256,6 +281,32 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       name: params.name,
       args: params.arguments,
     });
+    // First touch of an iOS simulator: start its accessibility reader in the
+    // background (one discarded read), so the first action's element tree
+    // does not pay the reader's cold start after the action itself. Other
+    // platforms are skipped because a concurrent read collides with the
+    // action's own (uiautomator dump, Vega page source). A call that starts
+    // the reader itself counts as warm. One attempt per device: a failed
+    // warm-up is not retried, since most failures (tvOS, an older tool-server
+    // without the route, an unknown UDID) would fail on every action.
+    const warmUdid = getUdidFromArgs(params.arguments);
+    if (
+      autoDescribeOn &&
+      warmUdid &&
+      isIosSimulatorUdid(warmUdid) &&
+      !warmedDevices.has(warmUdid)
+    ) {
+      if (startsScreenReader(params.name)) {
+        warmedDevices.add(warmUdid);
+      } else if (
+        shouldAutoDescribe(params.name) &&
+        // No element tree follows a call that types a secret.
+        !containsSecretPlaceholder(params.arguments)
+      ) {
+        warmedDevices.add(warmUdid);
+        void warmDevice(warmUdid);
+      }
+    }
     try {
       const { result, outputHint, note, profiling } = await callTool(params.name, params.arguments);
 

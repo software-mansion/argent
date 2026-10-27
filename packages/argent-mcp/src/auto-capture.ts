@@ -146,6 +146,26 @@ export function getUdidFromArgs(args: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * iOS simulator UDID shape (8-4-4-4-12 hex). Copy of IOS_UDID_SHAPE in
+ * packages/device-providers/src/contract.ts, which argent-mcp does not depend
+ * on. It excludes Android serials, `amazon-` (Vega), `chromium-cdp-`, `ext:`
+ * and `remote:` ids, and the physical iPhone's 8-16 shape.
+ */
+const IOS_SIMULATOR_UDID_SHAPE =
+  /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
+
+export function isIosSimulatorUdid(udid: string): boolean {
+  return IOS_SIMULATOR_UDID_SHAPE.test(udid);
+}
+
+/** Tools that start a device's accessibility reader themselves. */
+const SCREEN_READER_TOOLS = new Set(["describe", "await-ui-element"]);
+
+export function startsScreenReader(toolName: string): boolean {
+  return SCREEN_READER_TOOLS.has(normalizeToolName(toolName));
+}
+
 /** Strip the client's `mcp__server__` prefix so the allow-list sees canonical names. */
 export function normalizeToolName(name: string): string {
   const idx = name.lastIndexOf("__");

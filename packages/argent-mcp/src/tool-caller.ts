@@ -69,6 +69,12 @@ interface ToolCaller {
     name: string,
     args: unknown
   ): Promise<{ result: unknown; outputHint?: string; note?: string; profiling?: boolean }>;
+  /**
+   * Starts an iOS simulator's accessibility reader. One attempt, no reconnect:
+   * the agent did not ask for it, so it must not be resent beside the agent's
+   * own calls or respawn the tool-server.
+   */
+  warmScreenReader(udid: string): Promise<void>;
 }
 
 // A tool-server URL without `http://` either fails `new URL`, whose error names
@@ -130,11 +136,23 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
     },
   });
 
+  async function warmScreenReader(udid: string): Promise<void> {
+    const url = `${deps.getHandle().url}/ax-service/${encodeURIComponent(udid)}/warm`;
+    parseUrl(url);
+    const res = await fetchWithReconnect(() => url, deps.reconnect, {
+      init: () => withHeaders({ method: "POST" }),
+      fetchTimeoutMs: timeout,
+      maxRetries: 0,
+    });
+    if (!res.ok) throw new Error(`Warm-up failed with HTTP ${res.status}: ${await res.text()}`);
+  }
+
   return {
     fetchTools: client.fetchTools,
     async callTool(name, args) {
       const { data, note, outputHint, profiling } = await client.callTool(name, args);
       return { result: data, outputHint, note, ...(profiling ? { profiling } : {}) };
     },
+    warmScreenReader,
   };
 }

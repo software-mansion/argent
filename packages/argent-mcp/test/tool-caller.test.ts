@@ -141,6 +141,14 @@ async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}
       return;
     }
     if (req.method === "POST" && url === "/tools/reject") return json(422, { error: "nope" });
+    if (req.method === "POST" && url === "/ax-service/SIM/warm") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (req.method === "POST" && url === "/ax-service/BAD/warm") {
+      return json(400, { error: "not a simulator" });
+    }
     if (req.method === "POST" && url === "/tools/hinted") {
       return json(200, { data: { a: 1 }, note: "n" });
     }
@@ -320,6 +328,31 @@ describe("createToolCaller", () => {
     await expect(callTool("fast", {})).resolves.toEqual({ result: { n: 2 } });
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(postsTo("/tools/fast")).toHaveLength(2);
+  });
+
+  it("warms a device's screen reader with one authorized request", async () => {
+    const { warmScreenReader } = caller();
+
+    await expect(warmScreenReader("SIM")).resolves.toBeUndefined();
+    const sent = postsTo("/ax-service/SIM/warm");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.headers.authorization).toBe("Bearer tok");
+  });
+
+  it("fails a warm-up the tool-server refuses", async () => {
+    const { warmScreenReader } = caller();
+
+    await expect(warmScreenReader("BAD")).rejects.toThrow("HTTP 400");
+  });
+
+  it("sends a warm-up once, without a reconnect, when its connection drops", async () => {
+    await stub.close();
+    stub = await startStub({ dropFirst: ["/ax-service/SIM/warm"] });
+    const { warmScreenReader, reconnect } = caller();
+
+    await expect(warmScreenReader("SIM")).rejects.toThrow("fetch failed");
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(postsTo("/ax-service/SIM/warm")).toHaveLength(1);
   });
 
   it("sends a retry to the handle a reconnect installed, with its token", async () => {

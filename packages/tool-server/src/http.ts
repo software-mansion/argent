@@ -65,6 +65,7 @@ import {
   createChromiumServerRouter,
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
+import { isLocalMobileSimulator, warmAxService } from "./utils/warm-ax-service";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
 
@@ -591,6 +592,25 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       namespaces: snapshot.namespaces,
       tools: snapshot.tools,
     });
+  });
+
+  // Starts a local iOS simulator's accessibility reader and reads the screen
+  // once, for a client that wants the reader up before its first describe. Not
+  // a tool: the read is discarded, so it records no tool telemetry, takes no
+  // one-time notes, and has none of describe's native-devtools fallback.
+  app.post("/ax-service/:udid/warm", async (req: Request, res: Response) => {
+    idleTimer.touch();
+    const udid = req.params.udid as string;
+    if (!(await isLocalMobileSimulator(udid))) {
+      res.status(400).json({ error: `"${udid}" is not a local iOS simulator.` });
+      return;
+    }
+    try {
+      await warmAxService(registry, udid);
+      res.status(204).end();
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // The client tars a file or dir and streams it here before the tool call.
