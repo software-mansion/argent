@@ -78,6 +78,7 @@ Each token grants one mechanism. Argent refuses a tool that needs a mechanism th
 | `native-profiler`  | profile the app with Instruments or Perfetto                        |
 | `js-debugger`      | attach a debugger client to the JavaScript runtime                  |
 | `native-devtools`  | inject the native inspection agent (iOS only)                       |
+| `usbmuxd`          | reach a physical iPhone through the usbmuxd endpoint in `usbmuxd`   |
 
 Argent ignores an unknown token. Thus a provider can declare a capability of a newer Argent version.
 
@@ -103,7 +104,25 @@ Argent never starts, restarts or shuts down the device of a provider. `boot-devi
 
 Argent never removes the file of a provider. Argent uses only the endpoints that its own simulator-server build supplies.
 
-Argent does not adopt a physical iPhone that a provider offers. Argent drives an iPhone through its own `devicectl` backend, which reaches the hardware directly and so passes the simulator-server of the provider and the grants of the descriptor. Argent refuses such a device instead and `argent providers check` reports it. Simulators and Android devices, physical ones included, are unaffected.
+Argent adopts a physical iPhone from a provider only with a `usbmuxd` endpoint and the `usbmuxd` capability. Without them Argent would drive the iPhone through its own `devicectl` backend, which reaches the hardware directly and so passes the grants of the descriptor; Argent refuses such a device instead and `argent providers check` reports it. Simulators and Android devices, physical ones included, are unaffected.
+
+## A physical iPhone on another machine
+
+A provider can offer an iPhone that is cabled to a different computer. The provider relays the usbmuxd socket of that computer to a local endpoint and declares it:
+
+```json
+{
+  "capabilities": ["usbmuxd"],
+  "kind": "device",
+  "name": "iPhone 15 (desk 2)",
+  "nativeId": "00008120-000154913A05A01E",
+  "platform": "ios",
+  "state": "connected",
+  "usbmuxd": "127.0.0.1:15038"
+}
+```
+
+`usbmuxd` is `host:port` for a TCP relay, the form that libimobiledevice, pymobiledevice3 and go-ios read from `USBMUXD_SOCKET_ADDRESS`, or an absolute unix socket path. Argent speaks the usbmuxd protocol to the endpoint as it does to `/var/run/usbmuxd` on the Mac: the pairing record comes from the usbmuxd that owns the cable, so the phone needs no pairing with the Mac of the agent and never appears in Xcode. The [physical iOS devices](/docs/features/physical-ios-devices) page lists what works on such a phone and what the Mac needs.
 
 Argent examines the booted simulators and injects its own native agent into them. A provider that boots a simulator can publish its descriptor a moment later. Argent can inject in this interval.
 
