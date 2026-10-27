@@ -35,7 +35,7 @@ sim-remote simctl io <UDID> screenshot shot.png
 sim-remote simctl io <UDID> recordVideo demo.mp4
 ```
 
-A script cannot press Ctrl-C. Use `screen-record` there: `start` returns at once and `stop` writes the file.
+A script cannot press Ctrl-C. Use `screen-record` there: `start` returns at once and `stop` writes the file. The machine keeps up to 2 GB of video per recording. A longer recording keeps only its most recent part. A recording of a device in landscape plays sideways.
 
 ```bash
 sim-remote screen-record start <UDID> --show-touches

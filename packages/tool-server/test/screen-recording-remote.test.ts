@@ -262,6 +262,25 @@ describe("remote screen recording", () => {
   });
 
   /**
+   * A stop that never reached the runner leaves it recording, with the touch
+   * markers in the live stream, while this session forgets the recording.
+   */
+  it("ends the runner's recording when neither the stop nor the fetch got through", async () => {
+    const api = await makeSession();
+    await startRemoteCapture(api, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: true,
+    });
+    mockStop.mockRejectedValueOnce(new Error("could not reach sim-router"));
+    mockFetch.mockRejectedValueOnce(new Error("could not reach sim-router"));
+
+    await expect(stopRemoteCapture(api)).rejects.toThrow("could not reach sim-router");
+    expect(mockEnd).toHaveBeenCalledWith(REMOTE_UDID);
+  });
+
+  /**
    * A recording the runner is still making, which this session knows nothing
    * about, would refuse every start on the device. It is stopped — the runner
    * keeps its video — and the start goes through.
@@ -376,6 +395,38 @@ describe("remote screen recording", () => {
     // Downloaded onto the path the start handed back, so the partial video is
     // where the teardown breadcrumb says it is.
     expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID, started.outputFile);
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+  });
+
+  /**
+   * A teardown while the runner is still starting has no recording to release
+   * yet; the start that then succeeds must end it rather than hand back a
+   * capture on a dead session.
+   */
+  it("ends the runner's recording when the session is torn down mid-start", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, remoteDevice, {
+      device: remoteDevice,
+    } as never);
+    let finishStart: (id: string) => void = () => {};
+    mockStart.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (finishStart = resolve))
+    );
+
+    const starting = startRemoteCapture(instance.api as ScreenRecordingSessionApi, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: true,
+    });
+    await vi.waitFor(() => expect(mockStart).toHaveBeenCalled());
+    await instance.dispose?.();
+    finishStart("rec-1");
+
+    const err = await starting.catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+    );
+    expect(mockEnd).toHaveBeenCalledWith(REMOTE_UDID);
     expect(getActiveScreenRecordings()).toHaveLength(0);
   });
 });

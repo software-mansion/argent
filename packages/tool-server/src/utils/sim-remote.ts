@@ -299,6 +299,9 @@ export async function screenRecordStart(
 // budget rather than the default: a long capture of a high-resolution device
 // is hundreds of megabytes.
 const RECORDING_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+// Nothing is downloaded, but the runner still muxes the whole recording before
+// it answers, which it allows up to two minutes.
+const RECORDING_END_TIMEOUT_MS = 150_000;
 
 /** Stop the recording and download the mp4 to `outputFile`, overwriting it. */
 export async function screenRecordStop(udid: string, outputFile: string): Promise<void> {
@@ -312,7 +315,9 @@ export async function screenRecordStop(udid: string, outputFile: string): Promis
  * this is for a recording that only has to end.
  */
 export async function screenRecordEnd(udid: string): Promise<void> {
-  await run(["screen-record", "stop", stripRemotePrefix(udid)]);
+  await run(["screen-record", "stop", stripRemotePrefix(udid)], {
+    timeoutMs: RECORDING_END_TIMEOUT_MS,
+  });
 }
 
 /**

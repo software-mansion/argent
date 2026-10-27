@@ -98,6 +98,12 @@ export async function startRemoteCapture(
     // longer be able to release a recording started after it.
     assertNotDisposed(api, "screen_recording_start");
     recordingId = await startOnRunner(api.deviceId, params.showTouches);
+    // A dispose while the runner was starting found nothing to release, so the
+    // recording it left running is ended here.
+    if (api.disposed) {
+      await screenRecordEnd(api.deviceId).catch(() => {});
+      assertNotDisposed(api, "screen_recording_start");
+    }
   } catch (err) {
     api.startPending = false;
     throw asStartFailure(err);
@@ -196,12 +202,20 @@ async function stopAndDownload(
   try {
     await screenRecordStop(deviceId, outputFile);
   } catch (err) {
-    if (!recordingId) throw err;
     // The stop's own error is the one worth reporting if this fails as well:
     // the fetch can only say the recording is not there.
-    await screenRecordFetch(deviceId, recordingId, outputFile).catch(() => {
-      throw err;
-    });
+    const fetched =
+      recordingId !== null &&
+      (await screenRecordFetch(deviceId, recordingId, outputFile).then(
+        () => true,
+        () => false
+      ));
+    if (fetched) return;
+    // The stop may never have reached the runner, which is then still
+    // recording, touch markers and all. Ending it keeps the video there for a
+    // fetch; a runner the stop did reach answers "not recording".
+    await screenRecordEnd(deviceId).catch(() => {});
+    throw err;
   }
 }
 
@@ -489,7 +503,7 @@ function asStartFailure(err: unknown): FailureError {
 /**
  * A stop that brought no video back. The session is startable again after it,
  * so this message is the caller's only way back to the recording: the runner
- * keeps a stopped recording until the machine is released, and the id is what
+ * keeps a stopped recording until the lease ends, and the id is what
  * fetches it. `timeLimitSeconds` is set when the cap ended the recording.
  */
 function asStopFailure(
