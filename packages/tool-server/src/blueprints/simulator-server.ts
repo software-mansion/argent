@@ -483,7 +483,7 @@ function withCaptureOnDemand(
   deviceId: string,
   instance: ServiceInstance<SimulatorServerApi>
 ): ServiceInstance<SimulatorServerApi> {
-  const unregister = registerCaptureOnDemandSender(deviceId, (enabled) => {
+  const unregister = registerCaptureOnDemandSender(deviceId, instance.api.apiUrl, (enabled) => {
     sendCommand(instance.api, { cmd: "capture_on_demand", enabled }).catch(() => {});
   });
   return {

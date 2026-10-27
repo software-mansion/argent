@@ -16,7 +16,10 @@ interface ProfilingRun {
 type CaptureOnDemandSender = (onDemand: boolean) => void;
 
 const runs = new Map<string, Set<ProfilingRun>>();
-const servers = new Map<string, { send: CaptureOnDemandSender; onDemand: boolean }>();
+const servers = new Map<
+  string,
+  { endpoint: string; send: CaptureOnDemandSender; onDemand: boolean }
+>();
 
 export function trackProfilingRun(deviceId: string, run: ProfilingRun): void {
   let set = runs.get(deviceId);
@@ -56,14 +59,15 @@ function syncCaptureOnDemand(): void {
 }
 
 /**
- * Registers a simulator-server, which starts with capture_on_demand off. Returns
- * the unregister call for its exit.
+ * Registers a simulator-server, reached at `endpoint`, which starts with
+ * capture_on_demand off. Returns the unregister call for its exit.
  */
 export function registerCaptureOnDemandSender(
   deviceId: string,
+  endpoint: string,
   send: CaptureOnDemandSender
 ): () => void {
-  const entry = { send, onDemand: false };
+  const entry = { endpoint, send, onDemand: false };
   servers.set(deviceId, entry);
   syncCaptureOnDemand();
   return () => {
@@ -76,10 +80,15 @@ export function registerCaptureOnDemandSender(
   };
 }
 
-/** The next check sends the mode again, on a new connection. */
-export function captureOnDemandDropped(deviceId: string): void {
+/**
+ * The connection to `endpoint` closed, so that server dropped the mode. The next
+ * check sends it again, on a new connection. The late close of a server that
+ * was already replaced on the device changes nothing: the new server, at
+ * another endpoint, still holds the mode.
+ */
+export function captureOnDemandDropped(deviceId: string, endpoint: string): void {
   const server = servers.get(deviceId);
-  if (server) server.onDemand = false;
+  if (server?.endpoint === endpoint) server.onDemand = false;
 }
 
 export function __resetProfilingDevicesForTesting(): void {

@@ -243,7 +243,7 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
     connections.delete(key);
     failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
     // The server drops the connection's capture_on_demand with it.
-    if (api.deviceId) captureOnDemandDropped(api.deviceId);
+    if (api.deviceId) captureOnDemandDropped(api.deviceId, key);
   });
 
   connections.set(key, conn);
