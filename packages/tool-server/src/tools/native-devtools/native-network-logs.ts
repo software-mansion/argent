@@ -34,7 +34,8 @@ export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
   },
   capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Retrieve network requests captured at the native NSURLProtocol level. 
-Unlike the JS-level network inspector (view-network-logs), this captures ALL network traffic from the app including native modules, Swift/Objective-C networking, and background transfers that never pass through JS XMLHttpRequest or fetch. 
+Unlike the JS-level network inspector (view-network-logs), this captures URLSession requests from the app (default and ephemeral session configurations, and URLSession.shared), including native modules and Swift/Objective-C networking that never pass through JS XMLHttpRequest or fetch. 
+It does NOT capture background URLSession transfers, Network.framework connections, WKWebView traffic (including fetch() inside a web view), or HTTP clients that bypass URLSession (e.g. Flutter dart:io HttpClient), so an empty result does not mean the app sent no requests. 
 Use when you need to inspect native-level HTTP traffic that is invisible to the JS-level capture. 
 Returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
