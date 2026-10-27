@@ -309,8 +309,8 @@ function guestVulkanArgs(guestVulkan: boolean): string[] {
   return ["-feature", guestVulkan ? "Vulkan" : "-Vulkan"];
 }
 
-// Only `ro.boot.hardware.vulkan` tracks `-feature -Vulkan`; `ro.hardware.vulkan`
-// stays set either way.
+// Only `ro.boot.hardware.vulkan` reliably tracks `-feature -Vulkan`;
+// `ro.hardware.vulkan` stays set on some images (API 34).
 async function runningGuestVulkanNote(
   serial: string,
   guestVulkan: boolean

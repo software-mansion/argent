@@ -376,8 +376,8 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
 
   // A reused emulator keeps the guest Vulkan mode it was started with.
   it.each([
-    ["darwin", "ranchu", {}, /with guest Vulkan/],
-    ["darwin", "", { guestVulkan: true }, /without guest Vulkan/],
+    ["darwin", "ranchu", {}, /already running with guest Vulkan/],
+    ["darwin", "", { guestVulkan: true }, /already running without guest Vulkan/],
     ["darwin", "", {}, undefined],
     ["darwin", "ranchu", { guestVulkan: true }, undefined],
     ["linux", "ranchu", {}, undefined],
