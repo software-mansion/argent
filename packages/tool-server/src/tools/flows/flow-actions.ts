@@ -1943,7 +1943,9 @@ function isBlindTreeRead(data: DescribeTreeData): boolean {
  * the tree calls ready.
  *
  * This is `await-screen-idle`'s question asked against the tree the directives
- * actually resolve against. It returns early the moment the screen is still.
+ * actually resolve against, without its `ambientMotion` path: a looping
+ * animation that never stops keeps this wait running until its timeout. It
+ * returns early the moment the screen is still.
  *
  * A screen that never settles spends the whole timeout and then passes with a
  * warning (see the section note above). Only an unreadable window is a hard

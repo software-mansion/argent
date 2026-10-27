@@ -107,6 +107,14 @@ export const PROFILING_CAPTURE_SKIPPED_NOTE =
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 
+/** Appended when the screen settled while looping animations kept moving. */
+export const AMBIENT_MOTION_NOTE =
+  "The screen settled while one to three looping animations kept moving (ambientMotion), such as a bobbing hint or a spinner. Do not raw-tap a moving element, and confirm the content you expect with `await-ui-element`.";
+
+export function hasAmbientMotion(idleResult: unknown): boolean {
+  return (idleResult as { ambientMotion?: unknown } | null)?.ambientMotion === true;
+}
+
 export function shouldAutoDescribe(toolName: string): boolean {
   return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
 }

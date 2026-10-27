@@ -243,7 +243,7 @@ The tool's own description carries the conditions, selector matching, defaults a
 
 ### await-screen-idle: Block until the screen stops changing
 
-Use after launch/navigation and before a raw tap, when an early-painted element may still be moving:
+Use after launch/navigation, when an early-painted element may still be moving:
 
 ```json
 { "udid": "<UDID>", "timeoutMs": 3000, "minStableMs": 250 }
@@ -251,7 +251,9 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 
 On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
 
-Use it only for live diagnosis. Do not record it or put it in `run-sequence`. E2E tests use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
+`ambientMotion: true` means the tool settled while one to three looping animations kept moving, such as a bobbing hint, a pulsing badge or a spinner without a progress role. Those elements are still moving: do not raw-tap them, and confirm with `await-ui-element` that the content you expect is there.
+
+Use it only for live diagnosis. Do not record it or put it in `run-sequence`. E2E tests use `await: { idle: true }`, which also compares pixels and has no `ambientMotion` path. This live tool can return during a presentation-layer animation.
 
 ---
 

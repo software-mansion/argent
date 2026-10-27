@@ -65,6 +65,7 @@ const LISTING = {
     { name: "reject", description: "Reject", inputSchema: { type: "object", properties: {} } },
     { name: "noted", description: "Noted", inputSchema: { type: "object", properties: {} } },
     { name: "e2e-execute", description: "Run", inputSchema: { type: "object", properties: {} } },
+    { name: "launch-app", description: "Launch", inputSchema: { type: "object", properties: {} } },
     // A former id, as the tool-server lists it.
     {
       name: "flow-execute",
@@ -129,6 +130,11 @@ async function startStub({
         (reqUrl === "/tools/e2e-execute" || reqUrl === "/tools/flow-execute")
       ) {
         return json(200, { data: RUN_REPORT });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/launch-app") return json(200, { data: {} });
+      if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
+        const ambient = JSON.parse(body).udid === "looping";
+        return json(200, { data: { settled: true, ...(ambient ? { ambientMotion: true } : {}) } });
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
@@ -219,6 +225,7 @@ describe("startMcpServer tool calls", () => {
       "reject",
       "noted",
       "e2e-execute",
+      "launch-app",
       "gesture-tap",
     ]);
   });
@@ -319,6 +326,15 @@ describe("startMcpServer tool calls", () => {
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
     expect(textOf(result)).toContain('"ok": true');
+  });
+
+  it.each([
+    ["adds", "looping", true],
+    ["does not add", "still", false],
+  ])("%s the ambient motion note when the screen settled that way", async (_, udid, noted) => {
+    const result = await client.callTool({ name: "launch-app", arguments: { udid } });
+
+    expect(textOf(result).includes("(ambientMotion)")).toBe(noted);
   });
 });
 

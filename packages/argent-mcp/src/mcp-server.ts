@@ -36,6 +36,8 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  AMBIENT_MOTION_NOTE,
+  hasAmbientMotion,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
@@ -150,11 +152,15 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
    * Lets the screen settle before capturing, bounded by the per-tool budget:
    * `await-screen-idle` polls the tree server-side and usually returns well
    * under the cap. If the call fails (e.g. a tool-server without that tool),
-   * falls back to sleeping the full budget. Resolves whether it settled.
+   * falls back to sleeping the full budget. Resolves whether it settled and
+   * whether only looping animations were left moving.
    */
-  async function awaitScreenSettled(udid: string, toolName: string): Promise<boolean> {
+  async function awaitScreenSettled(
+    udid: string,
+    toolName: string
+  ): Promise<{ settled: boolean; ambientMotion: boolean }> {
     const maxWaitMs = getAutoScreenshotDelayMs(toolName);
-    if (maxWaitMs === 0) return true;
+    if (maxWaitMs === 0) return { settled: true, ambientMotion: false };
     try {
       const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs });
       await spyLog({
@@ -164,10 +170,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         maxWaitMs,
         ...(idle.result as Record<string, unknown>),
       });
-      return (idle.result as { settled?: unknown } | null)?.settled === true;
+      return {
+        settled: (idle.result as { settled?: unknown } | null)?.settled === true,
+        ambientMotion: hasAmbientMotion(idle.result),
+      };
     } catch {
       await new Promise((r) => setTimeout(r, maxWaitMs));
-      return false;
+      return { settled: false, ambientMotion: false };
     }
   }
 
@@ -319,11 +328,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
         }
       } else if (udid && (wantScreenshot || wantTree)) {
-        const screenSettled = await awaitScreenSettled(udid, params.name);
+        const idle = await awaitScreenSettled(udid, params.name);
+        if (idle.ambientMotion) {
+          content = [...content, { type: "text" as const, text: AMBIENT_MOTION_NOTE }];
+        }
         const screenshot = wantScreenshot ? captureScreenshotBlocks(udid) : Promise.resolve([]);
         // An unsettled screen can leave a tree read in flight, which a
         // concurrent describe would reuse (physical iPhone).
-        if (!screenSettled) await screenshot;
+        if (!idle.settled) await screenshot;
         const tree = wantTree ? captureTreeBlocks(udid, params.name) : Promise.resolve([]);
         content = [...content, ...(await screenshot), ...(await tree)];
       }
