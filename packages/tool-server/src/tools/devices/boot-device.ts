@@ -32,7 +32,7 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
-import { clearAutomationEnabled, setAccessibilityPrefsPreBoot } from "../../utils/ax-prefs";
+import { clearAutomationEnabledOrWarn, setAccessibilityPrefsPreBoot } from "../../utils/ax-prefs";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -682,7 +682,7 @@ async function bootIos(
     });
   }
 
-  if (!isTvOs) await clearAutomationEnabled(udid);
+  if (!isTvOs) await clearAutomationEnabledOrWarn(udid);
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);

@@ -33,7 +33,11 @@ vi.mock("../src/utils/ios-device-sets", () => ({
   deviceSetForUdid: async () => deviceSetDir,
 }));
 
-import { clearAutomationEnabled, setAccessibilityPrefsPreBoot } from "../src/utils/ax-prefs";
+import {
+  clearAutomationEnabled,
+  clearAutomationEnabledOrWarn,
+  setAccessibilityPrefsPreBoot,
+} from "../src/utils/ax-prefs";
 
 function defaultsError(stderr: string): Error & { stderr: string } {
   return Object.assign(new Error("Command failed"), { stderr });
@@ -69,13 +73,30 @@ describe("AutomationEnabled, which leaves Full Keyboard Access unable to move fo
   });
 
   it.each([
+    "Domain (com.apple.Accessibility) not found.\nDefaults have not been changed.",
     "Key AutomationEnabled does not exist in domain com.apple.Accessibility; leaving defaults unchanged",
-    "Domain 'com.apple.Accessibility' not found.",
-    "Invalid device: UDID-2",
-  ])("clearAutomationEnabled never fails the caller (%s)", async (stderr) => {
+  ])("clearAutomationEnabled treats a missing pref as cleared (%s)", async (stderr) => {
     nextError = defaultsError(stderr);
 
     await expect(clearAutomationEnabled("UDID-2")).resolves.toBeUndefined();
+  });
+
+  it("clearAutomationEnabled surfaces simctl's error when the sim is not booted", async () => {
+    nextError = defaultsError("Process spawn via launchd failed because device is not booted.");
+
+    await expect(clearAutomationEnabled("UDID-3")).rejects.toThrow("Command failed");
+  });
+
+  it("clearAutomationEnabledOrWarn logs a failure instead of throwing", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    nextError = defaultsError("Invalid device: UDID-5");
+
+    await expect(clearAutomationEnabledOrWarn("UDID-5")).resolves.toBeUndefined();
+
+    expect(stderr).toHaveBeenCalledWith(
+      expect.stringContaining("could not clear AutomationEnabled")
+    );
+    stderr.mockRestore();
   });
 
   it("setAccessibilityPrefsPreBoot never writes AutomationEnabled", async () => {

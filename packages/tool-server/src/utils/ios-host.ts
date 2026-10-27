@@ -581,7 +581,12 @@ export const localIosHost: IosHost = {
   async stopProxy() {},
 };
 
-/** Accessibility `defaults` keys (all `-bool true`) that describe-driven tools need. */
+/**
+ * Accessibility `defaults` keys (all `-bool true`) written on cloud sims.
+ * `AutomationEnabled` makes UIKit label a text field with its placeholder;
+ * local sims leave it out to keep Full Keyboard Access working
+ * ({@linkcode clearAutomationEnabled}).
+ */
 const ACCESSIBILITY_DEFAULT_FLAGS = [
   "AutomationEnabled",
   "AccessibilityEnabled",

@@ -33,15 +33,33 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await accessibilityDefaults(udid, "write", "AutomationEnabled", "-bool", "true");
 }
 
+function isMissingDefault(err: unknown): boolean {
+  const stderr = (err as { stderr?: unknown } | null)?.stderr;
+  return typeof stderr === "string" && /not found|does not exist/.test(stderr);
+}
+
 /**
  * `AutomationEnabled` persists on the sim's disk and leaves Full Keyboard Access
- * unable to move focus, even across reboots. The iOS ax-service does not need
- * it, so remove it, including from sims an older argent wrote it to. Best
- * effort: `defaults delete` also fails when the key or the whole domain is
- * absent, which is the state we want.
+ * unable to move focus, even across reboots. Local sims trade it away: the
+ * ax-service connects without it, though UIKit then reports a text field's
+ * placeholder only as its value, with no label. Removes it from sims an older
+ * argent wrote it to as well. A missing key or domain is the wanted state, so
+ * that failure is ignored.
  */
 export async function clearAutomationEnabled(udid: string): Promise<void> {
-  await accessibilityDefaults(udid, "delete", "AutomationEnabled").catch(() => undefined);
+  await accessibilityDefaults(udid, "delete", "AutomationEnabled").catch((err) => {
+    if (!isMissingDefault(err)) throw err;
+  });
+}
+
+export async function clearAutomationEnabledOrWarn(udid: string): Promise<void> {
+  await clearAutomationEnabled(udid).catch((err) => {
+    process.stderr.write(
+      `[ax-prefs ${udid.slice(0, 8)}] could not clear AutomationEnabled, Full Keyboard Access may stay broken: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
+    );
+  });
 }
 
 /**

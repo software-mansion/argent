@@ -43,11 +43,11 @@ vi.mock("node:fs", async () => {
 
 // Mock the AX-bypass helpers at the module boundary so this file asserts
 // boot-device's dispatch (state probe → pre-boot if shutdown → boot →
-// clearAutomationEnabled → native-devtools → open) without pulling
+// clearAutomationEnabledOrWarn → native-devtools → open) without pulling
 // plist/kickstart internals into the exec-call sequence.
 const scannedSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
-const clearAutomationEnabledMock = vi.fn();
+const clearAutomationEnabledOrWarnMock = vi.fn();
 const isEntitlementBypassActiveMock = vi.fn();
 
 let scanTimedOut = false;
@@ -62,7 +62,7 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
 
 vi.mock("../src/utils/ax-prefs", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
-  clearAutomationEnabled: (...args: unknown[]) => clearAutomationEnabledMock(...args),
+  clearAutomationEnabledOrWarn: (...args: unknown[]) => clearAutomationEnabledOrWarnMock(...args),
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
@@ -116,7 +116,7 @@ describe("boot-device — iOS path", () => {
       { udid: "33333333-3333-3333-3333-333333333333", state: "Shutdown" },
     ]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
-    clearAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
@@ -150,8 +150,10 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock.mock.invocationCallOrder[0]).toBeLessThan(
       mockExecFile.mock.invocationCallOrder[0]
     );
-    expect(clearAutomationEnabledMock).toHaveBeenCalledTimes(1);
-    expect(clearAutomationEnabledMock).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111");
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledTimes(1);
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111"
+    );
 
     expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
       ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
@@ -384,7 +386,9 @@ describe("boot-device — iOS path", () => {
     // Already-Booted sim: in-sim cfprefsd would overwrite the host write, so
     // skip it.
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
-    expect(clearAutomationEnabledMock).toHaveBeenCalledWith("22222222-2222-2222-2222-222222222222");
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(
+      "22222222-2222-2222-2222-222222222222"
+    );
   });
 
   it("still clears AutomationEnabled when the state probe fails", async () => {
@@ -402,7 +406,9 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "44444444-4444-4444-4444-444444444444" });
 
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
-    expect(clearAutomationEnabledMock).toHaveBeenCalledWith("44444444-4444-4444-4444-444444444444");
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(
+      "44444444-4444-4444-4444-444444444444"
+    );
   });
 
   it("refuses to boot when the state probe times out without finding the simulator", async () => {
@@ -462,7 +468,7 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    expect(clearAutomationEnabledMock).toHaveBeenCalled();
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalled();
   });
 
   it("returns a structured init_failed result when native-devtools has given up", async () => {
@@ -712,7 +718,7 @@ describe("boot-device — iOS path", () => {
 
     await tool.execute!({}, { udid: TV_UDID });
 
-    expect(clearAutomationEnabledMock).not.toHaveBeenCalled();
+    expect(clearAutomationEnabledOrWarnMock).not.toHaveBeenCalled();
   });
 
   it("disposes the cached TvControl service on a tvOS force reboot", async () => {
