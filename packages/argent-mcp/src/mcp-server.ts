@@ -309,10 +309,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           },
         ];
       } else if (udid && (wantScreenshot || wantTree) && profiling) {
-        // The idle wait, screenshot and describe each load the app a profiler
-        // is recording on this device, distorting the profile. `describe` has
-        // already answered with the tree, so it needs no pointer to itself.
+        // The screenshot and describe load the app a profiler is recording on
+        // this device, distorting the profile. The idle wait stays: without it,
+        // a `describe` sent right after the action reads the screen from before
+        // it. `describe` has already answered with the tree, so it needs no
+        // pointer to itself.
         if (params.name !== "describe") {
+          await awaitScreenSettled(udid, params.name);
           content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
         }
       } else if (udid && (wantScreenshot || wantTree)) {

@@ -88,7 +88,7 @@ Mind the react-native and ios-native profiler selection mentioned above when sta
 - if session is marked as "stale", you may overtake it without prompting the user for allowance
 - if session is NOT "stale" - before taking action and terminating the other session, **stop and ask user what you should do**, explaining the situation.
 
-While a profiler records, interaction tools return no automatic screenshot or element tree, so the capture does not load the app. Call `screenshot` or `describe` when you need to see the screen; on an Android emulator each screenshot during a profile takes one frame in about 100 ms and does not wake the screen capture; on a physical Android device it takes about 150–200 ms and briefly wakes the device screen capture, so take them sparingly there.
+While a profiler records, interaction tools return no automatic screenshot or element tree, so the capture does not load the app. Call `screenshot` or `describe` when you need to see the screen; interaction tools still wait for the screen to settle before they return, so add no wait of your own; on an Android emulator each screenshot during a profile takes one frame in about 100 ms and does not wake the screen capture; on a physical Android device it takes about 150–200 ms and briefly wakes the device screen capture, so take them sparingly there.
 
 #### Annotate every interaction
 
