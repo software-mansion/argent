@@ -206,6 +206,29 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     };
     cdp.events.on("disconnected", onDisconnected);
 
+    // A JS reload (`debugger-reload-metro`, `r` in Metro, a red-box Reload)
+    // ends the run inside the app, and everything this session set up there.
+    // A page with React Native's `nativePageReloads` capability keeps this CDP
+    // connection open across the reload, so `disconnected` never fires: the
+    // runtime only reports its execution context gone. End the session here
+    // instead, so its run stops counting as a profile (profiling-devices.ts)
+    // and the next start sets up the new runtime.
+    const onCdpEvent = (method: string) => {
+      if (
+        method !== "Runtime.executionContextDestroyed" &&
+        method !== "Runtime.executionContextsCleared"
+      ) {
+        return;
+      }
+      if (state.profilingActive) {
+        state.profilingActive = false;
+        clearCachedProfilerPaths(state.port, state.deviceId);
+        stopSamplerInNextRuntime(cdp);
+      }
+      events.emit("terminated");
+    };
+    cdp.events.on("event", onCdpEvent);
+
     return {
       api: state,
       dispose: async () => {
@@ -215,6 +238,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         // disposes only this node, once per run.
         cdp.events.off("scriptParsed", onScriptParsed);
         cdp.events.off("disconnected", onDisconnected);
+        cdp.events.off("event", onCdpEvent);
         // `react-profiler-stop` stops the renderers and the sampler before
         // disposing; a dispose from `stop-all-simulator-servers` arrives
         // mid-run instead, leaving the in-app DevTools backend recording every
@@ -240,6 +264,28 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     };
   },
 };
+
+/**
+ * The Hermes sampler is process-wide: it runs on in the runtime a JS reload
+ * creates, and a later `Profiler.start` there keeps its old samples. A
+ * `Profiler.stop` sent before that runtime exists is refused, so it goes out
+ * when the runtime announces itself. The listener outlives the session that
+ * armed it, and no new run can start before it fires: nothing evaluates in a
+ * runtime that has not announced itself yet.
+ */
+function stopSamplerInNextRuntime(cdp: CDPClient): void {
+  const onEvent = (method: string) => {
+    if (method !== "Runtime.executionContextCreated") return;
+    disarm();
+    void cdp.send("Profiler.stop").catch(() => {});
+  };
+  const disarm = () => {
+    cdp.events.off("event", onEvent);
+    cdp.events.off("disconnected", disarm);
+  };
+  cdp.events.on("event", onEvent);
+  cdp.events.on("disconnected", disarm);
+}
 
 const profilerPathsCache = new Map<string, ProfilerSessionPaths>();
 

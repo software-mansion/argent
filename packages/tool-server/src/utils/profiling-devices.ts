@@ -6,8 +6,8 @@
  *
  * A start registers its session state; the run counts for as long as that
  * state's `profilingActive` is set. The sessions clear the flag on every way a
- * run ends (stop, the recording cap, an xctrace exit, a session teardown), so
- * nothing here needs clearing.
+ * run ends (stop, the recording cap, an xctrace exit, a JS reload, a session
+ * teardown), so nothing here needs clearing.
  */
 interface ProfilingRun {
   profilingActive: boolean;
