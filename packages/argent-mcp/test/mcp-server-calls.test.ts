@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
-import { getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import {
+  AUTO_DESCRIBE_HEADER,
+  AUTO_DESCRIBE_LEGEND,
+  getAutoScreenshotDelayMs,
+} from "../src/auto-capture.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -77,6 +81,23 @@ const LISTING = {
   ],
 };
 
+// describe's full header; the adapter swaps its coordinate lines for AUTO_DESCRIBE_LEGEND.
+const DESCRIBE_PREAMBLE = [
+  "Source: ax-service",
+  "Mode: flat",
+  "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.",
+  "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.",
+  "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.",
+].join("\n");
+const DESCRIBE_TREE = [
+  "",
+  "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)",
+  "",
+  '  AXButton "General"  (0.040, 0.300, 0.920, 0.050)',
+  "",
+].join("\n");
+const DESCRIBE_HINT = "The tree may be incomplete; retry after the UI settles.";
+
 const RUN_REPORT = {
   ok: true,
   flow: "demo",
@@ -91,6 +112,17 @@ const RUN_REPORT = {
 };
 
 type Route = (res: http.ServerResponse) => void | Promise<void>;
+
+// A profiler records on this device, so the stub flags its calls with `profiling`.
+const PROFILED_UDID = "emulator-5554";
+
+function isProfiledDevice(body: string): boolean {
+  try {
+    return (JSON.parse(body) as { udid?: unknown }).udid === PROFILED_UDID;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * A stub tool-server. With `token`, a request without that bearer token gets
@@ -133,15 +165,30 @@ async function startStub({
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
       }
-      // Both made while a profiler records on the device.
-      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
-        return json(200, { data: { done: true }, profiling: true });
+      if (req.method === "POST" && reqUrl === "/tools/screenshot") {
+        return json(422, { error: "no screen" });
       }
-      if (req.method === "POST" && reqUrl === "/tools/describe") {
-        return json(200, { data: { description: "Button 'OK'" }, profiling: true });
+      if (req.method === "POST" && isProfiledDevice(body)) {
+        if (reqUrl === "/tools/gesture-tap") {
+          return json(200, { data: { done: true }, profiling: true });
+        }
+        if (reqUrl === "/tools/describe") {
+          return json(200, { data: { description: "Button 'OK'" }, profiling: true });
+        }
+        if (reqUrl === "/tools/await-screen-idle") {
+          return json(200, { data: { settled: true, waitedMs: 450, polls: 3 }, profiling: true });
+        }
+      }
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return json(200, { data: { tapped: true } });
       }
       if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
-        return json(200, { data: { settled: true, waitedMs: 450, polls: 3 }, profiling: true });
+        return json(200, { data: { idle: true } });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, {
+          data: { description: `${DESCRIBE_PREAMBLE}\n${DESCRIBE_TREE}`, hint: DESCRIBE_HINT },
+        });
       }
       json(404, { error: "not found" });
     });
@@ -310,6 +357,26 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toBe("nope");
     expect(requests.filter((r) => r.url === "/tools/reject")).toHaveLength(1);
+  });
+
+  it("attaches the compacted element tree without describe's hint and logs its size", async () => {
+    const result = await client.callTool({
+      name: "gesture-tap",
+      arguments: { udid: "u", x: 0.5, y: 0.3 },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text?: string }>;
+    const tree = `Source: ax-service\nMode: flat\n${AUTO_DESCRIBE_LEGEND}\n${DESCRIBE_TREE}`;
+    expect(content.at(-1)).toEqual({ type: "text", text: `${AUTO_DESCRIBE_HEADER}\n${tree}` });
+    expect(JSON.stringify(content)).not.toContain(DESCRIBE_HINT);
+
+    const logged = readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { event: string; chars?: number })
+      .filter((entry) => entry.event === "auto_describe");
+    expect(logged.at(-1)?.chars).toBe(tree.length);
   });
 
   it("puts the tool-server's note before the result", async () => {

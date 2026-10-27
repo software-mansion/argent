@@ -107,6 +107,38 @@ export const PROFILING_CAPTURE_SKIPPED_NOTE =
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 
+/** Legend that replaces describe's coordinate lines in the appended tree. */
+export const AUTO_DESCRIBE_LEGEND = "(frames: normalized x, y, width, height; tap the centre)";
+
+// Kept in the appended tree: `Source: native-devtools` is the only sign that an
+// iOS describe fell back to an app-scoped tree without system UI.
+const DESCRIBE_SOURCE_AND_MODE = [/^Source: \S+$/, /^Mode: (flat|nested)$/];
+
+// They repeat the coordinate contract that the describe tool description and
+// the argent rule already carry, so the appended tree gets the legend instead.
+const DESCRIBE_COORDINATE_LINES = [
+  /^Coordinates are normalized \[0,1\] fractions of the screen \(x, y, width, height\), not pixels\.$/,
+  /^Pass them straight to gesture-tap \/ gesture-swipe \/ gesture-pinch, which expect this same space\.$/,
+  /^To tap an element, use its centre: tap_x = frame\.x \+ frame\.width \/ 2, tap_y = frame\.y \+ frame\.height \/ 2\.$/,
+];
+
+const DESCRIBE_PREAMBLE = [...DESCRIBE_SOURCE_AND_MODE, ...DESCRIBE_COORDINATE_LINES];
+
+/**
+ * Output without the preamble (hints, Vega's D-pad note, physical iOS's
+ * no-pinch note) is returned unchanged.
+ */
+export function compactAutoDescribe(description: string): string {
+  const lines = description.split("\n");
+  const hasPreamble = DESCRIBE_PREAMBLE.every((re, i) => re.test(lines[i] ?? ""));
+  if (!hasPreamble) return description;
+  return [
+    ...lines.slice(0, DESCRIBE_SOURCE_AND_MODE.length),
+    AUTO_DESCRIBE_LEGEND,
+    ...lines.slice(DESCRIBE_PREAMBLE.length),
+  ].join("\n");
+}
+
 export function shouldAutoDescribe(toolName: string): boolean {
   return AUTO_DESCRIBE_TOOLS.has(normalizeToolName(toolName));
 }

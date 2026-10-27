@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -6,6 +6,9 @@ import { setFlag } from "@argent/configuration-core";
 import {
   AUTO_SCREENSHOT_TOOLS,
   AUTO_SCREENSHOT_DELAY_MS_BY_TOOL,
+  AUTO_DESCRIBE_HEADER,
+  AUTO_DESCRIBE_LEGEND,
+  compactAutoDescribe,
   autoScreenshotEnabled,
   AUTO_DESCRIBE_TOOLS,
   autoDescribeEnabled,
@@ -340,5 +343,152 @@ describe("containsSecretPlaceholder", () => {
       })
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
+  });
+});
+
+// tool-server's real formatter, so rewording its header fails here instead of
+// silently turning compaction off. Loaded by URL: the file is outside rootDir.
+const { formatDescribeTree } = (await import(
+  new URL("../../tool-server/src/tools/describe/format-tree.ts", import.meta.url).href
+)) as { formatDescribeTree: (root: unknown, opts: { source: string }) => string };
+
+// Android TV's empty-focus fallback reads uiautomator through describeAndroid.
+vi.mock("../../tool-server/src/tools/describe/platforms/android", () => ({
+  describeAndroid: async () => ({
+    tree: { role: "AXGroup", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [] },
+    source: "uiautomator",
+  }),
+}));
+
+const { describeTv } = (await import(
+  new URL("../../tool-server/src/tools/describe/platforms/tv.ts", import.meta.url).href
+)) as { describeTv: (registry: unknown, device: unknown) => Promise<{ description: string }> };
+
+async function describeTvScreen(device: { id: string; platform: string }, focused: boolean) {
+  const play = { label: "Play", isFocused: true };
+  const api = {
+    describe: async () => ({
+      bundleId: "com.example.tv",
+      focused: focused ? play : null,
+      focusable: focused ? [play] : [],
+    }),
+    recycleAx: async () => {},
+  };
+  const registry = { resolveService: async () => api };
+  return (await describeTv(registry, device)).description;
+}
+
+const APPLE_TV = { id: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD", platform: "ios" };
+const ANDROID_TV = { id: "emulator-5556", platform: "android" };
+const appleTvOutputs = [await describeTvScreen(APPLE_TV, true)];
+const androidTvOutputs = [
+  await describeTvScreen(ANDROID_TV, true),
+  await describeTvScreen(ANDROID_TV, false),
+];
+
+describe("compactAutoDescribe", () => {
+  const root = {
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [
+      {
+        role: "AXButton",
+        label: "Continue",
+        frame: { x: 0.055, y: 0.86, width: 0.891, height: 0.088 },
+        children: [],
+      },
+    ],
+  };
+
+  it.each([
+    "ax-service",
+    "native-devtools",
+    "uiautomator",
+    "android-devtools",
+    "cdp-dom",
+    "harmony-uitest",
+  ])("keeps the %s Source and Mode lines, swaps the coordinate lines for the legend", (source) => {
+    const full = formatDescribeTree(root, { source });
+    const tree = full.slice(full.indexOf("\n\nROOT  ") + 1);
+    expect(tree.startsWith("\nROOT  AXGroup")).toBe(true);
+    expect(tree).toContain('AXButton "Continue"');
+    const [sourceLine, modeLine] = full.split("\n");
+    expect(sourceLine).toBe(`Source: ${source}`);
+    expect(compactAutoDescribe(full)).toBe(
+      `${sourceLine}\n${modeLine}\n${AUTO_DESCRIBE_LEGEND}\n${tree}`
+    );
+  });
+
+  it.each(["vega-automation", "xcuitest-runner"])(
+    "leaves %s unchanged, since its header carries platform notes",
+    (source) => {
+      const full = formatDescribeTree(root, { source });
+      expect(compactAutoDescribe(full)).toBe(full);
+    }
+  );
+
+  it.each([2, 3, 4])("leaves the header unchanged when line %i gains extra text", (index) => {
+    const lines = formatDescribeTree(root, { source: "ax-service" }).split("\n");
+    lines[index] += " Extra clause.";
+    const extended = lines.join("\n");
+    expect(compactAutoDescribe(extended)).toBe(extended);
+  });
+
+  it("leaves output without the preamble unchanged", () => {
+    const hint = "Hint: the tree is empty\n\nROOT  AXGroup (0, 0, 1, 1)";
+    expect(compactAutoDescribe(hint)).toBe(hint);
+  });
+
+  describe("matches the attached tree the argent rule describes", () => {
+    const rule = fs.readFileSync(new URL("../../skills/rules/argent.md", import.meta.url), "utf8");
+    const describeOutputsByTarget: Record<string, string[]> = {
+      "iOS simulators": [
+        formatDescribeTree(root, { source: "ax-service" }),
+        formatDescribeTree(root, { source: "native-devtools" }),
+      ],
+      "Android phones and tablets": [
+        formatDescribeTree(root, { source: "uiautomator" }),
+        formatDescribeTree(root, { source: "android-devtools" }),
+      ],
+      "Chromium": [formatDescribeTree(root, { source: "cdp-dom" })],
+      "HarmonyOS": [formatDescribeTree(root, { source: "harmony-uitest" })],
+      "physical iPhone": [formatDescribeTree(root, { source: "xcuitest-runner" })],
+      "Vega": [formatDescribeTree(root, { source: "vega-automation" })],
+      "Apple TV": appleTvOutputs,
+      "Android TV": androidTvOutputs,
+    };
+    const legendSentence = rule.match(
+      /On (.+?), the legend `(.+?)` replaces the coordinate lines that follow `describe`'s `Source:` and `Mode:` lines \(`Source: native-devtools` means an app-scoped iOS tree without system UI\); on (.+?), the tree comes through exactly as `describe` prints it, platform notes included\. The attached tree leaves out the separate `hint` that `describe` returns/
+    );
+    const splitTargets = (list: string) => list.replace(/ and (?!.* and )/, ", ").split(", ");
+    const compactedTargets = splitTargets(legendSentence?.[1] ?? "");
+    const unchangedTargets = splitTargets(legendSentence?.[3] ?? "");
+
+    it("quotes the header and the legend", () => {
+      expect(rule).toContain(`\`${AUTO_DESCRIBE_HEADER}\``);
+      expect(legendSentence?.[2]).toBe(AUTO_DESCRIBE_LEGEND);
+    });
+
+    it("names every target exactly once", () => {
+      expect([...compactedTargets, ...unchangedTargets].sort()).toEqual(
+        Object.keys(describeOutputsByTarget).sort()
+      );
+    });
+
+    it("lists the targets whose header gets the legend", () => {
+      for (const target of compactedTargets) {
+        for (const output of describeOutputsByTarget[target] ?? []) {
+          expect(compactAutoDescribe(output)).toContain(AUTO_DESCRIBE_LEGEND);
+        }
+      }
+    });
+
+    it("lists the targets whose output comes through unchanged", () => {
+      for (const target of unchangedTargets) {
+        for (const output of describeOutputsByTarget[target] ?? []) {
+          expect(compactAutoDescribe(output)).toBe(output);
+        }
+      }
+    });
   });
 });
