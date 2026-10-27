@@ -24,6 +24,8 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "open-url",
   "describe",
   "run-sequence",
+  // A wait is almost always followed by a look at the screen it waited for.
+  "await-ui-element",
 ]);
 
 /**
@@ -51,6 +53,9 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "keyboard": 300,
   "paste": 300,
   "describe": 100,
+  // The wait returns on the first match, often mid-transition; the cap must
+  // leave `await-screen-idle` room to see two identical reads.
+  "await-ui-element": 1500,
 };
 
 const DEFAULT_DELAY_MS = 1400;
@@ -84,12 +89,20 @@ export const AUTO_DESCRIBE_TOOLS = new Set([
   "restart-app",
   "open-url",
   "run-sequence",
+  "await-ui-element",
 ]);
 
 // Opt-out only: the `disable-auto-describe` flag is off by default.
 export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
   return !isFlagEnabled("disable-auto-describe", options);
 }
+
+/**
+ * Appended instead of the screenshot and element tree while a profiler records
+ * on the call's device (the tool-server flags the call's envelope).
+ */
+export const PROFILING_CAPTURE_SKIPPED_NOTE =
+  "Auto-screenshot and element tree skipped while a profiler is recording on this device. Call screenshot or describe if you need to see the screen.";
 
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";

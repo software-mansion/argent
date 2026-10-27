@@ -52,6 +52,7 @@ export function createDebuggerStatusTool(
 Use when you need to verify connectivity before using other debugger tools. Never fails when the runtime is simply unreachable: it returns a discriminated result instead:
 - { status: "connected", ... } with port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), isNewDebugger (false on the legacy inspector), connected flag, loadedScripts count, and sourceMapReady (always true: waits for pending source maps before returning; no-op on Chromium).
 - { status: "not_connected", connected: false, reason, detail, guidance } (port omitted on Chromium) when Metro is not running (reason "metro_not_running"), no app is attached ("no_app_connected"), the device_id matches no target ("device_mismatch"), the CDP endpoint is unreachable or answered malformed ("cdp_unreachable"), the runtime accepted the connection but never answered ("runtime_unresponsive"), the cached connection went stale ("stale_connection"), or a reconnect is in flight ("reconnecting"). Follow the guidance field; do not retry in a loop.`,
+    readOnly: true,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
     // Resolved manually in execute so a not-connected precondition becomes a

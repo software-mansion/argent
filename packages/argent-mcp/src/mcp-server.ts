@@ -36,6 +36,7 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -145,6 +146,78 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     extraHeaders: aiClientHeaders,
   });
 
+  /**
+   * Lets the screen settle before capturing, bounded by the per-tool budget:
+   * `await-screen-idle` polls the tree server-side and usually returns well
+   * under the cap. If the call fails (e.g. a tool-server without that tool),
+   * falls back to sleeping the full budget. Resolves whether it settled.
+   */
+  async function awaitScreenSettled(udid: string, toolName: string): Promise<boolean> {
+    const maxWaitMs = getAutoScreenshotDelayMs(toolName);
+    if (maxWaitMs === 0) return true;
+    try {
+      const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs });
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "auto_screenshot_readiness",
+        name: toolName,
+        maxWaitMs,
+        ...(idle.result as Record<string, unknown>),
+      });
+      return (idle.result as { settled?: unknown } | null)?.settled === true;
+    } catch {
+      await new Promise((r) => setTimeout(r, maxWaitMs));
+      return false;
+    }
+  }
+
+  async function captureScreenshotBlocks(udid: string): Promise<ContentBlock[]> {
+    try {
+      const { result } = await callTool("screenshot", { udid });
+      const blocks = await toMcpContent(result, "image", {
+        toolsUrl: TOOLS_URL,
+        authToken: AUTH_TOKEN,
+        deviceId: udid,
+      });
+      if (!blocks.some((b) => b.type === "image")) return [];
+      return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
+    } catch {
+      return []; /* best-effort */
+    }
+  }
+
+  /**
+   * The element tree the agent would otherwise have to fetch with a `describe`
+   * round-trip before its next tap. Measured on Sonnet over 70 runs: −21%
+   * turns, −23% wall time, −17% cost at equal task success (see PR #958). The
+   * tree is a few hundred tokens per action.
+   */
+  async function captureTreeBlocks(udid: string, toolName: string): Promise<ContentBlock[]> {
+    const t1 = Date.now();
+    try {
+      const d = await callTool("describe", { udid });
+      const desc = (d.result as { description?: unknown } | null)?.description;
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "auto_describe",
+        name: toolName,
+        durationMs: Date.now() - t1,
+        chars: typeof desc === "string" ? desc.length : 0,
+      });
+      if (typeof desc !== "string" || desc.length === 0) return [];
+      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` }];
+    } catch (e) {
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "auto_describe",
+        name: toolName,
+        durationMs: Date.now() - t1,
+        error: String(e instanceof Error ? e.message : e),
+      });
+      return [];
+    }
+  }
+
   const server = new Server(
     { name: "argent", version: getInstalledVersion() },
     {
@@ -152,7 +225,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       instructions:
         "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
         "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe (or debugger-component-tree) only when no fresh tree is available — never guess coordinates from pixels. " +
-        "On session end: call stop-all-simulator-servers with devices: [...] naming the devices this session used, and perform any necessary cleanup. " +
+        "Do not stop simulator servers when a task finishes: the next task reuses them. Call stop-all-simulator-servers when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services, always with devices: [...] naming the devices this session used. Never stop a Metro the user started unless they ask. " +
         "One tool-server is shared by every agent using this argent install, so an unscoped call tears down their devices too — reserve it for a deliberate machine-wide cleanup. " +
         "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
     }
@@ -184,7 +257,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       args: params.arguments,
     });
     try {
-      const { result, outputHint, note } = await callTool(params.name, params.arguments);
+      const { result, outputHint, note, profiling } = await callTool(params.name, params.arguments);
 
       await spyLog({
         ts: new Date().toISOString(),
@@ -235,83 +308,24 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
             text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
           },
         ];
+      } else if (udid && (wantScreenshot || wantTree) && profiling) {
+        // The screenshot and describe load the app a profiler is recording on
+        // this device, distorting the profile. The idle wait stays: without it,
+        // a `describe` sent right after the action reads the screen from before
+        // it. `describe` has already answered with the tree, so it needs no
+        // pointer to itself.
+        if (params.name !== "describe") {
+          await awaitScreenSettled(udid, params.name);
+          content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
+        }
       } else if (udid && (wantScreenshot || wantTree)) {
-        // Let the screen settle before capturing, bounded by the per-tool
-        // budget: `await-screen-idle` polls the tree server-side and usually
-        // returns well under the cap. If the call fails (e.g. a tool-server
-        // without that tool), fall back to sleeping the full budget.
-        const maxWaitMs = getAutoScreenshotDelayMs(params.name);
-        if (maxWaitMs > 0) {
-          try {
-            const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs });
-            await spyLog({
-              ts: new Date().toISOString(),
-              event: "auto_screenshot_readiness",
-              name: params.name,
-              maxWaitMs,
-              ...(idle.result as Record<string, unknown>),
-            });
-          } catch {
-            await new Promise((r) => setTimeout(r, maxWaitMs));
-          }
-        }
-
-        if (wantScreenshot) {
-          try {
-            const screenshotResult = await callTool("screenshot", { udid });
-            const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
-              toolsUrl: TOOLS_URL,
-              authToken: AUTH_TOKEN,
-              deviceId: udid,
-            });
-            const hasImage = screenshotContent.some((b) => b.type === "image");
-            if (hasImage) {
-              content = [
-                ...content,
-                {
-                  type: "text" as const,
-                  text: "--- Screen after action ---",
-                },
-                ...screenshotContent,
-              ];
-            }
-          } catch {
-            /* best-effort */
-          }
-        }
-
-        // Append the element tree the agent would otherwise have to fetch with
-        // a `describe` round-trip before its next tap. Measured on Sonnet over
-        // 70 runs: −21% turns, −23% wall time, −17% cost at equal task success
-        // (see PR #958). The tree is a few hundred tokens per action.
-        if (wantTree) {
-          const t1 = Date.now();
-          try {
-            const d = await callTool("describe", { udid });
-            const desc = (d.result as { description?: unknown } | null)?.description;
-            if (typeof desc === "string" && desc.length > 0) {
-              content = [
-                ...content,
-                { type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` },
-              ];
-            }
-            await spyLog({
-              ts: new Date().toISOString(),
-              event: "auto_describe",
-              name: params.name,
-              durationMs: Date.now() - t1,
-              chars: typeof desc === "string" ? desc.length : 0,
-            });
-          } catch (e) {
-            await spyLog({
-              ts: new Date().toISOString(),
-              event: "auto_describe",
-              name: params.name,
-              durationMs: Date.now() - t1,
-              error: String(e instanceof Error ? e.message : e),
-            });
-          }
-        }
+        const screenSettled = await awaitScreenSettled(udid, params.name);
+        const screenshot = wantScreenshot ? captureScreenshotBlocks(udid) : Promise.resolve([]);
+        // An unsettled screen can leave a tree read in flight, which a
+        // concurrent describe would reuse (physical iPhone).
+        if (!screenSettled) await screenshot;
+        const tree = wantTree ? captureTreeBlocks(udid, params.name) : Promise.resolve([]);
+        content = [...content, ...(await screenshot), ...(await tree)];
       }
 
       if (note) {

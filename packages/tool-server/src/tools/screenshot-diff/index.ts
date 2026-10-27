@@ -48,13 +48,13 @@ const zodSchema = z
       .describe(
         "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
       ),
-    captureBaseline: z.coerce
+    captureBaseline: z
       .boolean()
       .optional()
       .describe(
         "Capture the baseline screenshot live at full resolution before diffing. Cannot be combined with captureCurrent."
       ),
-    captureCurrent: z.coerce
+    captureCurrent: z
       .boolean()
       .optional()
       .describe(

@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
+import { getAutoScreenshotDelayMs } from "../src/auto-capture.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -72,6 +73,7 @@ const LISTING = {
       hideFromMcp: true,
       aliasOf: "e2e-execute",
     },
+    { name: "gesture-tap", description: "Tap", inputSchema: { type: "object", properties: {} } },
   ],
 };
 
@@ -88,8 +90,17 @@ const RUN_REPORT = {
   durationMs: 1,
 };
 
-/** A stub tool-server. With `token`, a request without that bearer token gets 401. */
-async function startStub(token?: string): Promise<Stub> {
+type Route = (res: http.ServerResponse) => void | Promise<void>;
+
+/**
+ * A stub tool-server. With `token`, a request without that bearer token gets
+ * 401. `routes` answers extra paths and `listing` replaces the tool list.
+ */
+async function startStub({
+  token,
+  routes = {},
+  listing = LISTING,
+}: { token?: string; routes?: Record<string, Route>; listing?: unknown } = {}): Promise<Stub> {
   const requests: Recorded[] = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -105,7 +116,9 @@ async function startStub(token?: string): Promise<Stub> {
       if (token !== undefined && req.headers.authorization !== `Bearer ${token}`) {
         return json(401, { error: "unauthorized" });
       }
-      if (req.method === "GET" && reqUrl === "/tools") return json(200, LISTING);
+      const route = routes[reqUrl];
+      if (route) return void route(res);
+      if (req.method === "GET" && reqUrl === "/tools") return json(200, listing);
       if (req.method === "POST" && reqUrl === "/upload") return json(200, { uploadId: "u-1" });
       if (req.method === "POST" && reqUrl === "/tools/reinstall-app") {
         return json(200, { data: { reinstalled: true, bundleId: "x" } });
@@ -119,6 +132,16 @@ async function startStub(token?: string): Promise<Stub> {
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
+      }
+      // Both made while a profiler records on the device.
+      if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
+        return json(200, { data: { done: true }, profiling: true });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/describe") {
+        return json(200, { data: { description: "Button 'OK'" }, profiling: true });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/await-screen-idle") {
+        return json(200, { data: { settled: true, waitedMs: 450, polls: 3 }, profiling: true });
       }
       json(404, { error: "not found" });
     });
@@ -191,7 +214,13 @@ describe("startMcpServer tool calls", () => {
 
   it("lists the tools of the tool-server", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(["reinstall-app", "reject", "noted", "e2e-execute"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "reinstall-app",
+      "reject",
+      "noted",
+      "e2e-execute",
+      "gesture-tap",
+    ]);
   });
 
   it("renders a run report the same whether called as flow-execute or e2e-execute", async () => {
@@ -202,6 +231,37 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(byAlias)).toContain('Running e2e test "demo"');
     expect(textOf(byAlias)).not.toContain('"steps"');
     expect(byAlias.content).toEqual(byId.content);
+  });
+
+  it("skips the post-action capture while a profiler records, with a note except on describe", async () => {
+    const tap = await client.callTool({
+      name: "gesture-tap",
+      arguments: { udid: "emulator-5554", x: 0.5, y: 0.5 },
+    });
+    // The tap still waits for the screen to settle before it returns, so a
+    // describe sent next does not read the screen from before the tap.
+    const toolCalls = () => requests.filter((r) => r.url.startsWith("/tools/"));
+    expect(toolCalls().map((r) => r.url)).toEqual([
+      "/tools/gesture-tap",
+      "/tools/await-screen-idle",
+    ]);
+    expect(JSON.parse(toolCalls()[1]!.body)).toEqual({
+      udid: "emulator-5554",
+      timeoutMs: getAutoScreenshotDelayMs("gesture-tap"),
+    });
+
+    const described = await client.callTool({
+      name: "describe",
+      arguments: { udid: "emulator-5554" },
+    });
+    expect(toolCalls().map((r) => r.url)).toEqual([
+      "/tools/gesture-tap",
+      "/tools/await-screen-idle",
+      "/tools/describe",
+    ]);
+    expect(textOf(tap)).toContain("skipped while a profiler is recording");
+    expect(textOf(described)).toContain("Button 'OK'");
+    expect(textOf(described)).not.toContain("profiler");
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {
@@ -262,6 +322,141 @@ describe("startMcpServer tool calls", () => {
   });
 });
 
+describe("startMcpServer screen capture after an interaction", () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const CAPTURE_LISTING = {
+    tools: ["gesture-tap", "await-screen-idle", "screenshot", "describe"].map((name) => ({
+      name,
+      description: name,
+      inputSchema: { type: "object", properties: {} },
+    })),
+  };
+  let stub: Stub;
+  let client: Client;
+  let events: string[];
+  let settled: boolean;
+  let idleStatus: number;
+  let screenshotStatus: number;
+
+  const send = (res: http.ServerResponse, status: number, payload: unknown) => {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(payload));
+  };
+  const slow =
+    (name: string, answer: (res: http.ServerResponse) => void): Route =>
+    async (res) => {
+      events.push(`${name} start`);
+      await new Promise((r) => setTimeout(r, 100));
+      events.push(`${name} end`);
+      answer(res);
+    };
+
+  beforeEach(async () => {
+    events = [];
+    settled = true;
+    idleStatus = 200;
+    screenshotStatus = 200;
+    stub = await startStub({
+      routes: {
+        "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
+        "/tools/await-screen-idle": (res) =>
+          idleStatus === 200
+            ? send(res, 200, { data: { settled, waitedMs: 1, polls: 1 } })
+            : send(res, idleStatus, { error: "await-screen-idle is not supported" }),
+        "/tools/screenshot": slow("screenshot", (res) =>
+          screenshotStatus === 200
+            ? send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } })
+            : send(res, screenshotStatus, { error: "screenshot failed" })
+        ),
+        "/tools/describe": slow("describe", (res) =>
+          send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
+        ),
+        "/shot.png": (res) => {
+          res.writeHead(200, { "Content-Type": "image/png" });
+          res.end(PNG);
+        },
+      },
+      listing: CAPTURE_LISTING,
+    });
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+    client = await connect({
+      bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+      simulatorServerDir: "",
+      nativeDevtoolsDir: "",
+    });
+  });
+
+  afterEach(async () => {
+    await client.close();
+    vi.unstubAllEnvs();
+    await stub.close();
+  });
+
+  const tap = () =>
+    client.callTool({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } });
+
+  it("appends the screenshot, then the element tree, after the tool result", async () => {
+    const result = await tap();
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.map((c) => (c.type === "image" ? "image" : c.text!.split("\n")[0]))).toEqual([
+      "{",
+      "--- Screen after action ---",
+      "image",
+      "Saved: /tmp/shot.png",
+      "--- Elements after action (describe) ---",
+    ]);
+    expect(content[0]!.text).toContain('"tapped": true');
+    expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  it("captures the screenshot and the tree at the same time once the screen settled", async () => {
+    await tap();
+
+    expect(events.slice(0, 2).sort()).toEqual(["describe start", "screenshot start"]);
+  });
+
+  it("captures the tree after the screenshot when the screen did not settle", async () => {
+    settled = false;
+
+    await tap();
+
+    expect(events).toEqual([
+      "screenshot start",
+      "screenshot end",
+      "describe start",
+      "describe end",
+    ]);
+  });
+
+  it("captures the tree after the screenshot when the settle wait fails", async () => {
+    idleStatus = 400;
+
+    await tap();
+
+    expect(events).toEqual([
+      "screenshot start",
+      "screenshot end",
+      "describe start",
+      "describe end",
+    ]);
+  });
+
+  it("keeps the tool result and the tree when the screenshot fails", async () => {
+    screenshotStatus = 500;
+
+    const result = await tap();
+
+    expect(result.isError).toBeFalsy();
+    const text = textOf(result);
+    expect(text).toContain('"tapped": true');
+    expect(text).not.toContain("--- Screen after action ---");
+    expect(text).toContain("--- Elements after action (describe) ---");
+  });
+});
+
 describe("startMcpServer with a local tool-server", () => {
   // No link and no ARGENT_TOOLS_URL: the adapter finds its tool-server through
   // the state file of its bundle, as an editor session does. The record names
@@ -276,7 +471,7 @@ describe("startMcpServer with a local tool-server", () => {
   let client: Client;
 
   async function startRecordedStub(token: string): Promise<Stub> {
-    const stub = await startStub(token);
+    const stub = await startStub({ token });
     stubs.push(stub);
     await toolsClient.writeToolsServerState({
       port: stub.port,
