@@ -219,6 +219,47 @@ export function readUsbmuxResultCode(xml: string): number | undefined {
  * makes no promise about the order. The `USB` entry wins so every runner
  * command rides the cable; any other exact match is the fallback.
  */
+/**
+ * Every serial a `ListDevices` reply carries over USB. Used to tell whether a
+ * relayed phone is still attached at its endpoint; the DeviceID lookup above is
+ * what a `Connect` needs.
+ */
+export function readUsbmuxSerials(xml: string): string[] {
+  const root = parsePlistOrUndefined(xml);
+
+  if (!isPlistDict(root)) {
+    return [];
+  }
+
+  const list = root["DeviceList"];
+
+  if (!Array.isArray(list)) {
+    return [];
+  }
+
+  const serials: string[] = [];
+
+  for (const entry of list) {
+    if (!isPlistDict(entry)) {
+      continue;
+    }
+
+    const properties = entry["Properties"];
+
+    if (!isPlistDict(properties)) {
+      continue;
+    }
+
+    const serial = properties["SerialNumber"];
+
+    if (typeof serial === "string" && properties["ConnectionType"] === "USB") {
+      serials.push(serial);
+    }
+  }
+
+  return serials;
+}
+
 export function readUsbmuxDeviceIdForSerial(xml: string, serial: string): number | undefined {
   const root = parsePlistOrUndefined(xml);
 
