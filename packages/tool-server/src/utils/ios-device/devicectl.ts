@@ -12,6 +12,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { appendHintToMessage } from "./usbmux-protocol";
+import { goIosInstallApp, goIosLaunchApp, goIosUninstallApp } from "./go-ios";
 import { iosRelayFor, type IosRelay } from "./relay";
 import { listUsbmuxSerials } from "./usbmux";
 
@@ -290,6 +291,13 @@ export async function listIosPhysicalDevices(): Promise<IosPhysicalDevice[]> {
 
 /** Install a .app / .ipa onto the device. */
 export async function installApp(udid: string, installablePath: string): Promise<void> {
+  const relay = iosRelayFor(udid);
+
+  if (relay) {
+    await goIosInstallApp(relay, installablePath);
+    return;
+  }
+
   await runDevicectl(
     ["device", "install", "app", "--device", udid, installablePath],
     "install app",
@@ -301,6 +309,13 @@ export async function installApp(udid: string, installablePath: string): Promise
 
 /** Uninstall by bundle id. Missing apps count as success. */
 export async function uninstallApp(udid: string, bundleId: string): Promise<void> {
+  const relay = iosRelayFor(udid);
+
+  if (relay) {
+    await goIosUninstallApp(relay, bundleId);
+    return;
+  }
+
   try {
     await runDevicectl(["device", "uninstall", "app", "--device", udid, bundleId], "uninstall app");
   } catch (error) {
@@ -334,6 +349,13 @@ export async function launchApp(
   bundleId: string,
   opts: LaunchAppOptions = {}
 ): Promise<void> {
+  const relay = iosRelayFor(udid);
+
+  if (relay) {
+    await launchRelayedApp(relay, bundleId, opts);
+    return;
+  }
+
   const args = ["device", "process", "launch", "--device", udid];
 
   if (opts.terminateExisting) {
@@ -354,6 +376,28 @@ export async function launchApp(
   }
 
   await runDevicectl(args, `launch ${bundleId}`, { bundleId });
+}
+
+/**
+ * go-ios launches by bundle id and takes arguments, but has no payload URL:
+ * that is a CoreDevice feature. open-url names the gap before reaching here.
+ */
+async function launchRelayedApp(
+  relay: IosRelay,
+  bundleId: string,
+  opts: LaunchAppOptions
+): Promise<void> {
+  if (opts.payloadUrl) {
+    throw new IosDeviceControlError(
+      `A relayed iPhone cannot receive a URL at launch (go-ios has no payload URL)`,
+      { hint: "Launch the app with launch-app and navigate inside it instead." }
+    );
+  }
+
+  await goIosLaunchApp(relay, bundleId, {
+    terminateExisting: opts.terminateExisting,
+    args: opts.args,
+  });
 }
 
 interface DeviceConnectionInfo {
