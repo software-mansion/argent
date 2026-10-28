@@ -348,6 +348,22 @@ describe("startMcpServer screen capture after an interaction", () => {
   // A hanging route never answers, as a read of a frozen device's tree.
   let idleHangs: boolean;
   let describeHangs: boolean;
+  let imageHangs: boolean;
+  // The screenshot as an artifact handle, as a current tool-server returns it,
+  // instead of the `{ url, path }` of an older one.
+  let artifactScreenshot: boolean;
+  const SHOT_ARTIFACT = {
+    __argentArtifact: true,
+    id: "shot-1",
+    filename: "shot.png",
+    mimeType: "image/png",
+    size: PNG.length,
+  };
+  const sendPng: Route = (res) => {
+    if (imageHangs) return;
+    res.writeHead(200, { "Content-Type": "image/png" });
+    res.end(PNG);
+  };
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -370,6 +386,8 @@ describe("startMcpServer screen capture after an interaction", () => {
     waitResult = { success: true, elapsed: 120 };
     idleHangs = false;
     describeHangs = false;
+    imageHangs = false;
+    artifactScreenshot = false;
     const describeRoute = slow("describe", (res) =>
       send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
     );
@@ -382,21 +400,24 @@ describe("startMcpServer screen capture after an interaction", () => {
           if (idleStatus === 200) send(res, 200, { data: { settled, waitedMs: 1, polls: 1 } });
           else send(res, idleStatus, { error: "await-screen-idle is not supported" });
         },
-        "/tools/screenshot": slow("screenshot", (res) =>
-          screenshotStatus === 200
-            ? send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } })
-            : send(res, screenshotStatus, { error: "screenshot failed" })
-        ),
+        "/tools/screenshot": slow("screenshot", (res) => {
+          if (screenshotStatus !== 200) {
+            send(res, screenshotStatus, { error: "screenshot failed" });
+          } else if (artifactScreenshot) {
+            send(res, 200, { data: { image: SHOT_ARTIFACT } });
+          } else {
+            send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } });
+          }
+        }),
         "/tools/describe": (res) => (describeHangs ? undefined : describeRoute(res)),
-        "/shot.png": (res) => {
-          res.writeHead(200, { "Content-Type": "image/png" });
-          res.end(PNG);
-        },
+        "/shot.png": sendPng,
+        [`/artifacts/${SHOT_ARTIFACT.id}`]: sendPng,
       },
       listing: CAPTURE_LISTING,
     });
     vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
     vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+    vi.stubEnv("ARGENT_ARTIFACTS_DIR", join(TEST_HOME, "artifacts"));
     client = await connect(
       {
         bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
@@ -528,6 +549,36 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(text).toContain("--- Screen after action ---");
     expect(text).toContain(AUTO_DESCRIBE_HEADER);
   });
+
+  it("downloads a screenshot artifact the tool-server returns", async () => {
+    artifactScreenshot = true;
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string }>;
+    expect(content.some((c) => c.type === "image")).toBe(true);
+    expect(stub.requests.filter((r) => r.url === `/artifacts/${SHOT_ARTIFACT.id}`)).toHaveLength(1);
+  });
+
+  it.each([
+    ["an artifact", true],
+    ["an older tool-server's URL", false],
+  ])(
+    "drops a screenshot whose download from %s outlasts the capture budget",
+    async (_source, artifact) => {
+      artifactScreenshot = artifact;
+      imageHangs = true;
+
+      const started = Date.now();
+      const result = await tap();
+
+      expect(Date.now() - started).toBeLessThan(CAPTURE_MS + 2_000);
+      const text = textOf(result);
+      expect(text).toContain('"tapped": true');
+      expect(text).not.toContain("--- Screen after action ---");
+      expect(text).toContain(AUTO_DESCRIBE_HEADER);
+    }
+  );
 });
 
 describe("startMcpServer with a local tool-server", () => {

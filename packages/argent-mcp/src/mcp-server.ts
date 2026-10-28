@@ -192,6 +192,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         toolsUrl: TOOLS_URL,
         authToken: AUTH_TOKEN,
         deviceId: udid,
+        // An image this side downloads counts against the same budget.
+        signal,
       });
       if (!blocks.some((b) => b.type === "image")) return [];
       return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
