@@ -83,15 +83,15 @@ describe("profiling-devices", () => {
     // neither adds nor removes it, a lost connection sends it again, and only
     // the exit releases it.
     const send = vi.fn();
-    const unregister = registerCaptureOnDemandSender("R5GL52LQ8WL", FIRST, send, true);
+    const unregister = registerCaptureOnDemandSender("HT82A0203045", FIRST, send, true);
     expect(send.mock.calls).toEqual([[true]]);
     const run = { profilingActive: true };
-    trackProfilingRun("R5GL52LQ8WL", run);
+    trackProfilingRun("HT82A0203045", run);
     run.profilingActive = false;
-    expect(isProfiling("R5GL52LQ8WL")).toBe(false);
+    expect(isProfiling("HT82A0203045")).toBe(false);
     expect(send.mock.calls).toEqual([[true]]);
-    captureOnDemandDropped("R5GL52LQ8WL", FIRST);
-    isProfiling("R5GL52LQ8WL");
+    captureOnDemandDropped("HT82A0203045", FIRST);
+    isProfiling("HT82A0203045");
     unregister();
     expect(send.mock.calls).toEqual([[true], [true], [false]]);
   });

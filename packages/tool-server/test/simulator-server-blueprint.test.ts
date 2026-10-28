@@ -311,7 +311,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     const { trackProfilingRun, isProfiling, __resetProfilingDevicesForTesting } =
       await import("../src/utils/profiling-devices");
 
-    const serial = "R5GL52LQ8WL";
+    const serial = "HT82A0203045";
     const device: DeviceInfo = { id: serial, platform: "android", kind: "device" };
     const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     signalReady(fakeProc, 55560);
