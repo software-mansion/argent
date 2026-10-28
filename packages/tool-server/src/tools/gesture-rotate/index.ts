@@ -8,43 +8,19 @@ import { sleep } from "../../utils/timing";
 const zodSchema = z
   .object({
     udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-    centerX: z
-      .number()
-      .describe(
-        "Center of rotation, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)"
-      ),
-    centerY: z
-      .number()
-      .describe(
-        "Center of rotation, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)"
-      ),
-    radius: z
-      .number()
-      .optional()
-      .describe(
-        "Distance from center to each finger: normalized 0.0–1.0 (fraction of screen, not pixels). " +
-          "E.g. 0.15 = fingers placed 15% of screen away from center. One value for both axes, so on " +
-          "a non-square screen the orbit is a physical ellipse; pass radiusX+radiusY instead for a " +
-          "true circle. Required unless radiusX and radiusY are given."
-      ),
+    centerX: z.number().describe("Center of rotation, horizontal."),
+    centerY: z.number().describe("Center of rotation, vertical."),
+    radius: z.number().optional().describe("Distance from the center to each finger."),
     radiusX: z
       .number()
       .optional()
-      .describe(
-        "Per-axis finger distance, horizontal: normalized 0.0–1.0 fraction of screen WIDTH. Give " +
-          "both radiusX and radiusY (they override radius) with radiusX·screenWidth = " +
-          "radiusY·screenHeight for a physically circular orbit: constant finger separation, no " +
-          "pinch coupled into the turn."
-      ),
+      .describe("Finger distance along the horizontal axis, as a fraction of screen WIDTH."),
     radiusY: z
       .number()
       .optional()
-      .describe(
-        "Per-axis finger distance, vertical: normalized 0.0–1.0 fraction of screen HEIGHT. " +
-          "Always paired with radiusX; see radiusX."
-      ),
+      .describe("Finger distance along the vertical axis, as a fraction of screen HEIGHT."),
     startAngle: z.number().describe("Starting angle in degrees (0 = right, 90 = down)"),
-    endAngle: z.number().describe("Ending angle in degrees. endAngle > startAngle = clockwise."),
+    endAngle: z.number().describe("Ending angle in degrees."),
     durationMs: z
       .number()
       .optional()
@@ -90,12 +66,10 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
     },
     failedMsg: ({ failureSignal }) => `Failed to rotate gesture: ${failureSignal.error_code}`,
   },
-  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees. All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe.
-endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn. A single radius applies to both axes, so on a non-square screen it traces a physical ellipse (finger separation varies through the turn); pass radiusX+radiusY (fractions of width/height with radiusX·width = radiusY·height) for a physically circular orbit instead.
-Auto-generates interpolated frames at ~60fps.
+  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees (endAngle > startAngle = clockwise). All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn.
+Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected. A single radius traces a physical ellipse on a non-square screen (finger separation varies through the turn); for a physically circular orbit, pass radiusX and radiusY with radiusX·width = radiusY·height.
 Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.
-Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected.`,
+Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
   services: (params) => ({

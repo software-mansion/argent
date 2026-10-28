@@ -124,12 +124,12 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved e2e test to run from `.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore"). Omit when flow_path is set.'
+        'Name of a saved e2e test to run from `<project_root>/.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore").'
       ),
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved e2e test is read from `.argent/e2e/<name>.yaml`, else `.argent/flows/<name>.yaml`, under this root; with flow_path, the e2e test, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
+        "Absolute path to the calling agent's project root: the cwd it is working in, also with flow_path, where the e2e test, its run: siblings, its script: paths and baselines resolve beside the YAML instead. A script still RUNS in this root."
       ),
     flow_file: z
       .string()
@@ -137,35 +137,30 @@ const zodSchema = z
       .describe(
         "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
       ),
-    flow_path: z
-      .string()
-      .optional()
-      .describe(
-        "Omit when name is set. Absolute path to an e2e test .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, its run: fragments and the snapshot baselines of each run, and the tool-server runs those copies. Keep run: fragments under project_root or beside the e2e test file. With updateBaselines, the client writes the new baselines when the run ends. The client also uploads each absolute .png or .yaml path that a tool: step takes as a file argument, when the file is under project_root or beside the e2e test file. A tool: e2e-execute step that names an e2e test with name and an absolute project_root without a .. segment runs: the client also uploads that e2e test and its own files. Over a link, the uploaded e2e tests must not have: script: steps; tool: steps that run an e2e test another way or record an e2e test; tool: steps that take a directory, an app or an output directory; tool: steps whose tool builds a file path from several arguments; tool: steps that name a relative path or a file other than .png or .yaml. Without a link, the tool-server reads the files in place and all step kinds run."
-      ),
+    flow_path: z.string().optional().describe("Absolute path to an e2e test .yaml on the client."),
     device: z
       .string()
       .optional()
       .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform`); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches; with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
       ),
     platform: z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for a standalone e2e test - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or a standalone e2e test's launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`."
       ),
     updateBaselines: z
       .boolean()
       .optional()
       .describe(
-        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself."
+        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself. Over a link, the client writes the new baselines when the run ends."
       ),
     prerequisiteAcknowledged: z
       .boolean()
       .optional()
       .describe(
-        "Set to true to confirm the execution prerequisite has been met. Required (LLM path) when a fragment defines an executionPrerequisite."
+        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite."
       ),
   })
   .superRefine((params, ctx) => {
@@ -1502,7 +1497,13 @@ export function createRunFlowTool(
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
 one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
 exactly one e2e test source: name (under project_root) or flow_path.
-Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
+Returns a per-step report: the first failure stops the run and the rest report as skipped.
+Over a link (argent link or ARGENT_TOOLS_URL), the client uploads the e2e test with the run: fragments,
+snapshot baselines and absolute .png/.yaml file arguments its steps use, from under project_root or beside
+the e2e test file. The run fails if a step needs any other project file (a script: step, a recording tool,
+a nested e2e-execute not called by name with an absolute project_root, a directory or app argument, a
+relative path): it stops before the first step and the error lists each such step. An absolute .png/.yaml
+argument from anywhere else fails only when its step runs. Without a link, every step kind runs.`,
     longRunning: true,
     zodSchema,
     fileInputs,

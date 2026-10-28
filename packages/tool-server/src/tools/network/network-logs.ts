@@ -209,8 +209,8 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
-Each entry includes a requestId that can be passed to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) interception is injected into the JS runtime: it records each request once: XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module itself, such as react-native-fetch-api (found in a Metro development build). Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+Pass an entry's requestId to view-network-request-details for full details.
+On React Native (iOS / Android / Vega) an interceptor injected into the JS runtime records each request once, from XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and, in a Metro development build, a fetch library that sends through React Native's network module itself, such as react-native-fetch-api. Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the CDP Network domain of the active tab (all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   readOnly: true,

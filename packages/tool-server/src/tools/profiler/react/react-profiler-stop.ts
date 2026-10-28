@@ -157,11 +157,10 @@ export function createReactProfilerStopTool(
         `Failed to stop React profiler: ${failureSignal.error_code}`,
     },
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
-Reads commit data from the in-app React DevTools backend.
-Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
+Stores the results for react-profiler-analyze or react-profiler-cpu-summary.
 Call react-profiler-start first, then exercise the app, then call this.
-Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices } summarizing the session.
-When any commit had fibers whose display name could not be resolved at stop time (typically transient components like modals/tooltips/animations that unmounted before stop), the response also includes { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }. These quantify how much work is not accounted for in the per-component breakdown (the per-commit duration itself remains correct).
+Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices }.
+If some fibers' display names could not be resolved (typically modals, tooltips or animations that unmounted before stop), it also returns { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }: the work missing from the per-component breakdown. Per-commit durations stay correct.
 Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
     capability: RN_ONLY_TOOL_CAPABILITY,

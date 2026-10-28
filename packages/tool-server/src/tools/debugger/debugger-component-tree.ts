@@ -741,9 +741,9 @@ const zodSchema = z.object({
     .boolean()
     .default(true)
     .describe(
-      "When true (default), only components visible on screen are returned. " +
-        "Set to false to include all mounted components including those scrolled " +
-        "off-screen. Useful when you need to understand the full page structure."
+      "When true, only components visible on screen are returned. " +
+        "Set to false to include all mounted components, including those scrolled " +
+        "off-screen, e.g. to understand the full page structure."
     ),
   maxNodes: z.coerce
     .number()
@@ -757,9 +757,8 @@ const zodSchema = z.object({
     .boolean()
     .default(false)
     .describe(
-      "When true, appends a summary of all filtered components: total fiber count, " +
-        "JS-side skip counts by name, and TS-side filter pass removals. " +
-        "Useful for understanding what was pruned from the tree."
+      "When true, appends a summary of all filtered components: total fiber count " +
+        "and skip counts by component name and by filter."
     ),
 });
 
@@ -777,16 +776,14 @@ export function createDebuggerComponentTreeTool(
     description: `Fetch the current screen of a running React Native app as a compact tree of React components.
 Each on-screen component is listed with its name, its text (or accessibilityLabel when it has no
 text), [testID=…] and normalized (tap: x,y) centre in [0,1] (fractions of the screen, not pixels).
-Off-screen (scrolled) content, full-screen transparent wrappers and implementation-detail
-components are pruned; includeSkipped=true adds counts of what was pruned.
+Full-screen transparent wrappers and implementation-detail components are pruned.
 
 Use when you need what describe does not show: a testID for a selector (on Android, describe omits
 the testID of a view that has no label and is not tappable), or the component names and nesting
 behind the screen before editing code. To find what to tap, use describe.
 
 On an iOS simulator with a landscape UI (a rotated device, or an unfolded foldable), the tap
-coordinates are on the screen's axes, which the gesture tools use. When two or more devices share
-one Metro, pass the simulator's udid too.
+coordinates are on the screen's axes, which the gesture tools use.
 Returns a compact text tree; call again after navigation. Fails if the Metro debugger is not connected.`,
     searchHint: "react native component tree testID testIDs selector component names hierarchy",
     readOnly: true,

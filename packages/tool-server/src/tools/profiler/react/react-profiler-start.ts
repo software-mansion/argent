@@ -79,7 +79,7 @@ const zodSchema = z.object({
     .int()
     .positive()
     .default(100)
-    .describe("CPU sampling interval in microseconds (default 100)"),
+    .describe("CPU sampling interval in microseconds"),
   force: z
     .boolean()
     .default(false)
@@ -120,11 +120,10 @@ export function createReactProfilerStartTool(
         `Failed to start React profiler: ${failureSignal.error_code}`,
     },
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
-Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling).
-If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session, but BEFORE OVERTAKING - ask the user for approval first, as how_to_reclaim explains.
+Use when you need to profile a user interaction.
 Before calling this, ask the user if they also want native profiling (native-profiler-start), and recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     capability: RN_ONLY_TOOL_CAPABILITY,

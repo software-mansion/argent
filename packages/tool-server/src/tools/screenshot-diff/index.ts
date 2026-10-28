@@ -36,12 +36,16 @@ const zodSchema = z
       .string()
       .min(1)
       .optional()
-      .describe("Path to the baseline PNG file. Required unless captureBaseline is true."),
+      .describe(
+        "Path to the saved baseline PNG file. Required unless captureBaseline is true; do not pass both."
+      ),
     currentPath: z
       .string()
       .min(1)
       .optional()
-      .describe("Path to the current PNG file. Required unless captureCurrent is true."),
+      .describe(
+        "Path to the saved current PNG file. Required unless captureCurrent is true; do not pass both."
+      ),
     udid: z
       .string()
       .min(1)
@@ -52,13 +56,13 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Capture the baseline screenshot live at full resolution before diffing. Cannot be combined with captureCurrent."
+        "Capture the baseline screenshot live from the device, at full resolution, before diffing. Cannot be combined with captureCurrent."
       ),
     captureCurrent: z
       .boolean()
       .optional()
       .describe(
-        "Capture the current screenshot live at full resolution before diffing. Cannot be combined with captureBaseline."
+        "Capture the current screenshot live from the device, at full resolution, before diffing. Cannot be combined with captureBaseline."
       ),
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -71,7 +75,7 @@ const zodSchema = z
       .min(1)
       .optional()
       .describe(
-        "Directory where diff artifacts should be written. Optional: defaults to a temp directory; the diff images are returned in the result either way."
+        "Directory where diff artifacts should be written (default: a temp directory). The diff images are returned in the result either way."
       ),
   })
   .strict();
@@ -118,9 +122,8 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device<flag:harmonyos> (iOS, Android or HarmonyOS)</flag:harmonyos>. Always provide udid so the capture backend can be resolved.
+Each side is a saved PNG or a live capture from the device<flag:harmonyos> (iOS, Android or HarmonyOS)</flag:harmonyos>. baselinePath + captureCurrent is the common visual-regression flow.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
-For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
 Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.

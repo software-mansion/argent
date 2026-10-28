@@ -9,9 +9,9 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording. Together with `name` it identifies which recording this echo belongs to."
+      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
     ),
-  message: z.string().describe("Message to echo when the e2e test is replayed"),
+  message: z.string().describe("Text the echo step prints"),
 });
 
 export const flowInsertEchoTool: ToolDefinition<

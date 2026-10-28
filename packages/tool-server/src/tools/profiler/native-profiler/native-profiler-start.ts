@@ -21,26 +21,23 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "iOS: the CFBundleExecutable or display name of the app to profile. Android: the app's package name. " +
-        "If omitted, auto-detects the currently running foreground app. Only provide this if " +
-        "auto-detection picks the wrong app."
+        "If omitted, auto-detects the foreground app; set it only if auto-detection picks the wrong app."
     ),
   template_path: z
     .string()
     .optional()
     .describe(
-      "iOS-only: path to an Instruments .tracetemplate file (defaults to bundled Argent template). " +
-        "Ignored on Android."
+      "iOS only. Path to an Instruments .tracetemplate file (defaults to the bundled Argent template)."
     ),
   malloc_stack_logging: z
     .boolean()
     .optional()
     .describe(
-      "iOS-only. When true, cold-launches the app under the profiler with Malloc Stack Logging " +
-        "enabled so memory leaks carry an allocation backtrace (responsible frame + library). " +
-        "Without it, leaks carry no backtrace (Instruments reports '<Call stack limit reached>'). " +
-        "Trade-offs: this RESTARTS the app (current state is lost), adds memory/CPU overhead, and " +
-        "makes the app noticeably slow to launch (every startup allocation records a backtrace), so " +
-        "leave it off for pure CPU/hang profiling. Ignored on Android."
+      "iOS only. When true, cold-launches the app under the profiler with Malloc Stack Logging enabled so " +
+        "memory leaks carry an allocation backtrace (responsible frame + library). Without it, leaks " +
+        "carry no backtrace (Instruments reports '<Call stack limit reached>'). Trade-offs: this " +
+        "RESTARTS the app (current state is lost), adds memory/CPU overhead, and makes the app " +
+        "noticeably slow to launch, so leave it off for pure CPU/hang profiling."
     ),
 });
 
@@ -64,7 +61,6 @@ export const nativeProfilerStartTool: ToolDefinition<
   },
   capability,
   description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: Perfetto (CPU, jank, RSS-growth weak signal).
-Auto-detects the running app process unless app_process is explicitly provided.
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
 Returns { status, pid, traceFile } confirming the recording has started.

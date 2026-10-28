@@ -105,7 +105,7 @@ const zodSchema = z.object({
     .int()
     .positive()
     .default(10)
-    .describe("Maximum tree depth to traverse (default 10)"),
+    .describe("Maximum tree depth to traverse"),
   filter: z.string().optional().describe("Regex string to filter component names"),
 });
 

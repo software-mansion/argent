@@ -66,19 +66,18 @@ export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   // verbatim (pinned by native-devtools-status.test.ts): the description must stay
   // a plain literal for scripts/extract-tools.mjs to read statically.
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
-Use when you need to verify native devtools readiness before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
+Use when you need to verify native devtools readiness: call this before using app-scoped native hierarchy tools or native-network-logs.
 
 Returns { envSetup, appRunning, connected, requiresRestart, state, message, nextLaunchWillBeInjected, injectable }:
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
 - appRunning: the target bundle currently has a running UIKit process on the simulator
 - connected: the dylib is active in the current running process for this bundleId
-- requiresRestart: the app is already running and a fresh process would reach this simulator's devtools endpoint where the current one does not: it carries no argent injection, was pointed at an earlier tool-server's listener, or could not be inspected to tell. Always false for a non-injectable app, and false when state is unregistered or connecting, where a relaunch cannot help.
-- state: why devtools are or aren't live, measured from the running process. "connected"; "not_running"; "stale_process" (the process cannot reach this simulator's devtools endpoint, launched either before argent's instrumentation was in place or against an earlier tool-server's listener, so restart-app fixes it); "unregistered" (the process IS injected and pointed at this simulator's devtools endpoint yet the service never registered it, so restarting the app cannot help); "connecting" (the process IS injected but launched moments ago and is still connecting, so waiting is what helps); "indeterminate" (the process could not be inspected). Omitted when injectable is false, which is terminal on its own.
+- requiresRestart: the app is running and a fresh process may reach this simulator's devtools endpoint where the current one does not: true exactly when state is stale_process or indeterminate. Always false for a non-injectable app.
+- state: why devtools are or aren't live, measured from the running process. "connected"; "not_running"; "stale_process" (the process cannot reach this simulator's devtools endpoint: it launched before argent's instrumentation was in place or against an earlier tool-server's listener); "unregistered" (the process IS injected and pointed at this endpoint, yet the service never registered it); "connecting" (the process IS injected, launched moments ago and is still connecting); "indeterminate". Omitted when injectable is false.
 - message: the remedy for that state, in full, including for a state not listed above. Omitted when connected or non-injectable. Prefer it over inferring one from the booleans: it is the only field that can tell you to stop restarting the app.
 - nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place (always false for a non-injectable app)
-- injectable: whether this app is a supported target for Argent native devtools. Apple system apps (bundle ids under com.apple.) are not: they are never the app under test, so the native tools refuse to read one.
+- injectable: false for Apple system apps (bundle ids under com.apple.): they are never the app under test, so the native tools refuse to read one.
 
-Call this before using app-scoped native hierarchy tools or native-network-logs.
 If injectable is false: treat this as TERMINAL. The app is not a supported native-devtools target, and no relaunch changes that. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point): they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app once, then proceed with the native feature. Read state before acting on a second such reading. Indeterminate reaches this rule too, and its line below bounds it at that one restart.

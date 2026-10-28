@@ -123,8 +123,12 @@ const zodSchema = z.object({
     .describe(
       "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
-  x: z.coerce.number().describe("Logical X coordinate on device screen"),
-  y: z.coerce.number().describe("Logical Y coordinate on device screen"),
+  x: z.coerce
+    .number()
+    .describe("X coordinate on device screen, in logical pixels (not normalized 0–1)"),
+  y: z.coerce
+    .number()
+    .describe("Y coordinate on device screen, in logical pixels (not normalized 0–1)"),
   contextLines: z.coerce
     .number()
     .default(3)
@@ -133,20 +137,20 @@ const zodSchema = z.object({
     .boolean()
     .default(true)
     .describe(
-      "When true, resolves bundled frame locations to original source files via Metro symbolication and includes a code fragment. When false, returns the raw bundled frame info (file, line, column) without symbolication or source reading."
+      "When true, resolves bundled frame locations to original source files via Metro symbolication and includes a code fragment. When false, returns the raw bundled frame info (file, line, column) without a code fragment."
     ),
   maxItems: z.coerce
     .number()
     .default(35)
     .describe(
-      "Maximum number of hierarchy items to return, counted from the bottom (most specific component first). The hierarchy walks from the tapped element up to the root, so the first items are the most relevant for editing. Increase to 70+ if you need to understand the broader navigation/screen structure."
+      "Maximum number of hierarchy items to return, most specific first. The default covers all app-specific code; increase to 70+ to also see the navigation/screen structure."
     ),
   includeSkipped: z
     .boolean()
     .default(false)
     .describe(
       "When true, items that would normally be filtered are kept in the response " +
-        "with skipped=true and a skipReason. Useful for understanding what was pruned."
+        "with skipped=true and a skipReason."
     ),
 });
 
@@ -175,15 +179,8 @@ export const debuggerInspectElementTool: ToolDefinition<
   description: `Inspect the React component hierarchy at a screen coordinate (x, y).
 Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
-
 The first items (lowest indices) are the most specific: the exact component under
 the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Default shows 35 items which covers all app-specific code; use maxItems=70+ to also
-see the navigation/screen structure.
-
-Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.
-Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.
-Set includeSkipped=true to see filtered items annotated with skip reasons.
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
   readOnly: true,
   zodSchema,

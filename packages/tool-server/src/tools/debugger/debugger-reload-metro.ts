@@ -34,7 +34,7 @@ export const debuggerReloadMetroTool: ToolDefinition<
       `Failed to reload the app through Metro: ${failureSignal.error_code}`,
   },
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
-Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method, deviceName, appName, logicalDeviceId } indicating which reload path was used and which device/app was targeted. Fails if Metro is not running on the given port.`,
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method (cdp or http), deviceName, appName, logicalDeviceId }. Fails if Metro is not running on the given port.`,
   zodSchema,
   // RN-only: reloading a Chromium page is a different operation from restarting
   // the Metro bundle, so it would need its own tool.

@@ -77,11 +77,11 @@ const zodSchema = z.object({
     .describe(
       "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
     ),
-  requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
+  requestId: z.string().describe("The requestId from view-network-logs."),
   includeBody: z
     .boolean()
     .default(true)
-    .describe("Whether to include the response body (if captured). Defaults to true."),
+    .describe("Whether to include the response body (if captured)."),
 });
 
 interface RawEntry {
@@ -153,10 +153,10 @@ export const networkRequestTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
-  description: `Get full details of a specific network request by its requestId (from view-network-logs).
+  description: `Get full details of a specific network request by its requestId.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
-Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is replaced by "[body omitted: binary <mime>, N bytes]". Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found: use view-network-logs to get valid requestId values.`,
+Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted. Use when you need headers, body, or timing for a specific request after listing logs.
+Returns an error message string if the requestId is not found.`,
   readOnly: true,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,

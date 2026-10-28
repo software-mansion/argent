@@ -21,49 +21,30 @@ const zodSchema = z.object({
     .describe(
       "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
     ),
-  centerX: z
-    .number()
-    .describe(
-      "Center of pinch, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)"
-    ),
-  centerY: z
-    .number()
-    .describe(
-      "Center of pinch, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)"
-    ),
-  startDistance: z
-    .number()
-    .describe(
-      "Initial distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
-        "E.g. 0.2 = fingers 20% of screen apart. " +
-        "Use a larger startDistance than endDistance to pinch in (zoom out)."
-    ),
-  endDistance: z
-    .number()
-    .describe(
-      "Final distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
-        "E.g. 0.6 = fingers 60% of screen apart. " +
-        "Use a larger endDistance than startDistance to pinch out (zoom in)."
-    ),
+  centerX: z.number().describe("Center of the pinch, horizontal."),
+  centerY: z.number().describe("Center of the pinch, vertical."),
+  startDistance: z.number().describe("Initial distance between the two fingers."),
+  endDistance: z.number().describe("Final distance between the two fingers."),
   endCenterX: z
     .number()
     .optional()
     .describe(
-      "Final horizontal center of the pinch: normalized 0.0–1.0. When set, the centroid drifts " +
-        "linearly from centerX to endCenterX over the gesture (e.g. to keep expanding fingers " +
-        "on-screen near an edge). Omit for a fixed center."
+      "Final horizontal center of the pinch. When set, the centroid drifts linearly from centerX to " +
+        "endCenterX over the gesture (e.g. to keep expanding fingers on-screen near an edge). Omit for a " +
+        "fixed center."
     ),
   endCenterY: z
     .number()
     .optional()
     .describe(
-      "Final vertical center of the pinch: normalized 0.0–1.0. When set, the centroid drifts " +
-        "linearly from centerY to endCenterY over the gesture. Omit for a fixed center."
+      "Final vertical center of the pinch; drifts from centerY like endCenterX. Omit for a fixed center."
     ),
   angle: z
     .number()
     .optional()
-    .describe("Axis angle in degrees along which the fingers are placed (default 0 = horizontal)."),
+    .describe(
+      "Angle in degrees of the axis the fingers lie on: 0 = horizontal (default), 90 = vertical."
+    ),
   durationMs: z
     .number()
     .optional()
@@ -119,10 +100,9 @@ export const gesturePinchTool: ToolDefinition<Params, Result> = {
       `Pinched ${params.endDistance > params.startDistance ? "out" : "in"} at (${Math.round(params.centerX * 100)}%, ${Math.round(params.centerY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to pinch: ${failureSignal.error_code}`,
   },
-  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe.
+  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. Positions and distances are fractions of the screen (0.0–1.0, not pixels), as in gesture-tap.
 startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
 Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
-Auto-generates interpolated frames at ~60fps<flag:harmonyos> on iOS and Android; HarmonyOS takes both fingers' endpoints in one call and interpolates them on-device</flag:harmonyos>. The angle parameter controls the axis (0 = horizontal, 90 = vertical). Optional endCenterX/endCenterY drift the centroid linearly over the gesture (omitted = fixed center).
 Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
   zodSchema,
   capability,

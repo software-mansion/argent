@@ -37,7 +37,7 @@ const zodSchema = z.object({
   timeout: z
     .number()
     .optional()
-    .describe("Optional time limit in milliseconds. The default is 30000 and the minimum is 100."),
+    .describe("Time limit in milliseconds. The default is 30000 and the minimum is 100."),
 });
 
 interface FlowAddScriptResult {
@@ -133,7 +133,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add script step to e2e test ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Pass the same \`name\` and \`project_root\` as \`e2e-start-recording\`, and call it where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
+  description: `Run a local .mjs file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a

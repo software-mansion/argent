@@ -42,7 +42,7 @@ const annotationSchema = z.object({
   offsetMs: z.coerce
     .number()
     .describe(
-      "Milliseconds since profiling started. Compute as: tapTimestampMs - startedAtEpochMs, using the timestampMs returned by tap/swipe and the startedAtEpochMs returned by react-profiler-start."
+      "Milliseconds since profiling started: tapTimestampMs - startedAtEpochMs, where tapTimestampMs is the timestampMs a tap/swipe tool returned and startedAtEpochMs is the value react-profiler-start returned."
     ),
   label: z.string().describe("Description of the action performed"),
 });
@@ -63,8 +63,7 @@ const zodSchema = z.object({
     .array(annotationSchema)
     .optional()
     .describe(
-      "Optional list of user actions with their time offset from profiling start. " +
-        "Compute offsetMs = tapTimestampMs - startedAtEpochMs, where tapTimestampMs comes from the tap/swipe tool return value and startedAtEpochMs comes from react-profiler-start return value."
+      "User actions to annotate the report's commits with: each commit shows the action that preceded it."
     ),
 });
 
@@ -86,11 +85,6 @@ render cascades, root cause identification, and a top components table.
 Raw profiling data is saved to disk with a unique session timestamp for later reload via profiler-load.
 After presenting the report, ask the user whether to investigate further (drill-down with
 profiler-cpu-query / profiler-commit-query) or implement fixes and re-profile for comparison.
-Requires react-profiler-stop to have been called first.
-Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
-the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
-where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
-is returned by react-profiler-start.
 Use when the profiling session is complete and you need to interpret the collected data.
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,

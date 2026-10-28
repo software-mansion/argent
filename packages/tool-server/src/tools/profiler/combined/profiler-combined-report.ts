@@ -56,7 +56,6 @@ export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema
   },
   description: `Generate a cross-correlated report combining React Profiler and native profiler data.
 Maps native hangs to React commits using wall-clock time alignment.
-Requires both react-profiler-analyze and native-profiler-analyze to have been called first.
 Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
 Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,

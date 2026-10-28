@@ -101,12 +101,7 @@ const zodSchema = z.object({
     .describe(
       "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
     ),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(20)
-    .describe("Number of components to return, longest total render time first (default 20)"),
+  top_n: z.coerce.number().int().positive().default(20).describe("Number of components to return"),
 });
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
@@ -118,8 +113,8 @@ export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>,
       `Failed to read React render activity: ${failureSignal.error_code}`,
   },
   description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
-Returns a markdown table of the components with the longest total render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that. No profiling session required; works on a live connected app.
-Use when you want a quick look at what is mounted without a full profiling session.
+Returns a markdown table of the components with the longest total render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
+Use when you want a quick look at what is mounted in a live connected app, without a profiling session.
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   readOnly: true,
   zodSchema,

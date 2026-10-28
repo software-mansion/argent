@@ -22,7 +22,7 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording. Together with `name` it identifies which recording to finish."
+      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
     ),
 });
 
@@ -159,7 +159,7 @@ export const flowFinishRecordingTool: ToolDefinition<
       `Failed to finish recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
   description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
-A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line of its own, right below the step it judges, and \`message\` counts them by kind. A warning is repeated only while the step it judges is still identifiable by its number: hand-editing the .yaml during the recording moves the steps, so those warnings are DROPPED rather than pinned on whichever step inherited the number, and \`message\` says how many were dropped. A step that carries a cross-tree warning was re-probed against the runner's tree: read it before converting that wait to \`await:\`/\`assert:\`, which is what the verdict is about and what this moment is for. A step that recorded a wait which did not pass was never probed at all, and its own warning names the CAUSE, because only one of them judges the condition: an unmet wait was read and found false, and it stops the run at replay; a wait whose tree source could not be read, or one that was cancelled, observed nothing and leaves the condition UNKNOWN rather than known-bad. Read those before replaying.
+A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),

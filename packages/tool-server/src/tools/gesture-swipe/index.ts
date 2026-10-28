@@ -49,18 +49,10 @@ const zodSchema = z
       .describe(
         "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
       ),
-    fromX: z
-      .number()
-      .min(0)
-      .max(1)
-      .describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
-    fromY: z
-      .number()
-      .min(0)
-      .max(1)
-      .describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
-    toX: z.number().min(0).max(1).describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
-    toY: z.number().min(0).max(1).describe("End y: normalized 0.0–1.0 (not pixels; same as tap)"),
+    fromX: z.number().min(0).max(1).describe("Start x."),
+    fromY: z.number().min(0).max(1).describe("Start y."),
+    toX: z.number().min(0).max(1).describe("End x."),
+    toY: z.number().min(0).max(1).describe("End y."),
     durationMs: z
       .number()
       .max(MAX_DURATION_MS, {
@@ -68,13 +60,13 @@ const zodSchema = z
       })
       .optional()
       .describe(
-        `Total gesture duration in milliseconds (default 300, at most ${MAX_DURATION_MS} - the gesture holds a finger down for exactly this long)`
+        "Total gesture duration in milliseconds (default 300); the finger stays down this long. Below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as any flick."
       ),
     momentum: z
       .boolean()
       .optional()
       .describe(
-        `Whether the swipe releases with momentum; default true (a natural flinging swipe). Pass false for a momentum-free swipe at the default durationMs: the finger decelerates into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use false for scroll-to-element loops. momentum: false needs durationMs >= ${MOMENTUM_FREE_MIN_DURATION_MS} and is rejected below it: a shorter ease-out gives the OS velocity fit too little wall clock to read the deceleration as a stop, and it flings harder than a plain swipe instead (on Android, backwards). At ${MOMENTUM_FREE_MIN_DURATION_MS} itself the swipe lands short of where the finger stopped, and 2 of 47 runs still flung backwards.`
+        `Whether the swipe releases with momentum; default true (a natural flinging swipe). false eases the finger into the end point so the OS applies little to no fling and the content stops where the finger lifts: use it when you need a deterministic scroll distance, e.g. in scroll-to-element loops. false needs durationMs >= ${MOMENTUM_FREE_MIN_DURATION_MS} and is rejected below that; near ${MOMENTUM_FREE_MIN_DURATION_MS} it can still land short or fling, so keep the default 300.`
       ),
     // `momentum`'s shipped spelling, with the opposite polarity. Declared so this
     // non-strict object refuses it instead of stripping it and flinging - the exact
@@ -135,15 +127,15 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
       `Swiped from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to swipe: ${failureSignal.error_code}`,
   },
-  // The bounds are spelled out rather than interpolated: extract-tools scans this
-  // description statically, so a `${}` in it drops the tool out of the scan.
-  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
+  // Never interpolate into this description: extract-tools scans it statically,
+  // so a `${}` in it drops the tool out of the scan.
+  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Android emulator). All from/to positions are fractions of screen width/height (not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps)<flag:harmonyos>; HarmonyOS takes the whole gesture in one call and interpolates it on-device</flag:harmonyos>.
 Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium; use gesture-scroll there instead.
 Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.<flag:harmonyos>
 HarmonyOS: durationMs sets drag speed, clamped to uitest's 200-40000 px/s, so a short slow swipe ends early and a long fast one runs late.</flag:harmonyos>
-Pass momentum:false for a momentum-free swipe that lands where the finger lifts (little to no fling at the 300 default), when you need a deterministic scroll distance; it needs durationMs >= 150 and is rejected below that, a shorter ease-out leaving the OS too little wall clock to read the deceleration as a stop. At 150 it lands short of the lift point instead, and 2 of 47 runs still flung backwards. A plain swipe takes any duration up to 10000ms and is delivered as close to the speed it was authored as a 16ms frame allows: below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as it flings anything. Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
+Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,

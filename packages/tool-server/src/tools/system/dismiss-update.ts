@@ -15,7 +15,7 @@ export const dismissUpdateTool: ToolDefinition<{ hours: number }> = {
       `Failed to dismiss Argent update: ${failureSignal.error_code}`,
   },
   description:
-    "Clear the Argent update notification for the given number of hours. Use when the user asks to postpone or silence update reminders. Returns { message } confirming the suppression duration. Fails if the hours value is negative or the suppression state cannot be persisted.",
+    "Clear the Argent update notification for a number of hours. Use when the user asks to postpone or silence update reminders. Returns { message } confirming the suppression duration. Fails if the suppression state cannot be persisted.",
   zodSchema,
   services: () => ({}),
   async execute(_services, params, _options) {

@@ -38,7 +38,7 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 7. screenshot → verify home screen appeared
 ```
 
-> **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder (the `keyboard` description lists where it is read from and what to do when a name is missing). Never invent credentials or echo secret values into reports or saved files.
+> **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder (`keyboard`'s `text` parameter lists where it is read from and what to do when a name is missing). Never invent credentials or echo secret values into reports or saved files.
 
 ## 3. Recovery Pattern
 

@@ -66,10 +66,9 @@ export function createPasteTool(registry: Registry): ToolDefinition<PasteParams,
       completedMsg: () => "Pasted text",
       failedMsg: ({ failureSignal }) => `Failed to paste text: ${failureSignal.error_code}`,
     },
-    description: `Paste text into the focused field: puts \`text\` on the DEVICE clipboard, then triggers the platform's paste shortcut (iOS simulator, Android emulator).
-Do NOT use this in place of \`keyboard\`. \`keyboard\` types as a user would and is the default for all text entry; use \`paste\` only where a real user would paste: a 2FA/OTP code copied from another app, a long link or token, or when testing the app's own paste handling.
-Tap the field first so it has focus. Returns { pasted: true }, plus via: "keyboard" when a secret was typed instead of pasted. Fails on a TV target, when the device clipboard cannot be set, when a secret that has to be typed holds a character that cannot be typed, or when the simulator-server build lacks clipboard support.
-Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is never echoed back.`,
+    description: `Set the DEVICE clipboard to \`text\`, then trigger the platform's paste shortcut to paste it into the focused field (iOS simulator, Android emulator).
+Do NOT use this in place of \`keyboard\`. \`keyboard\` types as a user would and is the default for all text entry; call this only where a real user would paste: a 2FA/OTP code copied from another app, a long link or token, or when testing the app's own paste handling.
+Tap the field first so it has focus. Returns { pasted: true }, plus via: "keyboard" when a secret was typed instead of pasted. Fails on a TV target, when the device clipboard cannot be set, when a secret that has to be typed holds a character that cannot be typed, or when the simulator-server build lacks clipboard support.`,
     searchHint: "paste clipboard pasteboard otp 2fa code fill field",
     zodSchema: pasteZodSchema,
     capability,

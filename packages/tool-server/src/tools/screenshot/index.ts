@@ -55,7 +55,7 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
+      "Orientation override for the screenshot (on Chromium it rotates the captured image). On Android the capture already follows the device's rotation. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
     ),
   scale: z
     .number()
@@ -63,8 +63,8 @@ const zodSchema = z.object({
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>. " +
-        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture); an Android TV whose form factor or display size cannot be read in time keeps 0.25. " +
+      "Scale factor. Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>. " +
+        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
         "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
@@ -72,13 +72,13 @@ const zodSchema = z.object({
     .optional()
     .default(true)
     .describe(
-      "Default true. Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff. The file is still written, but the image bytes are not attached to the agent context."
+      "Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff. The file is still written, but the image bytes are not attached to the agent context."
     ),
   downscaler: z
     .enum(["lanczos3", "box", "bilinear", "nearest"])
     .optional()
     .describe(
-      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones."
+      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Ignored on every other platform."
     ),
 });
 
@@ -258,9 +258,9 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
       failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
     },
-    description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
-Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-Fails if the simulator-server / emulator backend / Chromium CDP <flag:harmonyos>/ \`hdc\` </flag:harmonyos>is not reachable for the given device.`,
+    description: `Capture a PNG of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app). Returns { image }, the PNG file.
+Use when you need a baseline image before an interaction or the screen state after a delay. Gestures, key presses and app launches already attach a screenshot to their result.
+Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harmonyos> or \`hdc\`</flag:harmonyos>) cannot be reached for this device.`,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
     readOnly: true,

@@ -103,10 +103,7 @@ export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, S
   capability,
   // Packaging plus the export passes routinely exceed the 30s MCP fetch timeout.
   longRunning: true,
-  description: `Stop native profiling and export trace data.
-iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks XML.
-Android: sends SIGTERM to the perfetto daemon, polls /proc/<pid>, then \`adb pull\`s the .pftrace.
-Call native-profiler-start first.
+  description: `Stop native profiling and export trace data: CPU, hangs, and leaks XML from xctrace on iOS; the Perfetto .pftrace on Android.
 Use when the user has finished the interaction to profile and you need to export the trace.
 Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
 Fails if no active native-profiler-start session exists for the given device_id.`,

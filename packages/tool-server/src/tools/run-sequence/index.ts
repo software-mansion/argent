@@ -44,11 +44,7 @@ const zodSchema = z.object({
   steps: z
     .array(
       z.object({
-        tool: z
-          .string()
-          .describe(
-            "Tool name, one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, fold, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
-          ),
+        tool: z.string().describe("Tool name: one of the allowed tools listed in the description."),
         args: z
           .record(z.string(), z.unknown())
           .describe("Tool arguments (excluding udid, which is injected automatically)"),
@@ -101,66 +97,30 @@ export function createRunSequenceTool(
       failedMsg: ({ failureSignal }) =>
         `Failed to run interaction sequence: ${failureSignal.error_code}`,
     },
-    description: `Execute multiple device interaction steps in a single call (iOS simulator or physical device, Android emulator, Apple TV / Android TV, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app).
-On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, button, keyboard, and await-ui-element steps run; others fail at their own gate.
-Use when you need sequential actions and do NOT need to observe the screen between them
-(e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
-Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
-One screenshot is captured automatically after the whole sequence (not per step). Call screenshot separately only for a baseline BEFORE it, or to observe an intermediate step.
-That single capture is also why a secret belongs in this call rather than in two bare ones: the skip is decided from the whole request, so a \`{{secret:...}}\` in any step suppresses the capture that would otherwise follow the submit.
+    description: `Execute several device interaction steps in one call.
+Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
+Steps run in order. If a step fails (an error, a tool that is not allowed or not supported on the target, or an await-ui-element whose condition is not met before its timeout), the sequence stops there and later steps do NOT run. Returns { completed, total, steps } with a result or an error for each step that ran, so a stopped sequence returns partial results.
+One screenshot and element tree are captured after the whole sequence, not per step: call screenshot separately only for a baseline before it or to see an intermediate step. A \`{{secret:...}}\` in any step skips that capture, so type a secret and submit it in one sequence.
+On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, button, keyboard and await-ui-element steps run. On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
 
-ONLY use this when every step is known in advance. If any step depends on the
-result of a previous one (e.g. tapping a menu item that only appears after
-a prior tap), use individual tool calls instead.
-
-Allowed tools and their args (udid is auto-injected, do NOT include it in args):
-
-  gesture-tap:    { x: number, y: number, clickCount?: number }                                                        [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium only]
-  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [chromium only]
-  gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
-  gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
-  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android<flag:harmonyos>/harmony; harmony: home/back/power only</flag:harmonyos>]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only<flag:harmonyos>; harmony: enter/return, backspace/delete, space, arrow-left, arrow-right only</flag:harmonyos>)  [ios/android/chromium/vega/tv<flag:harmonyos>/harmony</flag:harmonyos>]
-                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file (over a forward-secrets link, the client's first); credentials never enter agent context
-  paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP; keyboard otherwise)   [ios sim/android emu]
-  rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
-  shake:          { count?: number }                                                                                    [ios sim/android emu]
-  fold:           { posture?: "closed"|"half-open"|"open", angle?: 0-180 }  (one of posture/angle; the next step lands on the new panel, whose coordinates are different)  [foldable ios sim/android emu]
-  tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
-                  buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute work on Android TV and Vega; rejected on the Apple TV simulator)
-  await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos>]
-
-Example: scroll down three times (use gesture-scroll with positive deltaY on Chromium):
-  { "udid": "<UDID>", "steps": [
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
-  ]}
-
-Example: type text and submit (two keyboard steps; one call cannot carry both):
-  { "udid": "<UDID>", "steps": [
-    { "tool": "keyboard", "args": { "text": "hello world" } },
-    { "tool": "keyboard", "args": { "key": "enter" } }
-  ]}
-
-Example (TV): move focus right twice then activate (one tv-remote step with a path is cheaper):
-  { "udid": "<TV-TARGET-ID>", "steps": [
-    { "tool": "tv-remote", "args": { "button": ["right", "right", "select"] } }
-  ]}
-
-Example: tap, wait for the next screen's element, then tap it:
-  { "udid": "<UDID>", "steps": [
-    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.9 } },
-    { "tool": "await-ui-element", "args": { "condition": "visible", "selector": { "text": "Continue" } } },
-    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.5 } }
-  ]}
-If the await-ui-element condition is not met before its timeout, the sequence stops there and the
-following steps do NOT run, so the tap above only fires once "Continue" is actually on screen.
-
-Stops on the first error (or unmet await-ui-element condition) and returns partial results.`,
+Allowed tools, their args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles are in degrees, durations in ms.
+  gesture-tap: x, y, clickCount?  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-scroll: x, y, deltaX?, deltaY? (signed; positive scrolls down), durationMs?  [chromium]
+  gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium]
+  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?  [ios/android]
+  gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
+  button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
+  keyboard: text? or key? (one per step; key e.g. "enter"), delayMs?  [all; TV: text only<flag:harmonyos>; harmony keys: enter/return, backspace/delete, space, arrow-left, arrow-right</flag:harmonyos>]
+    text may hold {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> or an argent secrets file, so a credential never enters your context
+  paste: text (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP, else keyboard)  [ios sim/android emu]
+  rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios/android]
+  shake: count?  [ios sim/android emu]
+  fold: posture? "closed"|"half-open"|"open", or angle? 0–180, exactly one (later steps land on the new panel, whose coordinates differ)  [foldable ios sim/android emu]
+  tv-remote: button (one button, or an array run as a path in one step), repeat?  [apple tv/android tv/vega]
+    buttons: up/down/left/right/select/back/home/menu/playPause; rewind/fastForward/next/previous/volumeUp/volumeDown/mute on Android TV and Vega only
+  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText? (for "text"), textMatch?, timeoutMs?, pollIntervalMs?  [all but apple tv]`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",

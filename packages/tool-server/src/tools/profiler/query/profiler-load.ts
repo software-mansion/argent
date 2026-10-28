@@ -47,19 +47,12 @@ function assertSafeSessionId(sessionId: string): void {
 const zodSchema = z.object({
   mode: z
     .enum(["list", "load_react", "load_native"])
-    .describe(
-      "list: show available sessions on disk. " +
-        "load_react: load a React profiler session into memory for query tools. " +
-        "load_native: re-parse native profiler XML files (xctrace on iOS) into memory for query tools."
-    ),
+    .describe("What to do; see Modes in the tool description."),
   session_id: z
     .string()
     .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
     .optional()
-    .describe(
-      "Timestamp-based session identifier (e.g. '20250313-143022') from the list output. " +
-        "Required for load_react and load_native modes."
-    ),
+    .describe("Timestamp-based session identifier (e.g. '20250313-143022') from the list output."),
   port: metroPortField,
   device_id: metroDeviceIdParam(
     "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
@@ -68,7 +61,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Android package name to use when restoring older load_native .pftrace sessions that do not have a metadata sidecar."
+      "Android package name to pass when restoring an older load_native .pftrace session that has no metadata sidecar."
     ),
 });
 
@@ -487,16 +480,14 @@ export const profilerLoadTool: ToolDefinition<Params, string> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to ${profilerLoadAction[params.mode].failure} saved profiles: ${failureSignal.error_code}`,
   },
-  description: `Fetch and restore a previously captured profiling session from disk into memory so query tools can operate on it.
-This is the disk-restore counterpart to react-profiler-stop/native-profiler-stop, which write data, and to the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query), which read it.
+  description: `Fetch and restore a profiling session that react-profiler-stop or native-profiler-stop saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
 Use when you need to revisit past session data without capturing a new recording.
 Modes:
 - list: Show all available profiling sessions in the project's debug directory.
 - load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
-- load_native: Re-parse native profiler XML files into memory. Requires session_id and device_id.
-  For Android .pftrace restores, pass app_process for older sessions that do not have a metadata sidecar.
+- load_native: Load a native profiler session (xctrace XML on iOS, .pftrace on Android). Requires session_id.
 Returns a summary of the loaded session or a session list for the list mode.
-Fails if the session_id is not found or required XML files are missing from disk.`,
+Fails if the session_id is not found or the session's trace files are missing from disk.`,
   zodSchema,
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.

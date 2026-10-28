@@ -32,7 +32,7 @@ const zodSchema = z.object({
     .max(MAX_TIME_LIMIT_SECONDS)
     .optional()
     .describe(
-      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}, max ${MAX_TIME_LIMIT_SECONDS}). ` +
+      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}). ` +
         `Set it to slightly more than the interaction you plan to capture.`
     ),
   trimStatic: z
@@ -42,16 +42,14 @@ const zodSchema = z.object({
       "Default true. Collapse stretches where the screen does not change: the first second of " +
         "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
         "so a long recording with brief activity comes back short instead of full of dead air. " +
-        "The returned durationMs is the trimmed length; wallClockMs/trimmedMs report what was removed. " +
         "Set false to keep a faithful real-time recording."
     ),
   showTouches: z
     .boolean()
     .optional()
     .describe(
-      "Default true. Draw simulator-server's touch visualizer into the recording: a pulse marks each " +
-        "tap, a comet trail follows swipes and drags, and paired markers show two-finger pinch/rotate, so " +
-        "the video makes clear where every interaction landed. Set false to record the raw screen with no overlay."
+      "Default true. Draw an on-screen marker for every tap, swipe, drag, pinch and rotate into the " +
+        "video, so it shows where each interaction landed. Set false to record the raw screen with no overlay."
     ),
 });
 
@@ -73,8 +71,6 @@ export function createScreenRecordingStartTool(
     },
     capability,
     description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
-By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
-By default every tap, swipe, drag, pinch and rotate is drawn into the video as an on-screen touch marker (see showTouches), so the recording shows where each interaction landed.
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.

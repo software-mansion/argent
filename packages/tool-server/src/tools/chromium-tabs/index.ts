@@ -10,13 +10,13 @@ const zodSchema = z.object({
   action: z
     .enum(["list", "select", "new", "close"])
     .describe(
-      "list: enumerate tabs/windows. select: make a tab active (every other tool then acts on it). new: open a tab. close: close a tab."
+      "list: enumerate tabs/windows. select: make a tab active. new: open a tab and activate it. close: close a tab; if it was active, another live tab becomes active."
     ),
   tab: z
     .string()
     .optional()
     .describe(
-      "Target tab for `select` / `close`: a tabId like `t2` or a label. `close` defaults to the active tab."
+      "Target tab for `select` (required) / `close`: a tabId like `t2` or a label. `close` defaults to the active tab."
     ),
   url: z.string().optional().describe("`new` only: URL to open (defaults to about:blank)."),
   label: z
@@ -77,12 +77,9 @@ export const chromiumTabsTool: ToolDefinition<Params, Result> = {
       `Failed to ${tabAction[params.action].failure} browser tabs: ${failureSignal.error_code}`,
   },
   description: `List and switch the tabs / windows of a Chromium (CDP) app (an Electron app's BrowserWindows or a Chromium browser's tabs), and open or close them.
-- action="list": enumerate page targets with stable ids (\`t1\`, \`t2\`, …), title, url, and which is active.
-- action="select" (tab=<tabId|label>): make that tab the active one. The active tab is what describe / gesture-tap / screenshot / debugger-evaluate / open-url all operate on, so switch before driving a different tab.
-- action="new" (url?, label?): open a new tab/page and activate it.
-- action="close" (tab?=<tabId|label>): close a tab (defaults to the active one); if the active tab is closed, another live tab becomes active.
-Use when an app exposes multiple windows or tabs and you need to inspect or drive one other than the current page, or to open/close a page during an e2e test. tabIds are stable for the session and never reused.
-Returns { tabs: [{ tabId, targetId, title, url, active, label? }] }. Fails if the device is not a Chromium (CDP) device, or the requested tabId/label no longer matches a live tab. Chromium-only.`,
+The active tab is what describe / gesture-tap / screenshot / debugger-evaluate / open-url all operate on, so select a tab before driving it. tabIds (\`t1\`, \`t2\`, …) are stable for the session and never reused.
+Use when an app exposes multiple windows or tabs and you need to inspect or drive one other than the current page, or to open/close a page during an e2e test.
+Returns { tabs: [{ tabId, targetId, title, url, active, label? }] } after the action. Fails if the device is not a Chromium (CDP) device, or the requested tabId/label no longer matches a live tab.`,
   searchHint: "tab tabs window windows switch select close new open multi-tab chromium electron",
   zodSchema,
   capability,

@@ -99,24 +99,27 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id; not Apple TV, whose tree it cannot read)."
       ),
     condition: z
       .enum(["exists", "visible", "hidden", "text"])
       .describe(
-        "What to wait for. `exists`: selector is anywhere in the tree. " +
-          "`visible`: selector is present with a non-zero on-screen frame. `hidden`: selector is absent " +
-          "or zero-area. `text`: the first visible match in reading order (topmost), falling back to the first match overall if none is visible, " +
-          "contains (or, with textMatch `equals`, exactly matches) " +
-          "expectedText. If a loose selector hits several elements, only that one is checked, so narrow it to target the intended element."
+        "What to wait for. `exists`: the selector matches an element anywhere in the tree. " +
+          "`visible`: it matches one with a non-zero on-screen frame. `hidden`: it matches nothing, " +
+          "or only a zero-area element (e.g. a spinner that went away). `text`: the first visible match in reading order " +
+          "(topmost, then leftmost; the first match overall if none is visible) contains expectedText, or equals it " +
+          "with textMatch `equals`. Only that match is checked, so if a loose selector hits several elements, " +
+          "narrow it to the one holding the text."
       ),
-    selector: selectorSchema.describe("Element to match (text / identifier / role)."),
+    selector: selectorSchema.describe(
+      "Element to match. Give at least one field; every given field must match."
+    ),
     expectedText: z
       .string()
       .min(1)
       .optional()
       .describe(
-        "For condition `text`: the string the first visible matched element (topmost in reading order; the first match overall if none is visible) must contain (default) or equal (see `textMatch`). Case-insensitive."
+        "Required for condition `text`: the string the checked match must contain or equal (see `textMatch`)."
       ),
     textMatch: z
       .enum(["contains", "equals"])
@@ -128,7 +131,7 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform, " +
+        "iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform, " +
           "including physical iOS."
       ),
     timeoutMs: z
@@ -361,32 +364,9 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for UI element: ${failureSignal.error_code}`,
     },
-    description: `Block until a UI element reaches an expected state or a timeout elapses, so you don't have to poll screenshot/describe yourself.
-
-Conditions:
-  exists:    the selector matches an element anywhere in the tree.
-  visible:   the selector matches an element with a non-zero on-screen frame.
-  hidden:    the selector matches nothing, or only a zero-area element (e.g. a spinner that disappeared).
-  text:      the first VISIBLE match in reading order (topmost, then leftmost; falling back to the first match
-             overall if none is visible) contains expectedText (case-insensitive substring), or exactly matches
-             it when textMatch is \`equals\`. A loose selector can match several elements; only that one is
-             inspected, so if a different match is the one holding the text the wait still reports failure;
-             narrow the selector to target it.
-
-The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
-case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
-also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
-It polls the same accessibility / DOM tree as \`describe\`
-(iOS simulator AXRuntime, physical-iOS runner snapshot, Android uiautomator, Chromium CDP,
-Vega automation toolkit<flag:harmonyos>, HarmonyOS \`uitest dumpLayout\`</flag:harmonyos>) every pollIntervalMs
-(default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
-
-Returns { success: boolean, elapsed: number, note?, cause? }. success=false means the wait ended without the
-condition holding, which is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree
-was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or
-\`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check. <flag:harmonyos>A \`note\` on
-success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen. </flag:harmonyos>Use this
-after a tap/navigation to wait for the next screen, or before tapping an element that appears asynchronously.`,
+    description: `Block until a UI element reaches an expected state or the timeout elapses, so you don't have to poll screenshot/describe yourself. It polls the same tree as \`describe\`.
+Use when the next step needs an element that appears or disappears asynchronously, e.g. after a tap or navigation, or before tapping something that loads late.
+Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false instead of failing, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
     alwaysLoad: true,
     searchHint:
       "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
