@@ -3,6 +3,7 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
 import {
   assertAmStartOk,
+  followNativeNetworkCapture,
   normalizeActivityComponent,
   resolveLauncherActivity,
 } from "../../launch-app/platforms/android";
@@ -41,6 +42,7 @@ export const androidImpl: PlatformImpl<
         { cause: err instanceof Error ? err : new Error(String(err)) }
       );
     }
-    return { restarted: true, bundleId };
+    const capture = await followNativeNetworkCapture(udid, bundleId);
+    return { restarted: true, bundleId, ...capture };
   },
 };

@@ -77,11 +77,13 @@ Each token grants one mechanism. Argent refuses a tool that needs a mechanism th
 | `ax-service`       | start the accessibility service in the simulator                    |
 | `native-profiler`  | profile the app with Instruments or Perfetto                        |
 | `js-debugger`      | attach a debugger client to the JavaScript runtime                  |
-| `native-devtools`  | inject the native inspection agent (iOS only)                       |
+| `native-devtools`  | inject the native inspection agent into iOS apps                    |
 
 Argent ignores an unknown token. Thus a provider can declare a capability of a newer Argent version.
 
 Argent uses `native-devtools` on iOS only. `argent providers check` reports an error for an Android device that declares this token.
+
+On Android, native network capture needs only the `adb` token. With `adb`, `native-network-logs` attaches an in-app agent to a debuggable app on the device. It also adds an `adb reverse` port forward to the device for the in-app agent. Argent removes the port forward when the capture stops. A provider that withholds `adb` also withholds native network capture.
 
 ### One grant, both names of the device
 

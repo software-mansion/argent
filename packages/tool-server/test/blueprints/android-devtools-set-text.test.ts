@@ -28,12 +28,26 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-vi.mock("../../src/utils/adb", () => ({
-  runAdb: vi.fn(async (args: string[]) =>
+vi.mock("../../src/utils/adb", () => {
+  const runAdb = vi.fn(async (args: string[]) =>
     args.includes("forward") ? { stdout: "45678\n", stderr: "" } : { stdout: "", stderr: "" }
-  ),
-  adbShell: vi.fn(async () => "package:com.argent.androiddevtools versionCode:3\n"),
-}));
+  );
+  return {
+    runAdb,
+    // Goes through runAdb above, as the real one does.
+    adbForward: vi.fn(async (serial: string, hostPort: number, devicePort: number) => {
+      const { stdout } = await runAdb([
+        "-s",
+        serial,
+        "forward",
+        `tcp:${hostPort}`,
+        `tcp:${devicePort}`,
+      ]);
+      return stdout.trim();
+    }),
+    adbShell: vi.fn(async () => "package:com.argent.androiddevtools versionCode:3\n"),
+  };
+});
 
 vi.mock("../../src/utils/android-binary", () => ({
   resolveAndroidBinary: vi.fn(async () => "/usr/bin/adb"),

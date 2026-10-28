@@ -254,6 +254,43 @@ export async function adbShell(
   return stdout;
 }
 
+/**
+ * {@linkcode adbShell} with `input` written to the device command's stdin, for
+ * data that must stay out of every argv: the host's and the device's process
+ * lists show the command line, and so does the error a failure throws.
+ */
+export async function adbShellInput(
+  serial: string,
+  shellCommand: string,
+  input: string,
+  options: { timeoutMs?: number } = {}
+): Promise<string> {
+  const adbPath = await resolveAdbOrThrow();
+  const argv = adbArgv(["-s", serial, "shell", shellCommand]);
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      adbPath,
+      argv,
+      {
+        timeout: options.timeoutMs ?? 30_000,
+        killSignal: ADB_KILL_SIGNAL,
+        maxBuffer: 64 * 1024 * 1024,
+        encoding: "utf-8",
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(describeAdbFailure(argv, Object.assign(err, { stdout, stderr })));
+          return;
+        }
+        resolve(stdout);
+      }
+    );
+    // A stdin that broke early surfaces through the exit callback instead.
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input);
+  });
+}
+
 /** `adb -s <serial> exec-out <shellCommand>` — preserves stdout bytes for binary payloads. */
 export async function adbExecOutBinary(
   serial: string,
@@ -261,6 +298,57 @@ export async function adbExecOutBinary(
   options: { timeoutMs?: number } = {}
 ): Promise<Buffer> {
   return runAdbBinary(["-s", serial, "exec-out", shellCommand], options);
+}
+
+/**
+ * With `hostPort` 0 adb picks a free host port and prints it, and that output
+ * is what this returns; it is empty otherwise.
+ */
+export async function adbForward(
+  serial: string,
+  hostPort: number,
+  devicePort: number,
+  options: { timeoutMs?: number } = {}
+): Promise<string> {
+  const { stdout } = await runAdb(
+    ["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${devicePort}`],
+    options
+  );
+  return stdout.trim();
+}
+
+/**
+ * With `noRebind`, a device port that already has a reverse fails with
+ * "cannot rebind existing socket" instead of being taken over. A port a device
+ * process listens on fails with "cannot bind listener" either way.
+ */
+export async function adbReverse(
+  serial: string,
+  devicePort: number,
+  hostPort: number,
+  options: { timeoutMs?: number; noRebind?: boolean } = {}
+): Promise<void> {
+  await runAdb(
+    [
+      "-s",
+      serial,
+      "reverse",
+      ...(options.noRebind ? ["--no-rebind"] : []),
+      `tcp:${devicePort}`,
+      `tcp:${hostPort}`,
+    ],
+    { timeoutMs: options.timeoutMs }
+  );
+}
+
+export async function removeAdbReverse(serial: string, devicePort: number): Promise<void> {
+  try {
+    await runAdb(["-s", serial, "reverse", "--remove", `tcp:${devicePort}`], {
+      timeoutMs: 5_000,
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 interface AndroidDevice {
