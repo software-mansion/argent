@@ -54,6 +54,12 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
    > **Note:** `packages/argent-private` is a private git submodule that holds the ObjC source for the native devtools dylibs. If you don't have SSH access to it, `npm run dev` will use the pre-built dylibs committed to the repository — everything else works normally.
 
+   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle; one started from source (`npm run dev`, `npm run start`, or `node packages/tool-server/dist/index.js start`) does not, and the first physical-device tool fails with "Could not locate the ios-device-runner Xcode project". Point it at the project:
+   >
+   > ```bash
+   > ARGENT_IOS_RUNNER_PROJECT="$PWD/packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj" npm run dev
+   > ```
+
 That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.
 
 ---
