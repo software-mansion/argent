@@ -70,14 +70,14 @@ describe("script step rejections", () => {
 
   it("refuses an unknown key inside the map", () => {
     expect(() => step("{ path: seed.mjs, retries: 3 }")).toThrow(
-      /script has unknown key `retries`.*allowed keys: path, timeout/s
+      /script has unknown key `retries`.*allowed keys: path, timeout, env/s
     );
   });
 
-  it("refuses `env`, whose release has not landed", () => {
-    expect(() => step("{ path: seed.mjs, env: { TOKEN: abc } }")).toThrow(
-      /script has unknown key `env`/
-    );
+  it("takes an `env` map of names to string values", () => {
+    expect(step("{ path: seed.mjs, env: { TOKEN: abc, EMPTY: '' } }")).toEqual([
+      { kind: "script", path: "seed.mjs", env: { TOKEN: "abc", EMPTY: "" } },
+    ]);
   });
 
   it("refuses a missing, empty or non-string path", () => {
@@ -148,7 +148,9 @@ describe("script step rejections", () => {
 
   it("refuses a body that is not a map", () => {
     for (const body of ["", "[seed.mjs]", "42"]) {
-      expect(() => step(body), body).toThrow(/script needs \{ path, timeout\? \}|takes a map/);
+      expect(() => step(body), body).toThrow(
+        /script needs \{ path, timeout\?, env\? \}|takes a map/
+      );
     }
   });
 });

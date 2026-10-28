@@ -48,7 +48,7 @@ Make repeated runs deterministic:
 An e2e test has two fixture mechanisms:
 
 - `run:` replays a separately recorded reset or seed e2e test.
-- `script:` runs requested local setup or cleanup. Record it with `e2e-add-script` where it belongs in the walkthrough.
+- `script:` runs requested local setup or cleanup. Record it with `e2e-add-script` where it belongs in the walkthrough. Put defaults in the test's top-level `env` so `--env` can replace them for each run. Use `{{secret:NAME}}` for credentials. See [Environment values](../argent-create-e2e/references/e2e-yaml.md#environment-values).
 
 Ask before cleanup that creates or deletes meaningful user data outside the request.
 

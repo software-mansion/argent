@@ -1399,6 +1399,23 @@ describe("environment and working directory", () => {
     }
   }, 30_000);
 
+  it("runs a step whose BASH_ENV names a preamble the version probe cannot", async () => {
+    const ws = workspace();
+    const preamble = ws.write(
+      "preamble.sh",
+      'set -e\n: "${ARGENT_OUTPUT:?the step has an exchange}"\nexport GREETING=hello\n'
+    );
+
+    const result = await runBash(
+      ws,
+      "bash-env-preamble",
+      `printf '{"greeting":"%s"}' "$GREETING" > "$ARGENT_OUTPUT"`,
+      { env: { BASH_ENV: preamble } }
+    );
+
+    expect(result.output).toEqual({ greeting: "hello" });
+  }, 30_000);
+
   it("refuses the exchange name in a caller's override map", async () => {
     const result = await runBash(workspace(), "env-output", `exit 0`, {
       env: { ARGENT_OUTPUT: "/tmp/x" },

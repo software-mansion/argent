@@ -443,9 +443,10 @@ function nestedDocument(depth: number, leaf: string): string {
   return json;
 }
 
-describe("flow script executor — redacting a document from a runner", () => {
-  // At the deepest the parent admits.
-  it("scrubs a document at the depth bound", async () => {
+describe("flow script executor — a document from a runner", () => {
+  // At the deepest the parent admits. A secret in the document is kept: the
+  // document is data for later steps.
+  it("commits a document at the depth bound, as the script wrote it", async () => {
     const depth = 256;
     const result = await withFakeRunner(
       `process.on("message", () => {
@@ -458,7 +459,7 @@ describe("flow script executor — redacting a document from a runner", () => {
     expect(result.failure).toBeUndefined();
     let node: unknown = result.output;
     for (let i = 0; i < depth; i++) node = (node as Record<string, unknown>).nested;
-    expect(node).toBe("token {{secret:TOKEN}}");
+    expect(node).toBe("token sk-live-9d3f0a1b2c3d4e5f");
   }, 30_000);
 
   // `execute` owes its caller a verdict, however deep a hostile runner's document.

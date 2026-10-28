@@ -168,6 +168,17 @@ async function notBashProblem(
   );
 }
 
+const BASH_STARTUP_STEERING = ["BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"];
+
+function withoutBashStartupSteering(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const steering = new Set(BASH_STARTUP_STEERING.map((name) => name.toLowerCase()));
+  const kept: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (!steering.has(name.toLowerCase())) kept[name] = value;
+  }
+  return kept;
+}
+
 /**
  * One run of the candidate, bounded on every axis, since this is the only place
  * a `.sh` step waits before it has a process to time out: stdin is the null
@@ -191,9 +202,9 @@ function askForBashVersion(
     let child: ChildProcess;
     try {
       child = spawn(candidate, ["-c", BASH_PROBE_COMMAND], {
-        // The step's environment, not the tool server's: `BASH_ENV` is outside the
-        // step allowlist, and the candidate must not get the token and secrets.
-        env: probeEnv,
+        // The step's environment, not the tool server's, minus bash's startup
+        // variables: the candidate must not get the token and secrets.
+        env: withoutBashStartupSteering(probeEnv),
         // The step's directory: a version-manager shim picks its bash from it.
         cwd,
         // stderr for the refusal to quote: a shim says there why it ran no bash.

@@ -47,6 +47,7 @@ import {
   type FlowFile,
   type FlowStep,
   type Launch,
+  type ScriptEnv,
   SELECTABLE_PLATFORMS,
   windowsPathRefusal,
 } from "./flow-utils";
@@ -68,9 +69,18 @@ import {
   type ToolFileFix,
 } from "./flow-tool-inputs";
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
+import { assertNoEnvOutputReferences } from "./flow-utils";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
+import {
+  describeScriptEnvProblem,
+  mergeScriptEnv,
+  resolveScriptEnvSecrets,
+  scriptEnvParameter,
+} from "./script/flow-script-env";
+import { createScriptRunNotes, type FlowScriptRunNotes } from "./script/flow-script-executor";
 import { sleepOrAbort } from "../../utils/timing";
+import { InvalidToolInputError } from "../../utils/capability";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
@@ -166,6 +176,15 @@ const zodSchema = z
       .optional()
       .describe(
         "Set to true to confirm the execution prerequisite has been met. Required (LLM path) when a fragment defines an executionPrerequisite."
+      ),
+    env: scriptEnvParameter("This run's")
+      .optional()
+      .describe(
+        "Environment variables for every script in this run, including nested `run:` fragments. " +
+          "Use string values and names that match [A-Za-z_][A-Za-z0-9_]*. " +
+          "These values replace the e2e test's defaults. A script step's `env` takes priority. " +
+          "Use `{{secret:NAME}}` for credentials from the tool-server's secret sources, with `project_root` for project files. " +
+          "A missing secret prevents the run from starting. Plaintext values remain visible in tool logs."
       ),
   })
   .superRefine((params, ctx) => {
@@ -1101,6 +1120,8 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   attachedAppPath?: string;
   projectRoot: string;
   scriptLogBudget: FlowScriptLogBudget;
+  runtimeEnv: Readonly<ScriptEnv>;
+  scriptRunNotes: FlowScriptRunNotes;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -1509,6 +1530,29 @@ Returns a per-step report: the first failure stops the run and the rest report a
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const runStartedAt = Date.now();
+      const envProblem = describeScriptEnvProblem(params.env ?? {});
+      if (envProblem) {
+        throw new InvalidToolInputError(`This run's \`env\` ${envProblem}`, {
+          failure_stage: "flow_run_env",
+        });
+      }
+      try {
+        assertNoEnvOutputReferences(params.env, "This run's");
+      } catch (err) {
+        throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
+          failure_stage: "flow_run_env",
+        });
+      }
+      if (params.env && Object.keys(params.env).length > 0) {
+        try {
+          resolveScriptEnvSecrets(params.env, { cwd: params.project_root });
+        } catch (err) {
+          throw new InvalidToolInputError(
+            `This run's ${err instanceof Error ? err.message : String(err)}`,
+            { failure_stage: "flow_run_env" }
+          );
+        }
+      }
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
         params,
@@ -1729,6 +1773,8 @@ Returns a per-step report: the first failure stops the run and the rest report a
         snapshotApps: new Map(),
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
+        runtimeEnv: params.env ?? {},
+        scriptRunNotes: createScriptRunNotes(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -1741,6 +1787,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
           runStack: seed,
           rootDisplay: rootEntry.display,
           depth: 0,
+          env: flow.env ?? {},
         });
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
@@ -2210,6 +2257,7 @@ interface StepScope {
   runStack: RunStackEntry[];
   rootDisplay: string;
   depth: number;
+  env: Readonly<ScriptEnv>;
 }
 
 /** The flow name steps in this scope are attributed to (StepReport.flow). */
@@ -2672,7 +2720,10 @@ async function execRunStep(
   await execSteps(
     state,
     fragment.steps,
-    childScope(scope, { runStack: [...scope.runStack, { canonical, display }] })
+    childScope(scope, {
+      runStack: [...scope.runStack, { canonical, display }],
+      ...(fragment.env ? { env: mergeScriptEnv(scope.env, fragment.env) } : {}),
+    })
   );
 }
 
@@ -2717,6 +2768,8 @@ async function runScriptStep(
     step,
     projectRoot: state.projectRoot,
     logBudget: state.scriptLogBudget,
+    env: mergeScriptEnv(scope.env, state.runtimeEnv, step.env),
+    runNotes: state.scriptRunNotes,
     ...(state.signal ? { signal: state.signal } : {}),
   });
   return outcome.reason === undefined

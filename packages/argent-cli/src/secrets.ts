@@ -1,6 +1,7 @@
 // `argent secrets` — which names a `{{secret:<NAME>}}` placeholder resolves to and
-// from which source, checkable before an undefined name fails mid-flow at typing
-// time. Values are never printed: that would put the credential in terminal
+// from which source, checkable before an undefined name fails mid-flow — at
+// typing time, or when a `script` step's `env` is resolved, which reaches no
+// device at all. Values are never printed: that would put the credential in terminal
 // scrollback and, when an agent runs the command, in its context.
 
 import pc from "picocolors";

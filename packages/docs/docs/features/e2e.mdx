@@ -61,6 +61,8 @@ An e2e test can contain more than taps and text. A step can wait for an element,
 
 Use a local script for setup or cleanup that device steps cannot do. A script is an `.mjs` file or a `.sh` file. Ask the agent to add the script at the required point in the e2e test.
 
+Use the e2e test file's `env` for script defaults. To change a value for one run, use `argent e2e run --env NAME=value`. Use `{{secret:NAME}}` for credentials. See [Environment values](/docs/reference/e2e-yaml#environment-values).
+
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 
 <a id="replaying-a-flow" />

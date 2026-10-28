@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import supertest from "supertest";
 import type { Response } from "supertest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
+import { InvalidToolInputError } from "../src/utils/capability";
 import {
   FAILURE_CODES,
   FailureError,
@@ -166,6 +167,29 @@ describe("HTTP NDJSON streaming (Accept: application/x-ndjson)", () => {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       error_kind: "validation",
     });
+  });
+
+  it("unwraps a refusal about the call the same way both channels do", async () => {
+    handle = createHttpApp(
+      stubRegistry(async () => {
+        throw new InvalidToolInputError(
+          "This run's `env` holds NODE_OPTIONS, which steers the runner"
+        );
+      })
+    );
+
+    const streamed = await supertest(handle.app)
+      .post("/tools/test-tool")
+      .set("Accept", "application/x-ndjson")
+      .send({})
+      .buffer(true)
+      .parse(collectText)
+      .expect(200);
+    const [line] = parseLines(streamed.body as string);
+    const buffered = await supertest(handle.app).post("/tools/test-tool").send({}).expect(400);
+
+    expect(line.error).toBe(buffered.body.error);
+    expect(String(line.error)).not.toContain("[Tool:");
   });
 
   it("keeps plain-JSON status codes for failures before the invoke (unknown tool)", async () => {

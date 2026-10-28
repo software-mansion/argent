@@ -4,10 +4,15 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MIN_SCRIPT_HEAP_LIMIT_MB } from "@argent/configuration-core";
 import {
+  describeScriptEnvProblem,
+  mergeScriptEnv,
+} from "../../../src/tools/flows/script/flow-script-env";
+import {
   FlowScriptExecutor,
   type FlowScriptExecutorOptions,
 } from "../../../src/tools/flows/script/flow-script-executor";
 import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-script-workspace";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 const workspaces: ScriptWorkspace[] = [];
 const restoreEnv: Array<() => void> = [];
@@ -27,14 +32,22 @@ function withEnv(name: string, value: string): void {
   process.env[name] = value;
 }
 
-async function asWindows<T>(body: () => Promise<T>): Promise<T> {
+async function onPlatform<T>(platform: NodeJS.Platform, body: () => Promise<T>): Promise<T> {
   const real = process.platform;
-  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
   try {
     return await body();
   } finally {
     Object.defineProperty(process, "platform", { value: real, configurable: true });
   }
+}
+
+async function asWindows<T>(body: () => Promise<T>): Promise<T> {
+  return onPlatform("win32", body);
+}
+
+async function asPosix<T>(body: () => Promise<T>): Promise<T> {
+  return onPlatform("linux", body);
 }
 
 function withoutEnv(name: string): void {
@@ -65,11 +78,19 @@ describe("flow script executor — the environment allowlist", () => {
     withEnv("ARGENT_AUTH_TOKEN", "tool-server-bearer-token");
     withEnv("ARGENT_PORT", "43111");
     withEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
-    withEnv("HOME", "/argent-test-home");
     const ws = workspace();
+    withEnv("HOME", ws.dir);
+    withEnv("USERPROFILE", ws.dir);
     const script = ws.write(
       "env.mjs",
-      reporter(["ARGENT_AUTH_TOKEN", "ARGENT_PORT", "ARGENT_SECRET_APP_PASSWORD", "PATH", "HOME"])
+      reporter([
+        "ARGENT_AUTH_TOKEN",
+        "ARGENT_PORT",
+        "ARGENT_SECRET_APP_PASSWORD",
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+      ])
     );
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
@@ -78,7 +99,8 @@ describe("flow script executor — the environment allowlist", () => {
     expect(env.ARGENT_PORT).toBeNull();
     expect(env.ARGENT_SECRET_APP_PASSWORD).toBeNull();
     expect(env.PATH).toBe(process.env.PATH);
-    expect(env.HOME).toBe("/argent-test-home");
+    expect(env.HOME).toBe(ws.dir);
+    expect(env.USERPROFILE).toBe(ws.dir);
   });
 
   it("copies every npm_config_ value, so a project's npm settings survive", async () => {
@@ -224,6 +246,26 @@ describe("flow script executor — the environment allowlist", () => {
     expect(result.failure?.message).toContain("Electron_Run_As_Node");
   }, 30_000);
 
+  it("drops the host's spelling of a name a Windows override claims", async () => {
+    withEnv("LANG", "en_US.UTF-8");
+    const ws = workspace();
+    const script = ws.write(
+      "lang.mjs",
+      `output.lang = Object.entries(process.env)
+        .filter(([name]) => name.toLowerCase() === "lang")
+        .map(([, value]) => value);`
+    );
+    const result = await asWindows(() =>
+      executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { Lang: "pl_PL.UTF-8" },
+      })
+    );
+
+    expect(result.output?.lang).toEqual(["pl_PL.UTF-8"]);
+  }, 30_000);
+
   it("does not set the Electron flag when the server's environment lacks it", async () => {
     // A developer running the suite from an Electron-hosted shell has the flag
     // exported already.
@@ -233,6 +275,34 @@ describe("flow script executor — the environment allowlist", () => {
     const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
 
     expect((result.output?.env as Record<string, string | null>).ELECTRON_RUN_AS_NODE).toBeNull();
+  });
+});
+
+describe("an env map holding two names that differ only in case", () => {
+  const pair = { API_URL: "first", api_url: "second" };
+
+  it("is two variables on POSIX, and refused on Windows in a clause naming both", async () => {
+    expect(await asPosix(async () => describeScriptEnvProblem(pair))).toBeNull();
+    expect(await asWindows(async () => describeScriptEnvProblem(pair))).toContain(
+      "holds API_URL and api_url, which Windows reads as one variable"
+    );
+  });
+
+  it("merges to one variable per spelling on POSIX, and to the later layer's on Windows", async () => {
+    const merge = (flow: Record<string, string>, step: Record<string, string>) => async () =>
+      mergeScriptEnv(flow, step);
+
+    expect(await asPosix(merge({ API_URL: "flow" }, { api_url: "step" }))).toEqual({
+      API_URL: "flow",
+      api_url: "step",
+    });
+    // Whichever way round the spellings fall.
+    expect(await asWindows(merge({ API_URL: "flow" }, { api_url: "step" }))).toEqual({
+      api_url: "step",
+    });
+    expect(await asWindows(merge({ api_url: "flow" }, { API_URL: "step" }))).toEqual({
+      API_URL: "step",
+    });
   });
 });
 
@@ -494,4 +564,82 @@ describe("flow script executor — the working directory", () => {
     expect(fs.realpathSync(result.output?.cwd as string)).toBe(fs.realpathSync(ws.dir));
     expect(result.output?.cwd).not.toBe(process.cwd());
   });
+});
+
+describe("an environment near the operating system's limit", () => {
+  const onPosix = it.skipIf(process.platform === "win32");
+
+  onPosix(
+    "names the environment's size above the limit and just below it",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("noop.mjs", "output.ok = true;");
+
+      const refused = await executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_400_000) },
+      });
+      expect(refused.failure?.kind).toBe("spawn");
+      expect(refused.failure?.message).toContain("E2BIG");
+      expect(refused.failure?.message).toContain("ARG_MAX");
+
+      const died = await executor().execute({
+        scriptPath: script,
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_000_000) },
+      });
+      const said = `${died.failure?.message ?? ""} ${died.notes.join(" ")}`;
+      expect(died.ok).toBe(false);
+      expect(said).toMatch(/ARG_MAX/);
+      expect(said).toMatch(/100\d{4} bytes/);
+    },
+    60_000
+  );
+
+  onPosix(
+    "names the environment's size for a .sh step too",
+    async () => {
+      const found = await resolveHostBash();
+      if (!("path" in found)) return;
+      const ws = workspace();
+      const script = ws.write("noop.sh", "printf '{}' > \"$ARGENT_OUTPUT\"");
+
+      const refused = await executor().execute({
+        scriptPath: script,
+        interpreter: "bash",
+        projectRoot: ws.dir,
+        env: { BIG: "x".repeat(1_400_000) },
+      });
+
+      expect(refused.failure?.kind).toBe("spawn");
+      expect(refused.failure?.message).toContain("E2BIG");
+      expect(refused.failure?.message).toContain("ARG_MAX");
+      expect(refused.failure?.message).not.toContain("scripts.bash");
+      expect(refused.failure?.message).not.toContain("is not a bash");
+    },
+    60_000
+  );
+
+  it("says nothing of it when an ordinary one dies early, or a large one is cancelled first", async () => {
+    const ws = workspace();
+    const early = await executor().execute({
+      scriptPath: ws.write("early.mjs", "process.exit(7);"),
+      projectRoot: ws.dir,
+      env: { SMALL: "value" },
+    });
+    const controller = new AbortController();
+    const pending = executor().execute({
+      scriptPath: ws.write("slow.mjs", "await new Promise((r) => setTimeout(r, 5000));"),
+      projectRoot: ws.dir,
+      env: { BIG: "x".repeat(400 * 1024) },
+      signal: controller.signal,
+    });
+    controller.abort();
+    const cancelled = await pending;
+
+    expect(early.ok).toBe(false);
+    expect(cancelled.failure?.kind).toBe("cancelled");
+    for (const { notes } of [early, cancelled]) expect(notes.join(" ")).not.toContain("ARG_MAX");
+  }, 30_000);
 });

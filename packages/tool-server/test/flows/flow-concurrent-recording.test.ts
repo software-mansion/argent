@@ -2065,6 +2065,104 @@ describe("recording a flow-execute step while several projects are in play", () 
     expect(same.message).toBe('Step added to "quiet" e2e test');
     expect(await readSteps(recordingRoot, "quiet")).toEqual([{ kind: "run", flow: "helper.yaml" }]);
   });
+
+  it("warns that a rewritten run: step drops the call's env and passes the recording's", async () => {
+    const root = await makeRoot("run-target-env");
+    await writeSavedFlow(root, "helper", fragment);
+
+    await start(root, "wrapper");
+    await writeSavedFlow(root, "wrapper", {
+      executionPrerequisite: "",
+      env: { API_URL: "https://staging.example" },
+      steps: [],
+    });
+    const res = await addRawStep(root, "wrapper", "flow-execute", {
+      name: "helper",
+      project_root: root,
+      env: { BUILD: "1421", AUTH: "Bearer abc" },
+      udid: IOS_DEVICE,
+    });
+
+    expect(res.message).toContain("the values this call passed (BUILD, AUTH) are NOT part");
+    expect(res.message).toContain("only for a name that fragment does not itself declare");
+    expect(res.message).toContain(
+      "at replay the run: step passes API_URL from this recording's env: to helper.yaml's " +
+        "scripts, but the live e2e-execute call ran without it"
+    );
+    expect(res.message).toContain("declare it in helper.yaml's own env:");
+    expect(res.message).not.toContain("Bearer abc");
+    expect(res.message).not.toContain("https://staging.example");
+    expect(await readSteps(root, "wrapper")).toEqual([{ kind: "run", flow: "helper.yaml" }]);
+
+    const finished = await finish(root, "wrapper");
+    expect(finished.message).toContain(
+      "1 step replays under a different env than the recorded call ran with"
+    );
+    expect(finished.summary).toEqual([
+      "1. run: helper.yaml",
+      expect.stringMatching(
+        /^ +warning: a run: step takes no env.*; at replay the run: step passes/s
+      ),
+    ]);
+  });
+
+  it("stays quiet about the recording's env when the replay adds nothing to the live call", async () => {
+    const root = await makeRoot("run-target-inherits-none");
+    await writeSavedFlow(root, "helper", fragment);
+    await writeSavedFlow(root, "declares", {
+      ...fragment,
+      env: { API_URL: "https://fragment.example" },
+    });
+
+    await start(root, "plain");
+    const plain = await addRawStep(root, "plain", "flow-execute", {
+      name: "helper",
+      project_root: root,
+      udid: IOS_DEVICE,
+    });
+    expect(plain.message).toBe('Step added to "plain" e2e test');
+
+    await start(root, "shadowed");
+    await writeSavedFlow(root, "shadowed", {
+      executionPrerequisite: "",
+      env: { API_URL: "https://staging.example" },
+      steps: [],
+    });
+    const shadowed = await addRawStep(root, "shadowed", "flow-execute", {
+      name: "declares",
+      project_root: root,
+      udid: IOS_DEVICE,
+    });
+    expect(shadowed.message).toBe('Step added to "shadowed" e2e test');
+    expect(await readSteps(root, "shadowed")).toEqual([{ kind: "run", flow: "declares.yaml" }]);
+    const finished = await finish(root, "shadowed");
+    expect(finished.message).toBe('Finished recording "shadowed" e2e test (1 steps)');
+  });
+
+  it("leaves out of the recording's env what the fragment declares or the call passed", async () => {
+    const root = await makeRoot("run-target-env-both");
+    await writeSavedFlow(root, "helper", { ...fragment, env: { TENANT: "acme" } });
+
+    await start(root, "wrapper");
+    await writeSavedFlow(root, "wrapper", {
+      executionPrerequisite: "",
+      env: { API_URL: "https://staging.example", REGION: "eu", TENANT: "demo", BUILD: "1" },
+      steps: [],
+    });
+    const res = await addRawStep(root, "wrapper", "flow-execute", {
+      name: "helper",
+      project_root: root,
+      env: { BUILD: "1421" },
+      udid: IOS_DEVICE,
+    });
+
+    expect(res.message).toContain("the value this call passed (BUILD) is NOT part");
+    expect(res.message).toContain(
+      "at replay the run: step passes API_URL, REGION from this recording's env: to " +
+        "helper.yaml's scripts, but the live e2e-execute call ran without them"
+    );
+    expect(res.message).toContain("declare them in helper.yaml's own env:");
+  });
 });
 
 // ── Summarizing a hand-edited file that the parser cannot fully constrain ──

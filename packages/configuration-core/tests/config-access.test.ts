@@ -117,6 +117,25 @@ describe("recordings.directory — schema entry", () => {
   });
 });
 
+describe("scripts.env.allow — schema entry", () => {
+  it("is unset by default, takes both scopes and unions them", () => {
+    expect(getConfigValueByKey("scripts.env.allow", opts())).toBeUndefined();
+    expect(getConfigDefinition("scripts.env.allow")?.scopes).toEqual(["project", "global"]);
+    setConfigValue("scripts.env.allow", ["AWS_PROFILE"], "global", opts());
+    setConfigValue("scripts.env.allow", ["DATABASE_URL"], "project", opts());
+    expect(getConfigValueByKey("scripts.env.allow", opts())).toEqual([
+      "AWS_PROFILE",
+      "DATABASE_URL",
+    ]);
+  });
+
+  it("drops a blank or non-string entry when the file is read", () => {
+    expect(
+      setConfigValue("scripts.env.allow", ["  DATABASE_URL  ", "  "], "project", opts())
+    ).toEqual(["DATABASE_URL"]);
+  });
+});
+
 describe("setConfigValue — validation", () => {
   it("rejects an unknown key", () => {
     expect(() => setConfigValue("nope.nope", "x", "global", opts())).toThrow(UnknownConfigKeyError);

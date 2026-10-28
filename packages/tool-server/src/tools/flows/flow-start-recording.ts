@@ -81,7 +81,7 @@ export const flowStartRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to start recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one.
+  description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one. Save any top-level \`env\` defaults before this call. Restore them after recording.
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same e2e test was discarded.
 Without a link, it creates that file and fails if the .argent/e2e/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), your client writes the file, and \`savedTo\` is its path on your computer, or null when that write failed.

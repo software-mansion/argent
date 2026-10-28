@@ -821,6 +821,37 @@ describe("parseFlow", () => {
       "\t\n",
       "  hi  ",
       "plain single line",
+      // Past the emitter's fold point: a fold between an escaped space and an
+      // escaped newline ate the space. Each fails under one of the keys below.
+      "\n".repeat(10) +
+        "a".repeat(13) +
+        "\n".repeat(8) +
+        " ".repeat(15) +
+        "a " +
+        "\n".repeat(23) +
+        "a".repeat(12) +
+        " " +
+        "\n".repeat(43) +
+        "a".repeat(27) +
+        " ".repeat(4) +
+        "a".repeat(14) +
+        " ".repeat(11) +
+        "a".repeat(12),
+      " ".repeat(11) +
+        "\n".repeat(24) +
+        " ".repeat(21) +
+        "a " +
+        "\n".repeat(50) +
+        " ".repeat(3) +
+        "\n" +
+        " ".repeat(5) +
+        "a".repeat(8) +
+        " ".repeat(13) +
+        "a".repeat(9) +
+        " ".repeat(10) +
+        "\n".repeat(14) +
+        " ".repeat(20) +
+        "\n".repeat(5),
     ];
     for (const value of values) {
       const flow: FlowFile = {
@@ -846,6 +877,76 @@ describe("parseFlow", () => {
         ],
       };
       expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+    }
+  });
+
+  it("still parses a file a stray character opens or ends", async () => {
+    const strays = ["\r", "\v", "\f", "\u00a0", "\u1680", "\u2028", "\u202f", "\u3000", "\ufeff"];
+    for (const yaml of [
+      // A first line that opens with a tab, which YAML refuses as indentation.
+      "\tsteps:\n  - echo: hi\n",
+      // A last line of nothing but whitespace YAML does not count as such.
+      ...strays.flatMap((stray) => [
+        `steps:\n  - echo: hi\n${stray}`,
+        `steps:\n  - echo: hi\n \t${stray}`,
+      ]),
+      // A CRLF file whose final LF a conversion dropped, once or twice.
+      "steps:\r\n  - echo: hi\r",
+      "steps: [{ echo: hi }]\r",
+      "steps:\r\n  - echo: hi\r\r",
+    ]) {
+      expect(parseFlow(yaml).steps, JSON.stringify(yaml)).toEqual([
+        { kind: "echo", message: "hi" },
+      ]);
+    }
+    expect(
+      parseFlow("steps:\r\n  - script:\r\n      path: seed.mjs\r\n      env:\r\n        TOK: abc\r")
+        .steps
+    ).toEqual([{ kind: "script", path: "seed.mjs", env: { TOK: "abc" } }]);
+  });
+
+  it("keeps an env name YAML's core schema would resolve", async () => {
+    for (const name of ["TRUE", "True", "FALSE", "NULL", "Null", "YES", "ON", "NO", "OFF"]) {
+      const flow = parseFlow(
+        `env: { ${name}: v }\nsteps:\n  - script: { path: seed.mjs, env: { ${name}: v } }\n`
+      );
+      expect(flow.env).toEqual({ [name]: "v" });
+      expect(flow.steps[0]).toMatchObject({ env: { [name]: "v" } });
+    }
+  });
+
+  it("accepts a bare `env:` header with no entries under it", async () => {
+    const flow = parseFlow("env:\nsteps:\n  - echo: hi\n");
+    expect(flow.env).toEqual({});
+    expect(flow).toEqual(parseFlow("env: {}\nsteps:\n  - echo: hi\n"));
+  });
+
+  it("round-trips a trailing non-ASCII space in the file's last scalar, a stray line after it or not", async () => {
+    const spaces = [
+      "\u00a0",
+      "\u1680",
+      "\u2000",
+      "\u200a",
+      "\u2028",
+      "\u2029",
+      "\u202f",
+      "\u205f",
+      "\u3000",
+      "\ufeff",
+    ];
+    for (const space of spaces) {
+      const flow: FlowFile = {
+        executionPrerequisite: "",
+        env: { HEADER: `abc${space}` },
+        steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: `abc${space}` } }],
+      };
+      const lone: FlowFile = {
+        executionPrerequisite: "",
+        steps: [{ kind: "script", path: "scripts/seed.mjs", env: { TOK: space } }],
+      };
+      expect(parseFlow(serializeFlow(flow))).toEqual(flow);
+      expect(parseFlow(serializeFlow(lone))).toEqual(lone);
+      expect(parseFlow(`${serializeFlow(flow)}\u00a0`)).toEqual(flow);
     }
   });
 
@@ -1333,10 +1434,21 @@ describe("output references", () => {
     }
     const quoted = /Replace it with the literal value the step needs: "(.*)"$/s.exec(message)?.[1];
     expect(quoted).toBeDefined();
-    expect(quoted!.endsWith("…")).toBe(true);
-    // `MAX_ENTRY_RENDER_CHARS` (200) plus the ellipsis that replaces the rest.
-    expect(quoted!.length).toBe(201);
+    expect(quoted!.endsWith("…(+218 chars)")).toBe(true);
+    expect(quoted!.startsWith("{{output:user.id}}")).toBe(true);
     expect(message.length).toBeLessThan(1000);
+  });
+
+  it("says how much of a value it cut when the marker itself was past the cut", () => {
+    let message = "";
+    try {
+      parseFlow(`steps:\n  - echo: "${"x".repeat(400)}{{output:user.id}}"\n`);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("uses unsupported template syntax");
+    expect(message).toContain("…(+218 chars)");
+    expect(message).not.toContain("{{output:user.id}}");
   });
 
   it("leaves a pattern alone, at both levels that spell one", () => {

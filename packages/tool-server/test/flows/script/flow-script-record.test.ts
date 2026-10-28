@@ -333,17 +333,14 @@ describe("recording a script step", () => {
     expect((err as Error).message).toContain("Check the script's changes before you retry");
   });
 
-  it("blames the hand-edited step, not the script, when the re-parse refuses an earlier one", async () => {
-    // The append re-parses the whole file, so an output reference a mid-recording
-    // hand edit put in an EARLIER step refuses this write. The script itself ran
-    // and passed; wording it as "recording it failed" would send the author back
-    // over the one call that did nothing wrong.
-    await write("scripts/seed.mjs", `output.ok = true;`);
+  it("blames the hand-edited file, not the script, when the re-parse refuses it", async () => {
     await start("handedited");
-    await fs.writeFile(
-      flowPath("handedited"),
-      `steps:\n  - echo: "created {{output:user.id}}"\n`,
-      "utf8"
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(flowPath("handedited"))},
+         'steps:\\n  - echo: "created {{output:user.id}}"\\n');
+       output.ok = true;`
     );
 
     const err = (await addScript("handedited", "../../scripts/seed.mjs").catch(
@@ -352,11 +349,44 @@ describe("recording a script step", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain("passed, but the step was not recorded");
-    expect(err.message).toContain("Fix the existing step named below");
+    expect(err.message).toContain("Fix what is named below");
+    expect(err.message).toContain("not in this script");
     expect(err.message).toContain(flowPath("handedited"));
     expect(err.message).toContain("Step 1 (`echo`)");
     // The refusal keeps its own signal; only the framing around it changed.
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+  });
+
+  it.each([
+    [
+      "is gone, asking for a restart rather than a repair",
+      (file: string) => fs.rm(file),
+      ["is gone", "Start the recording again with e2e-start-recording"],
+    ],
+    [
+      "will not parse, blaming the file",
+      (file: string) => fs.writeFile(file, `env:\n  NODE_OPTIONS: --bogus\nsteps: []\n`, "utf8"),
+      ["about the FILE, not about this script", "NODE_OPTIONS"],
+    ],
+  ])("refuses a recording file that %s, before it runs the script", async (_, spoil, says) => {
+    const marker = path.join(root, "ran.txt");
+    await start("spoiled");
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";
+       fs.writeFileSync(${JSON.stringify(marker)}, "ran");`
+    );
+    await spoil(flowPath("spoiled"));
+
+    const err = (await addScript("spoiled", "../../scripts/seed.mjs").catch(
+      (e: unknown) => e
+    )) as Error;
+
+    expect(err).toBeInstanceOf(Error);
+    for (const text of ["was NOT run", flowPath("spoiled"), ...says]) {
+      expect(err.message).toContain(text);
+    }
+    await expect(fs.access(marker)).rejects.toThrow();
   });
 
   it("is never itself the step an output-reference refusal names", async () => {
@@ -445,6 +475,7 @@ describe("recording a script step", () => {
 
   it("needs no device of any kind", async () => {
     expect(Object.keys(flowAddScriptTool.zodSchema!.shape).sort()).toEqual([
+      "env",
       "name",
       "path",
       "project_root",
@@ -634,9 +665,14 @@ describe("a script that did not pass records nothing", () => {
       {},
       { name: "counted", project_root: root, message: "recorded" }
     );
-    await fs.appendFile(flowPath("counted"), "  - echo: hand-added\n  - bogus: [\n", "utf8");
+    await write(
+      "scripts/break-then-fail.mjs",
+      `import * as fs from "node:fs";
+       fs.appendFileSync(${JSON.stringify(flowPath("counted"))}, "  - bogus: [\\n");
+       throw new Error("seed failed");`
+    );
 
-    const failed = await addScript("counted", "../../scripts/gone.mjs");
+    const failed = await addScript("counted", "../../scripts/break-then-fail.mjs");
 
     expect(failed.status).toBe("fail");
     // The in-memory snapshot, while the file itself holds two steps.

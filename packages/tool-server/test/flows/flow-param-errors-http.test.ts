@@ -38,6 +38,25 @@ describe("flow param errors over HTTP", () => {
     expect(res.body.error).toContain("needs the e2e test's name in `name`");
   });
 
+  it("returns 400 for a run-time env carrying __proto__ in the raw JSON body", async () => {
+    // Only a parsed body carries `__proto__` as an own key, which `z.record`
+    // would drop silently; a body literal, since one in JS source is the accessor.
+    const registry = new Registry();
+    registry.registerTool(createRunFlowTool(registry) as never);
+    const { app } = createHttpApp(registry);
+
+    const res = await request(app)
+      .post("/tools/flow-execute")
+      .set("Content-Type", "application/json")
+      .send(
+        `{"project_root":${JSON.stringify(tmpDir)},"name":"demo","env":{"__proto__":"x","A":"y"}}`
+      );
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("`env`");
+    expect(res.body.message).toContain("holds __proto__");
+  });
+
   it("renders the 400 body as prose that names the caller's own keys, not raw Zod JSON", async () => {
     const registry = new Registry();
     registry.registerTool({

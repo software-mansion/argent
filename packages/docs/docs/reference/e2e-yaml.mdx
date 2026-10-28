@@ -40,12 +40,13 @@ steps:
   - await: { idle: true }
 ```
 
-The file has two top-level keys:
+The file has three top-level keys:
 
-| Key                     | Required | Description                                                             |
-| ----------------------- | -------- | ----------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                       |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it |
+| Key                     | Required | Description                                                                           |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                     |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it               |
+| `env`                   | no       | Default environment values for scripts. See [Environment values](#environment-values) |
 
 An e2e test has one of two shapes:
 
@@ -143,7 +144,7 @@ Each step contains one directive. A failed directive stops the e2e test.
 | `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                            |
 | `snapshot`   | `<name>` or `{ name, maxMismatch, cropOn }`                        | Compare a screenshot with a stored baseline. See [Snapshots](#snapshots)                          |
 | `run`        | `<path>`                                                           | Run another e2e test file inline. See [Composition](#composition)                                 |
-| `script`     | `{ path, timeout }`                                                | Run a local `.mjs` or `.sh` file in a new process. See [Local scripts](#local-scripts)            |
+| `script`     | `{ path, timeout, env }`                                           | Run a local `.mjs` or `.sh` file in a new process. See [Local scripts](#local-scripts)            |
 | `when`       | `{ <condition> }` or `{ platform }`, with `steps:`                 | Run the nested steps only when the condition holds. See [Optional steps](#optional-steps)         |
 | `echo`       | `<message>`                                                        | Print a message in the report                                                                     |
 | `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                     |
@@ -341,6 +342,7 @@ The value is always a map. Parsing rejects a bare path, such as `script: scripts
 | --------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `path`    | yes      | An `.mjs` or `.sh` file, relative to the e2e test file that holds the step. Use a lowercase extension. Match the letter case on disk |
 | `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                             |
+| `env`     | no       | Environment values for this script. See [Environment values](#environment-values)                                                    |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -351,7 +353,7 @@ Argent runs the script with the project root as the working directory. Argent gi
 - The Node, npm, Android, Java and Apple toolchain names
 - `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
 
-Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.
+Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent by default. Supply additional [environment values](#environment-values) through `env` or `scripts.env.allow`.
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
@@ -437,6 +439,39 @@ exit 1
 
 On Windows, Bash from Git for Windows gives its own commands priority on `PATH`.
 
+## Environment values
+
+Use top-level `env` for script defaults and `script.env` for one step. Read values with `process.env.NAME` in `.mjs` or `$NAME` in `.sh`:
+
+```yaml
+env:
+  API_URL: https://api.example.com
+steps:
+  - script:
+      path: ../../scripts/create-user.mjs
+      env:
+        API_KEY: "{{secret:API_KEY}}"
+        USER_TYPE: premium
+```
+
+Override defaults with `argent e2e run <name> --env NAME=value` or `e2e-execute`'s `env` parameter. Precedence, highest first: script step, run values, nested test defaults, parent defaults, allowed host variables.
+
+A `run:` inherits values; its defaults apply only inside that test. A raw `tool: e2e-execute` starts a separate run: pass values in `args.env`.
+
+Use string values; quote numbers and booleans. Names must match `[A-Za-z_][A-Za-z0-9_]*`; on Windows, avoid names that differ only in case. Reserved names and script output references are rejected.
+
+Add top-level `env` after recording. Save it before re-recording: `e2e-start-recording` clears the whole file.
+
+### Secrets in an `env` value
+
+Use `{{secret:NAME}}` for credentials; configure them in the tool-server's [secret sources](/docs/reference/configuration#secrets). Missing secrets prevent the script from starting.
+
+Argent redacts resolved secrets in script failures and logs, but not every encoding. Plaintext `env` values and returned output documents remain visible. Do not put credentials in logs or output documents.
+
+### Inheriting host variables
+
+[`scripts.env.allow`](/docs/reference/configuration#available-keys) adds names inherited from the tool-server. A later shell `export` does not update it. For a missing value or command, pass the value or `PATH` through `env`, or restart the tool-server with the required environment.
+
 <a id="the-argent-flow-command" />
 
 ## The `argent e2e` command
@@ -457,6 +492,7 @@ On Windows, Bash from Git for Windows gives its own commands priority on `PATH`.
 | `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
 | `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
 | `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Dot-directories and `node_modules` are skipped                                                                    |
+| `--env <NAME=value>` | Set a script environment value for this run. Repeat for each variable. See [Environment values](#environment-values)                                                          |
 | `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                 |
 | `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                               |
 | `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                     |
@@ -466,7 +502,10 @@ argent e2e run checkout --platform ios
 argent e2e run .argent/e2e/checkout.yaml --output e2e-artifacts --json
 argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
 argent e2e run .argent/e2e --recursive
+argent e2e run checkout --env BUILD=1421 --env BASE_URL=https://staging.example.com
 ```
+
+`--env` uses everything after the first `=` as the value. Quote values with spaces, for example `--env "LABEL=Test account"`. If you repeat a name, Argent uses its last value.
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
@@ -476,7 +515,7 @@ Each step line shows the time of the step before the reason, for example `(1.2s)
 
 A directory run prints a numbered header for each e2e test. Under the header Argent prints each step of that e2e test that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. After the last e2e test, Argent prints a `Failed e2e tests` section when one or more e2e tests failed. Argent prints a summary of all e2e tests at the end.
 
-An e2e test that fails its steps lets the directory run continue. So does an e2e test that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. So does an e2e test when the upload of one of its fragments fails. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the e2e tests after the failure as skipped.
+An e2e test that fails its steps lets the directory run continue. So does an e2e test that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. So does an e2e test when the upload of one of its fragments fails. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Invalid run arguments, such as a bad `--env` name, also stop the directory run. Argent counts the e2e tests after the failure as skipped.
 
 The outcome line of an e2e test that produced a report gives the result, the step counts and the time of that e2e test. The outcome line of an e2e test that produced no report states the reason. A single e2e test run prints the same reason under the name of the e2e test.
 
@@ -496,7 +535,7 @@ The `Failed e2e tests` section has one entry for each e2e test that failed. Each
 - The e2e test path.
 - The first step that failed or errored, with its number. An e2e test without a report gives its outcome line instead.
 - The reason of that step, or the error message of an e2e test without a report.
-- A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
+- A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform`, `--update-baselines` and `--env` options as the directory run. The command shows each `--env` value as you wrote it. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
 
 The section does not include the e2e tests that Argent skipped.
 
