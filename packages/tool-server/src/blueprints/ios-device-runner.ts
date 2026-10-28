@@ -35,6 +35,13 @@ import {
 
 export const IOS_DEVICE_RUNNER_NAMESPACE = "IosDeviceRunner";
 
+interface StartedRunner {
+  launched: LaunchedRunner;
+  client: RunnerClient;
+  /** Drops the connections the client keeps open to the runner. */
+  closeConnections: () => void;
+}
+
 /** How long an app-scoped runner death stays in memory. */
 const CRASH_MEMORY_MS = 10 * 60 * 1000;
 
@@ -161,10 +168,7 @@ const RUNNER_READY_TIMEOUT_MS = 120_000;
  * killed and the error carries `runnerLogText` so the caller can inspect the
  * launch log.
  */
-async function startRunner(
-  udid: string,
-  artifact: RunnerArtifact
-): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
+async function startRunner(udid: string, artifact: RunnerArtifact): Promise<StartedRunner> {
   const launched = await launchRunner({
     udid,
     xctestrunPath: artifact.xctestrunPath,
@@ -185,6 +189,7 @@ async function startRunner(
   launched.child.once("exit", onExit);
 
   let client: RunnerClient;
+  const sender = createUsbmuxCommandSender();
 
   try {
     const expiresAt = Date.now() + RUNNER_READY_TIMEOUT_MS;
@@ -199,7 +204,7 @@ async function startRunner(
     client = createRunnerClient({
       udid,
       port,
-      send: createUsbmuxCommandSender().sendCommand,
+      send: sender.sendCommand,
     });
 
     // The rest of the same budget goes to the first envelope.
@@ -208,6 +213,7 @@ async function startRunner(
       exited,
     ]);
   } catch (error) {
+    sender.close();
     killRunnerProcess(launched.child);
 
     const logText = await fs.readFile(launched.logPath, "utf8").catch(() => "");
@@ -238,6 +244,7 @@ async function startRunner(
   return {
     launched,
     client,
+    closeConnections: sender.close,
   };
 }
 
@@ -248,7 +255,7 @@ async function startRunner(
 async function buildAndStartRunner(
   udid: string,
   signing: RunnerSigningConfig
-): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
+): Promise<StartedRunner> {
   let artifact: RunnerArtifact;
 
   try {
@@ -300,7 +307,7 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
     await ensureDeviceReady(udid);
     await killStaleRunnersForDevice(udid);
 
-    const { launched, client } = await buildAndStartRunner(
+    const { launched, client, closeConnections } = await buildAndStartRunner(
       udid,
       await resolveRunnerSigningConfig()
     );
@@ -376,6 +383,7 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
           /* best-effort graceful stop */
         }
 
+        closeConnections();
         killRunnerProcess(launched.child);
       },
     };

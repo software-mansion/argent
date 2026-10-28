@@ -1,5 +1,6 @@
 import { sleep } from "../timing";
-import { postRunnerCommand } from "./runner-http";
+import type http from "node:http";
+import { createRunnerKeepAliveAgent, postRunnerCommand } from "./runner-http";
 import { createDeadline, openUsbmuxRunnerSocket, type Deadline } from "./usbmux";
 import { isIosDeviceTransportError } from "./usbmux-protocol";
 
@@ -29,7 +30,8 @@ export type SendRunnerCommand = (
 ) => Promise<unknown>;
 
 /**
- * Create a sender that posts commands over usbmux.
+ * Create a sender that posts commands over usbmux. The sender keeps its connections to the runner
+ * open between commands; `close` drops them.
  *
  * @param options.sendViaUsbmux test seam. Replaces the usbmux socket and HTTP send.
  */
@@ -42,10 +44,27 @@ export function createUsbmuxCommandSender(
       deadline: Deadline
     ) => Promise<unknown>;
   } = {}
-): { sendCommand: SendRunnerCommand } {
-  const sendViaUsbmux = options.sendViaUsbmux ?? defaultSendViaUsbmux;
+): { sendCommand: SendRunnerCommand; close: () => void } {
+  const agents = new Map<string, http.Agent>();
+  const sendViaUsbmux =
+    options.sendViaUsbmux ??
+    ((udid: string, port: number, body: unknown, deadline: Deadline) => {
+      const key = `${udid}:${port}`;
+      let agent = agents.get(key);
+      if (!agent) {
+        agent = createRunnerKeepAliveAgent();
+        agents.set(key, agent);
+      }
+      return sendViaUsbmuxOver(agent, udid, port, body, deadline);
+    });
 
   return {
+    close: () => {
+      for (const agent of agents.values()) {
+        agent.destroy();
+      }
+      agents.clear();
+    },
     sendCommand: async (udid, port, body, sendOptions) => {
       if (!sendOptions.readOnly) {
         return sendViaUsbmux(udid, port, body, createDeadline(sendOptions.timeoutMs));
@@ -78,16 +97,18 @@ export function createUsbmuxCommandSender(
 /**
  * Send one command over a usbmux socket and HTTP POST.
  */
-function defaultSendViaUsbmux(
+function sendViaUsbmuxOver(
+  keepAliveAgent: http.Agent,
   udid: string,
   port: number,
   body: unknown,
   deadline: Deadline
 ): Promise<unknown> {
-  // One deadline covers the handshake and the HTTP exchange.
+  // One deadline covers the handshake, when a new connection is needed, and the HTTP exchange.
   return postRunnerCommand({
     socketFactory: () => openUsbmuxRunnerSocket({ udid, port, timeoutMs: deadline.remainingMs() }),
     body,
     deadline,
+    keepAliveAgent,
   });
 }
