@@ -25,7 +25,10 @@ import {
   writeNewFlowFile,
   blockSteps,
   BLOCK_DIRECTIVE_KEYS,
+  holdsOutputReference,
+  resolveStepReferences,
   type FlowFile,
+  type FlowStep,
 } from "../../src/tools/flows/flow-utils";
 
 // ── serializeFlow ────────────────────────────────────────────────────
@@ -1125,17 +1128,45 @@ const BLOCK_DIRECTIVE_SIBLING_REJECTIONS: Record<
 };
 
 describe("output references", () => {
-  const REFUSALS: [label: string, yaml: string][] = [
+  const refusalOf = (yaml: string): Error => {
+    try {
+      parseFlow(yaml);
+    } catch (err) {
+      if (err instanceof Error) return err;
+      throw err;
+    }
+    throw new Error(`expected parseFlow to reject: ${yaml}`);
+  };
+
+  // Everything a refusal names between the step heading and its verdict, so a
+  // `(spelled … under `on:`)` alternative is pinned along with the path.
+  const locatorOf = (yaml: string): string => {
+    const { message } = refusalOf(yaml);
+    const locator = /\): (.*?) (?:holds a malformed|cannot hold an) output reference/.exec(
+      message
+    )?.[1];
+    if (locator === undefined) throw new Error(`not an output reference refusal: ${message}`);
+    return locator;
+  };
+
+  const stringsIn = (value: unknown): string[] =>
+    typeof value === "string"
+      ? [value]
+      : value !== null && typeof value === "object"
+        ? Object.values(value).flatMap(stringsIn)
+        : [];
+
+  // A reference resolves when its step runs, so the parse keeps it as written.
+  const REFERENCE_FIELDS: [label: string, yaml: string][] = [
     ["an echo message", 'steps:\n  - echo: "created {{output:user.id}}"\n'],
     ["typed text", 'steps:\n  - type: { into: { id: name }, text: "{{output:user.name}}" }\n'],
     ["a typed-into selector", 'steps:\n  - type: { into: { id: "{{output:field}}" }, text: hi }\n'],
     ["selector text", 'steps:\n  - tap: { text: "{{output:user.name}}" }\n'],
     ["a selector identifier", 'steps:\n  - tap: { id: "{{output:row}}" }\n'],
     ["a selector role", 'steps:\n  - tap: { id: row, role: "{{output:kind}}" }\n'],
-    [
-      "a nested relation's selector",
-      'steps:\n  - tap: { id: row, within: { id: "{{output:card}}" } }\n',
-    ],
+    ["a within relation", 'steps:\n  - tap: { id: row, within: { id: "{{output:card}}" } }\n'],
+    ["an after relation", 'steps:\n  - tap: { id: row, after: { id: "{{output:card}}" } }\n'],
+    ["a next relation", 'steps:\n  - tap: { id: row, next: { id: "{{output:card}}" } }\n'],
     ["an await selector", 'steps:\n  - await: { visible: { id: "{{output:row}}" } }\n'],
     [
       "an await expectation",
@@ -1172,6 +1203,8 @@ describe("output references", () => {
       "a snapshot crop selector",
       'steps:\n  - snapshot: { name: home, cropOn: { id: "{{output:row}}" } }\n',
     ],
+    ["a swipe start", 'steps:\n  - swipe: { from: { id: "{{output:row}}" }, direction: up }\n'],
+    ["a swipe end", 'steps:\n  - swipe: { from: { id: row }, to: { id: "{{output:row}}" } }\n'],
     ["a tool arg", 'steps:\n  - tool: keyboard\n    args: { text: "{{output:code}}" }\n'],
     [
       "a tool arg nested in an array",
@@ -1181,324 +1214,401 @@ describe("output references", () => {
       "a step inside a when block",
       'steps:\n  - when: { visible: { id: row } }\n    steps:\n      - echo: "{{output:user.id}}"\n',
     ],
-    ["an exists condition's selector", 'steps:\n  - await: { exists: { id: "{{output:row}}" } }\n'],
-    ["a hidden condition's selector", 'steps:\n  - await: { hidden: { id: "{{output:row}}" } }\n'],
-    ["an after relation", 'steps:\n  - tap: { id: row, after: { id: "{{output:card}}" } }\n'],
-    ["a next relation", 'steps:\n  - tap: { id: row, next: { id: "{{output:card}}" } }\n'],
     [
       "a step inside a platform-guarded when block",
       'steps:\n  - when: { platform: ios }\n    steps:\n      - echo: "{{output:user.id}}"\n',
     ],
+    ["an exists condition's selector", 'steps:\n  - await: { exists: { id: "{{output:row}}" } }\n'],
+    ["a hidden condition's selector", 'steps:\n  - await: { hidden: { id: "{{output:row}}" } }\n'],
+    [
+      "a script step's env value",
+      'steps:\n  - script: { path: scripts/seed.mjs, env: { TOKEN: "{{output:auth.token}}" } }\n',
+    ],
+    // A nested run's `env` is one of this step's tool args, resolved in the
+    // parent before the call, so it is not the child's run-wide `env` channel.
+    [
+      "a nested flow-execute's env value",
+      'steps:\n  - tool: flow-execute\n    args: { name: checkout, env: { ORDER: "{{output:order.id}}" } }\n',
+    ],
   ];
 
-  it.each(REFUSALS)("refuses one in %s", (_label, yaml) => {
-    expect(() => parseFlow(yaml)).toThrow(/unsupported template syntax/);
+  it.each(REFERENCE_FIELDS)("accepts one in %s and keeps it as written", (_label, yaml) => {
+    const reference = /\{\{output:[^}]*\}\}/.exec(yaml)![0];
+    const step = parseFlow(yaml).steps[0]!;
+    expect(stringsIn(step)).toEqual(expect.arrayContaining([expect.stringContaining(reference)]));
+    expect(holdsOutputReference(step)).toBe(true);
   });
 
-  it("names the field and asks for a literal value", () => {
-    let message = "";
-    try {
-      parseFlow('steps:\n  - type: { into: { id: name }, text: "{{output:user.name}}" }\n');
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
+  // The grammar does not depend on the field, so an echo carries each spelling.
+  // JSON.stringify writes a YAML double-quoted scalar that reads back exactly.
+  it.each([
+    "{{output:user.region ?? defaults.region ?? 'unknown'}}",
+    '{{output:user.region ?? "unknown"}}',
+    "{{output:user.name ?? 'it\\'s me'}}",
+    '{{output:flags["null"]}}',
+    "{{output:  user.id  ??\t'x'  }}",
+    // A near spelling is literal text.
+    "{{ output:x }}",
+    "{{Output:x}}",
+  ])("accepts %j in an echo", (message) => {
+    expect(parseFlow(`steps:\n  - echo: ${JSON.stringify(message)}\n`).steps[0]).toEqual({
+      kind: "echo",
+      message,
+    });
+  });
+
+  // The character is counted from 1 into the whole FIELD, so any text in front
+  // of the reference counts too.
+  const MALFORMED: [yaml: string, heading: string, field: string, character: number][] = [
+    // "created " 8 + "{{output:" 9 + "user.id " 8: the first `|` is the 26th.
+    ["steps:\n  - echo: \"created {{output:user.id || 'x'}}\"\n", "Step 1 (`echo`)", "`echo`", 26],
+    [
+      'steps:\n  - type: { into: { id: name }, text: "{{output:a + b}}" }\n',
+      "Step 1 (`type`)",
+      "`type.text`",
+      12,
+    ],
+    [
+      'steps:\n  - tap: { id: "{{output:user.toString()}}" }\n',
+      "Step 1 (`tap`)",
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)",
+      23,
+    ],
+    [
+      'steps:\n  - script: { path: scripts/seed.mjs, env: { TOKEN: "{{output:x ?? []}}" } }\n',
+      "Step 1 (`script`)",
+      "`script.env.TOKEN`",
+      15,
+    ],
+    // "Total " 6: the unclosed reference opens at the 7th.
+    [
+      'steps:\n  - when: { text: { in: total, equals: "Total {{output:sum" } }\n    steps:\n      - echo: hi\n',
+      "Step 1 (`when`)",
+      "`when.text.equals`",
+      7,
+    ],
+    // "{{output:a}} " 13 + "{{output:" 9 + "b." 2: the second `.` is the 25th.
+    ['steps:\n  - echo: "{{output:a}} {{output:b..c}}"\n', "Step 1 (`echo`)", "`echo`", 25],
+  ];
+
+  it.each(MALFORMED)(
+    "refuses a malformed reference in %j, naming the field and the character",
+    (yaml, heading, field, character) => {
+      const { message } = refusalOf(yaml);
+      expect(message).toContain(`${heading}: ${field} holds a malformed output reference: `);
+      expect(message).toContain(`(character ${character}, in "`);
     }
-    expect(message).toContain("`type.text`");
-    expect(message).toContain("{{output:");
-    expect(message).toContain("Replace it with the literal value the step needs");
-  });
+  );
 
-  it("addresses a condition's selector and its expectation apart", () => {
-    const fieldNamed = (yaml: string): string => {
-      try {
-        parseFlow(yaml);
-      } catch (err) {
-        return /`([^`]+)` uses unsupported template syntax/.exec(
-          err instanceof Error ? err.message : ""
-        )![1]!;
-      }
-      throw new Error(`expected parseFlow to reject: ${yaml}`);
-    };
+  // [yaml, how a refusal names the field]: `{{output:}}` is malformed anywhere.
+  const LOCATORS: [yaml: string, locator: string][] = [
+    // A condition's selector and its expectation are addressed apart.
+    [
+      'steps:\n  - await: { text: { in: { id: "{{output:}}" }, contains: Done } }\n',
+      "`await.text.in.id`",
+    ],
+    [
+      'steps:\n  - await: { text: { in: total, contains: "{{output:}}" } }\n',
+      "`await.text.contains`",
+    ],
+    ['steps:\n  - assert: { visible: { id: "{{output:}}" } }\n', "`assert.visible.id`"],
+    [
+      'steps:\n  - when: { text: { in: total, equals: "{{output:}}" } }\n    steps:\n      - echo: hi\n',
+      "`when.text.equals`",
+    ],
+    [
+      'steps:\n  - scroll-to: { target: { id: "{{output:}}" }, direction: down }\n',
+      "`scroll-to.target.id`",
+    ],
+    // A relation scope apart from the target it narrows.
+    [
+      'steps:\n  - await: { visible: { text: Ok, within: { text: "{{output:}}" } } }\n',
+      "`await.visible.within.text`",
+    ],
+    [
+      'steps:\n  - tap: { id: a, within: { id: b, after: { id: "{{output:}}" } } }\n',
+      "`tap.within.after.id` (spelled `tap.on.within.after.id` if the target sits under `on:`)",
+    ],
+    // An option beside a gesture target proves the `on:` form; `pinch` and
+    // `rotate` have no other form.
+    ['steps:\n  - tap: { on: { id: "{{output:}}" }, times: 2 }\n', "`tap.on.id`"],
+    [
+      'steps:\n  - long-press: { on: { id: "{{output:}}" }, duration: 900 }\n',
+      "`long-press.on.id`",
+    ],
+    ['steps:\n  - pinch: { on: { id: "{{output:}}" }, scale: 2 }\n', "`pinch.on.id`"],
+    ['steps:\n  - rotate: { on: { id: "{{output:}}" }, by: 45 }\n', "`rotate.on.id`"],
+    // With no option beside it the two forms parse alike, so the refusal names
+    // both: `times: 1` and an omitted `duration` normalize away.
+    [
+      'steps:\n  - tap: { id: "{{output:}}" }\n',
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)",
+    ],
+    [
+      'steps:\n  - tap: { on: { id: "{{output:}}" }, times: 1 }\n',
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)",
+    ],
+    [
+      'steps:\n  - long-press: { on: { id: "{{output:}}" } }\n',
+      "`long-press.id` (spelled `long-press.on.id` if the target sits under `on:`)",
+    ],
+    // A bare-string target is named by the constraint it parses into.
+    [
+      'steps:\n  - tap: "{{output:}}"\n',
+      "`tap.text` (spelled `tap.on.text` if the target sits under `on:`)",
+    ],
+    [
+      'steps:\n  - scroll-to: { target: "{{output:}}", direction: down }\n',
+      "`scroll-to.target.text`",
+    ],
+    // A tool arg by its own path, through a cyclic anchor and through the two
+    // YAML 1.1 containers own properties do not show.
+    [
+      'steps:\n  - tool: run-sequence\n    args: { steps: [{ args: { text: "{{output:}}" } }] }\n',
+      "`args.steps[0].args.text`",
+    ],
+    [
+      'steps:\n  - tool: keyboard\n    args: &a\n      self: *a\n      text: "{{output:}}"\n',
+      "`args.text`",
+    ],
+    [
+      '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args:\n      inner: !!set\n        ? "{{output:}}"\n',
+      "`args.inner`",
+    ],
+    [
+      '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args: !!omap\n      - k: "{{output:}}"\n',
+      "`args.k`",
+    ],
+  ];
 
-    expect(
-      fieldNamed('steps:\n  - await: { text: { in: { id: "{{output:row}}" }, contains: Done } }\n')
-    ).toBe("await.text.in.id");
-    expect(
-      fieldNamed('steps:\n  - await: { text: { in: total, contains: "{{output:sum}}" } }\n')
-    ).toBe("await.text.contains");
-    expect(fieldNamed('steps:\n  - assert: { visible: { id: "{{output:row}}" } }\n')).toBe(
-      "assert.visible.id"
-    );
-    expect(
-      fieldNamed(
-        'steps:\n  - when: { text: { in: total, equals: "{{output:sum}}" } }\n    steps:\n      - echo: hi\n'
-      )
-    ).toBe("when.text.equals");
-    expect(
-      fieldNamed('steps:\n  - scroll-to: { target: { id: "{{output:row}}" }, direction: down }\n')
-    ).toBe("scroll-to.target.id");
-  });
-
-  it("addresses a relation scope apart from the target it narrows", () => {
-    const locatorNamed = (yaml: string): string => {
-      try {
-        parseFlow(yaml);
-      } catch (err) {
-        return /\): (.*?) uses unsupported template syntax/.exec(
-          err instanceof Error ? err.message : ""
-        )![1]!;
-      }
-      throw new Error(`expected parseFlow to reject: ${yaml}`);
-    };
-
-    expect(
-      locatorNamed(
-        'steps:\n  - await: { visible: { text: Ok, within: { text: "{{output:x}}" } } }\n'
-      )
-    ).toBe("`await.visible.within.text`");
-    expect(
-      locatorNamed('steps:\n  - tap: { id: a, within: { id: b, after: { id: "{{output:x}}" } } }\n')
-    ).toBe(
-      "`tap.within.after.id` (spelled `tap.on.within.after.id` if the target sits under `on:`)"
-    );
-  });
-
-  it("addresses a gesture target under `on:` whenever the step is known to spell it there", () => {
-    const locatorNamed = (yaml: string): string => {
-      try {
-        parseFlow(yaml);
-      } catch (err) {
-        return /\): (.*?) uses unsupported template syntax/.exec(
-          err instanceof Error ? err.message : ""
-        )![1]!;
-      }
-      throw new Error(`expected parseFlow to reject: ${yaml}`);
-    };
-
-    // An option beside the target proves the options form; `pinch` and
-    // `rotate` have no other form. Each of these names one path.
-    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 2 }\n')).toBe(
-      "`tap.on.id`"
-    );
-    expect(
-      locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
-    ).toBe("`long-press.on.id`");
-    expect(locatorNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
-      "`pinch.on.id`"
-    );
-    expect(locatorNamed('steps:\n  - rotate: { on: { id: "{{output:map}}" }, by: 45 }\n')).toBe(
-      "`rotate.on.id`"
-    );
-  });
-
-  it("names both gesture spellings when the parse cannot tell them apart", () => {
-    // A `tap`/`long-press` step with no option beside its target parses the
-    // same from either form, so exactly one of these two paths is in the
-    // author's file and the parse cannot say which. `times: 1` and an omitted
-    // `duration` are the shapes that reach this: both normalize away.
-    const locatorNamed = (yaml: string): string => {
-      try {
-        parseFlow(yaml);
-      } catch (err) {
-        return /\): (.*?) uses unsupported template syntax/.exec(
-          err instanceof Error ? err.message : ""
-        )![1]!;
-      }
-      throw new Error(`expected parseFlow to reject: ${yaml}`);
-    };
-
-    expect(locatorNamed('steps:\n  - tap: { id: "{{output:row}}" }\n')).toBe(
-      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
-    );
-    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 1 }\n')).toBe(
-      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
-    );
-    expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(
-      "`long-press.id` (spelled `long-press.on.id` if the target sits under `on:`)"
-    );
-  });
-
-  it("names the constraint a bare-string target parses into", () => {
-    const locatorNamed = (yaml: string): string => {
-      try {
-        parseFlow(yaml);
-      } catch (err) {
-        return /\): (.*?) uses unsupported template syntax/.exec(
-          err instanceof Error ? err.message : ""
-        )![1]!;
-      }
-      throw new Error(`expected parseFlow to reject: ${yaml}`);
-    };
-
-    expect(locatorNamed('steps:\n  - tap: "{{output:row}}"\n')).toBe(
-      "`tap.text` (spelled `tap.on.text` if the target sits under `on:`)"
-    );
-    expect(
-      locatorNamed('steps:\n  - scroll-to: { target: "{{output:row}}", direction: down }\n')
-    ).toBe("`scroll-to.target.text`");
+  it.each(LOCATORS)("names the field of %j", (yaml, locator) => {
+    expect(locatorOf(yaml)).toBe(locator);
   });
 
   it("names the step, so a reference inside a block says which one", () => {
-    let message = "";
-    try {
-      parseFlow(
-        'steps:\n  - echo: first\n  - when: { visible: { id: row } }\n    steps:\n      - echo: ok\n      - echo: "{{output:user.id}}"\n'
-      );
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
-    }
+    const { message } = refusalOf(
+      'steps:\n  - echo: first\n  - when: { visible: { id: row } }\n    steps:\n      - echo: ok\n      - echo: "{{output:}}"\n'
+    );
     expect(message).toContain("Step 2.2 (`echo`)");
   });
 
-  it("addresses a tool arg by its own path through the args", () => {
-    let message = "";
-    try {
-      parseFlow(
-        'steps:\n  - tool: run-sequence\n    args: { steps: [{ args: { text: "{{output:code}}" } }] }\n'
-      );
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
-    }
-    expect(message).toContain("`args.steps[0].args.text`");
-  });
-
   it("carries the parser's own entry failure code", () => {
-    let signal;
-    try {
-      parseFlow('steps:\n  - echo: "{{output:user.id}}"\n');
-    } catch (err) {
-      signal = getFailureSignal(err);
+    for (const yaml of [
+      'steps:\n  - echo: "{{output:}}"\n',
+      'steps:\n  - launch: "com.acme.{{output:app}}"\n',
+      'executionPrerequisite: "Signed in as {{output:user.name}}"\nsteps:\n  - echo: hi\n',
+    ]) {
+      const signal = getFailureSignal(refusalOf(yaml));
+      expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+      expect(signal?.failure_stage).toBe("flow_output_reference");
     }
-    expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
   });
 
   it("survives a cyclic tool-args anchor rather than blowing the stack", () => {
     expect(() =>
       parseFlow("steps:\n  - tool: keyboard\n    args: &a\n      self: *a\n")
     ).not.toThrow();
-    expect(() =>
-      parseFlow(
-        'steps:\n  - tool: keyboard\n    args: &a\n      self: *a\n      text: "{{output:code}}"\n'
-      )
-    ).toThrow(/unsupported template syntax/);
+    const step = parseFlow(
+      'steps:\n  - tool: keyboard\n    args: &a\n      self: *a\n      text: "{{output:code}}"\n'
+    ).steps[0]!;
+    expect(holdsOutputReference(step)).toBe(true);
   });
 
-  it("reaches a leaf inside the two containers own properties do not show", () => {
-    expect(() =>
-      parseFlow(
-        '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args:\n      inner: !!set\n        ? "{{output:x}}"\n'
-      )
-    ).toThrow(/`args.inner` uses unsupported template syntax/);
-    expect(() =>
-      parseFlow(
-        '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args: !!omap\n      - k: "{{output:x}}"\n'
-      )
-    ).toThrow(/`args.k` uses unsupported template syntax/);
-  });
+  // Argent reads these as written, so a reference would reach the device as its
+  // literal text: `launch` would start an app named `com.acme.{{output:app}}`.
+  const STATIC_FIELDS: [label: string, yaml: string, field: string][] = [
+    ["a launch app id", 'steps:\n  - launch: "com.acme.{{output:app}}"\n', "`launch`"],
+    [
+      "a launch map platform",
+      'steps:\n  - launch: { ios: "com.acme.{{output:app}}" }\n',
+      "`launch.ios`",
+    ],
+    [
+      "a bare chromium launch path",
+      'steps:\n  - launch: { chromium: "{{output:dir}}/app" }\n',
+      "`launch.chromium`",
+    ],
+    [
+      "a chromium launch path",
+      'steps:\n  - launch: { chromium: { path: "{{output:dir}}/app" } }\n',
+      "`launch.chromium.path`",
+    ],
+    [
+      "a chromium launch arg",
+      'steps:\n  - launch: { chromium: { path: ./app, args: ["--seed={{output:order.id}}"] } }\n',
+      "`launch.chromium.args[0]`",
+    ],
+    ["a run target", 'steps:\n  - run: "{{output:dir}}/login.yaml"\n', "`run`"],
+    ["a script path", 'steps:\n  - script: { path: "{{output:dir}}/seed.mjs" }\n', "`script.path`"],
+    ["a tool name", 'steps:\n  - tool: "{{output:tool}}"\n', "`tool`"],
+    // A time limit, read as written.
+    [
+      "a tool step's delayMs",
+      'steps:\n  - tool: keyboard\n    args: { text: a }\n    delayMs: "{{output:d}}"\n',
+      "`delayMs`",
+    ],
+    // A string in place of the args map has nowhere to resolve to.
+    [
+      "a tool step's whole args",
+      'steps:\n  - tool: keyboard\n    args: "{{output:obj}}"\n',
+      "`args`",
+    ],
+    // These four pick which flow a nested run executes, and from where.
+    [
+      "a flow-execute flow_path",
+      'steps:\n  - tool: flow-execute\n    args: { flow_path: "{{output:dir}}/checkout.yaml" }\n',
+      "`args.flow_path`",
+    ],
+    [
+      "a flow-execute project_root",
+      'steps:\n  - tool: flow-execute\n    args: { name: checkout, project_root: "{{output:root}}" }\n',
+      "`args.project_root`",
+    ],
+    [
+      "a flow-execute name",
+      'steps:\n  - tool: flow-execute\n    args: { name: "{{output:flow}}" }\n',
+      "`args.name`",
+    ],
+    [
+      "a value nested under a flow-execute flow_file",
+      'steps:\n  - tool: flow-execute\n    args: { flow_file: { path: "{{output:dir}}/checkout.yaml" } }\n',
+      "`args.flow_file.path`",
+    ],
+    // `flow-execute` is an alias of `e2e-execute`; the rule follows the tool, not the id.
+    [
+      "an e2e-execute name",
+      'steps:\n  - tool: e2e-execute\n    args: { name: "{{output:flow}}" }\n',
+      "`args.name`",
+    ],
+    [
+      "a run-sequence step's tool name",
+      'steps:\n  - tool: run-sequence\n    args: { steps: [{ tool: "{{output:tool}}", args: {} }] }\n',
+      "`args.steps[0].tool`",
+    ],
+  ];
 
-  it("leaves fields off the supported list alone", () => {
-    expect(parseFlow('steps:\n  - launch: "com.acme.{{output:app}}"\n').steps[0]).toEqual({
-      kind: "launch",
-      app: "com.acme.{{output:app}}",
-    });
-    expect(
-      parseFlow(
-        'steps:\n  - launch: { chromium: { path: ./app, args: ["--seed={{output:order.id}}"] } }\n'
-      ).steps[0]
-    ).toEqual({
-      kind: "launch",
-      app: { chromium: { path: "./app", args: ["--seed={{output:order.id}}"] } },
-    });
-    expect(parseFlow('steps:\n  - run: "{{output:x}}/login.yaml"\n').steps[0]).toEqual({
-      kind: "run",
-      flow: "{{output:x}}/login.yaml",
-    });
-  });
+  it.each(STATIC_FIELDS)(
+    "refuses one in %s, listing where one does resolve",
+    (_label, yaml, field) => {
+      const kind = /^ {2}- ([a-z-]+):/m.exec(yaml)![1];
+      const { message } = refusalOf(yaml);
+      expect(message).toContain(`Step 1 (\`${kind}\`): ${field} cannot hold an output reference`);
+      expect(message).toContain("An output reference resolves only in");
+      expect(message).not.toContain("A `matches` pattern");
+    }
+  );
 
-  it("refuses the three unscanned names whose own charset already forbids one", () => {
-    expect(() => parseFlow('steps:\n  - run: "{{output:x}}"\n')).toThrow(/must end in .yaml/);
-    expect(() => parseFlow('steps:\n  - script: { path: "{{output:x}}.mjs" }\n')).toThrow(
-      /filename must match/
+  // The marker is UNESCAPED in every pattern here: an escaped `\\{\\{output:`
+  // does not contain the marker at all, so it would pass whether or not the
+  // field were checked, and pin nothing.
+  const PATTERNS: [label: string, yaml: string, field: string][] = [
+    [
+      "a tap selector",
+      'steps:\n  - tap: { text: { matches: "{{output:x}}" } }\n',
+      "`tap.text.matches` (spelled `tap.on.text.matches` if the target sits under `on:`)",
+    ],
+    [
+      "an assert text condition",
+      'steps:\n  - assert: { text: { in: total, matches: "{{output:sum}}" } }\n',
+      "`assert.text.matches`",
+    ],
+    [
+      "a when guard relation scope",
+      'steps:\n  - when: { visible: { text: Ok, within: { text: { matches: "{{output:x}}" } } } }\n    steps:\n      - echo: hi\n',
+      "`when.visible.within.text.matches`",
+    ],
+  ];
+
+  // Static in every step kind, not only in a guard: a resolved value could
+  // change the expression or leave it invalid, and the matcher compiles a
+  // pattern without a `try` because the parser vouched for it.
+  it.each(PATTERNS)("refuses a `matches` pattern in %s, saying why", (_label, yaml, field) => {
+    const { message } = refusalOf(yaml);
+    expect(message).toContain(`: ${field} cannot hold an output reference`);
+    expect(message).toContain(
+      "A `matches` pattern is always read as written, because a resolved value could change the expression."
     );
-    expect(() => parseFlow('steps:\n  - snapshot: "{{output:x}}"\n')).toThrow(
-      /snapshot name .* must match/
+    expect(message).toContain("An output reference resolves only in");
+  });
+
+  it("refuses one in executionPrerequisite, which shows before any script has run", () => {
+    const { message } = refusalOf(
+      'executionPrerequisite: "Signed in as {{output:user.name}}"\nsteps:\n  - echo: hi\n'
     );
+    expect(message).toContain(
+      "`executionPrerequisite` cannot hold an output reference: Argent shows it before any step runs"
+    );
+    expect(message).toContain("An output reference resolves only in");
+  });
+
+  it("refuses the three static names whose own charset already forbids one", () => {
+    // None of these charsets holds `{`, so each rule refuses the file before the
+    // reference check sees it. A directory component reaches that check instead.
+    for (const [yaml, rule] of [
+      ['steps:\n  - run: "{{output:x}}"\n', /must end in .yaml/],
+      ['steps:\n  - script: { path: "{{output:x}}.mjs" }\n', /filename must match/],
+      ['steps:\n  - snapshot: "{{output:x}}"\n', /snapshot name .* must match/],
+    ] as const) {
+      const { message } = refusalOf(yaml);
+      expect(message).toMatch(rule);
+      expect(message).not.toContain("cannot hold an output reference");
+    }
   });
 
   it("cuts a long offending value in the message rather than quoting all of it", () => {
-    const filler = "x".repeat(400);
-    let message = "";
-    try {
-      parseFlow(`steps:\n  - echo: "{{output:user.id}}${filler}"\n`);
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
-    }
-    const quoted = /Replace it with the literal value the step needs: "(.*)"$/s.exec(message)?.[1];
+    const { message } = refusalOf(
+      `steps:\n  - launch: "com.acme.{{output:app}}${"x".repeat(400)}"\n`
+    );
+    const quoted = /would use the literal text "(.*?)"\. An output reference/s.exec(message)?.[1];
     expect(quoted).toBeDefined();
-    expect(quoted!.endsWith("…(+218 chars)")).toBe(true);
-    expect(quoted!.startsWith("{{output:user.id}}")).toBe(true);
+    // 23 characters of app id and reference, then 400 of filler: 200 are shown.
+    expect(quoted!.endsWith("…(+223 chars)")).toBe(true);
+    expect(quoted!.startsWith("com.acme.{{output:app}}")).toBe(true);
     expect(message.length).toBeLessThan(1000);
+    // The marker itself can fall past the cut.
+    const past = refusalOf(`steps:\n  - launch: "${"x".repeat(400)}{{output:app}}"\n`).message;
+    expect(past).toContain("cannot hold an output reference");
+    expect(past).toContain("…(+214 chars)");
+    expect(past).not.toContain("{{output:app}}");
   });
 
-  it("says how much of a value it cut when the marker itself was past the cut", () => {
-    let message = "";
-    try {
-      parseFlow(`steps:\n  - echo: "${"x".repeat(400)}{{output:user.id}}"\n`);
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
+  // YAML reads an unquoted reference as a map whose key is a map, which the
+  // flow file's `stringKeys` parse refuses as "all keys must be strings". The
+  // refusal has to say what the author actually got wrong: the missing quotes.
+  it.each([
+    ["an echo", "steps:\n  - echo: {{output:user.id}}\n", 2, 11],
+    ["type text in a flow map", "steps:\n  - type: { into: x, text: {{output:name}} }\n", 2, 28],
+    [
+      "type text in block style",
+      "steps:\n  - type:\n      into: x\n      text: {{output:name ?? x}}\n",
+      4,
+      13,
+    ],
+    ["the flow-level env", "env: { X: {{output:x}} }\nsteps: []\n", 1, 11],
+  ])(
+    "refuses an unquoted reference in %s, asking for quotation marks",
+    (_label, yaml, line, column) => {
+      const { message } = refusalOf(yaml);
+      expect(message).toContain(`an unquoted output reference at line ${line}, column ${column}`);
+      expect(message).toContain("put quotation marks around the whole value");
     }
-    expect(message).toContain("uses unsupported template syntax");
-    expect(message).toContain("…(+218 chars)");
-    expect(message).not.toContain("{{output:user.id}}");
+  );
+
+  it("leaves YAML's own message for a map key that is not an unquoted reference", () => {
+    expect(refusalOf("steps:\n  - echo: {{ output:x }}\n").message).toContain(
+      "all keys must be strings"
+    );
+    expect(refusalOf("steps:\n  - tool: t\n    args: { {a: 1}: 2 }\n").message).not.toContain(
+      "unquoted output reference"
+    );
   });
 
-  it("leaves a pattern alone, at both levels that spell one", () => {
-    // A regular expression is not a literal — a `{{` in one is a
-    // quantifier-shaped sequence the author meant — so no regex is on the
-    // supported list. The marker is UNESCAPED in both patterns here: an escaped
-    // `\\{\\{output:` does not contain the marker at all, so it would pass
-    // whether or not the field were scanned, and pin nothing.
-    expect(parseFlow('steps:\n  - tap: { text: { matches: "{{output:.*" } }\n').steps[0]).toEqual({
-      kind: "tap",
-      selector: { textMatches: "{{output:.*" },
-    });
-    expect(
-      parseFlow('steps:\n  - assert: { text: { in: total, matches: "{{output:.*" } }\n').steps[0]
-    ).toMatchObject({ kind: "assert", expectedText: "{{output:.*", textMatch: "matches" });
-  });
-
-  it("refuses a pattern in a `when` guard, the one context where it fails silently", () => {
-    // The exemption above holds where an unmatchable pattern is LOUD: a tap
-    // finds nothing, an assert fails. A `when` guard that matches nothing is
-    // simply not met — the block is skipped and the run is green — so the two
-    // regex spellings are scanned there, exactly as the `{{secret:` guard in
-    // parseWhenCondition scans them.
-    const fieldNamed = (yaml: string): string => {
-      try {
-        parseFlow(yaml);
-      } catch (err) {
-        return /`([^`]+)` uses unsupported template syntax/.exec(
-          err instanceof Error ? err.message : ""
-        )![1]!;
-      }
-      throw new Error(`expected parseFlow to reject: ${yaml}`);
-    };
-
-    expect(
-      fieldNamed(
-        'steps:\n  - when: { visible: { text: { matches: "{{output:x}}" } } }\n    steps:\n      - echo: hi\n'
-      )
-    ).toBe("when.visible.text.matches");
-    expect(
-      fieldNamed(
-        'steps:\n  - when: { text: { in: { text: Total }, matches: "{{output:sum}}" } }\n    steps:\n      - echo: hi\n'
-      )
-    ).toBe("when.text.matches");
-    // A pattern in a relational scope of the guard degrades it the same way.
-    expect(
-      fieldNamed(
-        'steps:\n  - when: { visible: { text: Ok, within: { text: { matches: "{{output:x}}" } } } }\n    steps:\n      - echo: hi\n'
-      )
-    ).toBe("when.visible.within.text.matches");
+  // The flow's `env:` holds defaults for every script in the run and resolves
+  // before the first script has written any output.
+  it("refuses one in the flow-level env", () => {
+    expect(refusalOf('env: { X: "{{output:user.id}}" }\nsteps:\n  - echo: hi\n').message).toContain(
+      "The e2e test's `env.X` uses unsupported template syntax: this map holds defaults for every script in the run"
+    );
   });
 
   it("does not confuse a secret placeholder for one", () => {
@@ -1506,6 +1616,211 @@ describe("output references", () => {
       parseFlow('steps:\n  - type: { into: { id: pw }, text: "{{secret:APP_PASSWORD}}" }\n')
         .steps[0]
     ).toMatchObject({ kind: "type", text: "{{secret:APP_PASSWORD}}" });
+  });
+
+  it.each<[label: string, step: FlowStep, holds: boolean]>([
+    ["a reference field", { kind: "echo", message: "created {{output:user.id}}" }, true],
+    // A recorder picks the message for a refused append with this, and a miss
+    // here would blame the flow file rather than the new step.
+    ["a static field", { kind: "script", path: "../../scripts/{{output:user.id}}.mjs" }, true],
+    [
+      "only a when block's child",
+      {
+        kind: "when",
+        condition: { kind: "platform", platform: "ios" },
+        steps: [
+          { kind: "echo", message: "hi" },
+          { kind: "echo", message: "{{output:user.id}}" },
+        ],
+      },
+      true,
+    ],
+    ["no field", { kind: "tap", selector: { text: "Buy" } }, false],
+    [
+      "only a secret placeholder",
+      { kind: "type", into: { identifier: "pw" }, text: "{{secret:APP_PASSWORD}}" },
+      false,
+    ],
+  ])("holdsOutputReference sees a reference in %s: %s", (_label, step, holds) => {
+    expect(holdsOutputReference(step)).toBe(holds);
+  });
+
+  describe("resolveStepReferences", () => {
+    const DOCUMENT = {
+      label: "Buy",
+      row: "row-7",
+      kind: "button",
+      card: "card-1",
+      code: 42,
+      codes: ["A1"],
+      sum: 12.5,
+      user: { name: "Ada" },
+      auth: { token: "tok" },
+    };
+
+    const resolved = (step: FlowStep) => {
+      const resolution = resolveStepReferences(step, DOCUMENT);
+      if (!resolution.ok) throw new Error(resolution.reason);
+      return resolution;
+    };
+
+    it("returns the step itself when it holds no reference", () => {
+      const step: FlowStep = { kind: "echo", message: "hi" };
+      const resolution = resolveStepReferences(step, DOCUMENT);
+      expect(resolution).toEqual({ ok: true, step, references: [], wholeFields: [] });
+      expect(resolution.ok && resolution.step).toBe(step);
+    });
+
+    it("resolves on a copy and leaves the original step untouched", () => {
+      const step: FlowStep = {
+        kind: "type",
+        into: { identifier: "{{output:row}}" },
+        text: "Hi {{output:user.name}}",
+      };
+      const authored = structuredClone(step);
+      const copy = resolved(step).step;
+      expect(copy).toEqual({ kind: "type", into: { identifier: "row-7" }, text: "Hi Ada" });
+      expect(copy).not.toBe(step);
+      expect(step).toEqual(authored);
+
+      // All or nothing: the field that resolved is not written when a later one fails.
+      const failing: FlowStep = {
+        kind: "type",
+        into: { identifier: "{{output:row}}" },
+        text: "{{output:missing}}",
+      };
+      const failingAuthored = structuredClone(failing);
+      expect(resolveStepReferences(failing, DOCUMENT).ok).toBe(false);
+      expect(failing).toEqual(failingAuthored);
+    });
+
+    it.each<[label: string, step: FlowStep, expected: FlowStep]>([
+      [
+        "selector text, id and role, and a relation scope",
+        {
+          kind: "tap",
+          selector: {
+            text: "{{output:label}}",
+            identifier: "{{output:row}}",
+            role: "{{output:kind}}",
+            within: { identifier: "{{output:card}}" },
+          },
+        },
+        {
+          kind: "tap",
+          selector: {
+            text: "Buy",
+            identifier: "row-7",
+            role: "button",
+            within: { identifier: "card-1" },
+          },
+        },
+      ],
+      [
+        "typed text and the selector it types into",
+        { kind: "type", into: { identifier: "{{output:row}}" }, text: "Hi {{output:user.name}}" },
+        { kind: "type", into: { identifier: "row-7" }, text: "Hi Ada" },
+      ],
+      [
+        "expected text, writing a number as JSON does",
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "total" },
+          expectedText: "{{output:sum}}",
+          textMatch: "equals",
+        },
+        {
+          kind: "assert",
+          condition: "text",
+          selector: { identifier: "total" },
+          expectedText: "12.5",
+          textMatch: "equals",
+        },
+      ],
+      [
+        "an echo, printing an object as compact JSON",
+        { kind: "echo", message: "user {{output:user}}" },
+        { kind: "echo", message: 'user {"name":"Ada"}' },
+      ],
+      [
+        "tool args, an array element and a whole-field number among them",
+        {
+          kind: "tool",
+          name: "keyboard",
+          args: {
+            text: "Code {{output:code}}",
+            items: ["{{output:codes[0]}}"],
+            count: "{{output:code}}",
+          },
+        },
+        { kind: "tool", name: "keyboard", args: { text: "Code 42", items: ["A1"], count: 42 } },
+      ],
+      [
+        "a script step's env",
+        { kind: "script", path: "scripts/seed.mjs", env: { TOKEN: "{{output:auth.token}}" } },
+        { kind: "script", path: "scripts/seed.mjs", env: { TOKEN: "tok" } },
+      ],
+    ])("resolves %s", (_label, step, expected) => {
+      expect(resolved(step).step).toEqual(expected);
+    });
+
+    it("never touches a static field", () => {
+      expect(
+        resolved({
+          kind: "script",
+          path: "scripts/{{output:x}}.mjs",
+          env: { TOKEN: "{{output:auth.token}}" },
+        }).step
+      ).toEqual({ kind: "script", path: "scripts/{{output:x}}.mjs", env: { TOKEN: "tok" } });
+      expect(
+        resolved({
+          kind: "tap",
+          selector: { identifier: "{{output:row}}", textMatches: "{{output:x}}" },
+        }).step
+      ).toEqual({ kind: "tap", selector: { identifier: "row-7", textMatches: "{{output:x}}" } });
+      // With only a static reference there is nothing to resolve.
+      const launch: FlowStep = { kind: "launch", app: "com.acme.{{output:app}}" };
+      expect(resolved(launch).step).toBe(launch);
+    });
+
+    it("names the field a reference did not resolve in", () => {
+      expect(
+        resolveStepReferences({ kind: "tap", selector: { text: "{{output:row}}" } }, {})
+      ).toEqual({
+        ok: false,
+        reason:
+          "`tap.text` (spelled `tap.on.text` if the target sits under `on:`): " +
+          "{{output:row}} did not resolve: `output` has no `row` (it has no keys)",
+      });
+      expect(
+        resolveStepReferences(
+          { kind: "tool", name: "keyboard", args: { text: "{{output:user.promo}}" } },
+          DOCUMENT
+        )
+      ).toEqual({
+        ok: false,
+        reason:
+          "`args.text`: {{output:user.promo}} did not resolve: `output.user` has no `promo` (its keys: name)",
+      });
+    });
+
+    it("returns each reference it read, and each whole-field arg that kept a non-string type", () => {
+      const resolution = resolved({
+        kind: "tool",
+        name: "keyboard",
+        args: { text: "{{output:user.name ?? 'x'}}", count: "{{output:code}}" },
+      });
+      expect(resolution.references).toEqual([
+        { source: "user.name ?? 'x'", value: "Ada" },
+        { source: "code", value: 42 },
+      ]);
+      // A whole-field reference that gave a string is not listed: nothing about
+      // its type can surprise the tool.
+      expect(resolution.wholeFields).toEqual([
+        { where: "args.count", reference: "{{output:code}}", type: "a number" },
+      ]);
+    });
   });
 });
 

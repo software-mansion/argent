@@ -1095,6 +1095,31 @@ function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output
 }
 
 /**
+ * The rules {@link commitOutput} holds one script's document to, asked of the
+ * document a run holds after a step merged into it. The size is the rule that
+ * matters: each script's document fits the limit on its own, and only this
+ * side ever sees the total. The merge is shallow, so it cannot deepen the
+ * document, but the check is the same one rather than a second copy of it.
+ */
+export function mergedOutputProblem(document: Record<string, unknown>): string | undefined {
+  let encoded: string;
+  try {
+    encoded = JSON.stringify(document);
+  } catch (err) {
+    return `The e2e test output could not be encoded after this step: ${errorMessage(err)}`;
+  }
+  const bytes = Buffer.byteLength(encoded, "utf8");
+  if (bytes > SCRIPT_MAX_OUTPUT_BYTES) {
+    return (
+      `After this step the e2e test output is ${describeBytes(bytes)} encoded; the limit is ` +
+      `${describeBytes(SCRIPT_MAX_OUTPUT_BYTES)}. A script cannot remove a key, so set one ` +
+      "the e2e test no longer reads to null."
+    );
+  }
+  return documentProblem(document);
+}
+
+/**
  * How deep a document may nest; the size cap alone allows ~500 000 levels. A
  * fixed number rather than a trial encode, so the verdict does not depend on the
  * host: well below where the recursive `JSON.stringify` of Node 24 and older

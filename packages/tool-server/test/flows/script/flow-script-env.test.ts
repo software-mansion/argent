@@ -291,7 +291,6 @@ describe("environment shape rules", () => {
   const noEnv = "steps:\n  - echo: hi\n";
 
   const STEERS = /steers the runner's own process/;
-  const TEMPLATE = /env.X` uses unsupported template syntax/;
 
   it.each<[string, string, RegExp]>([
     ["a reserved name", fileEnv("{ NODE_OPTIONS: --inspect }"), /NODE_OPTIONS/],
@@ -312,8 +311,11 @@ describe("environment shape rules", () => {
       stepEnv('{ LONE: "\\uD800abc" }'),
       /script `env` holds an unpaired surrogate in the value of LONE/,
     ],
-    ["{{output:}}", fileEnv('{ X: "{{output:user.id}}" }'), TEMPLATE],
-    ["a step's {{output:}}", stepEnv('{ X: "{{output:user.id}}" }'), TEMPLATE],
+    [
+      "{{output:}}",
+      fileEnv('{ X: "{{output:user.id}}" }'),
+      /env.X` uses unsupported template syntax: this map holds defaults .*A `script` step's own `env` can read output/s,
+    ],
     ["__proto__", fileEnv("{ __proto__: x }"), /__proto__/],
   ])("refuses %s in a flow's env before the run starts", async (_case, yaml, error) => {
     await write("scripts/probe.mjs", "");
@@ -409,6 +411,45 @@ describe("environment shape rules", () => {
     expect(seen("file")).toEqual({ ARGENT_REASON: "from-recording" });
   });
 
+  it("resolves a {{output:...}} reference in a script step's own env, at replay and while recording", async () => {
+    await write("scripts/seed.mjs", `output.user = { id: "u_42" };`);
+    await write("scripts/probe.mjs", reporter("probe", ["X"]));
+    const probe = 'script: { path: ../../scripts/probe.mjs, env: { X: "{{output:user.id}}" } }';
+
+    // Resolved directly before the step: with nothing written yet, the step errors.
+    await flow("out-step-missing", `steps:\n  - ${probe}\n`);
+    const missing = (await runFlow("out-step-missing")).result;
+    expect(missing.steps[0]).toMatchObject({
+      status: "error",
+      reason:
+        "`script.env.X`: {{output:user.id}} did not resolve: `output` has no `user` (it has no keys)",
+    });
+    expect(readMark("probe")).toBeUndefined();
+
+    await flow("out-step", `steps:\n  - script: { path: ../../scripts/seed.mjs }\n  - ${probe}\n`);
+    expect((await runFlow("out-step")).result.ok).toBe(true);
+    expect(seen("probe")).toEqual({ X: "u_42" });
+    await fs.rm(markPath("probe"));
+
+    // Recording resolves against the recording's own document, which starts
+    // empty, and the file keeps the reference.
+    await startRecording("out-rec");
+    await expect(addScript("out-rec", "probe.mjs", { X: "{{output:user.id}}" })).rejects.toThrow(
+      "This call's `env` cannot be used, so the script did not run and nothing was recorded: " +
+        "`script.env.X`: {{output:user.id}} did not resolve"
+    );
+    expect(readMark("probe")).toBeUndefined();
+    await addScript("out-rec", "seed.mjs");
+    expect((await addScript("out-rec", "probe.mjs", { X: "{{output:user.id}}" })).status).toBe(
+      "pass"
+    );
+    expect(seen("probe")).toEqual({ X: "u_42" });
+    expect(parseFlow(await fs.readFile(e2ePath("out-rec"), "utf8")).steps).toEqual([
+      { kind: "script", path: "../../scripts/seed.mjs" },
+      { kind: "script", path: "../../scripts/probe.mjs", env: { X: "{{output:user.id}}" } },
+    ]);
+  });
+
   it("opens every flow-add-script env refusal with the two words the decision rule reads", async () => {
     await write("scripts/noop.mjs", "output.ok = true;");
     await startRecording("wording");
@@ -416,7 +457,7 @@ describe("environment shape rules", () => {
       [{ NODE_OPTIONS: "--inspect" }, "holds NODE_OPTIONS"],
       [{ ARGENT_OUTPUT: "/tmp/w" }, "holds ARGENT_OUTPUT"],
       [{ "not a name": "x" }, "is not an environment variable name"],
-      [{ A: "{{output:x}}" }, "`env.A` uses unsupported template syntax"],
+      [{ A: "{{output:x}}" }, "{{output:x}} did not resolve"],
       [JSON.parse('{"__proto__":"x","A":"y"}') as Record<string, string>, "holds __proto__"],
     ] as const) {
       const refused = await addScript("wording", "noop.mjs", env).then(

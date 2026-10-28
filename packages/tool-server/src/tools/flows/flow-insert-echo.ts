@@ -8,7 +8,8 @@ import {
 import {
   requireRecordingSession,
   appendStepToFlow,
-  holdsOutputReference,
+  refusesOutputReferences,
+  resolveStepReferences,
   type FlowSavedTo,
   type FlowStep,
 } from "./flow-utils";
@@ -63,7 +64,7 @@ Returns { message, stepCount, savedTo }. Fails if that e2e test has no recording
           failure_area: "tool_server",
           error_kind: "unknown",
         },
-        (!fromTheFile && holdsOutputReference(step)
+        (!fromTheFile && refusesOutputReferences(step)
           ? `The echo was not recorded: its own \`message\` failed validation. `
           : `The echo was not recorded. Fix what is named below in ${session.filePath} — it is ` +
             `already in the file, not in this call. `) +
@@ -71,8 +72,17 @@ Returns { message, stepCount, savedTo }. Fails if that e2e test has no recording
       );
     }
 
+    // An echo starts nothing, so a path the recording's document lacks is no
+    // reason to refuse it — a script recorded later may write that path. It is,
+    // though, the one moment the agent can see a misspelled one.
+    const resolved = resolveStepReferences(step, session.output);
+    const warning = resolved.ok
+      ? ""
+      : ` — but its message does not resolve against the recording's output document: ` +
+        `${resolved.reason}. At replay the echo errors and stops the run unless a script ` +
+        `writes that path first`;
     return {
-      message: `Echo added to "${params.name}" e2e test`,
+      message: `Echo added to "${params.name}" e2e test${warning}`,
       stepCount,
       savedTo,
     };

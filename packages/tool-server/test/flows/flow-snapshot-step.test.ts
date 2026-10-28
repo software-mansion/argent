@@ -44,6 +44,32 @@ describe("snapshot step wiring", () => {
     );
   });
 
+  it("crops to the resolved cropOn and keys the baseline on the cropOn as written", async () => {
+    await writeFlow("crop-ref", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "snapshot",
+          name: "order-card",
+          cropOn: { identifier: "order-{{output:order.id ?? 'o_1'}}" },
+        },
+      ],
+    });
+
+    const result = await run("crop-ref");
+
+    expect(result.steps).toEqual([expect.objectContaining({ status: "pass" })]);
+    expect(vi.mocked(runSnapshot)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cropOn: expect.objectContaining({ identifier: "order-o_1" }),
+        authoredCropOn: expect.objectContaining({
+          identifier: "order-{{output:order.id ?? 'o_1'}}",
+        }),
+      })
+    );
+  });
+
   it("passes no cropOn for a plain snapshot step", async () => {
     await writeFlow("plain", {
       executionPrerequisite: "",

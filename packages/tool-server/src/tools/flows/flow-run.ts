@@ -53,6 +53,15 @@ import {
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import {
+  assertNoEnvOutputReferences,
+  renderedValue,
+  resolveStepReferences,
+  type StepReferenceResolution,
+  type WholeFieldReference,
+} from "./flow-utils";
+import type { ResolvedOutputReference } from "./flow-output";
+import { mergeScriptOutput, runFlowScriptStep } from "./flow-script-step";
+import {
   ClientProjectAccess,
   HostProjectAccess,
   resolveRunTarget,
@@ -69,8 +78,6 @@ import {
   type ToolFileFix,
 } from "./flow-tool-inputs";
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
-import { assertNoEnvOutputReferences } from "./flow-utils";
-import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import {
   describeScriptEnvProblem,
@@ -1122,6 +1129,15 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   scriptLogBudget: FlowScriptLogBudget;
   runtimeEnv: Readonly<ScriptEnv>;
   scriptRunNotes: FlowScriptRunNotes;
+  /**
+   * The run's output document. It lives on the ROOT state, which a `run:`
+   * fragment and a `when` block share, so a nested scope keeps what its scripts
+   * merged when it ends — an environment is scoped instead, and ends with its
+   * scope. Replaced on every merge and never mutated. Read here, never off an
+   * `ActionEnv`: {@link deviceEnv} hands each device step a shallow copy, which
+   * a later merge would not reach.
+   */
+  output: Record<string, unknown>;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -1775,6 +1791,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
         scriptLogBudget: createScriptLogBudget(),
         runtimeEnv: params.env ?? {},
         scriptRunNotes: createScriptRunNotes(),
+        output: {},
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -2199,9 +2216,9 @@ function summarize(
   let skipped = 0;
   let errored = 0;
   for (const s of steps) {
-    // Echo is narration, not a test step — counting it would let the summary
-    // disagree with the renderers' step numbering (which skips echo too).
-    if (s.kind === "echo") continue;
+    // Narration goes uncounted, unless it could not be printed: an echo whose
+    // reference did not resolve stopped the run, and must not leave it PASS.
+    if (s.kind === "echo" && s.status !== "error") continue;
     if (s.status === "pass") passed++;
     else if (s.status === "fail") failed++;
     else if (s.status === "skip") skipped++;
@@ -2421,7 +2438,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       state.hoistedBootMs = undefined;
     }
     if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
-    const report = await execLeafStep(state, step, index, scope);
+    const report = await resolveAndExecLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
       const screen = await captureFailureScreen(state);
@@ -2542,7 +2559,26 @@ async function execWhenStep(
     const platform = authoringPlatform(guardEnv.device.platform);
     met = platform === step.condition.platform;
   } else {
-    const probe = await probeWhenCondition(deviceEnv(state), step.condition);
+    // Resolved before the probe, so the guard asks about the value. A reference
+    // that does not resolve stops the run with an error rather than reading as
+    // "condition not met": a guard that skips its block over a misspelled path,
+    // saying nothing, is what the when-guard fields are on the list to prevent.
+    const guard = resolveStepReferences(step, state.output);
+    if (!guard.ok) {
+      pushReport(state, {
+        ...marker,
+        status: "error",
+        reason: `could not resolve when guard (${label}): ${guard.reason}`,
+        durationMs: Date.now() - guardStartedAt,
+      });
+      state.stopped = true;
+      reportBlockSkipped(state, step.steps, inner, "when guard errored");
+      return;
+    }
+    const probe = await probeWhenCondition(
+      deviceEnv(state),
+      guard.step.condition as typeof step.condition
+    );
     if (probe.aborted) {
       pushReport(state, { ...marker, status: "skip", reason: "run aborted" });
       reportBlockSkipped(state, step.steps, inner, "run aborted");
@@ -2552,7 +2588,10 @@ async function execWhenStep(
       pushReport(state, {
         ...marker,
         status: "error",
-        reason: `could not evaluate when guard (${label}): ${probe.reason}`,
+        reason: appendResolvedValues(
+          `could not evaluate when guard (${label}): ${probe.reason}`,
+          guard.references
+        ),
         durationMs: Date.now() - guardStartedAt,
       });
       state.stopped = true;
@@ -2727,7 +2766,10 @@ async function execRunStep(
   );
 }
 
-type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;
+type ScriptStepOutcome = Pick<
+  StepReport,
+  "status" | "reason" | "warning" | "scriptLog" | "scriptLogTruncated"
+>;
 
 /**
  * A `script` step is the one step whose `reason` is written by something other
@@ -2763,18 +2805,38 @@ async function runScriptStep(
   step: Extract<FlowStep, { kind: "script" }>,
   scope: StepScope
 ): Promise<ScriptStepOutcome> {
-  const { outcome } = await runFlowScriptStep({
+  const { outcome, result } = await runFlowScriptStep({
     flowDir: scopeFlowDir(scope),
     step,
     projectRoot: state.projectRoot,
     logBudget: state.scriptLogBudget,
     env: mergeScriptEnv(scope.env, state.runtimeEnv, step.env),
+    output: state.output,
     runNotes: state.scriptRunNotes,
     ...(state.signal ? { signal: state.signal } : {}),
   });
-  return outcome.reason === undefined
-    ? outcome
-    : { ...outcome, reason: oneLineReason(outcome.reason) };
+  // Only a pass merges: a script that failed or errored may have written half
+  // of what it meant to, and none of it is kept.
+  let settled: ScriptStepOutcome = outcome;
+  if (outcome.status === "pass" && result?.output) {
+    const merged = mergeScriptOutput(state.output, result.output);
+    if ("problem" in merged) {
+      // The document is thrown away, and a warning about what it held goes too.
+      const { warning: discarded, ...kept } = outcome;
+      void discarded;
+      settled = {
+        ...kept,
+        status: "fail",
+        reason:
+          outcome.reason === undefined ? merged.problem : `${merged.problem} ${outcome.reason}`,
+      };
+    } else {
+      state.output = merged.output;
+    }
+  }
+  return settled.reason === undefined
+    ? settled
+    : { ...settled, reason: oneLineReason(settled.reason) };
 }
 
 type LeafStep = Exclude<FlowStep, BlockStep | { kind: "run" }>;
@@ -2837,19 +2899,162 @@ async function runFold(
   }
 }
 
-async function execLeafStep(
+type LeafReportBase = Pick<StepReport, "index" | "kind" | "flow" | "target" | "depth">;
+
+async function resolveAndExecLeafStep(
   state: ExecState,
   step: LeafStep,
   index: number,
   scope: StepScope
 ): Promise<StepReport> {
-  const base = {
+  const base: LeafReportBase = {
     index,
     kind: step.kind,
     flow: scopeFlow(scope),
     target: stepTarget(step),
     ...depthOf(scope),
-  } as const;
+  };
+  // Directly before the step, and only once it is reached: a skipped step reads
+  // nothing, and every script above it has already merged.
+  const resolution = resolveStepReferences(step, state.output);
+  if (!resolution.ok) {
+    return {
+      ...base,
+      status: "error",
+      reason: resolution.reason,
+      ...(step.kind === "echo" ? { message: step.message } : {}),
+      ...(step.kind === "tool" ? { tool: step.name } : {}),
+    };
+  }
+  const report = await execLeafStep(state, step, resolution, base, scope);
+  if (report.status !== "fail" && report.status !== "error") return report;
+  const reason = appendResolvedValues(report.reason, resolution.references);
+  return reason === report.reason ? report : { ...report, reason };
+}
+
+/**
+ * A step that read output and then failed says what it read. Its report keeps
+ * the reference as the flow file spells it, the way a `tool` step keeps
+ * `{{secret:NAME}}`, so without this an `assert` on `Order {{output:order.id}}`
+ * would fail without the text it looked for. Output is not secret, so the
+ * value is shown.
+ */
+function appendResolvedValues(
+  reason: string | undefined,
+  references: readonly ResolvedOutputReference[]
+): string | undefined {
+  if (references.length === 0) return reason;
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const { source, value } of references) {
+    if (seen.has(source)) continue;
+    seen.add(source);
+    // One line, whatever whitespace the author put between tokens: a step
+    // reason is rendered as one line on every surface.
+    const spelled = source.replace(/\s+/g, " ");
+    values.push(`(output.${spelled} = ${renderedValue(JSON.stringify(value))})`);
+  }
+  return reason ? `${reason} ${values.join(" ")}` : values.join(" ");
+}
+
+const WHOLE_FIELD_TYPE_ADVICE =
+  "write the value in the script with the type the tool expects, or, for text entry, use a " +
+  "`type:` step";
+
+/**
+ * A whole-field reference keeps the JSON type the script wrote, and a tool can
+ * refuse that type where a `type:` step would have made text of it — `tool:
+ * keyboard` refuses a number in `text`. The tool's own message names the
+ * argument, not where its value came from.
+ *
+ * Only the references the tool's schema refused are named: a refused literal
+ * beside them says nothing about their types. A tool that refused its
+ * arguments inside `execute`, after they parsed, does not say which one, so
+ * there the note can only say "if".
+ */
+function wholeFieldTypeNote(
+  err: unknown,
+  wholeFields: readonly WholeFieldReference[],
+  registry: Registry,
+  toolId: string,
+  args: unknown
+): string {
+  if (wholeFields.length === 0) return "";
+  if (getFailureSignal(err)?.error_code !== FAILURE_CODES.TOOL_INPUT_INVALID) return "";
+  const refused = refusedArgPaths(registry, toolId, args);
+  if (refused === undefined) return conditionalWholeFieldNote(wholeFields);
+  const blamed = wholeFields.filter((field) =>
+    refused.some(
+      (at) =>
+        at === field.where || at.startsWith(`${field.where}.`) || at.startsWith(`${field.where}[`)
+    )
+  );
+  if (blamed.length === 0) return "";
+  return (
+    ` — ${describeWholeFields(blamed)}. A reference that is the whole argument keeps the ` +
+    `JSON type the script wrote: ${WHOLE_FIELD_TYPE_ADVICE}`
+  );
+}
+
+/**
+ * The `args` paths the tool's schema refuses, spelled the way a
+ * {@link WholeFieldReference} spells them, or undefined when the args parse or
+ * the tool has no schema.
+ */
+function refusedArgPaths(registry: Registry, toolId: string, args: unknown): string[] | undefined {
+  const parsed = registry.getTool(toolId)?.zodSchema?.safeParse(args ?? {});
+  if (!parsed || parsed.success) return undefined;
+  return parsed.error.issues.map((issue) =>
+    issue.path.reduce<string>(
+      (at, key) => (typeof key === "number" ? `${at}[${key}]` : `${at}.${String(key)}`),
+      "args"
+    )
+  );
+}
+
+/**
+ * The same note for a `run-sequence` or a nested `flow-execute`: those report
+ * an inner tool's refusal in their result rather than by throwing, so its
+ * failure code never reaches the runner, and the note can only say "if".
+ */
+function nestedWholeFieldNote(
+  status: StepStatus,
+  wholeFields: readonly WholeFieldReference[]
+): string {
+  if (wholeFields.length === 0 || (status !== "fail" && status !== "error")) return "";
+  return conditionalWholeFieldNote(wholeFields);
+}
+
+function conditionalWholeFieldNote(wholeFields: readonly WholeFieldReference[]): string {
+  return (
+    ` — ${describeWholeFields(wholeFields)}. If a tool refused that type, ` +
+    WHOLE_FIELD_TYPE_ADVICE
+  );
+}
+
+function describeWholeFields(wholeFields: readonly WholeFieldReference[]): string {
+  return wholeFields
+    .map(
+      (field) =>
+        `\`${field.where}\` is ${JSON.stringify(renderedValue(field.reference))} alone, so it ` +
+        `received ${field.type}`
+    )
+    .join("; ");
+}
+
+/**
+ * One leaf step, run with its references resolved. `authored` is the step as
+ * the flow file spells it, and every report field that names the step keeps
+ * that spelling; only an `echo` shows what it resolved to.
+ */
+async function execLeafStep(
+  state: ExecState,
+  authored: LeafStep,
+  resolution: Extract<StepReferenceResolution<LeafStep>, { ok: true }>,
+  base: LeafReportBase,
+  scope: StepScope
+): Promise<StepReport> {
+  const step = resolution.step;
   const { registry, ctx, device, signal } = state;
 
   switch (step.kind) {
@@ -2938,6 +3143,7 @@ async function execLeafStep(
           maxMismatch: step.maxMismatch ?? DEFAULT_MAX_MISMATCH,
           updateBaselines: state.updateBaselines,
           cropOn: step.cropOn,
+          authoredCropOn: (authored as typeof step).cropOn,
           appIdentity: snapshotAppIdentity(state),
           seenKeys: state.snapshotApps,
         });
@@ -2974,6 +3180,19 @@ async function execLeafStep(
         step.args,
         state.deviceIsExplicit
       );
+      // The tool receives `args`, every reference resolved; the report shows the
+      // arguments as authored, bound the same way.
+      const authoredArgs = (authored as typeof step).args;
+      const reportArgs =
+        authored === step
+          ? args
+          : bindDeviceArgs(
+              registry,
+              step.name,
+              device?.id ?? "",
+              authoredArgs,
+              state.deviceIsExplicit
+            );
       const outputHint = registry.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
         return { ...base, status: "skip", tool: step.name, reason: "run aborted during delay" };
@@ -3046,10 +3265,10 @@ async function execLeafStep(
             ...base,
             status: nested.status,
             tool: step.name,
-            reason: nested.reason,
+            reason: `${nested.reason}${nestedWholeFieldNote(nested.status, resolution.wholeFields)}`,
             result,
             outputHint,
-            args,
+            args: reportArgs,
           };
         }
         if (isDebuggerNotConnectedResult(step.name, result)) {
@@ -3065,7 +3284,7 @@ async function execLeafStep(
             reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
             result,
             outputHint,
-            args,
+            args: reportArgs,
           };
         }
         // Same hazard as the two above, on the native-devtools precheck: it
@@ -3081,7 +3300,7 @@ async function execLeafStep(
             reason: `${step.name} did not run (${result.status}): ${result.message}`,
             result,
             outputHint,
-            args,
+            args: reportArgs,
           };
         }
         // The target the clear above dropped, restored for the two tools whose
@@ -3097,7 +3316,14 @@ async function execLeafStep(
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args: reportArgs,
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
@@ -3110,9 +3336,11 @@ async function execLeafStep(
           err,
           step.name,
           prepared?.args ?? args,
-          step.args ?? {}
+          authoredArgs ?? {}
         );
-        const reason = reframed ?? errMsg(err);
+        const reason =
+          (reframed ?? errMsg(err)) +
+          wholeFieldTypeNote(err, resolution.wholeFields, registry, step.name, args);
         return {
           ...base,
           status: "error",

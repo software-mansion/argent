@@ -42,6 +42,56 @@ describe("flow script executor — output validation", () => {
     });
   });
 
+  /** `source` as a script handed `output`, the document a run holds so far. */
+  async function runHanded(source: string, output: Record<string, unknown>) {
+    const ws = workspace();
+    const script = ws.write("handed.mjs", source);
+    return new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      output,
+    });
+  }
+
+  // Every script is handed the run's document, and a `.sh` step may return one
+  // as deep as the parent accepts (256 levels, root included).
+  it("hands a .mjs a document as deep as the parent accepts, and takes it back", async () => {
+    const nested = 255;
+    const deep: unknown = JSON.parse('{"a":'.repeat(nested) + "1" + "}".repeat(nested));
+    const result = await runHanded(`output.touched = true;`, { deep });
+    expect(result.failure).toBeUndefined();
+    expect(result.output?.touched).toBe(true);
+    // Counted without recursion: a recursive helper would overflow here first.
+    let levels = 0;
+    let node: unknown = result.output?.deep;
+    while (node !== null && typeof node === "object") {
+      levels++;
+      node = (node as { a?: unknown }).a;
+    }
+    expect(levels).toBe(nested);
+    expect(node).toBe(1);
+  });
+
+  it.each([
+    [
+      "deeper than the parent accepts, with the parent's own message",
+      `let node = 1; for (let i = 0; i < 257; i++) node = { a: node }; output.deep = node;`,
+      /^output\.deep(\.a)+\.?… nests deeper than 256 levels; output must be a document a later step can read back\.$/,
+    ],
+    // With no stack to overflow, output that grows as it is read would fill the
+    // heap before anything refused it.
+    [
+      "that grows as it is read, at the depth cap rather than the heap limit",
+      `class Endless { toJSON() { return { child: new Endless() }; } }\noutput.tree = new Endless();`,
+      /^output\.tree\.child.* nests deeper than 256 levels/,
+    ],
+  ])("refuses output %s", async (_label, source, message) => {
+    const result = await run(source);
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toMatch(message);
+  });
+
   it("takes a replaced binding, not only a mutated one", async () => {
     const result = await run(`output.seeded = 1; output = { replaced: true };`);
     expect(result.output).toEqual({ replaced: true });
@@ -58,11 +108,6 @@ describe("flow script executor — output validation", () => {
       "a function",
       `output.items = [1, 2, { handler: () => {} }];`,
       "output.items[2].handler is a function; output must be JSON-compatible data",
-    ],
-    [
-      "undefined",
-      `output.missing = undefined;`,
-      "output.missing is undefined; output must be JSON-compatible data",
     ],
     ["a BigInt", `output.big = 1n;`, "output.big is a BigInt; output must be JSON-compatible data"],
     [
@@ -95,6 +140,50 @@ describe("flow script executor — output validation", () => {
     expect(result.ok).toBe(false);
     expect(result.failure?.kind).toBe("output");
     expect(result.failure?.message).toBe(expected);
+  });
+
+  // [what the script returns, its source, the document it is handed]
+  it.each<[string, string, Record<string, unknown>, Record<string, unknown>]>([
+    [
+      "a top-level member set to undefined as null, so the merge clears it",
+      `output.promo = undefined; output.ok = true;`,
+      {},
+      { promo: null, ok: true },
+    ],
+    [
+      "a key deleted from the handed document as null",
+      `delete output.promo; output.name = "Bob";`,
+      { name: "Ada", promo: "SPRING", kept: 1 },
+      { name: "Bob", promo: null, kept: 1 },
+    ],
+    [
+      "a newly assigned object as it is, clearing none of the keys it leaves out",
+      `output = { name: "Bob" };`,
+      { name: "Ada", promo: "SPRING" },
+      { name: "Bob" },
+    ],
+    [
+      "an object without its nested member set to undefined",
+      `output.user = { id: "u_1", promo: undefined };`,
+      {},
+      { user: { id: "u_1" } },
+    ],
+    [
+      "an undefined array element as null, the way JSON.stringify does",
+      `output.codes = ["a", undefined, "c"];`,
+      {},
+      { codes: ["a", null, "c"] },
+    ],
+  ])("returns %s", async (_label, source, handed, expected) => {
+    const result = await runHanded(source, handed);
+    expect(result.failure).toBeUndefined();
+    expect(result.output).toEqual(expected);
+  });
+
+  it("refuses a handed document whose toJSON gives a string as not an object", async () => {
+    const result = await runHanded(`output.toJSON = () => "x";`, { name: "Ada" });
+    expect(result.ok).toBe(false);
+    expect(result.failure?.message).toBe("The script's output was not an object.");
   });
 
   it("rejects a cycle rather than crashing on it", async () => {
