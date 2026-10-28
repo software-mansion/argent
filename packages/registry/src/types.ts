@@ -51,7 +51,10 @@ export interface ServiceBlueprint<T = unknown, C = unknown> {
    * `signal` aborts when the service is torn down before the factory resolves,
    * e.g. on tool-server shutdown. A factory that waits on something outside the
    * process should stop waiting then and release what it holds, because the
-   * registry has no instance to dispose yet.
+   * registry has no instance to dispose yet. The signal is never already
+   * aborted when the factory is called: a service torn down while its
+   * dependencies resolve rejects with the terminating error instead, without
+   * calling the factory.
    */
   factory(
     deps: Record<string, unknown>,

@@ -97,8 +97,14 @@ export function startSimulatorWatcher(registry: Registry): {
    * Lent simulators whose attach failed, with the failures in a row and the
    * polls left to sit out. A provider that accepts and then hangs up or one
    * that stopped listening, would otherwise be dialled on every poll and log a
-   * service error each time. The watcher only warms the connection up and a
-   * tool call still attaches on its own, so waiting longer costs nothing.
+   * service error each time.
+   *
+   * The wait is not free. The watcher resolves the raw UDID, while a tool call
+   * that uses the `ext:` id from `list-devices` resolves its own service and
+   * dials the provider itself, so it never uses the watcher's connection. A
+   * tool call by raw UDID during the wait attaches a service the watcher does
+   * not track, so if the simulator shuts down before the next attempt the
+   * watcher does not dispose it and only the provider hanging up ends it.
    */
   const attachBackoff = new Map<string, { failures: number; pollsLeft: number }>();
 

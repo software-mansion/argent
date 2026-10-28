@@ -389,6 +389,16 @@ export class Registry {
         depNode.dependents.add(urn);
       }
 
+      /**
+       * Torn down while a dependency resolved. The factory never sees an
+       * aborted signal, so one that only listens for `abort` still stops.
+       */
+      if (signal.aborted) {
+        throw new ServiceInitializationError(urn, "Service was terminated during initialization", {
+          cause: terminatingSignalCause("Service was terminated during initialization"),
+        });
+      }
+
       const instance = await blueprint.factory(resolvedDeps, payload, options, signal);
 
       if (!signal.aborted) node.initAbort = null;
