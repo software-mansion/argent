@@ -13,6 +13,7 @@ import type { ServiceEvents } from "@argent/registry";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../src/tools/simulator/stop-metro";
+import { isBorrowedSimulatorServer } from "../src/tools/simulator/device-services";
 import { __resetExternalDeviceCacheForTesting } from "../src/utils/external-devices";
 
 function createMockRegistry(services: Map<string, { state: ServiceState; dependents: string[] }>) {
@@ -770,9 +771,9 @@ describe("stop-all-simulator-servers device scoping", () => {
     //
     // typechecks, keeps all 3255 tests green, and makes `params.devices` always
     // `[]` — so `scoped` is permanently true and the machine-wide sweep reaps
-    // nothing while answering `{ stopped: [] }`, which the tool documents as
-    // "means nothing of Argent's own was still running". Parse, then execute what the
-    // parse produced, on both shapes.
+    // nothing while answering `{ stopped: [] }`, which tells the agent that
+    // nothing was left running. Parse, then execute what the parse produced,
+    // on both shapes.
     const registry = createMockRegistry(twoAgentServices());
     const tool = createStopAllSimulatorServersTool(registry);
     const schema = tool.zodSchema!;
@@ -895,6 +896,7 @@ describe("stop tools — a provider's device under its plain UDID", () => {
   let descriptorPath: string;
   let registry: Registry;
   let simulatorServerDispose: Mock<() => Promise<void>>;
+  let simulatorServerStarts: number;
   let tvControlDispose: Mock<() => Promise<void>>;
 
   function publishClaim(): void {
@@ -929,6 +931,8 @@ describe("stop tools — a provider's device under its plain UDID", () => {
     __resetExternalDeviceCacheForTesting();
   }
 
+  type SimulatorServerOptions = { external?: boolean; fail?: boolean; gate?: Promise<void> };
+
   /** Builds `SimulatorServer:<id>` as attached (`external: true`) or spawned. */
   async function startSimulatorServer(id: string, external: boolean): Promise<void> {
     await registry.resolveService(`SimulatorServer:${id}`, { external });
@@ -943,16 +947,23 @@ describe("stop tools — a provider's device under its plain UDID", () => {
     __resetExternalDeviceCacheForTesting();
 
     simulatorServerDispose = vi.fn<() => Promise<void>>(async () => {});
+    simulatorServerStarts = 0;
     tvControlDispose = vi.fn<() => Promise<void>>(async () => {});
     registry = new Registry();
-    registry.registerBlueprint<{ external: boolean }, string>({
+    registry.registerBlueprint<SimulatorServerOptions, string>({
       namespace: "SimulatorServer",
       getURN: (id) => `SimulatorServer:${id}`,
-      factory: async (_deps, _id, options) => ({
-        api: { external: options?.external === true },
-        dispose: simulatorServerDispose,
-        events: new TypedEventEmitter<ServiceEvents>(),
-      }),
+      factory: async (_deps, _id, options) => {
+        simulatorServerStarts++;
+        if (options?.fail) throw new Error("refused to start");
+        await options?.gate;
+
+        return {
+          api: { external: options?.external === true },
+          dispose: simulatorServerDispose,
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
     });
     registry.registerBlueprint<object, string>({
       namespace: "TvControl",
@@ -1055,6 +1066,102 @@ describe("stop tools — a provider's device under its plain UDID", () => {
       { devices: [CLAIMED] }
     );
     expect(all).toEqual({ stopped: [`TvControl:${CLAIMED}`] });
+  });
+
+  /**
+   * Leaves `SimulatorServer:<id>` in ERROR, as a tvOS UDID the factory refused
+   * does.
+   */
+  async function failSimulatorServer(id: string): Promise<void> {
+    await expect(
+      registry.resolveService(`SimulatorServer:${id}`, { fail: true })
+    ).rejects.toThrow();
+
+    expect(registry.getServiceState(`SimulatorServer:${id}`)).toBe(ServiceState.ERROR);
+  }
+
+  /** Leaves `SimulatorServer:<id>` STARTING until `release()` is called. */
+  function holdSimulatorServer(id: string, external: boolean): { release: () => Promise<void> } {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+
+    const start = registry
+      .resolveService(`SimulatorServer:${id}`, { external, gate })
+      .catch(() => undefined);
+
+    expect(registry.getServiceState(`SimulatorServer:${id}`)).toBe(ServiceState.STARTING);
+
+    return {
+      release: async () => {
+        open();
+        await start;
+      },
+    };
+  }
+
+  /** The tool's result, or "pending" if it is still waiting on something. */
+  async function settleSoon<T>(call: Promise<T>): Promise<T | "pending"> {
+    return Promise.race([
+      call,
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 50)),
+    ]);
+  }
+
+  it("never starts an IDLE or ERROR node to find out whether it is borrowed", async () => {
+    await startSimulatorServer(CLAIMED, true);
+    await registry.disposeService(`SimulatorServer:${CLAIMED}`);
+    expect(await isBorrowedSimulatorServer(registry, `SimulatorServer:${CLAIMED}`)).toBe(false);
+
+    await failSimulatorServer(CLAIMED);
+    expect(await isBorrowedSimulatorServer(registry, `SimulatorServer:${CLAIMED}`)).toBe(false);
+
+    expect(simulatorServerStarts).toBe(2);
+  });
+
+  it("does not re-run the factory of an ERROR node in either tool", async () => {
+    await failSimulatorServer(CLAIMED);
+    const all = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [CLAIMED] }
+    );
+    expect(all).toEqual({ stopped: [] });
+    expect(simulatorServerStarts).toBe(1);
+
+    await failSimulatorServer(CLAIMED);
+    const single = await createStopSimulatorServerTool(registry).execute!({}, { udid: CLAIMED });
+    expect(single).toEqual({ stopped: false, udid: CLAIMED });
+    expect(simulatorServerStarts).toBe(2);
+  });
+
+  it("does not wait for a STARTING plain-UDID server, which still counts as Argent's", async () => {
+    const first = holdSimulatorServer(CLAIMED, true);
+    const all = await settleSoon(
+      createStopAllSimulatorServersTool(registry).execute!({}, { devices: [CLAIMED] })
+    );
+    await first.release();
+    expect(all).toEqual({ stopped: [`SimulatorServer:${CLAIMED}`] });
+
+    const second = holdSimulatorServer(CLAIMED, true);
+    const single = await settleSoon(
+      createStopSimulatorServerTool(registry).execute!({}, { udid: CLAIMED })
+    );
+    await second.release();
+    expect(single).toEqual({ stopped: true, udid: CLAIMED });
+    expect(simulatorServerStarts).toBe(2);
+  });
+
+  it("keeps a STARTING ext: server out of stopped in both tools", async () => {
+    const ext = `ext:acme-abc123:${CLAIMED}`;
+
+    const first = holdSimulatorServer(ext, true);
+    const all = await createStopAllSimulatorServersTool(registry).execute!({}, { devices: [ext] });
+    await first.release();
+    expect(all).toEqual({ stopped: [] });
+
+    const second = holdSimulatorServer(ext, true);
+    const single = await createStopSimulatorServerTool(registry).execute!({}, { udid: ext });
+    await second.release();
+    expect(single).toEqual({ stopped: false, udid: ext });
   });
 });
 

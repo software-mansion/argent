@@ -207,7 +207,10 @@ export function unnameableSessionUrns(urns: readonly string[]): string[] {
  * rather than spawned itself. Its `dispose()` is a no-op by design, so both
  * stop tools drop the cached handle but never report it as stopped. Every other
  * namespace of that device (AXService, NativeDevtools, TvControl, ...) is
- * Argent's own and really is shut down, so it is reported like any other.
+ * disposed and reported like any other. NativeDevtools is the one that is not
+ * Argent's own there: it is always attached to the agent the provider lends,
+ * and its `dispose()` only hangs up Argent's end, leaving the provider's socket
+ * and agent in place.
  *
  * Read from the running instance (`api.external`), which the factory set when
  * it built it, rather than from the provider's claim at stop time. The claim
