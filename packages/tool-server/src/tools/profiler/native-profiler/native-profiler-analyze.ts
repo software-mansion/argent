@@ -13,12 +13,6 @@ import { analyzeNativeProfilerAndroid } from "./platforms/android";
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const zodSchema = z.object({
-  device_id: metroDeviceIdParam(
-    "Target device id from `list-devices` (iOS UDID or Android serial)."
-  ),
-});
-
 const capability = {
   apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
@@ -32,11 +26,25 @@ type NativeProfilerAnalyzeToolResult = Omit<NativeProfilerAnalyzeResult, "report
   reportFile: ArtifactHandle | null;
 };
 
+const zodSchema = z.object({
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID or Android serial)."
+  ),
+});
+
 export const nativeProfilerAnalyzeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   NativeProfilerAnalyzeToolResult
 > = {
   id: "native-profiler-analyze",
+  description: `Analyze exported native trace data and return a markdown report with severity indicators, tables, and actionable suggestions.
+iOS: CPU time profile, UI hangs, and memory leaks from the exported XML files.
+Android: CPU hotspots, UI hangs with jank reason + main-thread state breakdown, GC annotation, and an RSS-growth weak signal from the Perfetto .pftrace.
+After presenting the report, ask the user whether to investigate further (drill-down with
+profiler-stack-query for hang stacks, CPU context, leak details) or implement fixes and re-profile.
+Use when you need to interpret a completed native profiling recording.
+Fails if native-profiler-stop has not been called first to export trace data.`,
+  zodSchema,
   interaction: {
     startedMsg: () => "Analyzing native profile",
     completedMsg: () => "Analyzed native profile",
@@ -47,14 +55,6 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
   // Parsing a trace from a recording up to RECORDING_CAP_MS long routinely exceeds
   // the 30s MCP fetch timeout, and an aborted call is replayed, not cancelled.
   longRunning: true,
-  description: `Analyze exported native trace data and return a markdown report with severity indicators, tables, and actionable suggestions.
-iOS: CPU time profile, UI hangs, and memory leaks from the exported XML files.
-Android: CPU hotspots, UI hangs with jank reason + main-thread state breakdown, GC annotation, and an RSS-growth weak signal from the Perfetto .pftrace.
-After presenting the report, ask the user whether to investigate further (drill-down with
-profiler-stack-query for hang stacks, CPU context, leak details) or implement fixes and re-profile.
-Use when you need to interpret a completed native profiling recording.
-Fails if native-profiler-stop has not been called first to export trace data.`,
-  zodSchema,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

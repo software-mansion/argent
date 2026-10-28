@@ -9,6 +9,27 @@ import {
 import { E2E_FILE_TEMPLATES, parseFlow } from "./flow-utils";
 import { resolveFlowSource } from "./flow-run";
 
+// Must stay field-for-field identical to flow-execute's specs, or the same
+// params resolve to different files here and there — e.g. dropping flow_path
+// would answer for the saved flow of the same stem. flow-run.ts explains the
+// unwrapWhenSet/skipWhenSet choices.
+const fileInputs: FileInputSpec[] = [
+  {
+    target: "flow_path",
+    path: "${flow_path}",
+    kind: "file",
+    optional: true,
+    unwrapWhenSet: "name",
+  },
+  {
+    target: "flow_file",
+    path: "${project_root}/.argent/flows/${name}.yaml",
+    paths: E2E_FILE_TEMPLATES,
+    kind: "file",
+    skipWhenSet: "flow_path",
+  },
+];
+
 const zodSchema = z
   .object({
     name: z
@@ -44,39 +65,11 @@ const zodSchema = z
     }
   });
 
-// Must stay field-for-field identical to flow-execute's specs, or the same
-// params resolve to different files here and there — e.g. dropping flow_path
-// would answer for the saved flow of the same stem. flow-run.ts explains the
-// unwrapWhenSet/skipWhenSet choices.
-const fileInputs: FileInputSpec[] = [
-  {
-    target: "flow_path",
-    path: "${flow_path}",
-    kind: "file",
-    optional: true,
-    unwrapWhenSet: "name",
-  },
-  {
-    target: "flow_file",
-    path: "${project_root}/.argent/flows/${name}.yaml",
-    paths: E2E_FILE_TEMPLATES,
-    kind: "file",
-    skipWhenSet: "flow_path",
-  },
-];
-
 export const flowReadPrerequisiteTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { flow: string; executionPrerequisite: string; warning?: string }
 > = {
   id: "e2e-read-prerequisite",
-  aliases: ["flow-read-prerequisite"],
-  interaction: {
-    startedMsg: () => "Reading e2e test prerequisite",
-    completedMsg: () => "Read e2e test prerequisite",
-    failedMsg: ({ failureSignal }) =>
-      `Failed to read e2e test prerequisite: ${failureSignal.error_code}`,
-  },
   description: `Read the execution prerequisite of an e2e test without running it.
 Returns { flow, executionPrerequisite, warning? }: the logical name, plus the precondition its author recorded
 verbatim. Empty when none was declared, as always for an e2e test that opens on a launch, which builds its
@@ -86,8 +79,15 @@ correct account, correct screen) before committing to a run, or when relaying th
 Touches no device and needs none booted: it only reads the file.
 Fails if the e2e test file does not exist.
 Address the e2e test exactly as you will address it in e2e-execute: name or flow_path, one and only one; supplying both or neither is rejected.`,
-  readOnly: true,
   zodSchema,
+  readOnly: true,
+  aliases: ["flow-read-prerequisite"],
+  interaction: {
+    startedMsg: () => "Reading e2e test prerequisite",
+    completedMsg: () => "Read e2e test prerequisite",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to read e2e test prerequisite: ${failureSignal.error_code}`,
+  },
   fileInputs,
   services: () => ({}),
   async execute(_services, params, ctx?: ToolContext) {

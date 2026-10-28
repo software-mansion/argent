@@ -9,6 +9,12 @@ import { vegaImpl } from "./platforms/vega";
 
 const BUTTONS = [...REMOTE_BUTTONS] as [RemoteButton, ...RemoteButton[]];
 
+const capability: ToolCapability = {
+  apple: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  vega: { vvd: true },
+};
+
 // Some MCP clients serialize array arguments as a JSON (or comma-separated)
 // string, so coerce those back to an array before validating.
 const buttonSchema = z
@@ -60,12 +66,6 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-const capability: ToolCapability = {
-  apple: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  vega: { vvd: true },
-};
-
 // `capability` can't tell a TV apart from a phone, so the ios/android branches
 // accept any Apple/Android target and `resolveTvApi` rejects the non-TV ones at
 // call time — which is also why `services()` is empty: the backend can only be
@@ -73,6 +73,13 @@ const capability: ToolCapability = {
 export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, TvRemoteResult> {
   return {
     id: "tv-remote",
+    description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device: Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
+A TV is navigated with a directional remote, not touch. Use when you need to move focus or press a key on a TV, instead of gesture-tap/swipe (which do not apply on a TV).
+Read the screen with \`describe\` before and after to see where focus landed.
+Returns { pressed, count }. Fails on a target that is not a TV, and on the Apple TV simulator for rewind, fastForward, next, previous, volumeUp, volumeDown and mute (its HID stack ignores them); every other button works on all three platforms.`,
+    zodSchema,
+    searchHint:
+      "tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path apple tv tvos android tv leanback vega fire tv",
     interaction: {
       startedMsg: ({ params }) =>
         `Pressing ${params.button} on TV remote${(params.repeat ?? 1) > 1 ? ` ${params.repeat} times` : ""}`,
@@ -81,16 +88,9 @@ export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, T
       failedMsg: ({ params, failureSignal }) =>
         `Failed to press ${params.button} on TV remote: ${failureSignal.error_code}`,
     },
-    description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device: Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
-A TV is navigated with a directional remote, not touch. Use when you need to move focus or press a key on a TV, instead of gesture-tap/swipe (which do not apply on a TV).
-Read the screen with \`describe\` before and after to see where focus landed.
-Returns { pressed, count }. Fails on a target that is not a TV, and on the Apple TV simulator for rewind, fastForward, next, previous, volumeUp, volumeDown and mute (its HID stack ignores them); every other button works on all three platforms.`,
     // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses, sent
     // one round-trip at a time on the Apple/Android path — minutes of wall-clock.
     longRunning: true,
-    searchHint:
-      "tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path apple tv tvos android tv leanback vega fire tv",
-    zodSchema,
     capability,
     services: () => ({}),
     execute: dispatchByPlatform<

@@ -22,15 +22,6 @@ import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: z
-    .string()
-    .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
-    ),
-});
-
 interface StopReadResult {
   live: ProfilingDataBackend | null;
   displayNameById: Record<string, string | null>;
@@ -145,17 +136,20 @@ export function flattenProfilingData(
   return { commits, totalCommits: flatCommitIndex, unattributedByCommit };
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: z
+    .string()
+    .describe(
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+    ),
+});
+
 export function createReactProfilerStopTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
-    interaction: {
-      startedMsg: () => "Stopping React profiler",
-      completedMsg: () => "Stopped React profiler",
-      failedMsg: ({ failureSignal }) =>
-        `Failed to stop React profiler: ${failureSignal.error_code}`,
-    },
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
 Stores the results for react-profiler-analyze or react-profiler-cpu-summary.
 Call react-profiler-start first, then exercise the app, then call this.
@@ -163,6 +157,12 @@ Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits
 If some fibers' display names could not be resolved (typically modals, tooltips or animations that unmounted before stop), it also returns { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }: the work missing from the per-component breakdown. Per-commit durations stay correct.
 Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
+    interaction: {
+      startedMsg: () => "Stopping React profiler",
+      completedMsg: () => "Stopped React profiler",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to stop React profiler: ${failureSignal.error_code}`,
+    },
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {

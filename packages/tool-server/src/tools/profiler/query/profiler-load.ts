@@ -44,27 +44,6 @@ function assertSafeSessionId(sessionId: string): void {
   }
 }
 
-const zodSchema = z.object({
-  mode: z
-    .enum(["list", "load_react", "load_native"])
-    .describe("What to do; see Modes in the tool description."),
-  session_id: z
-    .string()
-    .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
-    .optional()
-    .describe("Timestamp-based session identifier (e.g. '20250313-143022') from the list output."),
-  port: metroPortField,
-  device_id: metroDeviceIdParam(
-    "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
-  ),
-  app_process: z
-    .string()
-    .optional()
-    .describe(
-      "Android package name to pass when restoring an older load_native .pftrace session that has no metadata sidecar."
-    ),
-});
-
 async function listSessions(debugDir: string): Promise<string> {
   let entries: string[];
   try {
@@ -445,8 +424,6 @@ async function loadNativeSession(
   return lines.join("\n");
 }
 
-type Params = z.infer<typeof zodSchema>;
-
 const profilerLoadAction = {
   list: {
     started: () => "Listing saved profiles",
@@ -472,14 +449,31 @@ const profilerLoadAction = {
   }
 >;
 
+const zodSchema = z.object({
+  mode: z
+    .enum(["list", "load_react", "load_native"])
+    .describe("What to do; see Modes in the tool description."),
+  session_id: z
+    .string()
+    .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
+    .optional()
+    .describe("Timestamp-based session identifier (e.g. '20250313-143022') from the list output."),
+  port: metroPortField,
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
+  ),
+  app_process: z
+    .string()
+    .optional()
+    .describe(
+      "Android package name to pass when restoring an older load_native .pftrace session that has no metadata sidecar."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const profilerLoadTool: ToolDefinition<Params, string> = {
   id: "profiler-load",
-  interaction: {
-    startedMsg: ({ params }) => profilerLoadAction[params.mode].started(params),
-    completedMsg: ({ params }) => profilerLoadAction[params.mode].completed(params),
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to ${profilerLoadAction[params.mode].failure} saved profiles: ${failureSignal.error_code}`,
-  },
   description: `Fetch and restore a profiling session that react-profiler-stop or native-profiler-stop saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
 Use when you need to revisit past session data without capturing a new recording.
 Modes:
@@ -490,6 +484,12 @@ Loading replaces the session in memory for this device_id (and Metro port, for R
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or the session's trace files are missing from disk.`,
   zodSchema,
+  interaction: {
+    startedMsg: ({ params }) => profilerLoadAction[params.mode].started(params),
+    completedMsg: ({ params }) => profilerLoadAction[params.mode].completed(params),
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to ${profilerLoadAction[params.mode].failure} saved profiles: ${failureSignal.error_code}`,
+  },
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
   capability: RN_ONLY_TOOL_CAPABILITY,

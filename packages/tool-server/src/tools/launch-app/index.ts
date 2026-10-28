@@ -24,6 +24,15 @@ import { harmonyImpl } from "./platforms/harmony";
 // same flag-injection reason as bundleId, as are shell metacharacters like `$`.
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
+  vega: { vvd: true },
+  harmony: { device: true },
+};
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -54,15 +63,6 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  chromium: { app: true },
-  vega: { vvd: true },
-  harmony: { device: true },
-};
-
 // native-devtools is resolved through `registry` inside the iOS handler rather
 // than declared in `services()` — the same pattern as `describe` / `screenshot`.
 // A tvOS sim classifies as platform "ios" by UDID shape, and native-devtools
@@ -72,12 +72,6 @@ const capability: ToolCapability = {
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
-    interaction: {
-      startedMsg: ({ params }) => `Launching ${params.bundleId}`,
-      completedMsg: ({ params }) => `Launched ${params.bundleId}`,
-      failedMsg: ({ params, failureSignal }) =>
-        `Failed to launch ${params.bundleId}: ${failureSignal.error_code}`,
-    },
     description: `Open an installed app, or confirm the running renderer (Chromium).
 Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).
 Returns { launched, bundleId, note? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.
@@ -85,10 +79,16 @@ For Chromium, the app is already running behind a CDP port; this call simply ref
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.mobileslideshow (Photos), com.apple.MobileAddressBook
 Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,
+    zodSchema,
     alwaysLoad: true,
     searchHint:
       "open start app bundle id package simulator emulator chromium vega launch tvos apple tv fire tv",
-    zodSchema,
+    interaction: {
+      startedMsg: ({ params }) => `Launching ${params.bundleId}`,
+      completedMsg: ({ params }) => `Launched ${params.bundleId}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to launch ${params.bundleId}: ${failureSignal.error_code}`,
+    },
     capability,
     // ios-remote's handler reads `services.nativeDevtools`; local iOS resolves
     // it lazily instead (see header comment).

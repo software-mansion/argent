@@ -118,69 +118,6 @@ import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 
-const zodSchema = z
-  .object({
-    name: z
-      .string()
-      .optional()
-      .describe(
-        'Name of a saved e2e test to run from `<project_root>/.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore").'
-      ),
-    project_root: z
-      .string()
-      .describe(
-        "Absolute path to the calling agent's project root: the cwd it is working in, also with flow_path, where the e2e test, its run: siblings, its script: paths and baselines resolve beside the YAML instead. A script still RUNS in this root."
-      ),
-    flow_file: z
-      .string()
-      .optional()
-      .describe(
-        "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
-      ),
-    flow_path: z.string().optional().describe("Absolute path to an e2e test .yaml on the client."),
-    device: z
-      .string()
-      .optional()
-      .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches; with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
-      ),
-    platform: z
-      .enum(SELECTABLE_PLATFORMS)
-      .optional()
-      .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`."
-      ),
-    updateBaselines: z
-      .boolean()
-      .optional()
-      .describe(
-        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself. Over a link, the client writes the new baselines when the run ends."
-      ),
-    prerequisiteAcknowledged: z
-      .boolean()
-      .optional()
-      .describe(
-        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite."
-      ),
-  })
-  .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.flow_path === undefined)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          params.name !== undefined
-            ? "Pass exactly one e2e test source: name or flow_path."
-            : "Pass exactly one e2e test source: name or flow_path. e2e-execute needs the e2e test's " +
-              "name in `name` — it resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.",
-        // The ROOT, not `flow_path`: the rule spans both source fields, and a
-        // path would prefix the message with "`flow_path`:".
-        path: [],
-      });
-    }
-  });
-
-type Params = z.infer<typeof zodSchema>;
-
 // A dual-source call (name + flow_path) must be diagnosed by the schema's
 // exactly-one rule, not by whether either unused file happens to exist:
 // - unwrapWhenSet: flow_path is caller-authored, so alongside name zod still
@@ -1481,18 +1418,74 @@ function assertUploadSelfContained(
   );
 }
 
+const zodSchema = z
+  .object({
+    name: z
+      .string()
+      .optional()
+      .describe(
+        'Name of a saved e2e test to run from `<project_root>/.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore").'
+      ),
+    project_root: z
+      .string()
+      .describe(
+        "Absolute path to the calling agent's project root: the cwd it is working in, also with flow_path, where the e2e test, its run: siblings, its script: paths and baselines resolve beside the YAML instead. A script still RUNS in this root."
+      ),
+    flow_file: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
+      ),
+    flow_path: z.string().optional().describe("Absolute path to an e2e test .yaml on the client."),
+    device: z
+      .string()
+      .optional()
+      .describe(
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches; with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+      ),
+    platform: z
+      .enum(SELECTABLE_PLATFORMS)
+      .optional()
+      .describe(
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`."
+      ),
+    updateBaselines: z
+      .boolean()
+      .optional()
+      .describe(
+        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself. Over a link, the client writes the new baselines when the run ends."
+      ),
+    prerequisiteAcknowledged: z
+      .boolean()
+      .optional()
+      .describe(
+        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite."
+      ),
+  })
+  .superRefine((params, ctx) => {
+    if ((params.name === undefined) === (params.flow_path === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          params.name !== undefined
+            ? "Pass exactly one e2e test source: name or flow_path."
+            : "Pass exactly one e2e test source: name or flow_path. e2e-execute needs the e2e test's " +
+              "name in `name` — it resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.",
+        // The ROOT, not `flow_path`: the rule spans both source fields, and a
+        // path would prefix the message with "`flow_path`:".
+        path: [],
+      });
+    }
+  });
+
+type Params = z.infer<typeof zodSchema>;
+
 export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "e2e-execute",
-    aliases: ["flow-execute"],
-    interaction: {
-      startedMsg: ({ params }) => `Running e2e test ${displayFlowName(params)}`,
-      completedMsg: ({ params }) => `Ran e2e test ${displayFlowName(params)}`,
-      failedMsg: ({ params, failureSignal }) =>
-        `Failed to run e2e test ${displayFlowName(params)}: ${failureSignal.error_code}`,
-    },
     description: `Run a saved YAML e2e test end to end. Use when
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
 one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
@@ -1504,8 +1497,15 @@ the e2e test file. The run fails if a step needs any other project file (a scrip
 a nested e2e-execute not called by name with an absolute project_root, a directory or app argument, a
 relative path): it stops before the first step and the error lists each such step. An absolute .png/.yaml
 argument from anywhere else fails only when its step runs. Without a link, every step kind runs.`,
-    longRunning: true,
     zodSchema,
+    aliases: ["flow-execute"],
+    interaction: {
+      startedMsg: ({ params }) => `Running e2e test ${displayFlowName(params)}`,
+      completedMsg: ({ params }) => `Ran e2e test ${displayFlowName(params)}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to run e2e test ${displayFlowName(params)}: ${failureSignal.error_code}`,
+    },
+    longRunning: true,
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {

@@ -767,12 +767,6 @@ export function createDebuggerComponentTreeTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, string> {
   return {
     id: "debugger-component-tree",
-    interaction: {
-      startedMsg: () => "Reading React component tree",
-      completedMsg: () => "Read React component tree",
-      failedMsg: ({ failureSignal }) =>
-        `Failed to read React component tree: ${failureSignal.error_code}`,
-    },
     description: `Fetch the current screen of a running React Native app as a compact tree of React components.
 Each on-screen component is listed with its name, its text (or accessibilityLabel when it has no
 text), [testID=…] and normalized (tap: x,y) centre in [0,1] (fractions of the screen, not pixels).
@@ -785,9 +779,15 @@ behind the screen before editing code. To find what to tap, use describe.
 On an iOS simulator with a landscape UI (a rotated device, or an unfolded foldable), the tap
 coordinates are on the screen's axes, which the gesture tools use.
 Returns a compact text tree; call again after navigation. Fails if the Metro debugger is not connected.`,
+    zodSchema,
     searchHint: "react native component tree testID testIDs selector component names hierarchy",
     readOnly: true,
-    zodSchema,
+    interaction: {
+      startedMsg: () => "Reading React component tree",
+      completedMsg: () => "Read React component tree",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to read React component tree: ${failureSignal.error_code}`,
+    },
     // RN-only: needs the React DevTools backend from the dev JS bundle. Chromium has
     // no equivalent — use `describe` there.
     capability: RN_ONLY_TOOL_CAPABILITY,

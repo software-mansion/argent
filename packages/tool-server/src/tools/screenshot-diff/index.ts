@@ -30,6 +30,35 @@ import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
 import { summaryReportsDimensionMismatch } from "./screenshot-diff-summary";
 
+interface ScreenshotDiffResult {
+  summary: string;
+  /**
+   * Artifact handles, not host paths: the client materializes them locally so the
+   * agent can open them — and the MCP adapter can inline the context diff — even
+   * when the tool-server is remote.
+   */
+  diffPath?: ArtifactHandle;
+  contextDiffPath?: ArtifactHandle;
+}
+
+type CaptureScreenshot = typeof httpScreenshot;
+
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
+};
+
+/**
+ * The saved PNGs live on the AGENT's machine, so both path params cross the file
+ * boundary as `file` inputs. `outputDir` is only probed — see resolveOutputDir.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
+  { target: "currentPath", path: "${currentPath}", kind: "file", optional: true },
+  { target: "outputDir", path: "${outputDir}", kind: "probe", optional: true },
+];
+
 const zodSchema = z
   .object({
     baselinePath: z
@@ -82,37 +111,18 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-interface ScreenshotDiffResult {
-  summary: string;
-  /**
-   * Artifact handles, not host paths: the client materializes them locally so the
-   * agent can open them — and the MCP adapter can inline the context diff — even
-   * when the tool-server is remote.
-   */
-  diffPath?: ArtifactHandle;
-  contextDiffPath?: ArtifactHandle;
-}
-
-type CaptureScreenshot = typeof httpScreenshot;
-
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  android: { emulator: true, device: true, unknown: true },
-  harmony: { device: true },
-};
-
-/**
- * The saved PNGs live on the AGENT's machine, so both path params cross the file
- * boundary as `file` inputs. `outputDir` is only probed — see resolveOutputDir.
- */
-const fileInputs: FileInputSpec[] = [
-  { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
-  { target: "currentPath", path: "${currentPath}", kind: "file", optional: true },
-  { target: "outputDir", path: "${outputDir}", kind: "probe", optional: true },
-];
-
 export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
   id: "screenshot-diff",
+  description: `Compare two PNG screenshots and return a compact visual-diff summary.
+Each side is a saved PNG or a live capture from the device<flag:harmonyos> (iOS, Android or HarmonyOS)</flag:harmonyos>. baselinePath + captureCurrent is the common visual-regression flow.
+Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
+Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
+Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
+Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
+Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable.`,
+  zodSchema,
+  searchHint:
+    "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
   interaction: {
     startedMsg: () => "Comparing screenshots",
     completedMsg: ({ result }) =>
@@ -121,16 +131,6 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
         : "Compared screenshots",
     failedMsg: ({ failureSignal }) => `Failed to compare screenshots: ${failureSignal.error_code}`,
   },
-  description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Each side is a saved PNG or a live capture from the device<flag:harmonyos> (iOS, Android or HarmonyOS)</flag:harmonyos>. baselinePath + captureCurrent is the common visual-regression flow.
-Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
-Physical iPhones: live captures are device-wide and need no registered app. Keep baselines per device model; different aspect ratios fail as a dimension mismatch.
-Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
-Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable.`,
-  searchHint:
-    "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
-  zodSchema,
   capability,
   fileInputs,
   services: (params): Record<string, ServiceRef> => {

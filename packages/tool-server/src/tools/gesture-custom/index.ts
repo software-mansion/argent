@@ -16,32 +16,6 @@ import { interpolateEvents } from "../../utils/gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const eventSchema = z.object({
-  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
-  x: z.number().min(0).max(1).describe("Touch x."),
-  y: z.number().min(0).max(1).describe("Touch y."),
-  x2: z.number().min(0).max(1).optional().describe("Second finger x, for two-finger gestures."),
-  y2: z.number().min(0).max(1).optional().describe("Second finger y, for two-finger gestures."),
-  delayMs: z
-    .number()
-    .optional()
-    .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
-});
-
-const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-  events: z.array(eventSchema).describe("Touch events, dispatched in order."),
-  interpolate: z
-    .number()
-    .optional()
-    .describe(
-      "Number of Move events to insert between each pair of consecutive events, linearly interpolating " +
-        "both x,y and x2,y2 and splitting the delay evenly, for a smooth gesture. Default: no interpolation."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 interface Result {
   events: number;
   /**
@@ -157,14 +131,34 @@ async function runOnIosDevice(
   return { events: events.length, ...(reactivated ? { reactivated: true as const } : {}) };
 }
 
+const eventSchema = z.object({
+  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
+  x: z.number().min(0).max(1).describe("Touch x."),
+  y: z.number().min(0).max(1).describe("Touch y."),
+  x2: z.number().min(0).max(1).optional().describe("Second finger x, for two-finger gestures."),
+  y2: z.number().min(0).max(1).optional().describe("Second finger y, for two-finger gestures."),
+  delayMs: z
+    .number()
+    .optional()
+    .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
+});
+
+const zodSchema = z.object({
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  events: z.array(eventSchema).describe("Touch events, dispatched in order."),
+  interpolate: z
+    .number()
+    .optional()
+    .describe(
+      "Number of Move events to insert between each pair of consecutive events, linearly interpolating " +
+        "both x,y and x2,y2 and splitting the delay evenly, for a smooth gesture. Default: no interpolation."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
-  interaction: {
-    startedMsg: () => "Performing custom gesture",
-    completedMsg: () => "Performed custom gesture",
-    failedMsg: ({ failureSignal }) =>
-      `Failed to perform custom gesture: ${failureSignal.error_code}`,
-  },
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
@@ -189,6 +183,12 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
            {"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}]
   interpolate: 10`,
   zodSchema,
+  interaction: {
+    startedMsg: () => "Performing custom gesture",
+    completedMsg: () => "Performed custom gesture",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to perform custom gesture: ${failureSignal.error_code}`,
+  },
   capability,
   // Declare the runner only for a train execute can replay. A rejected train must not pay a runner cold start.
   services: (params): Record<string, ServiceRef> => {

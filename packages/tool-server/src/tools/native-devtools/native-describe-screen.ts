@@ -13,6 +13,8 @@ import {
   type NativeDescribeScreenResult,
 } from "./native-describe-contract";
 
+type Result = NativeDevtoolsPrecheckBlock | ({ status: "ok" } & NativeDescribeScreenResult);
+
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   bundleId: z.string().describe("Bundle ID of the app"),
@@ -34,17 +36,9 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | ({ status: "ok" } & NativeDescribeScreenResult);
 
 export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   id: "native-describe-screen",
-  interaction: {
-    startedMsg: ({ params }) => `Reading native screen for ${params.bundleId}`,
-    completedMsg: ({ params }) => `Read native screen for ${params.bundleId}`,
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
-  },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
@@ -60,8 +54,15 @@ normalized contract.
 
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
-  readOnly: true,
   zodSchema,
+  readOnly: true,
+  interaction: {
+    startedMsg: ({ params }) => `Reading native screen for ${params.bundleId}`,
+    completedMsg: ({ params }) => `Read native screen for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),

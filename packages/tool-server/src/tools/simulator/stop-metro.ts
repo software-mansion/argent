@@ -73,14 +73,14 @@ export const stopMetroTool: ToolDefinition<
   { stopped: boolean; port: number; pids: number[] }
 > = {
   id: "stop-metro",
+  description: `Stop the Metro bundler process listening on \`port\`. Use when the user asks to stop Metro or when Metro must be restarted - do not offer it when a task wraps up, since the next task would wait on a cold Metro start. Returns { stopped, port, pids }; stopped=false when no process listens on the port or the port lookup fails. This is DESTRUCTIVE: always ask the user for confirmation before calling this tool.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Stopping Metro on port ${params.port}`,
     completedMsg: ({ params }) => `Stopped Metro on port ${params.port}`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to stop Metro on port ${params.port}: ${failureSignal.error_code}`,
   },
-  description: `Stop the Metro bundler process listening on \`port\`. Use when the user asks to stop Metro or when Metro must be restarted - do not offer it when a task wraps up, since the next task would wait on a cold Metro start. Returns { stopped, port, pids }; stopped=false when no process listens on the port or the port lookup fails. This is DESTRUCTIVE: always ask the user for confirmation before calling this tool.`,
-  zodSchema,
   services: () => ({}),
   async execute(_services, params) {
     const port = (params as { port: number }).port;

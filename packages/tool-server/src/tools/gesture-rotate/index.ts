@@ -5,6 +5,22 @@ import { resolveDevice } from "../../utils/device-info";
 import { sendTouchEvent } from "../../utils/gesture-utils";
 import { sleep } from "../../utils/timing";
 
+interface Result {
+  rotated: boolean;
+  timestampMs: number;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the gesture went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
+}
+
+const capability: ToolCapability = {
+  apple: { simulator: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+};
+
 const zodSchema = z
   .object({
     udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -35,24 +51,13 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  rotated: boolean;
-  timestampMs: number;
-  /**
-   * Foldable iOS simulators only: the panel the device renders to could not
-   * be resolved, so the gesture went to the cover panel. Says why and what to check.
-   */
-  warning?: string;
-}
-
-const capability: ToolCapability = {
-  apple: { simulator: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-};
-
 export const gestureRotateTool: ToolDefinition<Params, Result> = {
   id: "gesture-rotate",
+  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees (endAngle > startAngle = clockwise). All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn.
+Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected. A single radius traces a physical ellipse on a non-square screen (finger separation varies through the turn); for a physically circular orbit, pass radiusX and radiusY with radiusX·width = radiusY·height.
+Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
+Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => {
       const degrees = Math.abs(params.endAngle - params.startAngle);
@@ -66,11 +71,6 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
     },
     failedMsg: ({ failureSignal }) => `Failed to rotate gesture: ${failureSignal.error_code}`,
   },
-  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees (endAngle > startAngle = clockwise). All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn.
-Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected. A single radius traces a physical ellipse on a non-square screen (finger separation varies through the turn); for a physically circular orbit, pass radiusX and radiusY with radiusX·width = radiusY·height.
-Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
-  zodSchema,
   capability,
   services: (params) => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),

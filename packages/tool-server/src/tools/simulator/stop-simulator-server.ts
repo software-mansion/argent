@@ -18,14 +18,14 @@ export function createStopSimulatorServerTool(
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",
+    description: `Stop the transport session for a specific device (iOS simulator / Android: simulator-server process; physical iOS: the on-device runner; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use to restart a wedged transport, or when the user is done with one device but wants to keep others running - not just because a task on it finished, since the next task on that device would start cold again. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM, stopping the transport also ends the JS-runtime debugger session and its captured console history - reconnect with debugger-connect afterwards. Returns { stopped, udid }; \`stopped\` is false, not an error, when no session is open for the id.`,
+    zodSchema,
     interaction: {
       startedMsg: ({ params }) => `Stopping simulator server for ${params.udid}`,
       completedMsg: ({ params }) => `Stopped simulator server for ${params.udid}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to stop simulator server for ${params.udid}: ${failureSignal.error_code}`,
     },
-    description: `Stop the transport session for a specific device (iOS simulator / Android: simulator-server process; physical iOS: the on-device runner; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use to restart a wedged transport, or when the user is done with one device but wants to keep others running - not just because a task on it finished, since the next task on that device would start cold again. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM, stopping the transport also ends the JS-runtime debugger session and its captured console history - reconnect with debugger-connect afterwards. Returns { stopped, udid }; \`stopped\` is false, not an error, when no session is open for the id.`,
-    zodSchema,
     services: () => ({}),
     async execute(_services, params) {
       const udid = (params as { udid: string }).udid;

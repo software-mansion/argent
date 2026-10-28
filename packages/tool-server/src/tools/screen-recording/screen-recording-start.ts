@@ -21,6 +21,11 @@ const POINTER_TRAIL_LENGTH = 8;
 /** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
 
+const capability = {
+  apple: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+} as const;
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -53,16 +58,18 @@ const zodSchema = z.object({
     ),
 });
 
-const capability = {
-  apple: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-} as const;
-
 export function createScreenRecordingStartTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, StartRecordingResult> {
   return {
     id: "screen-recording-start",
+    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
+The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
+Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
+Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
+Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega<flag:harmonyos>, HarmonyOS</flag:harmonyos> and remote simulators are unsupported).`,
+    zodSchema,
+    searchHint: "record video screen capture movie mp4 start filming screencast",
     interaction: {
       startedMsg: () => "Starting screen recording",
       completedMsg: () => "Started screen recording",
@@ -70,13 +77,6 @@ export function createScreenRecordingStartTool(
         `Failed to start screen recording: ${failureSignal.error_code}`,
     },
     capability,
-    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
-The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
-Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
-Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium, Vega<flag:harmonyos>, HarmonyOS</flag:harmonyos> and remote simulators are unsupported).`,
-    searchHint: "record video screen capture movie mp4 start filming screencast",
-    zodSchema,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
     // iOS by shape, so an eager service would spawn simulator-server for a
     // device it cannot drive and hang on its ready timeout (as in `screenshot`).

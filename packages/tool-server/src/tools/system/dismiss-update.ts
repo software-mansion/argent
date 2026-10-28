@@ -8,15 +8,15 @@ const zodSchema = z.object({
 
 export const dismissUpdateTool: ToolDefinition<{ hours: number }> = {
   id: "dismiss-update",
+  description:
+    "Clear the Argent update notification for a number of hours. Use when the user asks to postpone or silence update reminders. Returns { message } confirming the suppression duration. Fails if the suppression state cannot be persisted.",
+  zodSchema,
   interaction: {
     startedMsg: () => "Dismissing Argent update",
     completedMsg: () => "Dismissed Argent update",
     failedMsg: ({ failureSignal }) =>
       `Failed to dismiss Argent update: ${failureSignal.error_code}`,
   },
-  description:
-    "Clear the Argent update notification for a number of hours. Use when the user asks to postpone or silence update reminders. Returns { message } confirming the suppression duration. Fails if the suppression state cannot be persisted.",
-  zodSchema,
   services: () => ({}),
   async execute(_services, params, _options) {
     const durationMs = params.hours * 60 * 60 * 1000;

@@ -11,20 +11,6 @@ import {
   setStorageItem,
 } from "../../chromium-server/storage";
 
-const zodSchema = z.object({
-  udid: z.string().describe("Chromium device id from `list-devices` (e.g. `chromium-cdp-9222`)."),
-  store: z.enum(["local", "session"]).describe("`local`: localStorage. `session`: sessionStorage."),
-  action: z
-    .enum(["get", "set", "remove", "clear"])
-    .describe(
-      "get: read one key (with `key`) or all entries. set: write `key`=`value`. remove: delete `key`. clear: empty the store."
-    ),
-  key: z.string().optional().describe("The storage key."),
-  value: z.string().optional().describe("The value to store."),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 const storageAction = {
   get: { started: "Reading", completed: "Read", failure: "read" },
   set: { started: "Updating", completed: "Updated", failure: "update" },
@@ -43,8 +29,28 @@ const capability: ToolCapability = {
   chromium: { app: true },
 };
 
+const zodSchema = z.object({
+  udid: z.string().describe("Chromium device id from `list-devices` (e.g. `chromium-cdp-9222`)."),
+  store: z.enum(["local", "session"]).describe("`local`: localStorage. `session`: sessionStorage."),
+  action: z
+    .enum(["get", "set", "remove", "clear"])
+    .describe(
+      "get: read one key (with `key`) or all entries. set: write `key`=`value`. remove: delete `key`. clear: empty the store."
+    ),
+  key: z.string().optional().describe("The storage key."),
+  value: z.string().optional().describe("The value to store."),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const chromiumStorageTool: ToolDefinition<Params, Result> = {
   id: "chromium-storage",
+  description: `Read and write localStorage / sessionStorage of a Chromium (CDP) app, for the origin of the active tab's page.
+Use when seeding feature flags / auth tokens before an e2e test or asserting persisted app state after one.
+Returns { value } for one key, { entries, count } for all keys, and { set } / { removed } / { cleared } for the writes. Fails if the device is not a Chromium (CDP) device, or the action is missing the \`key\` / \`value\` it needs.`,
+  zodSchema,
+  searchHint:
+    "storage localstorage sessionstorage local session get set remove clear key value chromium",
   interaction: {
     startedMsg: ({ params }) => `${storageAction[params.action].started} ${params.store} storage`,
     completedMsg: ({ params }) =>
@@ -52,12 +58,6 @@ export const chromiumStorageTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to ${storageAction[params.action].failure} ${params.store} storage: ${failureSignal.error_code}`,
   },
-  description: `Read and write localStorage / sessionStorage of a Chromium (CDP) app, for the origin of the active tab's page.
-Use when seeding feature flags / auth tokens before an e2e test or asserting persisted app state after one.
-Returns { value } for one key, { entries, count } for all keys, and { set } / { removed } / { cleared } for the writes. Fails if the device is not a Chromium (CDP) device, or the action is missing the \`key\` / \`value\` it needs.`,
-  searchHint:
-    "storage localstorage sessionstorage local session get set remove clear key value chromium",
-  zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);

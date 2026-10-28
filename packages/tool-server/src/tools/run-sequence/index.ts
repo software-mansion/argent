@@ -35,6 +35,30 @@ export const ALLOWED_TOOLS = new Set([
   AWAIT_UI_ELEMENT_TOOL_ID,
 ]);
 
+type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
+
+type RunSequenceResult = {
+  completed: number;
+  total: number;
+  steps: StepResult[];
+};
+
+// Gates only the *outer* invocation: every step resolves its own platform from
+// `params.udid` and is gated separately in `execute`.
+const capability: ToolCapability = {
+  // Physical iOS is a valid outer target. Unsupported steps fail at their own gate, not the whole sequence.
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
+  // Vega (Fire TV) is a valid target: its `tv-remote` / `keyboard` steps are
+  // supported. Without this key the HTTP layer's `assertSupported` would reject
+  // a Vega udid before any step runs.
+  vega: { vvd: true },
+  // Same for HarmonyOS.
+  harmony: { device: true },
+};
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -62,41 +86,11 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
-
-type RunSequenceResult = {
-  completed: number;
-  total: number;
-  steps: StepResult[];
-};
-
-// Gates only the *outer* invocation: every step resolves its own platform from
-// `params.udid` and is gated separately in `execute`.
-const capability: ToolCapability = {
-  // Physical iOS is a valid outer target. Unsupported steps fail at their own gate, not the whole sequence.
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  chromium: { app: true },
-  // Vega (Fire TV) is a valid target: its `tv-remote` / `keyboard` steps are
-  // supported. Without this key the HTTP layer's `assertSupported` would reject
-  // a Vega udid before any step runs.
-  vega: { vvd: true },
-  // Same for HarmonyOS.
-  harmony: { device: true },
-};
-
 export function createRunSequenceTool(
   registry: Registry
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
-    interaction: {
-      startedMsg: ({ params }) => `Running ${params.steps.length}-step interaction sequence`,
-      completedMsg: ({ params }) => `Ran ${params.steps.length}-step interaction sequence`,
-      failedMsg: ({ failureSignal }) =>
-        `Failed to run interaction sequence: ${failureSignal.error_code}`,
-    },
     description: `Execute several device interaction steps in one call.
 Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
 Steps run in order. If a step fails (an error, a tool that is not allowed or not supported on the target, or an await-ui-element whose condition is not met before its timeout), the sequence stops there and later steps do NOT run. Returns { completed, total, steps } with a result or an error for each step that ran, so a stopped sequence returns partial results.
@@ -121,10 +115,16 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
   tv-remote: button (one button, or an array run as a path in one step), repeat?  [apple tv/android tv/vega]
     buttons: up/down/left/right/select/back/home/menu/playPause; rewind/fastForward/next/previous/volumeUp/volumeDown/mute on Android TV and Vega only
   await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText? (for "text"), textMatch?, timeoutMs?, pollIntervalMs?  [all but apple tv]`,
-    alwaysLoad: true,
-    longRunning: true,
-    searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
+    alwaysLoad: true,
+    searchHint: "batch sequence multiple gesture steps sequentially",
+    interaction: {
+      startedMsg: ({ params }) => `Running ${params.steps.length}-step interaction sequence`,
+      completedMsg: ({ params }) => `Ran ${params.steps.length}-step interaction sequence`,
+      failedMsg: ({ failureSignal }) =>
+        `Failed to run interaction sequence: ${failureSignal.error_code}`,
+    },
+    longRunning: true,
     capability,
     // Each step resolves its own services. An eager resolver can't be used
     // because a tvOS udid shape-classifies as `ios` (there is no `tvos`

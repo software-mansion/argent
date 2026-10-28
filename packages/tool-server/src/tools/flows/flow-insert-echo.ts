@@ -19,6 +19,10 @@ export const flowInsertEchoTool: ToolDefinition<
   { message: string; stepCount: number; savedTo: FlowSavedTo }
 > = {
   id: "e2e-add-echo",
+  description: `Record an echo step in the e2e test named by \`name\` + \`project_root\`. Echo steps print a message when the e2e test is replayed, useful as labels between tool calls.
+Use when you want to annotate a recorded e2e test with a human-readable label or checkpoint message.
+Returns { message, stepCount, savedTo }. Fails if that e2e test has no recording in progress.`,
+  zodSchema,
   aliases: ["flow-add-echo"],
   interaction: {
     // Name the flow: recordings are concurrent, so an unqualified message is ambiguous.
@@ -27,10 +31,6 @@ export const flowInsertEchoTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to add note to e2e test ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Record an echo step in the e2e test named by \`name\` + \`project_root\`. Echo steps print a message when the e2e test is replayed, useful as labels between tool calls.
-Use when you want to annotate a recorded e2e test with a human-readable label or checkpoint message.
-Returns { message, stepCount, savedTo }. Fails if that e2e test has no recording in progress.`,
-  zodSchema,
   services: () => ({}),
   async execute(_services, params) {
     const session = await requireRecordingSession(params.project_root, params.name);

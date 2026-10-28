@@ -6,6 +6,25 @@ import { resolveDevice } from "../../utils/device-info";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+interface Result {
+  scrolled: boolean;
+  timestampMs: number;
+}
+
+function scrollDirection(params: Params): string {
+  const horizontal = (params.deltaX ?? 0) > 0 ? "right" : "left";
+  const vertical = (params.deltaY ?? 0) > 0 ? "down" : "up";
+  if ((params.deltaX ?? 0) === 0) return vertical;
+  if ((params.deltaY ?? 0) === 0) return horizontal;
+  return `${vertical} and ${horizontal}`;
+}
+
+// Chromium only: a desktop renderer scrolls with wheel events, so touch
+// platforms use `gesture-swipe` instead.
+const capability: ToolCapability = {
+  chromium: { app: true },
+};
+
 const zodSchema = z
   .object({
     udid: z
@@ -44,37 +63,18 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  scrolled: boolean;
-  timestampMs: number;
-}
-
-function scrollDirection(params: Params): string {
-  const horizontal = (params.deltaX ?? 0) > 0 ? "right" : "left";
-  const vertical = (params.deltaY ?? 0) > 0 ? "down" : "up";
-  if ((params.deltaX ?? 0) === 0) return vertical;
-  if ((params.deltaY ?? 0) === 0) return horizontal;
-  return `${vertical} and ${horizontal}`;
-}
-
-// Chromium only: a desktop renderer scrolls with wheel events, so touch
-// platforms use `gesture-swipe` instead.
-const capability: ToolCapability = {
-  chromium: { app: true },
-};
-
 export const gestureScrollTool: ToolDefinition<Params, Result> = {
   id: "gesture-scroll",
+  description: `Send mouse-wheel events at a point to scroll content in a Chromium app. The anchor x/y and the deltas are fractions of the window (not pixels); x/y match gesture-tap and describe.
+Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
+Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
+  zodSchema,
+  searchHint: "scroll wheel list page chromium mouse down up content fold",
   interaction: {
     startedMsg: ({ params }) => `Scrolling ${scrollDirection(params)}`,
     completedMsg: ({ params }) => `Scrolled ${scrollDirection(params)}`,
     failedMsg: ({ failureSignal }) => `Failed to scroll: ${failureSignal.error_code}`,
   },
-  description: `Send mouse-wheel events at a point to scroll content in a Chromium app. The anchor x/y and the deltas are fractions of the window (not pixels); x/y match gesture-tap and describe.
-Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
-Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
-  searchHint: "scroll wheel list page chromium mouse down up content fold",
-  zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => ({
     chromium: chromiumCdpRef(resolveDevice(params.udid)),

@@ -15,6 +15,42 @@ import {
 } from "../../utils/harmony-uitest";
 import { sleep } from "../../utils/timing";
 
+interface Result {
+  pinched: boolean;
+  timestampMs: number;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the gesture went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
+}
+
+const capability: ToolCapability = {
+  apple: { simulator: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
+};
+
+interface Contacts {
+  first: { x: number; y: number };
+  second: { x: number; y: number };
+}
+
+/** Linear in `t`, so the endpoints alone determine the path HarmonyOS draws as two lines. */
+function contactsAt(params: Params, t: number): Contacts {
+  const angleRad = ((params.angle ?? 0) * Math.PI) / 180;
+  const cosA = Math.cos(angleRad);
+  const sinA = Math.sin(angleRad);
+  const halfDist = (params.startDistance + (params.endDistance - params.startDistance) * t) / 2;
+  const cx = params.centerX + ((params.endCenterX ?? params.centerX) - params.centerX) * t;
+  const cy = params.centerY + ((params.endCenterY ?? params.centerY) - params.centerY) * t;
+  return {
+    first: { x: cx - halfDist * cosA, y: cy - halfDist * sinA },
+    second: { x: cx + halfDist * cosA, y: cy + halfDist * sinA },
+  };
+}
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -55,44 +91,13 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  pinched: boolean;
-  timestampMs: number;
-  /**
-   * Foldable iOS simulators only: the panel the device renders to could not
-   * be resolved, so the gesture went to the cover panel. Says why and what to check.
-   */
-  warning?: string;
-}
-
-const capability: ToolCapability = {
-  apple: { simulator: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  harmony: { device: true },
-};
-
-interface Contacts {
-  first: { x: number; y: number };
-  second: { x: number; y: number };
-}
-
-/** Linear in `t`, so the endpoints alone determine the path HarmonyOS draws as two lines. */
-function contactsAt(params: Params, t: number): Contacts {
-  const angleRad = ((params.angle ?? 0) * Math.PI) / 180;
-  const cosA = Math.cos(angleRad);
-  const sinA = Math.sin(angleRad);
-  const halfDist = (params.startDistance + (params.endDistance - params.startDistance) * t) / 2;
-  const cx = params.centerX + ((params.endCenterX ?? params.centerX) - params.centerX) * t;
-  const cy = params.centerY + ((params.endCenterY ?? params.centerY) - params.centerY) * t;
-  return {
-    first: { x: cx - halfDist * cosA, y: cy - halfDist * sinA },
-    second: { x: cx + halfDist * cosA, y: cy + halfDist * sinA },
-  };
-}
-
 export const gesturePinchTool: ToolDefinition<Params, Result> = {
   id: "gesture-pinch",
+  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. Positions and distances are fractions of the screen (0.0–1.0, not pixels), as in gesture-tap.
+startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
+Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
+Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) =>
       `Pinching ${params.endDistance > params.startDistance ? "out" : "in"} at (${Math.round(params.centerX * 100)}%, ${Math.round(params.centerY * 100)}%)`,
@@ -100,11 +105,6 @@ export const gesturePinchTool: ToolDefinition<Params, Result> = {
       `Pinched ${params.endDistance > params.startDistance ? "out" : "in"} at (${Math.round(params.centerX * 100)}%, ${Math.round(params.centerY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to pinch: ${failureSignal.error_code}`,
   },
-  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. Positions and distances are fractions of the screen (0.0–1.0, not pixels), as in gesture-tap.
-startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
-Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
-Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
-  zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);

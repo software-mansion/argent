@@ -12,6 +12,13 @@ import { startNativeProfilerAndroid } from "./platforms/android";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 import { trackProfilingRun } from "../../../utils/profiling-devices";
 
+const capability = {
+  apple: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+} as const;
+
+export { handleXctraceExit } from "./platforms/ios";
+
 const zodSchema = z.object({
   device_id: metroDeviceIdParam(
     "Target device id from `list-devices` (iOS UDID or Android serial)."
@@ -41,18 +48,17 @@ const zodSchema = z.object({
     ),
 });
 
-const capability = {
-  apple: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-} as const;
-
-export { handleXctraceExit } from "./platforms/ios";
-
 export const nativeProfilerStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { status: "recording"; pid: number; traceFile: string }
 > = {
   id: "native-profiler-start",
+  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: Perfetto (CPU, jank, RSS-growth weak signal).
+After starting, let the user interact with the app, then call native-profiler-stop.
+Use when you want to capture native CPU, hang, and memory data for a running app.
+Returns { status, pid, traceFile } confirming the recording has started.
+Fails if no app is running on the device, or the profiler cannot attach to the process.`,
+  zodSchema,
   interaction: {
     startedMsg: () => "Starting native profiler",
     completedMsg: () => "Started native profiler",
@@ -60,12 +66,6 @@ export const nativeProfilerStartTool: ToolDefinition<
       `Failed to start native profiler: ${failureSignal.error_code}`,
   },
   capability,
-  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: Perfetto (CPU, jank, RSS-growth weak signal).
-After starting, let the user interact with the app, then call native-profiler-stop.
-Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started.
-Fails if no app is running on the device, or the profiler cannot attach to the process.`,
-  zodSchema,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

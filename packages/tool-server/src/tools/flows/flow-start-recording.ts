@@ -15,6 +15,18 @@ import {
   type FlowSavedTo,
 } from "./flow-utils";
 
+/**
+ * `project_root` is the AGENT's project; the probe says whether it also exists
+ * on this host. A call without a link whose root is here (co-located) writes
+ * the flow file here. A call over a link, or one whose root is not here, keeps
+ * the recording in memory, and every mutating flow tool returns a client-write
+ * directive, so the YAML lands in the agent's project instead of recreating its
+ * layout here.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "probe" },
+];
+
 const zodSchema = z.object({
   name: z
     .string()
@@ -38,18 +50,6 @@ const zodSchema = z.object({
     ),
 });
 
-/**
- * `project_root` is the AGENT's project; the probe says whether it also exists
- * on this host. A call without a link whose root is here (co-located) writes
- * the flow file here. A call over a link, or one whose root is not here, keeps
- * the recording in memory, and every mutating flow tool returns a client-write
- * directive, so the YAML lands in the agent's project instead of recreating its
- * layout here.
- */
-const fileInputs: FileInputSpec[] = [
-  { target: "project_root", path: "${project_root}", kind: "probe" },
-];
-
 export const flowStartRecordingTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
@@ -61,25 +61,6 @@ export const flowStartRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-start-recording",
-  aliases: ["flow-start-recording"],
-  interaction: {
-    // Name the flow: concurrent recordings interleave in one log, and "flow
-    // recording" would not say which.
-    startedMsg: ({ params }) => `Starting recording of e2e test ${params.name}`,
-    completedMsg: ({ params, result }) => {
-      if (!result.restarted) return `Started recording e2e test ${params.name}`;
-      // A plain "started" would hide that a live take was discarded.
-      // `discardedSteps` is absent when the superseded file could not be read
-      // or parsed - 0 is the answer a genuinely empty take gives - so do not
-      // claim a count we do not have.
-      const discarded = result.discardedSteps;
-      return discarded === undefined
-        ? `Restarted recording e2e test ${params.name}, discarding the previous take`
-        : `Restarted recording e2e test ${params.name}, discarding ${discarded} ${discarded === 1 ? "step" : "steps"}`;
-    },
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to start recording of e2e test ${params.name}: ${failureSignal.error_code}`,
-  },
   description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one.
 Use when you want to capture a reusable sequence of device interactions for later replay.
 Returns { message, flowFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same e2e test was discarded.
@@ -104,6 +85,25 @@ To remove or reorder steps, edit the .yaml file after e2e-finish-recording, not
 during the recording: over a link, the next recorded step writes over your edit,
 and without a link, an edit that renumbers the steps drops their warnings.`,
   zodSchema,
+  aliases: ["flow-start-recording"],
+  interaction: {
+    // Name the flow: concurrent recordings interleave in one log, and "flow
+    // recording" would not say which.
+    startedMsg: ({ params }) => `Starting recording of e2e test ${params.name}`,
+    completedMsg: ({ params, result }) => {
+      if (!result.restarted) return `Started recording e2e test ${params.name}`;
+      // A plain "started" would hide that a live take was discarded.
+      // `discardedSteps` is absent when the superseded file could not be read
+      // or parsed - 0 is the answer a genuinely empty take gives - so do not
+      // claim a count we do not have.
+      const discarded = result.discardedSteps;
+      return discarded === undefined
+        ? `Restarted recording e2e test ${params.name}, discarding the previous take`
+        : `Restarted recording e2e test ${params.name}, discarding ${discarded} ${discarded === 1 ? "step" : "steps"}`;
+    },
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to start recording of e2e test ${params.name}: ${failureSignal.error_code}`,
+  },
   fileInputs,
   services: () => ({}),
   async execute(_services, params, ctx) {

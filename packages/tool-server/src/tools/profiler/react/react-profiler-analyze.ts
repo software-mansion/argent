@@ -72,12 +72,6 @@ export const reactProfilerAnalyzeTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-analyze",
-  interaction: {
-    startedMsg: () => "Analyzing React profile",
-    completedMsg: () => "Analyzed React profile",
-    failedMsg: ({ failureSignal }) =>
-      `Failed to analyze React profile: ${failureSignal.error_code}`,
-  },
   description: `Analyze stored profiling data and return a markdown performance report.
 Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }.
 The report is structured around hot React commits (≥16ms absolute floor) with per-commit
@@ -88,6 +82,12 @@ profiler-cpu-query / profiler-commit-query) or implement fixes and re-profile fo
 Use when the profiling session is complete and you need to interpret the collected data.
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
+  interaction: {
+    startedMsg: () => "Analyzing React profile",
+    completedMsg: () => "Analyzed React profile",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to analyze React profile: ${failureSignal.error_code}`,
+  },
   // RN-only: reads commit data captured via the React DevTools backend, which
   // Chromium does not have.
   capability: RN_ONLY_TOOL_CAPABILITY,

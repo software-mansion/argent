@@ -27,6 +27,39 @@ const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_MIN_STABLE_MS = 250;
 
+interface IdleResult {
+  /** Screen rendered content and went still before the timeout. */
+  settled: boolean;
+  waitedMs: number;
+  polls: number;
+  /** Why what it settled on may not be the live screen. */
+  note?: string;
+}
+
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
+  harmony: { device: true },
+};
+
+// Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
+// while still catching real motion (a slide/fade animation).
+function treeSignature(root: DescribeNode): string {
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const parts: string[] = [];
+  const walk = (node: DescribeNode): void => {
+    const f = node.frame;
+    parts.push(
+      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}`
+    );
+    for (const child of node.children) walk(child);
+  };
+  for (const child of root.children) walk(child);
+  return parts.join("\n");
+}
+
 const zodSchema = z
   .object({
     udid: z
@@ -65,39 +98,6 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-interface IdleResult {
-  /** Screen rendered content and went still before the timeout. */
-  settled: boolean;
-  waitedMs: number;
-  polls: number;
-  /** Why what it settled on may not be the live screen. */
-  note?: string;
-}
-
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  chromium: { app: true },
-  harmony: { device: true },
-};
-
-// Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
-// while still catching real motion (a slide/fade animation).
-function treeSignature(root: DescribeNode): string {
-  const round = (n: number) => Math.round(n * 100) / 100;
-  const parts: string[] = [];
-  const walk = (node: DescribeNode): void => {
-    const f = node.frame;
-    parts.push(
-      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}`
-    );
-    for (const child of node.children) walk(child);
-  };
-  for (const child of root.children) walk(child);
-  return parts.join("\n");
-}
-
 // The MCP layer times its auto-screenshot with this: capture once the screen is
 // stable instead of after a fixed delay.
 export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Params, IdleResult> {
@@ -129,6 +129,13 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
   return {
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
+    description: `Block until the screen has rendered content and stopped changing, or the timeout elapses. It polls the same element tree as \`describe\`.
+Use when a launch or navigation must finish rendering before you take a screenshot or tap.
+Returns { settled, waitedMs, polls<flag:harmonyos>, note?</flag:harmonyos> }. If the screen never goes still before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
+    zodSchema,
+    searchHint:
+      "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
+    readOnly: true,
     interaction: {
       startedMsg: () => "Waiting for screen to settle",
       completedMsg: ({ result }) =>
@@ -136,14 +143,7 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for screen to settle: ${failureSignal.error_code}`,
     },
-    description: `Block until the screen has rendered content and stopped changing, or the timeout elapses. It polls the same element tree as \`describe\`.
-Use when a launch or navigation must finish rendering before you take a screenshot or tap.
-Returns { settled, waitedMs, polls<flag:harmonyos>, note?</flag:harmonyos> }. If the screen never goes still before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
-    searchHint:
-      "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
     longRunning: true,
-    readOnly: true,
-    zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);

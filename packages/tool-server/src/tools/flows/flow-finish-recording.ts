@@ -15,17 +15,6 @@ import {
 } from "./flow-utils";
 import { stepAnchor, summarizeSteps } from "./flow-step-definitions";
 
-const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
-    ),
-});
-
 /**
  * Fold each recorded step's cross-tree verdict into its own summary line.
  *
@@ -133,6 +122,17 @@ function anchoredWarnings(
   return kept;
 }
 
+const zodSchema = z.object({
+  name: z
+    .string()
+    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
+    ),
+});
+
 export const flowFinishRecordingTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
@@ -146,6 +146,10 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-finish-recording",
+  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
+A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
+You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
+  zodSchema,
   aliases: ["flow-finish-recording"],
   interaction: {
     // Name the flow: other recordings stay live, so an unqualified message would
@@ -158,10 +162,6 @@ export const flowFinishRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to finish recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
-A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
-You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
-  zodSchema,
   services: () => ({}),
   async execute(_services, params) {
     // Resolve, read and clear as ONE critical section: host mode's

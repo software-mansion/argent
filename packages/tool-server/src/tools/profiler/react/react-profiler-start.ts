@@ -67,6 +67,25 @@ const UNKNOWN_DEVICE_NOTE =
   "So taps and swipes on that device still return a screenshot and an element tree, and the " +
   "capture loads the app while the profiler records. To avoid this, run the app on its own Metro port.";
 
+type ReadStateResult =
+  | { hookExists: false }
+  | { hookExists: true; rendererInterfaceFound: false }
+  | {
+      hookExists: true;
+      rendererInterfaceFound: true;
+      isRunning: boolean;
+      owner: ProfilerSessionOwner | null;
+      nowEpochMs: number;
+    };
+
+function safeGetState(registry: Registry, urn: string): ServiceState | null {
+  try {
+    return registry.getServiceState(urn);
+  } catch {
+    return null;
+  }
+}
+
 const zodSchema = z.object({
   port: metroPortField,
   device_id: z
@@ -88,37 +107,11 @@ const zodSchema = z.object({
     ),
 });
 
-type ReadStateResult =
-  | { hookExists: false }
-  | { hookExists: true; rendererInterfaceFound: false }
-  | {
-      hookExists: true;
-      rendererInterfaceFound: true;
-      isRunning: boolean;
-      owner: ProfilerSessionOwner | null;
-      nowEpochMs: number;
-    };
-
-function safeGetState(registry: Registry, urn: string): ServiceState | null {
-  try {
-    return registry.getServiceState(urn);
-  } catch {
-    return null;
-  }
-}
-
 export function createReactProfilerStartTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-start",
-    interaction: {
-      startedMsg: () => "Starting React profiler",
-      completedMsg: ({ result }) =>
-        result.already_running ? "React profiler was already running" : "Started React profiler",
-      failedMsg: ({ failureSignal }) =>
-        `Failed to start React profiler: ${failureSignal.error_code}`,
-    },
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Use when you need to profile a user interaction.
 Before calling this, ask the user if they also want native profiling (native-profiler-start), and recommend running both in parallel for a complete picture.
@@ -126,6 +119,13 @@ After starting, ask the user to perform the interaction to profile, then call re
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
+    interaction: {
+      startedMsg: () => "Starting React profiler",
+      completedMsg: ({ result }) =>
+        result.already_running ? "React profiler was already running" : "Started React profiler",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to start React profiler: ${failureSignal.error_code}`,
+    },
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {

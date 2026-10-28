@@ -22,6 +22,15 @@ const MOMENTUM_FREE_MIN_STEPS = 8;
 // 300ms default.
 const MAX_DURATION_MS = 10_000;
 
+interface Result {
+  dragged: boolean;
+  timestampMs: number;
+}
+
+const capability: ToolCapability = {
+  chromium: { app: true },
+};
+
 const zodSchema = z.object({
   udid: z.string().describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
   fromX: z.number().min(0).max(1).describe("Press x."),
@@ -58,17 +67,13 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  dragged: boolean;
-  timestampMs: number;
-}
-
-const capability: ToolCapability = {
-  chromium: { app: true },
-};
-
 export const gestureDragTool: ToolDefinition<Params, Result> = {
   id: "gesture-drag",
+  description: `Press the left mouse button at a start point, move to an end point, and release: a desktop mouse drag in a Chromium app, with mouse moves interpolated at ~60fps. All positions are fractions of the window width/height (not pixels), the same space as gesture-tap and describe, except that exactly 1.0 lands one pixel inside the window edge.
+Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop; use gesture-scroll for lists/pages. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
+Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
+  zodSchema,
+  searchHint: "drag drop slider mouse press move release chromium select",
   interaction: {
     startedMsg: ({ params }) =>
       `Dragging from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
@@ -76,11 +81,6 @@ export const gestureDragTool: ToolDefinition<Params, Result> = {
       `Dragged from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
     failedMsg: ({ failureSignal }) => `Failed to drag: ${failureSignal.error_code}`,
   },
-  description: `Press the left mouse button at a start point, move to an end point, and release: a desktop mouse drag in a Chromium app, with mouse moves interpolated at ~60fps. All positions are fractions of the window width/height (not pixels), the same space as gesture-tap and describe, except that exactly 1.0 lands one pixel inside the window edge.
-Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop; use gesture-scroll for lists/pages. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
-Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
-  searchHint: "drag drop slider mouse press move release chromium select",
-  zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => ({
     chromium: chromiumCdpRef(resolveDevice(params.udid)),

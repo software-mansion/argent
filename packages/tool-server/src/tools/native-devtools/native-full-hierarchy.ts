@@ -9,6 +9,8 @@ import {
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 
+type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; windows: unknown[]; screen?: unknown };
+
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   bundleId: z.string().describe("Bundle ID of the app"),
@@ -43,17 +45,9 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; windows: unknown[]; screen?: unknown };
 
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
-  interaction: {
-    startedMsg: ({ params }) => `Reading native view hierarchy for ${params.bundleId}`,
-    completedMsg: ({ params }) => `Read native view hierarchy for ${params.bundleId}`,
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to read native view hierarchy for ${params.bundleId}: ${failureSignal.error_code}`,
-  },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   description: `Get the complete UIKit view tree for the running app.
 WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
 Reduce the output with skipClasses / skipClassPrefixes, fields and maxDepth.
@@ -61,8 +55,15 @@ Use when you need deep layout debugging, finding views with no accessibility lab
 Returns { status: "ok", windows, screen } with the full view hierarchy. screen gives the screen size in points on its portrait axes, and the interfaceOrientation of the UI (portrait, portraitUpsideDown, landscapeLeft, landscapeRight). Each screenFrame uses the portrait axes of the screen. Each windowFrame uses the axes of its window, which turn with the UI.
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
-  readOnly: true,
   zodSchema,
+  readOnly: true,
+  interaction: {
+    startedMsg: ({ params }) => `Reading native view hierarchy for ${params.bundleId}`,
+    completedMsg: ({ params }) => `Read native view hierarchy for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to read native view hierarchy for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),

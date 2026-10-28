@@ -16,6 +16,15 @@ import { makeChromiumImpl } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
 
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
+  vega: { vvd: true },
+  harmony: { device: true },
+};
+
 // `text` and `key` are at-most-one, and the advertised JSON Schema cannot say
 // so: `not` is one of the top-level combinators #782 banned repo-wide, and
 // `tool-input-schema-contract.test.ts` fails any tool declaring one — the
@@ -64,15 +73,6 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  chromium: { app: true },
-  vega: { vvd: true },
-  harmony: { device: true },
-};
-
 // TV is a `runtimeKind`, not a `platform` — a tvOS sim dispatches as "ios" and
 // an Android TV as "android" by id shape — so those two branches probe the kind
 // at runtime and route a TV target to the focus-driven backend. A non-TV target
@@ -104,6 +104,14 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
   });
   return {
     id: "keyboard",
+    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
+Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
+A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "type text keyboard input named key enter escape arrow tv vega fire tv <flag:harmonyos>harmony harmonyos </flag:harmonyos>search field hid leanback",
     interaction: {
       // Never quote the parameters: `text` may hold a plaintext credential and
       // `key` is an unvalidated free string here, yet these messages reach the
@@ -120,18 +128,10 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
-    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
-Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
-A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.`,
-    zodSchema,
     capability,
-    alwaysLoad: true,
     // Typing time grows with text length on several backends and can outlast the MCP
     // fetch timeout, whose abort replays the call: the text would be typed twice.
     longRunning: true,
-    searchHint:
-      "type text keyboard input named key enter escape arrow tv vega fire tv <flag:harmonyos>harmony harmonyos </flag:harmonyos>search field hid leanback",
     services: () => ({}),
     execute: async (services, params, options) => {
       // A combined call has no meaning a caller can rely on: `key: "enter"` reads

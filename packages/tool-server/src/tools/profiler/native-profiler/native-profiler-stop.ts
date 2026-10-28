@@ -18,12 +18,6 @@ import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 import type { ArtifactKind, ArtifactStore } from "@argent/registry";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const zodSchema = z.object({
-  device_id: metroDeviceIdParam(
-    "Target device id from `list-devices` (iOS UDID or Android serial)."
-  ),
-});
-
 /**
  * Mirrors {@link IosStopResult}, but the file paths are artifact handles the
  * MCP client materializes locally instead of raw host paths.
@@ -93,8 +87,19 @@ function registerTrace(store: ArtifactStore, traceFile: string): Promise<Artifac
   return store.register({ hostPath: traceFile, kind: "native-profile-trace", archive: "tar.gz" });
 }
 
+const zodSchema = z.object({
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID or Android serial)."
+  ),
+});
+
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
+  description: `Stop native profiling and export trace data: CPU, hangs, and leaks XML from xctrace on iOS; the Perfetto .pftrace on Android.
+Use when the user has finished the interaction to profile and you need to export the trace.
+Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
+Fails if no active native-profiler-start session exists for the given device_id.`,
+  zodSchema,
   interaction: {
     startedMsg: () => "Stopping native profiler",
     completedMsg: ({ result }) => `Saved native profile ${result.traceFile.filename}`,
@@ -103,11 +108,6 @@ export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, S
   capability,
   // Packaging plus the export passes routinely exceed the 30s MCP fetch timeout.
   longRunning: true,
-  description: `Stop native profiling and export trace data: CPU, hangs, and leaks XML from xctrace on iOS; the Perfetto .pftrace on Android.
-Use when the user has finished the interaction to profile and you need to export the trace.
-Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
-Fails if no active native-profiler-start session exists for the given device_id.`,
-  zodSchema,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

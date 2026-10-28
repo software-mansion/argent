@@ -33,26 +33,6 @@ function withDescription(data: DescribeTreeData): DescribeResult {
   return out;
 }
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
-    ),
-  bundleId: z
-    .string()
-    .optional()
-    .describe(
-      "App bundle ID, used as a target hint on iOS when the AX-service returns no elements " +
-        "and describe falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on every other platform, " +
-        "including a physical iOS device."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
@@ -148,14 +128,29 @@ function makeDescribeExecute(
   });
 }
 
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .min(1)
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+    ),
+  bundleId: z
+    .string()
+    .optional()
+    .describe(
+      "App bundle ID, used as a target hint on iOS when the AX-service returns no elements " +
+        "and describe falls back to native-devtools inspection. " +
+        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on every other platform, " +
+        "including a physical iOS device."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
     id: "describe",
-    interaction: {
-      startedMsg: () => "Reading screen",
-      completedMsg: () => "Read screen",
-      failedMsg: ({ failureSignal }) => `Failed to read screen: ${failureSignal.error_code}`,
-    },
     description: `Get the accessibility / DOM element tree for the current screen.
 Use when you need element frames or labels and have no fresh tree: most interaction tools (not tv-remote or shake) already return one after each action.
 On iOS it reads the AXRuntime accessibility service, so it sees whatever is visible, including system dialogs and permission prompts. While a system dialog is visible it returns the dialog's elements (buttons, text); otherwise the foreground app's. On a physical iOS device it covers only the app started with launch-app; to read system dialogs there, launch-app \`com.apple.springboard\` first.
@@ -170,11 +165,16 @@ Fails if the tree cannot be read, e.g. on a locked Android screen, or on a physi
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS simulator only).
 For React Native component names, or a testID describe does not list, use debugger-component-tree.`,
+    zodSchema,
     alwaysLoad: true,
     searchHint:
       "accessibility element tree ui hierarchy tap coordinates ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
     readOnly: true,
-    zodSchema,
+    interaction: {
+      startedMsg: () => "Reading screen",
+      completedMsg: () => "Read screen",
+      failedMsg: ({ failureSignal }) => `Failed to read screen: ${failureSignal.error_code}`,
+    },
     capability,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);

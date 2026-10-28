@@ -11,15 +11,6 @@ import {
   type DebuggerNotConnectedResult,
 } from "./not-connected";
 
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: z
-    .string()
-    .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
-    ),
-});
-
 interface DebuggerConnectedStatus {
   status: "connected";
   port: number;
@@ -34,11 +25,26 @@ interface DebuggerConnectedStatus {
   sourceMapReady: boolean;
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: z
+    .string()
+    .describe(
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+    ),
+});
+
 export function createDebuggerStatusTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, DebuggerConnectedStatus | DebuggerNotConnectedResult> {
   return {
     id: "debugger-status",
+    description: `Get JS runtime debugger connection status and diagnostic info.
+Use when you need to verify connectivity before using other debugger tools. Never fails when the runtime is simply unreachable: it returns a discriminated result instead:
+- { status: "connected", ... } with port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), isNewDebugger (false on the legacy inspector), connected flag, loadedScripts count, and sourceMapReady (always true: waits for pending source maps before returning).
+- { status: "not_connected", connected: false, reason, detail, guidance } (port omitted on Chromium), with reason one of metro_not_running, no_app_connected, device_mismatch, cdp_unreachable, runtime_unresponsive, stale_connection, reconnecting. Follow the guidance field; do not retry in a loop.`,
+    zodSchema,
+    readOnly: true,
     interaction: {
       startedMsg: () => "Checking JavaScript debugger",
       completedMsg: ({ result }) =>
@@ -48,12 +54,6 @@ export function createDebuggerStatusTool(
       failedMsg: ({ failureSignal }) =>
         `Failed to check JavaScript debugger: ${failureSignal.error_code}`,
     },
-    description: `Get JS runtime debugger connection status and diagnostic info.
-Use when you need to verify connectivity before using other debugger tools. Never fails when the runtime is simply unreachable: it returns a discriminated result instead:
-- { status: "connected", ... } with port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), isNewDebugger (false on the legacy inspector), connected flag, loadedScripts count, and sourceMapReady (always true: waits for pending source maps before returning).
-- { status: "not_connected", connected: false, reason, detail, guidance } (port omitted on Chromium), with reason one of metro_not_running, no_app_connected, device_mismatch, cdp_unreachable, runtime_unresponsive, stale_connection, reconnecting. Follow the guidance field; do not retry in a loop.`,
-    readOnly: true,
-    zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
     // Resolved manually in execute so a not-connected precondition becomes a
     // structured result instead of a tool failure.

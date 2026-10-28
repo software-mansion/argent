@@ -106,18 +106,18 @@ const zodSchema = z.object({
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
+  description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
+Returns a markdown table of the components with the longest total render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
+Use when you want a quick look at what is mounted in a live connected app, without a profiling session.
+Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Reading React render activity",
     completedMsg: () => "Read React render activity",
     failedMsg: ({ failureSignal }) =>
       `Failed to read React render activity: ${failureSignal.error_code}`,
   },
-  description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
-Returns a markdown table of the components with the longest total render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
-Use when you want a quick look at what is mounted in a live connected app, without a profiling session.
-Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
-  readOnly: true,
-  zodSchema,
   // RN-only: queries the React DevTools backend hook on the live runtime.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({

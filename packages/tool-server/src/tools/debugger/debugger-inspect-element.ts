@@ -170,20 +170,20 @@ export const debuggerInspectElementTool: ToolDefinition<
   | { error: string }
 > = {
   id: "debugger-inspect-element",
-  interaction: {
-    startedMsg: ({ params }) => `Inspecting element at (${params.x}, ${params.y})`,
-    completedMsg: ({ params }) => `Inspected element at (${params.x}, ${params.y})`,
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to inspect element at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
-  },
   description: `Inspect the React component hierarchy at a screen coordinate (x, y).
 Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
 The first items (lowest indices) are the most specific: the exact component under
 the tap point and its direct parents. Higher indices are broader context (page, navigator).
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
-  readOnly: true,
   zodSchema,
+  readOnly: true,
+  interaction: {
+    startedMsg: ({ params }) => `Inspecting element at (${params.x}, ${params.y})`,
+    completedMsg: ({ params }) => `Inspected element at (${params.x}, ${params.y})`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to inspect element at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
+  },
   // RN-only: needs React Native's internal getInspectorDataForViewAtPoint and
   // Metro's /symbolicate; the Chromium session has no source resolver.
   capability: RN_ONLY_TOOL_CAPABILITY,

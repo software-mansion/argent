@@ -21,6 +21,14 @@ import { harmonyImpl } from "./platforms/harmony";
 // activities like `.MainActivity`, no leading `-` (flag injection).
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  vega: { vvd: true },
+  harmony: { device: true },
+};
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -52,33 +60,25 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  vega: { vvd: true },
-  harmony: { device: true },
-};
-
 // Local iOS resolves native-devtools inside the handler rather than via
 // `services()`. A tvOS sim classifies as platform "ios", and native-devtools
 // covers it too (ensureEnv injects the TVOSSIMULATOR dylib slice).
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
+    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>or Vega.
+Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
+Returns { restarted, bundleId }. Fails if the app is not installed.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
     interaction: {
       startedMsg: ({ params }) => `Restarting ${params.bundleId}`,
       completedMsg: ({ params }) => `Restarted ${params.bundleId}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to restart ${params.bundleId}: ${failureSignal.error_code}`,
     },
-    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>or Vega.
-Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
-Returns { restarted, bundleId }. Fails if the app is not installed.`,
-    alwaysLoad: true,
-    searchHint:
-      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
-    zodSchema,
     capability,
     // Only ios-remote's handler reads `services.nativeDevtools`, so only it
     // needs an eager declaration.

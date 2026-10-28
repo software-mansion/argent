@@ -93,72 +93,6 @@ export function unmetUiWaitCause(result: unknown): UnmetUiWaitCause {
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 400;
 
-const zodSchema = z
-  .object({
-    udid: z
-      .string()
-      .min(1)
-      .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id; not Apple TV, whose tree it cannot read)."
-      ),
-    condition: z
-      .enum(["exists", "visible", "hidden", "text"])
-      .describe(
-        "What to wait for. `exists`: the selector matches an element anywhere in the tree. " +
-          "`visible`: it matches one with a non-zero on-screen frame. `hidden`: it matches nothing, " +
-          "or only a zero-area element (e.g. a spinner that went away). `text`: the first visible match in reading order " +
-          "(topmost, then leftmost; the first match overall if none is visible) contains expectedText, or equals it " +
-          "with textMatch `equals`. Only that match is checked, so if a loose selector hits several elements, " +
-          "narrow it to the one holding the text."
-      ),
-    selector: selectorSchema.describe(
-      "Element to match. Give at least one field; every given field must match."
-    ),
-    expectedText: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Required for condition `text`: the string the checked match must contain or equal (see `textMatch`)."
-      ),
-    textMatch: z
-      .enum(["contains", "equals"])
-      .optional()
-      .describe(
-        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
-      ),
-    bundleId: z
-      .string()
-      .optional()
-      .describe(
-        "iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform, " +
-          "including physical iOS."
-      ),
-    timeoutMs: z
-      .number()
-      .int()
-      .positive()
-      .max(120_000)
-      .optional()
-      .describe(
-        `Max time to wait for the condition before giving up (default ${DEFAULT_TIMEOUT_MS}).`
-      ),
-    pollIntervalMs: z
-      .number()
-      .int()
-      .min(50)
-      .max(5000)
-      .optional()
-      .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
-  })
-  .strict()
-  .refine((p) => p.condition !== "text" || p.expectedText !== undefined, {
-    message: "condition `text` requires expectedText",
-    path: ["expectedText"],
-  });
-
-type Params = z.infer<typeof zodSchema>;
-
 const conditionDescription = {
   exists: "appear",
   visible: "become visible",
@@ -320,6 +254,72 @@ function timeoutNote(
   return appendDiagnostics(base, lastData);
 }
 
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .min(1)
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id; not Apple TV, whose tree it cannot read)."
+      ),
+    condition: z
+      .enum(["exists", "visible", "hidden", "text"])
+      .describe(
+        "What to wait for. `exists`: the selector matches an element anywhere in the tree. " +
+          "`visible`: it matches one with a non-zero on-screen frame. `hidden`: it matches nothing, " +
+          "or only a zero-area element (e.g. a spinner that went away). `text`: the first visible match in reading order " +
+          "(topmost, then leftmost; the first match overall if none is visible) contains expectedText, or equals it " +
+          "with textMatch `equals`. Only that match is checked, so if a loose selector hits several elements, " +
+          "narrow it to the one holding the text."
+      ),
+    selector: selectorSchema.describe(
+      "Element to match. Give at least one field; every given field must match."
+    ),
+    expectedText: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Required for condition `text`: the string the checked match must contain or equal (see `textMatch`)."
+      ),
+    textMatch: z
+      .enum(["contains", "equals"])
+      .optional()
+      .describe(
+        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
+      ),
+    bundleId: z
+      .string()
+      .optional()
+      .describe(
+        "iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform, " +
+          "including physical iOS."
+      ),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(120_000)
+      .optional()
+      .describe(
+        `Max time to wait for the condition before giving up (default ${DEFAULT_TIMEOUT_MS}).`
+      ),
+    pollIntervalMs: z
+      .number()
+      .int()
+      .min(50)
+      .max(5000)
+      .optional()
+      .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
+  })
+  .strict()
+  .refine((p) => p.condition !== "text" || p.expectedText !== undefined, {
+    message: "condition `text` requires expectedText",
+    path: ["expectedText"],
+  });
+
+type Params = z.infer<typeof zodSchema>;
+
 // A factory (like `describe`) because the iOS / Android tree fetch resolves the
 // AX / android-devtools services through the registry rather than through the
 // tool's own services() declaration. Only the Chromium CDP session flows in as a
@@ -357,6 +357,14 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
 
   return {
     id: AWAIT_UI_ELEMENT_TOOL_ID,
+    description: `Block until a UI element reaches an expected state or the timeout elapses, so you don't have to poll screenshot/describe yourself. It polls the same tree as \`describe\`.
+Use when the next step needs an element that appears or disappears asynchronously, e.g. after a tap or navigation, or before tapping something that loads late.
+Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false instead of failing, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
+    readOnly: true,
     interaction: {
       startedMsg: ({ params }) =>
         `Waiting for UI element to ${conditionDescription[params.condition]}`,
@@ -364,15 +372,7 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for UI element: ${failureSignal.error_code}`,
     },
-    description: `Block until a UI element reaches an expected state or the timeout elapses, so you don't have to poll screenshot/describe yourself. It polls the same tree as \`describe\`.
-Use when the next step needs an element that appears or disappears asynchronously, e.g. after a tap or navigation, or before tapping something that loads late.
-Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false instead of failing, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
-    alwaysLoad: true,
-    searchHint:
-      "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
     longRunning: true,
-    readOnly: true,
-    zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);

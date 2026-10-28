@@ -312,15 +312,6 @@ const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
-  interaction: {
-    startedMsg: () => "Listing devices",
-    completedMsg: ({ result }) => {
-      const deviceLabel = result.devices.length === 1 ? "device" : "devices";
-      const avdLabel = result.avds.length === 1 ? "AVD" : "AVDs";
-      return `Listed ${result.devices.length} ${deviceLabel} and ${result.avds.length} ${avdLabel}`;
-    },
-    failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
-  },
   description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos>and Vega (Fire TV) devices in one place.
 Call this at the start of a session to pick a target id ('udid' for iOS<flag:harmonyos>/HarmonyOS</flag:harmonyos> entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', <flag:harmonyos>'harmony', </flag:harmonyos>or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
@@ -332,11 +323,20 @@ iOS simulators from an additional CoreSimulator device set (the 'ios.additionalD
 A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'; use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
 Booted/ready devices are listed first. A platform is silently omitted when its CLI is not found; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
+  zodSchema,
   alwaysLoad: true,
   searchHint:
     "list devices simulators emulators avd serial udid ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>app fire tv session start",
   readOnly: true,
-  zodSchema,
+  interaction: {
+    startedMsg: () => "Listing devices",
+    completedMsg: ({ result }) => {
+      const deviceLabel = result.devices.length === 1 ? "device" : "devices";
+      const avdLabel = result.avds.length === 1 ? "AVD" : "AVDs";
+      return `Listed ${result.devices.length} ${deviceLabel} and ${result.avds.length} ${avdLabel}`;
+    },
+    failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
+  },
   services: () => ({}),
   async execute(_services, _params) {
     const harmonyEnabled = isHarmonyEnabled();

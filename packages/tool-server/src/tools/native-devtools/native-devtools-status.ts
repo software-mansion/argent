@@ -13,12 +13,6 @@ import {
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 
-const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app to check (e.g. com.example.MyApp)"),
-});
-
-type Params = z.infer<typeof zodSchema>;
 type Result =
   | NativeDevtoolsInitFailedResult
   | {
@@ -53,15 +47,15 @@ function envSetupReading(api: NativeDevtoolsApi, connected: boolean): boolean {
   return api.isEnvSetup() && (connected || api.getInitFailure() === null);
 }
 
+const zodSchema = z.object({
+  udid: z.string().describe("Simulator UDID"),
+  bundleId: z.string().describe("Bundle ID of the app to check (e.g. com.example.MyApp)"),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
-  interaction: {
-    startedMsg: ({ params }) => `Checking native inspection for ${params.bundleId}`,
-    completedMsg: ({ params }) => `Checked native inspection for ${params.bundleId}`,
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to check native inspection for ${params.bundleId}: ${failureSignal.error_code}`,
-  },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   // The "injectable is false" recovery sentence inlines NON_INJECTABLE_RECOVERY
   // verbatim (pinned by native-devtools-status.test.ts): the description must stay
   // a plain literal for scripts/extract-tools.mjs to read statically.
@@ -86,8 +80,15 @@ If state is connecting: do NOT restart the app. Launching it is what starts the 
 If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again: the service is stale rather than the app uninjected, so restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.
 Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment failed to initialize.
 Fails if the simulator server is not running for the given UDID.`,
-  readOnly: true,
   zodSchema,
+  readOnly: true,
+  interaction: {
+    startedMsg: ({ params }) => `Checking native inspection for ${params.bundleId}`,
+    completedMsg: ({ params }) => `Checked native inspection for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to check native inspection for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),

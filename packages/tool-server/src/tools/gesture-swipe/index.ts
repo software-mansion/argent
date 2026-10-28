@@ -42,6 +42,31 @@ const MOMENTUM_FREE_MIN_DURATION_MS = 150;
 // applied to the same thing: one finger-down-to-lift stroke.
 const MAX_DURATION_MS = 10_000;
 
+interface Result {
+  swiped: boolean;
+  timestampMs: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this swipe, so the foreground screen changed as a
+   * side effect. Set only when true.
+   */
+  reactivated?: true;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the swipe went to the cover panel. Says why and what to check.
+   */
+  warning?: string;
+}
+
+// Touch platforms only: on a desktop renderer a mouse drag selects text instead
+// of scrolling, so Chromium callers use `gesture-scroll` (wheel-based) instead.
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
+};
+
 const zodSchema = z
   .object({
     udid: z
@@ -93,40 +118,8 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
-  swiped: boolean;
-  timestampMs: number;
-  /**
-   * Physical iOS only: the target app was backgrounded and the runner
-   * re-fronted it to run this swipe, so the foreground screen changed as a
-   * side effect. Set only when true.
-   */
-  reactivated?: true;
-  /**
-   * Foldable iOS simulators only: the panel the device renders to could not
-   * be resolved, so the swipe went to the cover panel. Says why and what to check.
-   */
-  warning?: string;
-}
-
-// Touch platforms only: on a desktop renderer a mouse drag selects text instead
-// of scrolling, so Chromium callers use `gesture-scroll` (wheel-based) instead.
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  harmony: { device: true },
-};
-
 export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   id: "gesture-swipe",
-  interaction: {
-    startedMsg: ({ params }) =>
-      `Swiping from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
-    completedMsg: ({ params }) =>
-      `Swiped from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
-    failedMsg: ({ failureSignal }) => `Failed to swipe: ${failureSignal.error_code}`,
-  },
   // Never interpolate into this description: extract-tools scans it statically,
   // so a `${}` in it drops the tool out of the scan.
   description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Android emulator). All from/to positions are fractions of screen width/height (not pixels), same as gesture-tap.
@@ -136,9 +129,16 @@ Use when you need to scroll a list, dismiss a modal, drag an element, or navigat
 Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.<flag:harmonyos>
 HarmonyOS: durationMs sets drag speed, clamped to uitest's 200-40000 px/s, so a short slow swipe ends early and a long fast one runs late.</flag:harmonyos>
 Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
+  zodSchema,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
-  zodSchema,
+  interaction: {
+    startedMsg: ({ params }) =>
+      `Swiping from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    completedMsg: ({ params }) =>
+      `Swiped from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    failedMsg: ({ failureSignal }) => `Failed to swipe: ${failureSignal.error_code}`,
+  },
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);

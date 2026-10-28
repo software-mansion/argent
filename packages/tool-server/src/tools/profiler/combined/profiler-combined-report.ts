@@ -30,11 +30,6 @@ import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/de
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
-});
-
 interface HangCommitCorrelation {
   hang: UiHang;
   hangWallStartMs: number;
@@ -46,21 +41,26 @@ interface HangCommitCorrelation {
   }[];
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
+});
+
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-combined-report",
+  description: `Generate a cross-correlated report combining React Profiler and native profiler data.
+Maps native hangs to React commits using wall-clock time alignment.
+Call this tool when both profilers were run in parallel on the same session.
+Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
+Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Building combined performance report",
     completedMsg: () => "Built combined performance report",
     failedMsg: ({ failureSignal }) =>
       `Failed to build combined performance report: ${failureSignal.error_code}`,
   },
-  description: `Generate a cross-correlated report combining React Profiler and native profiler data.
-Maps native hangs to React commits using wall-clock time alignment.
-Call this tool when both profilers were run in parallel on the same session.
-Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
-Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
-  readOnly: true,
-  zodSchema,
   // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
   // loadAndroidCombinedData. Chromium has no native trace capture.
   capability: {

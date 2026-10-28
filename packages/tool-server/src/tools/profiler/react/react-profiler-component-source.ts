@@ -5,11 +5,6 @@ import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipe
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
 
-const zodSchema = z.object({
-  component_name: z.string().describe("Name of the React component to look up"),
-  project_root: z.string().describe("Absolute path to the RN project root"),
-});
-
 /**
  * A project tree can't ride along in a tool call, so `kind: "directory"` fails
  * a remote caller whose checkout isn't mirrored on this host, instead of
@@ -19,11 +14,22 @@ const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "directory" },
 ];
 
+const zodSchema = z.object({
+  component_name: z.string().describe("Name of the React component to look up"),
+  project_root: z.string().describe("Absolute path to the RN project root"),
+});
+
 export const reactProfilerComponentSourceTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   Record<string, unknown>
 > = {
   id: "react-profiler-component-source",
+  description: `Find a named React component's source in the project: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source.
+Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
+Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
+When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Finding source for ${params.component_name}`,
     completedMsg: ({ params, result }) =>
@@ -31,12 +37,6 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to find source for ${params.component_name}: ${failureSignal.error_code}`,
   },
-  description: `Find a named React component's source in the project: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source.
-Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
-Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
-When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
-  readOnly: true,
-  zodSchema,
   // Declared so the tool catalogue groups this with the other react-profiler-*
   // tools; the HTTP gate itself is a no-op here, as there is no device arg to
   // inspect.

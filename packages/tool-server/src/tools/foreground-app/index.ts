@@ -17,12 +17,6 @@ interface ForegroundApp {
   alertVisible?: boolean;
 }
 
-const zodSchema = z.object({
-  udid: z.string().min(1).describe("Target device id from `list-devices`."),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
@@ -57,21 +51,27 @@ async function readAndroidForegroundApp(
   return { bundleId: tree.foregroundApp, alertVisible: tree.alertVisible };
 }
 
+const zodSchema = z.object({
+  udid: z.string().min(1).describe("Target device id from `list-devices`."),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export function createForegroundAppTool(registry: Registry): ToolDefinition<Params, ForegroundApp> {
   return {
     id: "foreground-app",
+    description: `Read which app is in front, for SDK callers.
+Returns { bundleId, name, alertVisible }; under a system alert, bundleId is the app it covers.
+A field is unset when it is unknown.`,
+    zodSchema,
+    readOnly: true,
+    hideFromMcp: true,
     interaction: {
       startedMsg: () => "Reading foreground app",
       completedMsg: () => "Read foreground app",
       failedMsg: ({ failureSignal }) =>
         `Failed to read foreground app: ${failureSignal.error_code}`,
     },
-    description: `Read which app is in front, for SDK callers.
-Returns { bundleId, name, alertVisible }; under a system alert, bundleId is the app it covers.
-A field is unset when it is unknown.`,
-    hideFromMcp: true,
-    readOnly: true,
-    zodSchema,
     capability,
     services: () => ({}),
     execute: dispatchByPlatform({

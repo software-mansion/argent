@@ -45,45 +45,6 @@ import * as fs from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
-    ),
-  rotation: z
-    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
-    .optional()
-    .describe(
-      "Orientation override for the screenshot (on Chromium it rotates the captured image). On Android the capture already follows the device's rotation. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
-    ),
-  scale: z
-    .number()
-    .min(0.01)
-    .max(1.0)
-    .optional()
-    .describe(
-      "Scale factor. Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>. " +
-        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
-        "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
-    ),
-  includeImageInContext: z
-    .boolean()
-    .optional()
-    .default(true)
-    .describe(
-      "Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff. The file is still written, but the image bytes are not attached to the agent context."
-    ),
-  downscaler: z
-    .enum(["lanczos3", "box", "bilinear", "nearest"])
-    .optional()
-    .describe(
-      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Ignored on every other platform."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 interface Result {
   /**
    * Set only when the caller asked for geometry the backend could not apply.
@@ -250,21 +211,60 @@ export async function downscalePngInPlace(
   });
 }
 
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+    ),
+  rotation: z
+    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
+    .optional()
+    .describe(
+      "Orientation override for the screenshot (on Chromium it rotates the captured image). On Android the capture already follows the device's rotation. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
+    ),
+  scale: z
+    .number()
+    .min(0.01)
+    .max(1.0)
+    .optional()
+    .describe(
+      "Scale factor. Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>. " +
+        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
+        "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
+    ),
+  includeImageInContext: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      "Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff. The file is still written, but the image bytes are not attached to the agent context."
+    ),
+  downscaler: z
+    .enum(["lanczos3", "box", "bilinear", "nearest"])
+    .optional()
+    .describe(
+      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Ignored on every other platform."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
   return {
     id: "screenshot",
+    description: `Capture a PNG of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app). Returns { image }, the PNG file.
+Use when you need a baseline image before an interaction or the screen state after a delay. Gestures, key presses and app launches already attach a screenshot to their result.
+Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harmonyos> or \`hdc\`</flag:harmonyos>) cannot be reached for this device.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
+    readOnly: true,
     interaction: {
       startedMsg: () => "Capturing screenshot",
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
       failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
     },
-    description: `Capture a PNG of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app). Returns { image }, the PNG file.
-Use when you need a baseline image before an interaction or the screen state after a delay. Gestures, key presses and app launches already attach a screenshot to their result.
-Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harmonyos> or \`hdc\`</flag:harmonyos>) cannot be reached for this device.`,
-    alwaysLoad: true,
-    searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
-    readOnly: true,
-    zodSchema,
     outputHint: "image",
     capability,
     // No eager service: a tvOS udid classifies as iOS by shape, so declaring
