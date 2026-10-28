@@ -34,6 +34,8 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   caption="The same interaction model on a physical Pixel connected over adb"
 />
 
+On a physical Android device, Argent captures the screen only when something reads it: a screenshot, a screen recording or a live preview. Between those, the device encodes no video. A screenshot starts the capture and takes about 150 ms to 200 ms. Taps and swipes do not start it. This needs a simulator-server version with on-demand capture; an older one captures the screen the whole time, as an emulator does.
+
 ### Foldable simulators and emulators
 
 Argent drives these foldable devices closed, half-open and open:

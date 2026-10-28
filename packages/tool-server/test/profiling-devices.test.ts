@@ -78,6 +78,24 @@ describe("profiling-devices", () => {
     expect(send.mock.calls).toEqual([[true], [false]]);
   });
 
+  it("holds the mode for the life of a server registered as always on demand", () => {
+    // A physical Android phone: the mode is sent at registration, a profile
+    // neither adds nor removes it, a lost connection sends it again, and only
+    // the exit releases it.
+    const send = vi.fn();
+    const unregister = registerCaptureOnDemandSender("R5GL52LQ8WL", FIRST, send, true);
+    expect(send.mock.calls).toEqual([[true]]);
+    const run = { profilingActive: true };
+    trackProfilingRun("R5GL52LQ8WL", run);
+    run.profilingActive = false;
+    expect(isProfiling("R5GL52LQ8WL")).toBe(false);
+    expect(send.mock.calls).toEqual([[true]]);
+    captureOnDemandDropped("R5GL52LQ8WL", FIRST);
+    isProfiling("R5GL52LQ8WL");
+    unregister();
+    expect(send.mock.calls).toEqual([[true], [true], [false]]);
+  });
+
   it("ignores the late close of a server that was already replaced", () => {
     // The old process exits only after the new one took over the device.
     const unregisterOld = registerCaptureOnDemandSender("emulator-5554", FIRST, vi.fn());
