@@ -199,6 +199,10 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
           return new Promise(() => {}) as unknown as { stdout: string; stderr: string };
         }
         if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          // Another AVD's emulator: boot-device neither reuses nor waits on it.
+          if ((args[3] ?? "").includes("qemu.avd_name")) {
+            return { stdout: "Other_AVD\n", stderr: "" };
+          }
           return { stdout: "\n", stderr: "" };
         }
         if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
@@ -286,6 +290,10 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
           return new Promise(() => {}) as unknown as { stdout: string; stderr: string };
         }
         if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          // Another AVD's emulator: boot-device neither reuses nor waits on it.
+          if ((args[3] ?? "").includes("qemu.avd_name")) {
+            return { stdout: "Other_AVD\n", stderr: "" };
+          }
           return { stdout: "\n", stderr: "" };
         }
         if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {

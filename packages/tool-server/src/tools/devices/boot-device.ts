@@ -332,7 +332,7 @@ const BOOT_POLL_INTERVALS_MS = {
   serialByAvd: 1_500, // findSerialByAvdName: re-scan when >1 new emulator appeared
   adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
   earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
-  serialGone: 500, // awaitEmulatorsGone: re-scan adb devices for a killed emulator
+  serialGone: 500, // awaitEmulatorsGone, listSettledAndroidDevices: re-scan for a dying emulator
 } as const;
 
 // How long a killed emulator may stay listed by adb before the next spawn.
@@ -521,6 +521,27 @@ async function awaitEmulatorsGone(serials: string[]): Promise<void> {
     if (!serials.some((s) => listed.includes(s))) return;
     await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialGone));
   }
+}
+
+/**
+ * List Android devices once every emulator is either gone or answers with its
+ * AVD name (bounded). An emulator killed outside argent (window closed, crash,
+ * `adb emu kill`) stays listed for a few seconds, as `offline` or as `device`
+ * with getprop failing. It is then neither reused as this AVD nor gone, so its
+ * serial would land in the before-spawn snapshot, and the next spawn, which
+ * takes the freed console port, would register under it and never count as new.
+ */
+async function listSettledAndroidDevices() {
+  const deadline = Date.now() + EMULATOR_GONE_BUDGET_MS;
+  let devices = await listAndroidDevices().catch(() => []);
+  while (
+    devices.some((d) => d.isEmulator && (d.state !== "device" || d.avdName === null)) &&
+    Date.now() < deadline
+  ) {
+    await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialGone));
+    devices = await listAndroidDevices().catch(() => devices);
+  }
+  return devices;
 }
 
 async function bootIos(
@@ -1088,7 +1109,7 @@ async function bootAndroidImpl(params: {
   // down `adb devices` returns [], every already-connected emulator later looks
   // "new", and the tool could hand back an unrelated emulator as "booted".
   await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
-  const existingDevices = await listAndroidDevices().catch(() => []);
+  const existingDevices = await listSettledAndroidDevices();
 
   // Fast path: reuse this AVD when it is already running and ready, instead of
   // spawning a second emulator that collides on AVD locks and fails with a

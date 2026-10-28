@@ -791,6 +791,117 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     }
   );
 
+  // Answers for an emulator that booted fine, for the shell commands the boot
+  // pipeline sends after the serial registers.
+  function healthyShell(shellCmd: string) {
+    if (shellCmd === "getprop ro.boot.qemu.avd_name")
+      return { stdout: "Pixel_7_API_34\n", stderr: "" };
+    if (shellCmd.startsWith("getprop sys.boot_completed")) return { stdout: "1\n", stderr: "" };
+    if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+    if (shellCmd === "pm path android")
+      return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+    if (shellCmd.startsWith("screencap")) return { stdout: "1\n", stderr: "" };
+    return { stdout: "\n", stderr: "" };
+  }
+
+  // A window closed, a crash or `adb emu kill` outside argent: adb keeps listing
+  // the dying emulator for a few seconds while its getprop fails.
+  it.each(["device", "offline"] as const)(
+    "boots under the freed serial when an emulator killed outside argent is still listed as %s",
+    async (dyingState) => {
+      vi.useFakeTimers();
+      try {
+        hasSnapshotMock.mockResolvedValue(true);
+        probeMock.mockResolvedValue({ loadable: true, reason: null });
+        const killedAt = Date.now();
+        let spawned = false;
+        spawnMock.mockImplementation(() => {
+          spawned = true;
+          return fakeChild();
+        });
+        execFileMock.mockImplementation((cmd: string, args: string[]) => {
+          if (cmd === "emulator" && args[0] === "-list-avds")
+            return { stdout: "Pixel_7_API_34\n", stderr: "" };
+          if (cmd === "adb" && args[0] === "version")
+            return { stdout: "Android Debug Bridge\n", stderr: "" };
+          if (cmd === "adb" && args[0] === "devices") {
+            let line = "";
+            if (spawned) line = "emulator-5554\tdevice\n";
+            else if (Date.now() - killedAt < 3_000) line = `emulator-5554\t${dyingState}\n`;
+            return { stdout: `List of devices attached\n${line}`, stderr: "" };
+          }
+          if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+            if (!spawned) return new Error("error: closed");
+            return healthyShell(args[3] ?? "");
+          }
+          return { stdout: "", stderr: "" };
+        });
+
+        const tool = createBootDeviceTool(registry);
+        const settled = tool.execute!({}, { avdName: "Pixel_7_API_34" }).then(
+          (r) => ({ r }),
+          (e: unknown) => ({ e })
+        );
+        // Past the 30 s hot and 60 s cold registration budgets.
+        await vi.advanceTimersByTimeAsync(120_000);
+        const outcome = await settled;
+
+        expect(outcome).toEqual({ r: expect.objectContaining({ serial: "emulator-5554" }) });
+        expect(spawnMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it("waits at most 30 s for an emulator that never answers with its AVD name", async () => {
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(false);
+      const start = Date.now();
+      let spawnedAt = -1;
+      spawnMock.mockImplementation(() => {
+        spawnedAt = Date.now();
+        return fakeChild();
+      });
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "emulator" && args[0] === "-list-avds")
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "version")
+          return { stdout: "Android Debug Bridge\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices") {
+          const spawned = spawnedAt >= 0 ? "emulator-5556\tdevice\n" : "";
+          return {
+            stdout: `List of devices attached\nemulator-5554\tdevice\n${spawned}`,
+            stderr: "",
+          };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
+          return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          // emulator-5554 is wedged: listed, but its shell never answers.
+          if (args[1] === "emulator-5554") return new Error("error: closed");
+          return healthyShell(args[3] ?? "");
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      const tool = createBootDeviceTool(registry);
+      const settled = tool.execute!({}, { avdName: "Pixel_7_API_34" }).then(
+        (r) => ({ r }),
+        (e: unknown) => ({ e })
+      );
+      await vi.advanceTimersByTimeAsync(120_000);
+      const outcome = await settled;
+
+      expect(outcome).toEqual({ r: expect.objectContaining({ serial: "emulator-5556" }) });
+      expect(spawnedAt - start).toBeGreaterThanOrEqual(30_000);
+      expect(spawnedAt - start).toBeLessThan(32_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns the already-running emulator without spawning when the AVD is live and its framebuffer is healthy", async () => {
     // adb devices reports the AVD already attached; getprop answers with the
     // matching AVD name. screencap returns a healthy frame ("1") so the
