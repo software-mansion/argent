@@ -868,6 +868,79 @@ describe("list-devices — external provider shadows", () => {
     }
   });
 
+  it("marks a foldable whose check settles on a later timer, well inside the budget", async () => {
+    /**
+     * A real `simctl` call settles on a later macrotask, not in microtasks, so
+     * the budget has to leave it room. A budget near zero would drop the flag.
+     */
+    vi.mocked(isFoldableSimulator).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 20))
+    );
+
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const claimed = result.devices.find(
+      (device) => "udid" in device && device.udid === `ext:acme-3f2a9c:${CLAIMED_UDID}`
+    );
+
+    expect(claimed).toMatchObject({ external: true, foldable: true });
+  });
+
+  it("runs no foldable check when the provider lends no iOS simulator", async () => {
+    /** A provider may lend only Android devices. None of them is foldable. */
+    fs.writeFileSync(
+      descriptorPath,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["adb"],
+            kind: "emulator",
+            name: "Pixel 8",
+            nativeId: "emulator-5554",
+            platform: "android",
+            state: "Booted",
+          },
+          {
+            capabilities: ["adb"],
+            kind: "device",
+            name: "Pixel 9",
+            nativeId: "R58M123ABCD",
+            platform: "android",
+            state: "Booted",
+          },
+        ],
+        id: "acme-3f2a9c",
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const lent = result.devices.filter((device) => "external" in device);
+    expect(lent.map((device) => ("udid" in device ? device.udid : device.serial))).toEqual(
+      expect.arrayContaining(["ext:acme-3f2a9c:emulator-5554", "ext:acme-3f2a9c:R58M123ABCD"])
+    );
+    expect(lent.some((device) => "foldable" in device)).toBe(false);
+    expect(isFoldableSimulator).not.toHaveBeenCalled();
+  });
+
   it("leaves an unclaimed simulator in the plain listing", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "xcrun" && args[0] === "simctl") {
