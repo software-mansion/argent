@@ -166,8 +166,9 @@ describe("forward-secrets", () => {
     } else {
       await expect(call).rejects.toThrow(
         "forward-secrets sends secret values only over https:// with the certificate checked, or " +
-          `to a loopback address, and ${target} is reached neither over https:// nor at a loopback ` +
-          "address, so the call was not sent (it names APP_PASSWORD)."
+          "to a loopback address, so the call was not sent (it names APP_PASSWORD): " +
+          `${target} is reached neither over https:// nor at a loopback address. Link the ` +
+          "tool-server through an https:// URL, or through an SSH tunnel to a 127.0.0.1 port."
       );
       expect(posted).toHaveLength(0);
       // A call naming no secret this machine holds still goes.
@@ -320,7 +321,8 @@ describe("forward-secrets", () => {
       expect(secretsTransportRefusal(target)).toBe(
         allowed
           ? undefined
-          : `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${target}`
+          : `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${target}. Unset ` +
+              "it, and trust a self-signed certificate through NODE_EXTRA_CA_CERTS instead"
       );
     }
   );
@@ -339,8 +341,8 @@ describe("forward-secrets", () => {
       baseUrl: async () => ({ url: "https://192.0.2.10:3001", token: "t", remote: true }),
     });
     await expect(linked.callTool("keyboard", { text: "{{secret:APP_PASSWORD}}" })).rejects.toThrow(
-      "and NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of " +
-        "https://192.0.2.10:3001, so the call was not sent (it names APP_PASSWORD)."
+      "so the call was not sent (it names APP_PASSWORD): NODE_TLS_REJECT_UNAUTHORIZED=0 turns " +
+        "off the certificate check of https://192.0.2.10:3001. Unset it"
     );
     expect(fetchImpl.mock.calls.map(([to]) => to)).toEqual(["https://192.0.2.10:3001/tools"]);
   });

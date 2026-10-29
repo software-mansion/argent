@@ -149,9 +149,9 @@ describe("argent secrets", () => {
     [
       true,
       "http://192.0.2.10:3001",
-      "refuses a call that names a secret of this machine, because http://192.0.2.10:3001 is reached neither over https://",
+      "refuses a call that names a secret of this machine: http://192.0.2.10:3001 is reached neither over https://",
     ],
-    [true, "127.0.0.1:3001", "because 127.0.0.1:3001 is not a URL"],
+    [true, "127.0.0.1:3001", "of this machine: 127.0.0.1:3001 is not a URL."],
   ])("with forward-secrets %s and a link to %s, says what a call sends", async (on, url, note) => {
     if (on)
       write(path.join(projectDir, ".argent", "flags.json"), '{"flags":{"forward-secrets":true}}');
@@ -171,7 +171,7 @@ describe("argent secrets", () => {
       vi.unstubAllEnvs();
     }
     expect(output()).toContain(
-      "because NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of https://192.0.2.10:3001"
+      "of this machine: NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of https://192.0.2.10:3001. Unset it"
     );
   });
 

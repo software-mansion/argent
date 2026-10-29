@@ -406,9 +406,9 @@ async function forwardedSecrets(args: unknown): Promise<Map<string, string> | un
 }
 
 /**
- * Why `forward-secrets` may not send values to `url`, else undefined: they
- * cross the wire as plain header text, so only over verified TLS or to this
- * machine.
+ * Why `forward-secrets` may not send values to `url`, and how to fix it; else
+ * undefined. The values cross the wire as plain header text, so only over
+ * verified TLS or to this machine.
  */
 export function secretsTransportRefusal(url: string): string | undefined {
   if (!URL.canParse(url)) return `${url} is not a URL`;
@@ -416,11 +416,17 @@ export function secretsTransportRefusal(url: string): string | undefined {
   const host = hostname.replace(/^\[|\]$/g, "");
   if (["127.0.0.1", "localhost", "::1"].includes(host)) return undefined;
   if (protocol !== "https:") {
-    return `${url} is reached neither over https:// nor at a loopback address`;
+    return (
+      `${url} is reached neither over https:// nor at a loopback address. Link the tool-server ` +
+      `through an https:// URL, or through an SSH tunnel to a 127.0.0.1 port`
+    );
   }
   // The one value Node reads as "skip certificate checks", fetch included.
   if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
-    return `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${url}`;
+    return (
+      `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${url}. Unset it, and ` +
+      `trust a self-signed certificate through NODE_EXTRA_CA_CERTS instead`
+    );
   }
   return undefined;
 }
@@ -568,9 +574,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     if (refusal !== undefined) {
       throw new Error(
         `forward-secrets sends secret values only over https:// with the certificate checked, or to ` +
-          `a loopback address, and ${refusal}, so the call was not sent (it names ` +
-          `${[...clientSecrets!.keys()].join(", ")}). Link the tool-server through an https:// URL, ` +
-          `or through an SSH tunnel to a 127.0.0.1 port.`
+          `a loopback address, so the call was not sent (it names ` +
+          `${[...clientSecrets!.keys()].join(", ")}): ${refusal}.`
       );
     }
     const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;

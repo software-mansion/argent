@@ -124,9 +124,7 @@ export async function linkedSecretsNote(): Promise<string | undefined> {
       `A call sends it the value \`argent secrets\` lists for each placeholder the call names; ` +
       `that machine's own sources resolve the rest.`;
   } else {
-    note =
-      `forward-secrets refuses a call that names a secret of this machine, because ${refusal}. ` +
-      `Link it through an https:// URL or an SSH tunnel to a 127.0.0.1 port.`;
+    note = `forward-secrets refuses a call that names a secret of this machine: ${refusal}.`;
   }
   return `Note: a remote tool-server is linked (${routed.url}). ${note}`;
 }
