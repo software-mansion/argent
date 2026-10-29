@@ -105,7 +105,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // telemetry. Unrecognized names collapse to `other`; the raw name is never sent.
   function aiClientHeaders(): Record<string, string> {
     const rawName = server.getClientVersion()?.name?.trim() || undefined;
-    const aiClient = canonicalizeAiClient(rawName);
+    const aiClient = canonicalizeAiClient(rawName, process.env);
     if (aiClient) return { "X-Argent-AI-Client": aiClient };
     if (rawName) return { "X-Argent-AI-Client": "other" };
     return {};
