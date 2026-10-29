@@ -44,10 +44,7 @@ export class Registry {
   private tools = new Map<string, ToolRecord>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
-  /**
-   * When a tool invocation last resolved each service, in epoch ms. Resolves
-   * outside an invocation (background watchers, dependency chains) are not use.
-   */
+  /** Epoch ms a tool call last used each service. Background and dependency resolves don't count. */
   private lastUsedAt = new Map<URN, number>();
   /**
    * Injected so the registry needs no dependency on the flag store; the
@@ -199,7 +196,7 @@ export class Registry {
             return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
           });
         } finally {
-          // Restamped at the end too, so a long call does not read as idle for its own duration.
+          // Also at the end, so a long call does not read as idle while it runs.
           const now = Date.now();
           for (const urn of resolved) this.lastUsedAt.set(urn, now);
         }

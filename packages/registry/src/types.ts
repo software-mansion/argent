@@ -82,11 +82,10 @@ export interface ServiceNode<T = unknown> {
   dependents: Set<string>;
 }
 
-/** One service's entry in `Registry.getSnapshot()`. */
 export interface ServiceSnapshot {
   state: ServiceState;
   dependents: string[];
-  /** Epoch ms a tool invocation last resolved this service; absent if none ever has. */
+  /** Epoch ms a tool call last used this service; absent if none has. */
   lastUsedAt?: number;
 }
 

@@ -114,10 +114,6 @@ type ListedDevice =
   | IosRemoteDevice
   | VegaDevice;
 
-/**
- * Present only on a device this tool-server holds a live, tool-used service
- * for. Informational: nothing in argent refuses a device because of it.
- */
 type DeviceUsage = { inUse?: true; idleSeconds?: number };
 
 type ListDevicesResult = {
@@ -347,7 +343,7 @@ TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
 A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'. Use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
-An entry with 'inUse: true' holds services a tool opened on this argent tool-server, which every agent using this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last acted on it, and a large value suggests a forgotten session. It is informational only and blind to other argent installs, other programs, and devices driven purely through CLI shell-outs (Vega until a debugger or network tool attaches).
+'inUse: true' marks a device with a live session on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last used it, and a large value suggests a forgotten session. Informational only; blind to other argent installs, other programs, and Vega until a debugger or network tool attaches.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
     alwaysLoad: true,
     searchHint:

@@ -198,10 +198,8 @@ export function unnameableSessionUrns(urns: readonly string[]): string[] {
 }
 
 /**
- * When a tool last acted on each of `deviceIds` through a service that is still
- * live, keyed in the caller's spelling. A device holding no such service is
- * absent, including one whose only live service is the native-devtools attach
- * the simulator watcher makes on its own.
+ * When a tool last used each of `deviceIds` through a still-live service, keyed
+ * in the caller's spelling. The simulator watcher's own attach is not use.
  */
 export function lastDeviceUse(
   services: ReadonlyMap<string, ServiceSnapshot>,
