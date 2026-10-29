@@ -302,9 +302,8 @@ function externalShadowIds(external: readonly ExternalDevice[]): Set<string> {
 
 /** The id interaction tools take for this entry; a stopped VVD has none. */
 function listedDeviceId(d: ListedDevice): string | null {
-  if ("udid" in d && d.udid) return d.udid;
-  if ("serial" in d) return d.serial ?? null;
-  return "id" in d ? d.id : null;
+  if ("id" in d) return d.id;
+  return "udid" in d ? d.udid : d.serial;
 }
 
 function withUsage(
@@ -318,7 +317,7 @@ function withUsage(
     const id = listedDeviceId(d);
     const usedAt = id === null ? undefined : lastUse.get(id);
     if (usedAt === undefined) return d;
-    return { ...d, inUse: true, idleSeconds: Math.max(0, Math.floor((now - usedAt) / 1000)) };
+    return { ...d, inUse: true, idleSeconds: Math.floor((now - usedAt) / 1000) };
   });
 }
 

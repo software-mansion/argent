@@ -187,15 +187,22 @@ export class Registry {
       let lazilyResolved = new Set<URN>();
 
       const runOnce = async (): Promise<TResult> => {
-        lazilyResolved = new Set<URN>();
+        const resolved = new Set<URN>();
+        lazilyResolved = resolved;
 
-        return resolvedDuringInvocation.run(lazilyResolved, async () => {
-          const resolvedServices: Record<string, unknown> = {};
-          for (const { alias, urn, options: resolveOptions } of refs) {
-            resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-          }
-          return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
-        });
+        try {
+          return await resolvedDuringInvocation.run(resolved, async () => {
+            const resolvedServices: Record<string, unknown> = {};
+            for (const { alias, urn, options: resolveOptions } of refs) {
+              resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+            }
+            return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+          });
+        } finally {
+          // Restamped at the end too, so a long call does not read as idle for its own duration.
+          const now = Date.now();
+          for (const urn of resolved) this.lastUsedAt.set(urn, now);
+        }
       };
 
       let result: TResult;

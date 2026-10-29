@@ -44,6 +44,23 @@ describe("Registry -- lastUsedAt", () => {
     expect(lastUsedAt(registry, "Sim:dev-1")).toBe(1_000_000);
   });
 
+  it("restamps a service when the call that used it finishes, even when the call fails", async () => {
+    const registry = new Registry();
+    registry.registerBlueprint(createMockBlueprint("Sim"));
+    registry.registerTool({
+      id: "await-ui-element",
+      services: () => ({ sim: "Sim:dev-1" }),
+      execute: async () => {
+        vi.setSystemTime(1_060_000);
+        throw new Error("element never appeared");
+      },
+    });
+
+    await expect(registry.invokeTool("await-ui-element")).rejects.toThrow("element never appeared");
+
+    expect(lastUsedAt(registry, "Sim:dev-1")).toBe(1_060_000);
+  });
+
   it("does not stamp a resolve made outside any tool call, nor a dependency", async () => {
     const registry = new Registry();
     registry.registerBlueprint(createMockBlueprint("Devtools"));
