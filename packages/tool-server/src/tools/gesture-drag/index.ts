@@ -211,14 +211,23 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
     if (device.platform === "macos") {
       const app = requireMacosApp(services, "gesture-drag", device);
       const longPress = params.fromX === params.toX && params.fromY === params.toY;
+      let at: Point = { x: params.fromX, y: params.fromY };
       await runPointerDrag(
-        { x: params.fromX, y: params.fromY },
+        at,
         { x: params.toX, y: params.toY },
         { ...opts, durationMs: params.durationMs ?? (longPress ? MACOS_LONG_PRESS_MS : undefined) },
         {
           down: (p) => macosMouse(app, { type: "down", ...p, clickCount: 1 }),
-          move: (p) => macosMouse(app, { type: "move", ...p }),
-          up: (p) => macosMouse(app, { type: "up", ...p, clickCount: 1 }),
+          move: async (p) => {
+            await macosMouse(app, { type: "move", ...p });
+            at = p;
+          },
+          // Web pages and custom views follow the moves, not the release: the last move is at
+          // the release point.
+          up: async (p) => {
+            if (p.x !== at.x || p.y !== at.y) await macosMouse(app, { type: "move", ...p });
+            await macosMouse(app, { type: "up", ...p, clickCount: 1 });
+          },
         }
       );
       await sleep(MACOS_CLICK_SETTLE_MS);

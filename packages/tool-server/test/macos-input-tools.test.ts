@@ -159,18 +159,18 @@ describe("gesture-tap on a Mac app", () => {
 describe("gesture-drag on a Mac app", () => {
   const drag = { fromX: 0.1, fromY: 0.5, toX: 0.9, toY: 0.5 };
 
-  it("presses at the start, moves with the button held, releases at the end, then waits", async () => {
+  it("presses at the start, moves with the button held to the end, releases there, then waits", async () => {
     vi.useFakeTimers();
     const { invoke, calls, urns } = harness();
     let done = false;
     const run = invoke("gesture-drag", { ...drag, durationMs: 64 }).then(() => (done = true));
     await vi.advanceTimersByTimeAsync(64);
-    // durationMs 64 -> 4 steps -> 3 moves between the press and the release.
-    expect(calls.map((c) => c.params.type)).toEqual(["down", "move", "move", "move", "up"]);
+    // durationMs 64 -> 4 steps -> 4 moves between the press and the release, the last at the end.
+    expect(calls.map((c) => c.params.type)).toEqual(["down", "move", "move", "move", "move", "up"]);
     expect(calls[0]!.params).toMatchObject({ x: 0.1, y: 0.5, clickCount: 1 });
     expect(calls.at(-1)!.params).toMatchObject({ x: 0.9, y: 0.5, clickCount: 1 });
     const xs = calls.slice(1, -1).map((c) => c.params.x as number);
-    [0.3, 0.5, 0.7].forEach((x, i) => expect(xs[i]).toBeCloseTo(x));
+    [0.3, 0.5, 0.7, 0.9].forEach((x, i) => expect(xs[i]).toBeCloseTo(x));
     expect(done).toBe(false);
     await vi.advanceTimersByTimeAsync(MACOS_CLICK_SETTLE_MS);
     await run;
@@ -195,7 +195,7 @@ describe("gesture-drag on a Mac app", () => {
     await vi.advanceTimersByTimeAsync(32 + MACOS_CLICK_SETTLE_MS);
     await run;
     const moves = calls.filter((c) => c.params.type === "move").map((c) => c.params.x as number);
-    expect(moves).toHaveLength(7);
+    expect(moves).toHaveLength(8);
     // Each step covers less distance than the one before it.
     const deltas = moves.map((x, i) => x - (i === 0 ? 0.1 : moves[i - 1]!));
     for (let i = 1; i < deltas.length; i++) expect(deltas[i]!).toBeLessThan(deltas[i - 1]!);
