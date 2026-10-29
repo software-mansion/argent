@@ -7,6 +7,7 @@ import type { NativeProfilerSessionApi } from "../../../../blueprints/native-pro
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
+import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import {
   listenForDarwinNotification,
@@ -563,6 +564,8 @@ export async function startNativeProfilerIos(
       throw mallocNonDeviceStrategyError(captureDecision.reason);
     }
     const info = resolveAppForLaunch(params.device_id, params.app_process);
+    // The relaunch below must not beat injection.
+    await firstSimulatorPoll();
     appProcess = info.CFBundleExecutable;
     launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
     // Terminate any running instance so the env var is set from process start

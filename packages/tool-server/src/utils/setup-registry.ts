@@ -26,7 +26,7 @@ import { createRestartAppTool } from "../tools/restart-app";
 import { terminateAppTool } from "../tools/terminate-app";
 import { reinstallAppTool } from "../tools/reinstall-app";
 import { settingsPermissionsTool } from "../tools/settings-permissions";
-import { createOpenUrlTool } from "../tools/open-url";
+import { openUrlTool } from "../tools/open-url";
 import { createScreenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
 import { gestureSwipeTool } from "../tools/gesture-swipe";
@@ -136,7 +136,7 @@ export function createRegistry(): Registry {
   registry.registerTool(terminateAppTool);
   registry.registerTool(reinstallAppTool);
   registry.registerTool(settingsPermissionsTool);
-  registry.registerTool(createOpenUrlTool(registry));
+  registry.registerTool(openUrlTool);
   registry.registerTool(createScreenshotTool(registry));
   registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));

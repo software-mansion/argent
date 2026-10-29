@@ -19,6 +19,24 @@ const execFileAsync = promisify(execFile);
 
 const POLL_INTERVAL_MS = 10_000;
 
+/**
+ * Cap on {@link firstSimulatorPoll}, from startup. A cold CoreSimulatorService
+ * can hold the first poll for about a minute, and then no simulator is booted.
+ */
+const FIRST_POLL_WAIT_MS = 15_000;
+
+let firstPollSettled: Promise<void> = Promise.resolve();
+
+/**
+ * Settles once the first poll has attempted injection for every simulator booted
+ * at startup, or {@link FIRST_POLL_WAIT_MS} after startup. A tool that can launch
+ * an app without arming injection itself waits on this, so the app is not
+ * started uninjected. Settled when no watcher runs.
+ */
+export function firstSimulatorPoll(): Promise<void> {
+  return firstPollSettled;
+}
+
 async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string>> {
   const { stdout } = await execFileAsync("xcrun", [
     ...simctlPrefix(deviceSet),
@@ -228,6 +246,10 @@ export function startSimulatorWatcher(registry: Registry): {
 
   // Settles once ensureEnv has been attempted for every simulator booted at start.
   const ready = poll(true).catch(() => {});
+  firstPollSettled = Promise.race([
+    ready,
+    new Promise<void>((resolve) => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
+  ]);
 
   const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);
 

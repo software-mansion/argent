@@ -333,9 +333,9 @@ describe("boot-device — iOS path", () => {
   });
 
   it("still runs the fallback ensureAutomationEnabled when the state probe fails", async () => {
-    // The scan lists nothing on an xcrun failure / unknown udid; boot must
-    // not block on the probe — fall through to ensureAutomationEnabled which
-    // writes prefs best-effort.
+    // The scan lists nothing on an unknown udid or an xcrun failure other than
+    // a timeout; boot must not block on the probe — fall through to
+    // ensureAutomationEnabled which writes prefs best-effort.
     scannedSimulatorsMock.mockResolvedValueOnce([]);
 
     const resolveService = vi.fn(async () => ({
