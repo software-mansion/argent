@@ -38,6 +38,7 @@ import {
   clearAutomationEnabledOrWarn,
   setAccessibilityPrefsPreBoot,
 } from "../src/utils/ax-prefs";
+import { localIosHost } from "../src/utils/ios-host";
 
 function defaultsError(stderr: string): Error & { stderr: string } {
   return Object.assign(new Error("Command failed"), { stderr });
@@ -94,6 +95,12 @@ describe("AutomationEnabled, which leaves Full Keyboard Access unable to move fo
     nextError = defaultsError("Process spawn via launchd failed because device is not booted.");
 
     await expect(clearAutomationEnabled("UDID-3")).rejects.toThrow("Command failed");
+  });
+
+  it("localIosHost.bootstrapAx rejects when clearing AutomationEnabled fails", async () => {
+    nextError = defaultsError("Process spawn via launchd failed because device is not booted.");
+
+    await expect(localIosHost.bootstrapAx("UDID-8")).rejects.toThrow("Command failed");
   });
 
   it("clearAutomationEnabledOrWarn logs a failure instead of throwing", async () => {
