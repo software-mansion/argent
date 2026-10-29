@@ -70,7 +70,7 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
   {
     name: "forward-secrets",
     description:
-      "Over `argent link` or ARGENT_TOOLS_URL, resolve each `{{secret:NAME}}` a call names on this machine and send the value with the call, so a remote tool-server can type a secret it does not hold. The linked tool-server then receives every secret of this machine that a call names, so link only one you trust with all of them. Values go only over https:// or to a loopback address. Off by default.",
+      "Over `argent link` or ARGENT_TOOLS_URL, resolve each `{{secret:NAME}}` a call names on this machine and send the value with the call, so a remote tool-server can type a secret it does not hold. The linked tool-server then receives every secret of this machine that a call names, so link only one you trust with all of them. Values go only over https:// with the certificate checked, or to a loopback address. Off by default.",
   },
   {
     name: "video-watermark",

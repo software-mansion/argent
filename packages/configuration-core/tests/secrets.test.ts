@@ -13,6 +13,7 @@ import {
   secretNames,
   describeSecretSources,
   secretPlacementAdvice,
+  clientSecretPlacementAdvice,
   type SecretSourceOptions,
 } from "../src/secrets.js";
 
@@ -220,6 +221,17 @@ describe("diagnostics", () => {
     expect(advice).toContain(
       "the user can instead define it on the client's machine and run `argent enable forward-secrets` there; `argent secrets` there lists the sources the client reads"
     );
+  });
+
+  it("advises the client's machine for a secret a forwarding client lacks", () => {
+    const advice = clientSecretPlacementAdvice("APP_PASSWORD");
+    expect(advice).toContain(
+      "add `APP_PASSWORD=…` to ~/.argent/secrets.env on the client's machine (or to " +
+        "`.argent/secrets.env` in the project the client runs in), or to export " +
+        "ARGENT_SECRET_APP_PASSWORD before the client starts"
+    );
+    expect(advice).toContain("never ask the user for the secret value itself");
+    expect(advice).not.toContain(globalSecrets());
   });
 });
 

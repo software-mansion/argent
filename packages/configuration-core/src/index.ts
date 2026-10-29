@@ -38,6 +38,7 @@ export {
   secretNames,
   describeSecretSources,
   secretPlacementAdvice,
+  clientSecretPlacementAdvice,
   SECRET_ENV_PREFIX,
   type SecretSource,
   type SecretSourceOptions,

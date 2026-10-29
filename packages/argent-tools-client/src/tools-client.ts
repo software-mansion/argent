@@ -117,6 +117,12 @@ export interface CreateToolsClientOptions {
    * into a JSON record, since its stderr carries one JSON object per line.
    */
   onDiagnostic?: (message: string) => void;
+  /**
+   * Headers added to GET /tools and POST /tools/:name. Set here rather than in
+   * `fetchImpl`, so they count toward the header limit a call that forwards
+   * secrets is checked against.
+   */
+  headers?: () => Record<string, string>;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
@@ -339,7 +345,8 @@ function carriesUpload(args: unknown): boolean {
 /**
  * With `forward-secrets` on, the value on this machine of each secret a
  * placeholder in `args` names, the e2e tests a call sends included; undefined
- * when there is none. A name this machine lacks is left to the tool-server.
+ * when the call names none. A name this machine lacks is left to the
+ * tool-server, so the map can be empty.
  */
 async function forwardedSecrets(args: unknown): Promise<Map<string, string> | undefined> {
   if (!isFeatureEnabled("forward-secrets")) return undefined;
@@ -395,18 +402,27 @@ async function forwardedSecrets(args: unknown): Promise<Map<string, string> | un
     const { name, value } = lookupPlaceholderSecret(rawName, sources);
     if (value !== undefined) values.set(name, value);
   }
-  return values.size > 0 ? values : undefined;
+  return values;
 }
 
 /**
- * Whether `forward-secrets` may send values to `url`: they cross the wire as
- * plain header text, so only over TLS or to this machine.
+ * Why `forward-secrets` may not send values to `url`, else undefined: they
+ * cross the wire as plain header text, so only over verified TLS or to this
+ * machine.
  */
-export function forwardsSecretsTo(url: string): boolean {
-  if (!URL.canParse(url)) return false;
+export function secretsTransportRefusal(url: string): string | undefined {
+  if (!URL.canParse(url)) return `${url} is not a URL`;
   const { protocol, hostname } = new URL(url);
   const host = hostname.replace(/^\[|\]$/g, "");
-  return protocol === "https:" || ["127.0.0.1", "localhost", "::1"].includes(host);
+  if (["127.0.0.1", "localhost", "::1"].includes(host)) return undefined;
+  if (protocol !== "https:") {
+    return `${url} is reached neither over https:// nor at a loopback address`;
+  }
+  // The one value Node reads as "skip certificate checks", fetch included.
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    return `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${url}`;
+  }
+  return undefined;
 }
 
 /** Upper bound of the head bytes fetch adds to a call's own headers and URL. */
@@ -450,7 +466,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const { url, token } = await baseUrl();
     const res = await doFetch(
       `${url}/tools`,
-      { headers: authHeaders(token), signal: opts?.signal },
+      { headers: { ...options.headers?.(), ...authHeaders(token) }, signal: opts?.signal },
       { longRunning: false, carriesUpload: false }
     );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
@@ -543,18 +559,23 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // progress lines keep the connection busy through a proxy's idle timeout.
     const stream = opts?.onProgress !== undefined || carriesMembers(finalArgs);
     const sentOnce = carriesUpload(finalArgs);
-    const clientSecrets = remote ? await forwardedSecrets(finalArgs) : undefined;
-    if (clientSecrets && !forwardsSecretsTo(url)) {
+    const forwarded = remote ? await forwardedSecrets(finalArgs) : undefined;
+    // Sent even when empty: an unknown-secret error can then say the client
+    // was asked and had no value.
+    const encodedSecrets = forwarded ? encodeClientSecrets(forwarded) : undefined;
+    const clientSecrets = forwarded?.size ? forwarded : undefined;
+    const refusal = clientSecrets ? secretsTransportRefusal(url) : undefined;
+    if (refusal !== undefined) {
       throw new Error(
-        `forward-secrets sends secret values only over https:// or to a loopback address, and ${url} ` +
-          `is neither, so the call was not sent (it names ` +
-          `${[...clientSecrets.keys()].join(", ")}). Link the tool-server through an https:// URL, ` +
+        `forward-secrets sends secret values only over https:// with the certificate checked, or to ` +
+          `a loopback address, and ${refusal}, so the call was not sent (it names ` +
+          `${[...clientSecrets!.keys()].join(", ")}). Link the tool-server through an https:// URL, ` +
           `or through an SSH tunnel to a 127.0.0.1 port.`
       );
     }
-    const encodedSecrets = clientSecrets ? encodeClientSecrets(clientSecrets) : undefined;
     const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;
     const headers: Record<string, string> = {
+      ...options.headers?.(),
       "Content-Type": "application/json",
       // Tells the tool-server the call came over a link, a link to
       // 127.0.0.1 included, which nothing else in the request shows.
@@ -568,7 +589,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
       ...authHeaders(token),
     };
-    if (encodedSecrets !== undefined) {
+    if (clientSecrets !== undefined && encodedSecrets !== undefined) {
       // Node's limit counts the whole head, fetch's own headers included. Past
       // it the tool-server refuses the call, and with a large body the socket
       // closes mid-send instead of answering 431.

@@ -60,6 +60,16 @@ describe(`HTTP ${CLIENT_SECRETS_HEADER} header`, () => {
     expect(options?.clientSecrets).toEqual(new Map([["APP_PASSWORD", "hunter2\nline two"]]));
   });
 
+  it("hands an empty header to the tool as empty clientSecrets", async () => {
+    const registry = stubRegistry();
+    handle = createHttpApp(registry);
+    await supertest(handle.app)
+      .post("/tools/test-tool")
+      .set(CLIENT_SECRETS_HEADER, "e30=")
+      .send({});
+    expect(vi.mocked(registry.invokeTool).mock.calls[0]![2]?.clientSecrets).toEqual(new Map());
+  });
+
   it("passes no clientSecrets without the header", async () => {
     const registry = stubRegistry();
     handle = createHttpApp(registry);

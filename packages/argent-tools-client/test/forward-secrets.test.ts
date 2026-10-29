@@ -25,7 +25,7 @@ afterAll(() => {
 
 let server: Server;
 let url: string;
-let sent: Array<{ url: string; secrets: string | undefined }>;
+let sent: Array<{ url: string; secrets: string | undefined; pad?: string }>;
 let project: string;
 
 function readBody(req: IncomingMessage): Promise<void> {
@@ -70,7 +70,11 @@ beforeEach(async () => {
     if (req.method === "POST" && req.url === "/upload") return json({ uploadId: "u-1" });
     if (req.method === "POST" && req.url?.startsWith("/tools/")) {
       const header = req.headers["x-argent-client-secrets"];
-      sent.push({ url: req.url, secrets: Array.isArray(header) ? header[0] : header });
+      sent.push({
+        url: req.url,
+        secrets: Array.isArray(header) ? header[0] : header,
+        pad: req.headers["x-pad"] as string | undefined,
+      });
       if (req.headers.accept?.includes("application/x-ndjson")) {
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
         res.end(`${JSON.stringify({ event: "result", data: { ok: true } })}\n`);
@@ -115,17 +119,22 @@ describe("forward-secrets", () => {
     expect(lastSecrets()).toEqual({ APP_PASSWORD: "hunter2" });
   });
 
-  it("sends nothing when the flag is off, the call is local, or the name is not here", async () => {
+  it("sends nothing when the flag is off, the call is local, or names no secret", async () => {
     await client(false).callTool("keyboard", { text: "{{secret:APP_PASSWORD}}" });
     expect(lastSecrets()).toBeUndefined();
 
-    await client().callTool("keyboard", { text: "{{secret:NOT_HERE}}" });
+    await client().callTool("keyboard", { text: "plain" });
     expect(lastSecrets()).toBeUndefined();
 
     writeFileSync(join(project, ".argent", "flags.json"), '{"flags":{}}');
     await client().callTool("keyboard", { text: "{{secret:APP_PASSWORD}}" });
     expect(lastSecrets()).toBeUndefined();
     expect(sent).toHaveLength(3);
+  });
+
+  it("sends an empty header for a call naming only secrets this machine lacks", async () => {
+    await client().callTool("keyboard", { text: "{{secret:NOT_HERE}}" });
+    expect(sent.at(-1)?.secrets).toBe("e30=");
   });
 
   it.each([
@@ -156,13 +165,15 @@ describe("forward-secrets", () => {
       expect(posted[0]?.["x-argent-client-secrets"]).toBeDefined();
     } else {
       await expect(call).rejects.toThrow(
-        `forward-secrets sends secret values only over https:// or to a loopback address, and ${target} ` +
-          "is neither, so the call was not sent (it names APP_PASSWORD)."
+        "forward-secrets sends secret values only over https:// with the certificate checked, or " +
+          `to a loopback address, and ${target} is reached neither over https:// nor at a loopback ` +
+          "address, so the call was not sent (it names APP_PASSWORD)."
       );
       expect(posted).toHaveLength(0);
       // A call naming no secret this machine holds still goes.
       await linked.callTool("keyboard", { text: "{{secret:NOT_HERE}}" });
       expect(posted).toHaveLength(1);
+      expect(posted[0]?.["x-argent-client-secrets"]).toBe("e30=");
     }
   });
 
@@ -292,8 +303,68 @@ describe("forward-secrets", () => {
   });
 
   it("does not forward to a URL that does not parse", async () => {
-    const { forwardsSecretsTo } = await import("../src/tools-client.js");
-    expect(forwardsSecretsTo("127.0.0.1:3001")).toBe(false);
+    const { secretsTransportRefusal } = await import("../src/tools-client.js");
+    expect(secretsTransportRefusal("127.0.0.1:3001")).toBe("127.0.0.1:3001 is not a URL");
+  });
+
+  it.each([
+    ["0", "https://192.0.2.10:3001", false],
+    ["false", "https://192.0.2.10:3001", true],
+    ["1", "https://192.0.2.10:3001", true],
+    ["0", "http://127.0.0.1:3001", true],
+  ])(
+    "with NODE_TLS_REJECT_UNAUTHORIZED=%s, forwards to %s: %s",
+    async (setting, target, allowed) => {
+      vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", setting);
+      const { secretsTransportRefusal } = await import("../src/tools-client.js");
+      expect(secretsTransportRefusal(target)).toBe(
+        allowed
+          ? undefined
+          : `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${target}`
+      );
+    }
+  );
+
+  it("refuses a call over https whose certificate is not checked", async () => {
+    vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+    const fetchImpl = vi.fn(async (to: string) =>
+      Response.json(
+        to.endsWith("/tools")
+          ? { tools: [{ name: "keyboard", description: "", inputSchema: {} }] }
+          : { data: {} }
+      )
+    );
+    const linked = createToolsClient({
+      fetchImpl,
+      baseUrl: async () => ({ url: "https://192.0.2.10:3001", token: "t", remote: true }),
+    });
+    await expect(linked.callTool("keyboard", { text: "{{secret:APP_PASSWORD}}" })).rejects.toThrow(
+      "and NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of " +
+        "https://192.0.2.10:3001, so the call was not sent (it names APP_PASSWORD)."
+    );
+    expect(fetchImpl.mock.calls.map(([to]) => to)).toEqual(["https://192.0.2.10:3001/tools"]);
+  });
+
+  it("sends the caller's headers and counts them against Node's header limit", async () => {
+    const pad = { "X-Pad": "p".repeat(200) };
+    const padded = () =>
+      createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: true }),
+        headers: () => pad,
+      });
+
+    await padded().callTool("keyboard", { text: "plain" });
+    expect(sent.map((call) => call.pad)).toEqual([pad["X-Pad"]]);
+
+    // The largest secret that fits without the caller's headers.
+    writeFileSync(join(project, ".argent", "secrets.env"), `BIG=${"s".repeat(11_963)}\n`);
+    await client().callTool("keyboard", { text: "{{secret:BIG}}" });
+    expect(sent).toHaveLength(2);
+
+    await expect(padded().callTool("keyboard", { text: "{{secret:BIG}}" })).rejects.toThrow(
+      "takes the request headers past the 16384 bytes a tool-server accepts, so the call was not sent."
+    );
+    expect(sent).toHaveLength(2);
   });
 
   it("reads the names in a flow file and in a fragment sent through POST /upload", async () => {

@@ -1,6 +1,7 @@
 import { FAILURE_CODES } from "@argent/registry";
 import { InvalidToolInputError } from "./capability";
 import {
+  clientSecretPlacementAdvice,
   clientSecretSource,
   describeSecretSources,
   lookupPlaceholderSecret,
@@ -65,14 +66,19 @@ export function resolveSecretPlaceholders(
     const { name, value } = lookupPlaceholderSecret(rawName, sources);
     if (value === undefined) {
       const names = secretNames(sources);
+      // Only a client that forwards sends `clientSecrets`, an empty map included.
       const where = options.clientSecrets
-        ? "neither the argent client nor any source on the machine running the tool-server defines"
-        : "no source on the machine running the tool-server defines";
+        ? `the required secret ${name} was not provided: the argent client forwards its ` +
+          `secrets to this tool-server and has no value for it, and no source on the machine ` +
+          `running the tool-server defines it either`
+        : `no source on the machine running the tool-server defines ${name}`;
       throw new InvalidToolInputError(
-        `Unknown secret "${rawName}" — ${where} ` +
-          `${name}. Available secrets: ${names.length ? names.join(", ") : "(none)"}.\n` +
+        `Unknown secret "${rawName}" — ${where}. ` +
+          `Available secrets: ${names.length ? names.join(", ") : "(none)"}.\n` +
           `Sources consulted, first match wins:\n${describeSecretSources(sources)}\n` +
-          secretPlacementAdvice(name, options),
+          (options.clientSecrets
+            ? clientSecretPlacementAdvice(name)
+            : secretPlacementAdvice(name, options)),
         {
           error_code: FAILURE_CODES.SECRET_PLACEHOLDER_UNKNOWN,
           failure_stage: "secret_placeholder_resolution",

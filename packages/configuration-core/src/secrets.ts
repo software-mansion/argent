@@ -313,3 +313,16 @@ export function secretPlacementAdvice(name: string, options: SecretSourceOptions
     `client reads, which this list leaves out.`
   );
 }
+
+/**
+ * Where to define a secret that a client with `forward-secrets` on sent no
+ * value for: on that client's machine, whose paths this host cannot know.
+ */
+export function clientSecretPlacementAdvice(name: string): string {
+  return (
+    `To make it available, ask the user to add \`${name}=…\` to ~/.argent/${SECRETS_FILE_NAME} on the ` +
+    `client's machine (or to \`.argent/${SECRETS_FILE_NAME}\` in the project the client runs in), or ` +
+    `to export ${SECRET_ENV_PREFIX}${name} before the client starts; \`argent secrets\` there lists ` +
+    `the sources the client reads — never ask the user for the secret value itself.`
+  );
+}

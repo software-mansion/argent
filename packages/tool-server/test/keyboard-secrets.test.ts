@@ -213,13 +213,35 @@ describe("secrets the argent client sent", () => {
       caught = err as Error;
     }
     expect(caught!.message).toContain(
-      "neither the argent client nor any source on the machine running the tool-server defines NOPE"
+      'Unknown secret "NOPE" — the required secret NOPE was not provided: the argent client ' +
+        "forwards its secrets to this tool-server and has no value for it, and no source on the " +
+        "machine running the tool-server defines it either."
     );
     expect(caught!.message).toContain(
       "1. secrets the argent client sent with this call — 1 secret"
     );
     expect(caught!.message).toContain("Available secrets: APP_PASSWORD.");
     expect(caught!.message).not.toContain("from-client");
+  });
+
+  it("say a name was not provided when the client sent none, and where to define it", () => {
+    let caught: Error | undefined;
+    try {
+      resolveSecretPlaceholders("{{secret:NOPE}}", {
+        ...opts({ PATH: "/bin" }),
+        clientSecrets: new Map(),
+      });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught!.message).toContain("the required secret NOPE was not provided");
+    expect(caught!.message).toContain(
+      "1. secrets the argent client sent with this call — 0 secrets"
+    );
+    expect(caught!.message).toContain(
+      "ask the user to add `NOPE=…` to ~/.argent/secrets.env on the client's machine"
+    );
+    expect(caught!.message).not.toContain("in the tool-server's environment");
   });
 
   it("reach keyboard and paste through ctx.clientSecrets", async () => {

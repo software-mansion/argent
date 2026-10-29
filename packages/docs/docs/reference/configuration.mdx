@@ -179,13 +179,13 @@ With the flag on, the client does these steps for each call to a linked tool-ser
 2. The client resolves each name with the sources in the table above, on the client computer. The client finds the project root from its own working directory.
 3. The client sends each value that it finds with the call, in the `x-argent-client-secrets` request header.
 
-The tool-server uses these values before its own sources. The tool-server resolves a name that the client does not define with its own sources. The tool-server does not store the values. A value that `paste` pastes stays on the clipboard of the device, as for a secret of the tool-server.
+The tool-server uses these values before its own sources. The tool-server resolves a name that the client does not define with its own sources. When neither the client nor the tool-server defines a name, the error says that the client did not provide the secret. Define the secret on the client computer. The tool-server does not store the values. A value that `paste` pastes stays on the clipboard of the device, as for a secret of the tool-server.
 
 The client sends a value only for a name that the call contains. The client reads the flag on the client computer. A tool-server that is older than this feature ignores the values and uses only its own sources.
 
 The flag gives the linked tool-server each secret that a call names. A call of any tool can name any secret of the client, so enable the flag only for a tool-server that you trust with all of these secrets.
 
-The header contains the values as plain text. Thus the client sends the values only to an `https://` URL or to a loopback address, for example an SSH tunnel to `127.0.0.1`. The client does not send a call that names a secret of the client over plain HTTP to a different computer, and the call fails.
+The header contains the values as plain text. Thus the client sends the values only to an `https://` URL or to a loopback address, for example an SSH tunnel to `127.0.0.1`. The client does not send a call that names a secret of the client over plain HTTP to a different computer, and the call fails. When `NODE_TLS_REJECT_UNAUTHORIZED` is `0` on the client, the client does not check the certificate of an `https://` URL. Thus the client also does not send these values over `https://`, and the call fails. When a link is set, `argent enable forward-secrets` and `argent secrets` tell you whether the client can send values to it.
 
 A tunnel or a proxy can store the request headers. For example, the local web inspector of ngrok records each request with its headers. Turn off this recording for a link that forwards secrets.
 
