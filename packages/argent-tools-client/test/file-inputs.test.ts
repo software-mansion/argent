@@ -266,6 +266,40 @@ describe("prepareFileInputs — tar-upload kind", () => {
     ).rejects.toThrow(/failed/i);
   });
 
+  it("preserves structured shutdown errors from an upload", async () => {
+    const apk = path.join(tmpDir, "app.apk");
+    await fs.writeFile(apk, "app");
+    const error = "The tool-server is shutting down. This call was not started.";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error,
+              error_code: "HTTP_SERVER_SHUTTING_DOWN",
+              error_kind: "unknown",
+            }),
+            { status: 503, statusText: "Service Unavailable" }
+          )
+      )
+    );
+    await expect(
+      prepareFileInputs(
+        specs,
+        { appPath: apk },
+        {
+          includeContent: true,
+          uploadEndpoint: { url: "https://sim.example", token: "tok" },
+        }
+      )
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(error),
+      errorCode: "HTTP_SERVER_SHUTTING_DOWN",
+      errorKind: "unknown",
+    });
+  });
+
   it("skips upload and sends a path-only wrapper when the path is not local", async () => {
     // A path that exists only on the remote host (e.g. pre-uploaded to the VM).
     const remotePath = path.join(tmpDir, "not", "on", "this", "machine", "MyApp.app");

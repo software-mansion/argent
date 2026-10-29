@@ -1,7 +1,8 @@
 import {
   FAILURE_CODES,
   FailureError,
-  ServiceRef,
+  ServiceState,
+  type Registry,
   TypedEventEmitter,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -9,23 +10,41 @@ import {
 } from "@argent/registry";
 import type { ChildProcess } from "child_process";
 import { promises as fs } from "fs";
-import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
+import { finalizeEncoder } from "../tools/screen-recording/encoder";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 import { recordReapedSession } from "../utils/reaped-sessions";
+import type { StopRecordingFile } from "../tools/screen-recording/session-guards";
+import type { DebugCapture } from "../tools/screen-recording/debug-capture";
 
 // Session for the `screen-recording-*` tools, one shape for both platforms:
-// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
-// child that writes the mp4 host-side, so there is nothing device-side to clean
+// frames come from simulator-server's MJPEG stream and ffmpeg writes the mp4
+// host-side, so there is nothing device-side to clean
 // up. Mirrors the native-profiler session.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
 
-export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
+export function screenRecordingSessionRef(device: DeviceInfo) {
   return {
     urn: `${SCREEN_RECORDING_SESSION_NAMESPACE}:${device.id}`,
     options: { device },
   };
+}
+
+export function assertRecordingNotTerminating(registry: Registry, device: DeviceInfo): void {
+  const { urn } = screenRecordingSessionRef(device);
+  if (registry.getSnapshot().services.get(urn)?.state !== ServiceState.TERMINATING) return;
+  throw new FailureError(
+    `The screen-recording session for device ${device.id} is being torn down. ` +
+      `Wait for any in-flight stop or teardown call to finish. If its connection was lost, ` +
+      `check the outputFile returned by start on the tool-server. A server restart loses retrieval state.`,
+    {
+      error_code: FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN,
+      failure_stage: "screen_recording_resolve_session",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    }
+  );
 }
 
 export interface ScreenRecordingSessionApi {
@@ -35,12 +54,13 @@ export interface ScreenRecordingSessionApi {
   recordingActive: boolean;
   /**
    * True from a start's admission check until its session stamp (spawn and
-   * readiness are async). With `stopPending`, keeps a second start or a stop
+   * readiness are async). With `stopping`, keeps a second start or a stop
    * admitted inside that window from racing the shared session state.
    */
   startPending: boolean;
-  /** True while a stop is running; a concurrent start/stop must not interleave. */
-  stopPending: boolean;
+  /** The in-flight stop, awaited by disposal before it clears shared capture state. */
+  stopping: Promise<StopRecordingFile> | null;
+  finishedRecording: { outputFile: string; result: StopRecordingFile | Error } | null;
   /**
    * Set the moment dispose() begins — process shutdown, or a
    * `stop-all-simulator-servers` reaping this device (scoped or machine-wide).
@@ -98,6 +118,7 @@ export interface ScreenRecordingSessionApi {
   lastFrameStreamError: Error | null;
   /** Interval pacing frames onto the fixed output frame rate. */
   pumpTimer: NodeJS.Timeout | null;
+  debugCapture: DebugCapture | null;
   /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
   trimStatic: boolean;
   /** Frames the pump has fed the encoder; the output video's length in frames. */
@@ -117,26 +138,30 @@ export interface ScreenRecordingSessionApi {
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
-  lastExitInfo: { code: number | null; signal: string | null } | null;
+  lastExitInfo: {
+    code: number | null;
+    signal: string | null;
+    stderr?: string;
+    framesEncoded?: number;
+  } | null;
 }
 
 // Dispose abandons an in-flight recording — process shutdown, or a
 // `stop-all-simulator-servers` reaping this device-owned service — so the video
-// is a best-effort salvage rather than something a caller is waiting on:
-// closing ffmpeg's stdin is what finalizes the container, so give that one
-// short grace before SIGKILL. `screen-recording-stop` has its own, longer
-// finalize contract.
+// is a best-effort salvage rather than something a caller is waiting on.
+// Light mode only needs to flush its container; debug still has frames to encode.
 const DISPOSE_FINALIZE_GRACE_MS = 1_500;
-const DISPOSE_REAP_MS = 1_000;
 
 function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.recordingActive = false;
   state.startPending = false;
-  state.stopPending = false;
+  state.stopping = null;
+  state.finishedRecording = null;
   state.pendingRetrieval = false;
   state.captureProcess = null;
   state.pendingChild = null;
   state.frameStream = null;
+  state.debugCapture = null;
   state.lastFrameStreamError = null;
   if (state.panelPollTimer) {
     clearInterval(state.panelPollTimer);
@@ -193,7 +218,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       platform: device.platform,
       recordingActive: false,
       startPending: false,
-      stopPending: false,
+      stopping: null,
+      finishedRecording: null,
       disposed: false,
       pendingRetrieval: false,
       captureProcess: null,
@@ -208,6 +234,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       panelSwitches: 0,
       panelReadFailures: 0,
       pumpTimer: null,
+      debugCapture: null,
       trimStatic: true,
       framesWritten: 0,
       trimmedAnyFrames: false,
@@ -230,12 +257,16 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         // Before any await, so a start suspended at a pre-spawn await aborts
         // instead of spawning an orphan the teardown below can no longer reap.
         state.disposed = true;
-        // Decided BEFORE the teardown below clears the flags it reads: a
-        // capture still encoding, a start mid-flight and one waiting to be
-        // handed over all owe the caller a video.
-        const hadUnretrievedCapture =
-          state.recordingActive || state.startPending || state.pendingRetrieval;
-        const abandonedOutput = state.outputFile;
+        clearActiveScreenRecording(state.deviceId);
+        // Decide before teardown clears capture and completed-stop retry state.
+        const hadCapture =
+          state.recordingActive ||
+          state.startPending ||
+          state.pendingRetrieval ||
+          state.stopping !== null ||
+          state.finishedRecording !== null;
+        const abandonedOutput = state.outputFile ?? state.finishedRecording?.outputFile;
+        await state.stopping?.catch(() => {});
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
@@ -254,11 +285,9 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
 
         // The overlay is sim-server global state that must not outlive the
         // capture.
-        if (state.pointerDisable) {
-          const disable = state.pointerDisable;
-          state.pointerDisable = null;
-          await disable().catch(() => {});
-        }
+        await state.pointerDisable?.();
+        state.pointerDisable = null;
+        await state.debugCapture?.finish();
 
         // A start still mid-readiness has a live child `captureProcess`
         // (success-only) can't see — reap it here or it records forever.
@@ -275,15 +304,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           if (child) {
             // Closing stdin is ffmpeg's normal finalize path, so the abandoned
             // file still has a chance to be playable.
-            if (child.stdin?.writable) child.stdin.end();
-            if (!(await waitForChildExit(child, DISPOSE_FINALIZE_GRACE_MS))) {
-              try {
-                child.kill("SIGKILL");
-              } catch {
-                // already dead
-              }
-              await waitForChildExit(child, DISPOSE_REAP_MS);
-            }
+            if (!state.debugCapture && child.stdin?.writable) child.stdin.end();
+            await finalizeEncoder(child, Boolean(state.debugCapture), DISPOSE_FINALIZE_GRACE_MS);
           }
         } finally {
           // The logo temp is normally removed by stop, a path this teardown
@@ -292,6 +314,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
             await fs.rm(state.logoFile, { force: true }).catch(() => {});
             state.logoFile = null;
           }
+          await state.debugCapture?.cleanup().catch(() => {});
+          const stopResult = state.finishedRecording?.result;
           clearLiveState(state);
           // The reminder must not outlive the capture it points at.
           clearActiveScreenRecording(state.deviceId);
@@ -299,15 +323,27 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           // the teardown instead of "you never started a recording": the next
           // resolve builds a session that has never heard of this capture, and
           // nothing else would say the salvaged file exists.
-          if (hadUnretrievedCapture) {
+          if (hadCapture) {
+            const outputExists = abandonedOutput
+              ? await fs.stat(abandonedOutput).then(
+                  async (stat) => {
+                    if (stat.size === 0)
+                      await fs.rm(abandonedOutput, { force: true }).catch(() => {});
+                    return stat.size > 0;
+                  },
+                  () => false
+                )
+              : false;
             recordReapedSession(
               "screen-recording",
               state.deviceId,
-              abandonedOutput
-                ? `ffmpeg was given a moment to finalize the container first, so the video ` +
-                    `captured up to that point is usually playable at ${abandonedOutput} — ` +
-                    `check it before re-recording.`
-                : undefined
+              stopResult && !(stopResult instanceof Error)
+                ? `The completed recording ${outputExists ? "is at" : "is no longer available at"} ${abandonedOutput}. It may already have been delivered. Teardown ended its retry state.`
+                : outputExists
+                  ? `The recording output is at ${abandonedOutput}. Check that it plays before re-recording.`
+                  : stopResult instanceof Error
+                    ? stopResult.message
+                    : "No recording output was saved."
             );
           }
         }

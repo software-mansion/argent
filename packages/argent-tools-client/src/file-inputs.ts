@@ -252,16 +252,20 @@ function sha256File(filePath: string): Promise<string> {
   });
 }
 
-/**
- * The `error` of a reply that the tool-server itself sent: a JSON object with
- * `error` as its only field. A proxy's JSON error page has more fields.
- */
-function toolServerError(text: string): string | undefined {
+function toolServerError(
+  text: string
+): { error: string; error_code?: string; error_kind?: string } | undefined {
   try {
-    const body = JSON.parse(text) as unknown;
-    if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
-    const { error, ...rest } = body as { error?: unknown };
-    return typeof error === "string" && Object.keys(rest).length === 0 ? error : undefined;
+    const body = JSON.parse(text) as Record<string, unknown> | null;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+    if (
+      typeof body.error !== "string" ||
+      Object.keys(body).some((key) => !["error", "error_code", "error_kind"].includes(key)) ||
+      (body.error_code !== undefined && typeof body.error_code !== "string") ||
+      (body.error_kind !== undefined && typeof body.error_kind !== "string")
+    )
+      return undefined;
+    return body as { error: string; error_code?: string; error_kind?: string };
   } catch {
     return undefined;
   }
@@ -272,7 +276,7 @@ function toolServerError(text: string): string | undefined {
  * tool-server did not send comes from a proxy that limits the size of a
  * request body, so the error names the size that the proxy must accept.
  * The call that needs the upload is not sent, so the error is a rejection of
- * that call alone (kind "validation"): the tool did not run.
+ * that call alone: the tool did not run.
  */
 function uploadFailure(
   url: string,
@@ -282,7 +286,7 @@ function uploadFailure(
 ): ToolInvocationError {
   const status = `${res.status} ${res.statusText}`.trim();
   const own = toolServerError(text);
-  let detail = own === undefined ? "" : `: ${own}`;
+  let detail = own === undefined ? "" : `: ${own.error}`;
   if (own === undefined && res.status === 413) {
     const mb = Math.max(1, Math.ceil(bytes / (1024 * 1024)));
     detail =
@@ -291,8 +295,8 @@ function uploadFailure(
       `client_max_body_size ${mb}m in nginx`;
   }
   return new ToolInvocationError(`Upload to ${url}/upload failed: ${status}${detail}`, {
-    errorCode: FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED,
-    errorKind: "validation",
+    errorCode: own?.error_code ?? FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED,
+    errorKind: own?.error_kind ?? "validation",
   });
 }
 

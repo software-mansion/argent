@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { FAILURE_CODES } from "@argent/registry";
+import { createHttpApp } from "../src/http";
+import { FAILURE_CODES, ServiceState } from "@argent/registry";
 
 const telemetryMock = vi.hoisted(() => ({
   init: vi.fn(),
@@ -14,6 +15,9 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const registryMock = vi.hoisted(() => ({
+  getSnapshot: vi.fn(() => ({ services: new Map() })),
+  beginShutdown: vi.fn(),
+  disposeService: vi.fn<() => Promise<void>>(),
   dispose: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -227,4 +231,59 @@ describe("tool-server bind-failure telemetry", () => {
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
+  it.each([500, 2500])(
+    "bounds recording shutdown before HTTP close after %s ms of other cleanup",
+    async (cleanupMs) => {
+      const { start } = await import("../src/index");
+      start();
+      await vi.waitFor(() => expect(serverMock.listenerCount("error")).toBeGreaterThan(0));
+      let finishRecording!: () => void;
+      const recording = new Promise<void>((resolve) => {
+        finishRecording = resolve;
+      });
+      registryMock.getSnapshot.mockReturnValue({
+        services: new Map([
+          ["ScreenRecordingSession:device", { state: ServiceState.RUNNING, dependents: [] }],
+        ]),
+      });
+      registryMock.disposeService.mockReturnValueOnce(recording);
+      let close!: () => void;
+      const closeSpy = vi.spyOn(serverMock, "close").mockImplementationOnce((callback) => {
+        close = callback;
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      registryMock.dispose.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, cleanupMs);
+          })
+      );
+      const onShutdown = vi.mocked(createHttpApp).mock.calls.at(-1)![1]!.onShutdown!;
+      const shutdown = Promise.resolve(onShutdown());
+      try {
+        expect(registryMock.disposeService).toHaveBeenCalledWith("ScreenRecordingSession:device");
+        expect(registryMock.disposeService.mock.invocationCallOrder.at(-1)).toBeLessThan(
+          registryMock.dispose.mock.invocationCallOrder.at(-1)!
+        );
+        await vi.advanceTimersByTimeAsync(Math.max(1500, cleanupMs) - 1);
+        expect(closeSpy).not.toHaveBeenCalled();
+        expect(telemetryMock.shutdown).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(closeSpy).toHaveBeenCalledOnce();
+        expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);
+        await vi.advanceTimersByTimeAsync(4999 - Math.max(1500, cleanupMs));
+        expect(exitSpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(exitSpy).toHaveBeenCalledWith(0);
+      } finally {
+        finishRecording();
+        await vi.advanceTimersByTimeAsync(10_000);
+        close?.();
+        await shutdown;
+        closeSpy.mockRestore();
+        registryMock.getSnapshot.mockReturnValue({ services: new Map() });
+        vi.useRealTimers();
+      }
+    }
+  );
 });

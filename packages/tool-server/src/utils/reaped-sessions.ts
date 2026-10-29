@@ -1,6 +1,6 @@
 /**
  * Process-global record of capture sessions a teardown reaped while they still
- * held data nobody had retrieved.
+ * held capture or retrieval state.
  *
  * `Registry._teardown` nulls the node's instance, so the next tool call
  * resolves a FRESH service indistinguishable from one that never ran — and the
@@ -41,9 +41,9 @@ function key(kind: ReapedSessionKind, deviceId: string): string {
 }
 
 /**
- * Call ONLY when there was something to lose: a dispose of an idle session is
- * routine cleanup, and recording it would make the next honest "no active
- * session" answer claim a teardown destroyed something.
+ * Call only for capture or retrieval state. Disposing an idle session is
+ * routine cleanup. A completed recording can retain retry state even after
+ * delivery, so its salvage message must not imply the video was lost.
  */
 export function recordReapedSession(
   kind: ReapedSessionKind,

@@ -21,10 +21,10 @@ export interface StopRecordingFile {
   /** Host path of the finalized video (registered as an artifact by the tool). */
   outputFile: string;
   sizeBytes: number;
+  encodingComplete?: boolean;
   /**
    * With static-frame trimming on, the frame-derived length of the returned
-   * video (never null). Null only when trimming is off and the session lost its
-   * start stamp.
+   * video (never null). Null when the session lost its start stamp or debug encoding failed.
    */
   durationMs: number | null;
   /** Real elapsed recording time. Present only when trimming actually applied. */
@@ -56,12 +56,12 @@ export function clip(s: string, max = 300): string {
  */
 export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: string): void {
   const awaitingRetrieval = api.pendingRetrieval && api.outputFile !== null;
-  if (api.recordingActive || api.startPending || api.stopPending || awaitingRetrieval) {
+  if (api.recordingActive || api.startPending || api.stopping || awaitingRetrieval) {
     const detail = api.recordingActive
       ? `A screen recording is already running on device ${api.deviceId} ` +
         `(started ${api.wallClockStartMs ? Math.round((Date.now() - api.wallClockStartMs) / 1000) : "?"}s ago). ` +
         `Call \`screen-recording-stop\` first.`
-      : api.stopPending
+      : api.stopping
         ? `A screen-recording-stop is still finalizing on device ${api.deviceId}. ` +
           `Wait for it to return before starting a new recording.`
         : api.startPending
@@ -84,7 +84,11 @@ export function assertNoActiveRecording(api: ScreenRecordingSessionApi, stage: s
  * running start/stop is rejected: two concurrent finalize sequences would race
  * into the same host file.
  */
-export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: string): void {
+export function assertStoppableSession(
+  api: ScreenRecordingSessionApi,
+  stage: string,
+  outputFile?: string
+): void {
   if (api.startPending) {
     // A stop admitted now (e.g. against a previous finalized capture) would
     // wipe the superseding capture's session the moment it stamps, leaving that
@@ -100,9 +104,11 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
       }
     );
   }
-  if (api.stopPending) {
+  if (api.stopping) {
     throw new FailureError(
-      `A screen-recording-stop is already in progress on device ${api.deviceId}; wait for it to return.`,
+      `A screen-recording-stop is already in progress on device ${api.deviceId}. ` +
+        `Wait for finalization, then retry stop with the outputFile returned by start if the connection was lost. ` +
+        `The expected output is ${api.outputFile}.`,
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_STOP_IN_PROGRESS,
         failure_stage: stage,
@@ -111,7 +117,21 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
       }
     );
   }
-  const recoverable = api.pendingRetrieval && api.outputFile !== null;
+  const captureOutput = api.outputFile ?? api.finishedRecording?.outputFile;
+  if (outputFile && captureOutput && outputFile !== captureOutput) {
+    throw new FailureError(
+      `The requested recording at ${outputFile} is not the current recording on device ${api.deviceId}.`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_NO_ACTIVE_SESSION,
+        failure_stage: stage,
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+  const recoverable =
+    (api.pendingRetrieval && api.outputFile !== null) ||
+    (outputFile !== undefined && api.finishedRecording !== null);
   if (!api.recordingActive && !recoverable) {
     // A teardown reaps this device's session and the registry nulls the
     // instance, so the session resolved above never heard of the capture that
@@ -121,7 +141,10 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
     throw new FailureError(
       reaped
         ? describeReapedSession(reaped, "screen recording")
-        : `No active screen recording on device ${api.deviceId}. Call \`screen-recording-start\` first.`,
+        : api.finishedRecording
+          ? `The previous recording on device ${api.deviceId} already stopped. ` +
+            `To retrieve its result again, pass outputFile: ${api.finishedRecording.outputFile}.`
+          : `No active screen recording on device ${api.deviceId}. Call \`screen-recording-start\` first.`,
       {
         error_code: reaped
           ? FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
@@ -136,25 +159,32 @@ export function assertStoppableSession(api: ScreenRecordingSessionApi, stage: st
 }
 
 /**
- * Reject a start whose readiness resumed after the session was disposed. Call
- * synchronously right before spawn, with no await between this check and the
- * spawn/pendingChild stamp, so no capture is launched that dispose's teardown
- * can no longer reap.
+ * Reject a start if disposal wins an initialization await. Check synchronously
+ * before spawn/pendingChild, then after readiness and touch setup. Pass outputFile
+ * only after capture owns the encoder, so the error can identify possible saved output.
  *
  * `dispose()` runs on process shutdown but also whenever
  * `stop-all-simulator-servers` reaps this device-owned session (commonly another
  * agent ending its session). `api.disposed` cannot tell the two apart, so the
- * message names both and invites a retry: after a reap the device is usually
+ * message names both: after a reap the device is usually
  * still up. The `SCREEN_RECORDING_SERVER_SHUTTING_DOWN` wording is historical,
  * not a second claim about the cause.
  */
-export function assertNotDisposed(api: ScreenRecordingSessionApi, stage: string): void {
+export function assertNotDisposed(
+  api: ScreenRecordingSessionApi,
+  stage: string,
+  outputFile?: string
+): void {
   if (api.disposed) {
     throw new FailureError(
       `The screen-recording session for device ${api.deviceId} was torn down while this start ` +
-        `was still initializing, so nothing was recorded. That is either the tool-server shutting ` +
+        `was still initializing. That is either the tool-server shutting ` +
         `down or a stop-all-simulator-servers reaping this device (e.g. another agent ending its ` +
-        `session). If the device is still up, start the recording again.`,
+        `session). ` +
+        (outputFile
+          ? `Capture had already begun, and a video may have been saved at ${outputFile}. ` +
+            `Check that path on the tool-server before starting another recording.`
+          : `Nothing was recorded. If the device is still up, start the recording again.`),
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN,
         failure_stage: stage,
@@ -166,13 +196,17 @@ export function assertNotDisposed(api: ScreenRecordingSessionApi, stage: string)
 }
 
 /** Size of the finished video; rejects a missing or empty container. */
-export async function statNonEmptyOutput(outputFile: string, stage: string): Promise<number> {
+export async function statNonEmptyOutput(
+  outputFile: string,
+  stage: string,
+  unavailableMessage?: string
+): Promise<number> {
   let size: number;
   try {
     size = (await fs.stat(outputFile)).size;
   } catch (err) {
     throw new FailureError(
-      `The recording ended but no video file exists at ${outputFile}.`,
+      unavailableMessage ?? `The recording ended but no video file exists at ${outputFile}.`,
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
         failure_stage: stage,
@@ -183,12 +217,15 @@ export async function statNonEmptyOutput(outputFile: string, stage: string): Pro
     );
   }
   if (size === 0) {
-    throw new FailureError(`The recording ended but the video file at ${outputFile} is empty.`, {
-      error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
-      failure_stage: stage,
-      failure_area: "tool_server",
-      error_kind: "not_found",
-    });
+    throw new FailureError(
+      unavailableMessage ?? `The recording ended but the video file at ${outputFile} is empty.`,
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+        failure_stage: stage,
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
   }
   return size;
 }

@@ -189,11 +189,13 @@ A tool file member has `role: "tool"`, and its `key` and `path` are the argument
 
 ## The call
 
-The client asks for a stream for each call with a `members` field, also when the list is empty. It sends `Accept: application/x-ndjson` and `Accept-Encoding: identity`.
+The client requests a stream for long-running tools, calls with a `members` field (including an empty list), and calls with a progress callback. It sends `Accept: application/x-ndjson` and `Accept-Encoding: identity`.
 
-The tool-server sends the stream with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. A proxy that holds the stream delays the progress lines, but the result does not change. The tool-server sends a progress line after each step. A proxy ends the response when no data arrives from the tool-server within its read timeout. The default is 60 seconds in nginx. Thus a step that runs longer than this timeout fails the call.
+The tool-server sends headers before invoking the tool, with `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`. It sends progress lines when the tool reports progress and blank keepalive lines every 15 seconds. Clients ignore blank lines. Proxies must forward these chunks to prevent idle read timeouts.
 
-The client sends a call with a `members` field only one time. When the connection closes before the result arrives, the client does not send the call again. The MCP server sets no timeout for this call. The error says that the tool possibly ran, for example `The connection to the tool-server closed before e2e-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
+The client sends a call with a `members` field only one time. The MCP server sets no fetch timeout for these calls or long-running tools. For any streamed call, a connection failure after headers arrive does not resend the call. The error says that the tool possibly ran, for example `The connection to the tool-server closed before e2e-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
+
+During shutdown, `GET /tools`, `POST /tools/:name`, and `POST /upload` reject new requests with HTTP 503. Pending calls can fail immediately during teardown. Other pending calls get a terminal shutdown error when the short grace expires. Reconnect after the server exits. Argent does not retry these calls automatically. Discovery and upload errors keep the server message and error code. Before a call, discovery sends its tool name and device in the URI-encoded JSON `X-Argent-Call` header so shutdown guidance names only that device’s recording. A standalone listing receives generic reconnect guidance.
 
 ## What the tool-server does with the members
 

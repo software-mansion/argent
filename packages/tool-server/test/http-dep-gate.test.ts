@@ -261,6 +261,17 @@ describe("http dependency gate", () => {
     const res = await request(app).post("/tools/dual-class-error").send({});
     expect(res.status).toBe(424);
     expect(res.body.error).toBe("install adb please");
+    const streamed = await request(app)
+      .post("/tools/dual-class-error")
+      .set("Accept", "application/x-ndjson")
+      .send({});
+    expect(streamed.status).toBe(200);
+    expect(JSON.parse(streamed.text.trim())).toMatchObject({
+      event: "error",
+      error: res.body.error,
+      error_code: res.body.error_code,
+      error_kind: res.body.error_kind,
+    });
   });
 
   it("still returns 424 when the DependencyMissingError is buried two levels deep in the cause chain", async () => {

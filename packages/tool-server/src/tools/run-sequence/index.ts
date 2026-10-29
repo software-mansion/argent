@@ -1,10 +1,19 @@
 import { z } from "zod";
 
-import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
+import {
+  type Registry,
+  type ToolCapability,
+  type ToolContext,
+  type ToolDefinition,
+} from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
-import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import {
+  invokeSubTool,
+  describeNestedParamError,
+  rethrowRegistryShutdown,
+} from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
@@ -223,6 +232,7 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
           }
           results.push({ tool: step.tool, result });
         } catch (err) {
+          rethrowRegistryShutdown(err);
           const reframed = describeNestedParamError(
             registry,
             err,

@@ -24,7 +24,7 @@ import {
   type TextMatchMode,
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
-import { invokeSubTool } from "../../utils/sub-invoke";
+import { invokeSubTool, rethrowRegistryShutdown } from "../../utils/sub-invoke";
 import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
@@ -532,6 +532,7 @@ export async function settleTree(
     if (read.type === "value") {
       tree = read.value.tree;
     } else if (read.type === "error") {
+      rethrowRegistryShutdown(read.cause);
       // transient describe failure mid-navigation — retry until the deadline
       lastError = read.cause;
     }
@@ -692,7 +693,8 @@ async function waitForFocus(
       if (!FOCUS_REPORTING_SOURCES.has(source)) return;
       const target = flowSelectorToFrame(tree, into, uiOrientation) ?? tappedFrame;
       if (collectFocused(tree, []).some((n) => framesOverlap(n.frame, target))) return;
-    } catch {
+    } catch (err) {
+      rethrowRegistryShutdown(err);
       // transient describe failure — retry until the deadline
     }
     if (Date.now() >= deadline) return;
@@ -775,6 +777,7 @@ async function scrollIncrement(
       })
     );
   } catch (err) {
+    rethrowRegistryShutdown(err);
     // The tool rejects when cancelled mid-gesture. Let scrollToVisible's next
     // abort check produce the uniform aborted skip instead of surfacing that.
     if (env.signal?.aborted) return undefined;
@@ -1006,6 +1009,7 @@ async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
     try {
       await settleTree(env, { skipProvenOutage: true });
     } catch (err) {
+      rethrowRegistryShutdown(err);
       // tree-source outage — this gesture needs no frame from it, so dispatch
       // anyway. Untyped because a settle has nothing else to throw: every read
       // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
@@ -1161,6 +1165,7 @@ async function runLongPress(
         durationMs: duration,
       });
     } catch (err) {
+      rethrowRegistryShutdown(err);
       // gesture-drag rejects when cancelled mid-hold; per ABORTED_OUTCOME that
       // must read as an aborted skip, never a step failure with the tool's message.
       if (env.signal?.aborted) return ABORTED_OUTCOME;
@@ -1272,7 +1277,8 @@ async function fetchScreenAspect(env: ActionEnv): Promise<number | undefined> {
     return screen && screen.width > 0 && screen.height > 0
       ? screen.width / screen.height
       : undefined;
-  } catch {
+  } catch (err) {
+    rethrowRegistryShutdown(err);
     return undefined; // fail soft: the caller falls back to the legacy ellipse
   }
 }
@@ -1355,6 +1361,7 @@ async function runRotate(
       durationMs: deriveRotateDurationMs(step.by),
     });
   } catch (err) {
+    rethrowRegistryShutdown(err);
     // The tool rejects when cancelled mid-gesture; per ABORTED_OUTCOME that must
     // read as an aborted skip, never a step failure with the tool's message.
     if (env.signal?.aborted) return ABORTED_OUTCOME;
@@ -1594,6 +1601,7 @@ async function runSwipe(
       travel
     );
   } catch (err) {
+    rethrowRegistryShutdown(err);
     // Both tools reject when cancelled mid-gesture; per ABORTED_OUTCOME that must
     // read as an aborted skip, never a step failure with the tool's message.
     if (env.signal?.aborted) return ABORTED_OUTCOME;
@@ -1608,7 +1616,8 @@ async function runSwipe(
   if (supportsFlowTree(env.device.platform)) {
     try {
       await settleTree(env);
-    } catch {
+    } catch (err) {
+      rethrowRegistryShutdown(err);
       // Tree-source outage AFTER the gesture landed: proceed as runSnapshot's
       // settle does rather than fail a swipe that happened.
     }
@@ -1727,6 +1736,7 @@ async function waitForCondition(
         return { ok: true };
       }
     } catch (err) {
+      rethrowRegistryShutdown(err);
       fetchError = err instanceof Error ? err.message : String(err);
       // A throw is as blind as an empty tree — `lastMatches` still holds the
       // previous successful read, which must not pass for current evidence.
@@ -2085,6 +2095,7 @@ async function waitForIdle(
       treeReadBlind = true;
       blindHint = read.value.hint;
     } else if (read.type === "error") {
+      rethrowRegistryShutdown(read.cause);
       // A tree-source blip mid-animation is expected; keep polling. Only its
       // presence on the LAST read is reportable.
       lastRead = "error";

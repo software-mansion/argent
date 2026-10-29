@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, rm, readFile, writeFile, stat, symlink, readdir } from "node:fs/promises";
+import { processNamespaceId } from "@argent/registry";
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs/promises";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -13,6 +15,16 @@ import {
   type ArtifactHandle,
 } from "../src/artifacts.js";
 import { redirectHomeTo } from "./helpers/home-redirect.js";
+
+vi.mock("@argent/registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/registry")>()),
+  processNamespaceId: vi.fn(async () => "aaaaaaaaaaaa"),
+}));
+beforeEach(() => vi.mocked(processNamespaceId).mockResolvedValue("aaaaaaaaaaaa"));
+
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
+}));
 
 function handle(id: string, filename: string, mimeType: string): ArtifactHandle {
   return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size: 0 };
@@ -758,6 +770,55 @@ describe("materializeArtifacts durable destination", () => {
     expect((result as { video: null }).video).toBeNull();
   });
 
+  it("does not recommend retrying an oversized remote recording", async () => {
+    const fetchImpl = vi.fn();
+    const { result } = await materializeArtifacts(
+      {
+        video: {
+          ...handle("large", "large.mp4", "video/mp4"),
+          kind: "screen-recording",
+          size: 3 * 1024 ** 3,
+          hostPath: "/remote/large.mp4",
+          saveDir: ".argent/recordings",
+        },
+      },
+      { toolsUrl: "http://remote:3001", fetchImpl }
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect((result as { warning: string }).warning).toContain(
+      "A repeated stop cannot bypass the 2 GiB download limit"
+    );
+    expect((result as { warning: string }).warning).not.toContain("retry screen-recording-stop");
+  });
+
+  it("does not blame the download cap when a large local recording destination is refused", async () => {
+    const file = join(hostDir, "large.mp4");
+    const output = await fs.open(file, "w");
+    await output.truncate(3 * 1024 ** 3);
+    await output.close();
+    await mkdir(join(projectRoot, ".argent"));
+    await symlink(hostDir, join(projectRoot, ".argent/recordings"));
+    const { result } = await materializeArtifacts(
+      {
+        video: {
+          ...handle("large-local", "large.mp4", "video/mp4"),
+          kind: "screen-recording",
+          size: 3 * 1024 ** 3,
+          hostPath: file,
+          saveDir: ".argent/recordings",
+        },
+      },
+      { toolsUrl: "http://remote:3001", fetchImpl: vi.fn() }
+    );
+    expect((result as { warning: string }).warning).toContain(
+      "resolves outside its allowed location"
+    );
+    expect((result as { warning: string }).warning).toContain(
+      "Fix client storage or directory errors"
+    );
+    expect((result as { warning: string }).warning).not.toContain("2 GiB download limit");
+  });
+
   it("refuses a size:0 durable download — an unverifiable body is never persisted", async () => {
     // A durable file survives temp-cache GC, so a length that can't be checked
     // (size 0) must not be persisted. A remote server that announces size:0 and
@@ -823,6 +884,8 @@ describe("materializeArtifacts durable destination", () => {
     const h: ArtifactHandle = {
       [ARTIFACT_MARKER]: true,
       id: "evilsym",
+      kind: "screen-recording",
+      hostPath: "/remote/capture.mp4",
       filename: "pwned.mp4",
       mimeType: "video/mp4",
       size: MP4.length,
@@ -835,7 +898,13 @@ describe("materializeArtifacts durable destination", () => {
 
     // Nothing escaped into the real .git dir, and the durable write was refused.
     expect(await readdir(join(projectRoot, ".git"))).not.toContain("pwned.mp4");
-    expect((result as { video: null }).video).toBeNull();
+    expect(result).toMatchObject({
+      video: null,
+      warning: expect.stringContaining("resolves outside its allowed location"),
+    });
+    expect((result as { warning: string }).warning).toContain(
+      "Fix client storage or directory errors before retrying"
+    );
   });
 
   it("never overwrites an existing durable recording — lands the new file alongside", async () => {
@@ -856,7 +925,13 @@ describe("materializeArtifacts durable destination", () => {
     };
     const { result } = await materializeArtifacts(
       { video: h },
-      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ viddup: MP4 }) }
+      {
+        toolsUrl: "http://remote:3001",
+        fetchImpl: vi.fn(
+          async () =>
+            new Response(Buffer.from(MP4), { headers: { "Content-Length": String(MP4.length) } })
+        ),
+      }
     );
 
     const out = (result as { video: string }).video;
@@ -961,6 +1036,522 @@ describe("materializeArtifacts durable destination", () => {
     );
     expect((result as { video: string | null }).video).toBeNull();
     expect(state.pulls).toBeLessThanOrEqual(1); // header check fired; the body is not drained
+  });
+
+  it("reports an oversized recording with its server path without starting a download", async () => {
+    const fetchImpl = vi.fn();
+    const handle: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "large",
+      kind: "screen-recording",
+      filename: "large.mp4",
+      mimeType: "video/mp4",
+      size: 3 * 1024 * 1024 * 1024,
+      hostPath: "/remote/recording.mp4",
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: handle, encodingComplete: false, durationMs: null, warning: "Incomplete capture." },
+      { toolsUrl: "http://remote:3001", fetchImpl }
+    );
+    expect(result).toMatchObject({ video: null, encodingComplete: false, durationMs: null });
+    expect((result as { warning: string }).warning).toMatch(
+      /Incomplete capture.*2 GiB.*already stopped.*\/remote\/recording.mp4/
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "warns when every durable filename is occupied (local: %s)",
+    async (local) => {
+      const file = join(hostDir, "source.mp4");
+      await writeFile(file, Buffer.from(MP4));
+      const collision = Object.assign(new Error("occupied"), { code: "EEXIST" });
+      const writing = vi.spyOn(fs, "link").mockRejectedValue(collision);
+      try {
+        const { result } = await materializeArtifacts(
+          {
+            video: {
+              ...handle("occupied", "occupied.mp4", "video/mp4"),
+              kind: "screen-recording",
+              size: MP4.length,
+              ...(local ? { hostPath: file } : {}),
+              saveDir: ".argent/recordings",
+            },
+          },
+          {
+            toolsUrl: "http://remote:3001",
+            fetchImpl: vi.fn(async () => new Response(Buffer.from(MP4))),
+          }
+        );
+        expect(result).toMatchObject({
+          video: null,
+          warning: expect.stringContaining("No unused recording filename"),
+        });
+        expect(writing).toHaveBeenCalledTimes(1000);
+      } finally {
+        writing.mockRestore();
+      }
+    }
+  );
+
+  it.each([
+    { code: "ENOTSUP", local: false },
+    { code: "EPERM", local: false },
+    { code: "ENOTSUP", local: true },
+    { code: "EPERM", local: true },
+  ])(
+    "keeps a completed recording when all links fail with $code (local: $local)",
+    async ({ code, local }) => {
+      const source = join(hostDir, "fallback.mp4");
+      await writeFile(source, Buffer.from(MP4));
+      const linking = vi
+        .spyOn(fs, "link")
+        .mockRejectedValue(Object.assign(new Error("unsupported link"), { code }));
+      try {
+        const { result } = await materializeArtifacts(
+          {
+            video: {
+              ...handle("fallback", "fallback.mp4", "video/mp4"),
+              kind: "screen-recording",
+              ...(local ? { hostPath: source } : {}),
+              size: MP4.length,
+              saveDir: ".argent/recordings",
+            },
+          },
+          {
+            toolsUrl: "http://remote:3001",
+            fetchImpl: vi.fn(async () => new Response(Buffer.from(MP4))),
+          }
+        );
+        const file = (result as { video: string }).video;
+        expect(file).toMatch(/[/\\]recording-[^/\\]+[/\\]fallback\.mp4$/);
+        expect(await readFile(file)).toEqual(Buffer.from(MP4));
+        expect(await readdir(join(file, ".."))).toEqual(["fallback.mp4"]);
+        expect(result).not.toHaveProperty("warning");
+      } finally {
+        linking.mockRestore();
+      }
+    }
+  );
+
+  it("returns the published recording even when staging cleanup fails", async () => {
+    const cleanup = vi
+      .spyOn(fs, "rm")
+      .mockRejectedValueOnce(Object.assign(new Error("cleanup denied"), { code: "EACCES" }));
+    try {
+      const { result } = await materializeArtifacts(
+        {
+          video: {
+            ...handle("saved", "saved.mp4", "video/mp4"),
+            kind: "screen-recording",
+            size: MP4.length,
+            saveDir: ".argent/recordings",
+          },
+        },
+        {
+          toolsUrl: "http://remote:3001",
+          fetchImpl: vi.fn(async () => new Response(Buffer.from(MP4))),
+        }
+      );
+      const file = join(projectRoot, ".argent/recordings", "saved.mp4");
+      expect(result).toEqual({ video: file });
+      expect(await readFile(file)).toEqual(Buffer.from(MP4));
+      expect(cleanup).toHaveBeenCalledOnce();
+    } finally {
+      cleanup.mockRestore();
+    }
+  });
+
+  it.each([undefined, "4"])(
+    "rejects a cleanly truncated stream (Content-Length: %s)",
+    async (length) => {
+      const { result } = await materializeArtifacts(
+        {
+          video: {
+            ...handle("truncated", "truncated.mp4", "video/mp4"),
+            kind: "screen-recording",
+            size: 8,
+            saveDir: ".argent/recordings",
+          },
+          encodingComplete: true,
+        },
+        {
+          toolsUrl: "http://remote:3001",
+          fetchImpl: vi.fn(
+            async () =>
+              new Response(
+                Buffer.from("part"),
+                length ? { headers: { "Content-Length": length } } : undefined
+              )
+          ),
+        }
+      );
+      expect(result).toMatchObject({
+        video: null,
+        encodingComplete: true,
+        warning: expect.stringContaining("download size did not match"),
+      });
+      expect(await readdir(join(projectRoot, ".argent/recordings"))).toEqual([]);
+    }
+  );
+
+  it("publishes a local copy only after all bytes have been copied", async () => {
+    const source = join(hostDir, "local.mp4");
+    await writeFile(source, Buffer.from(MP4));
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let partial!: string;
+    const copying = vi
+      .spyOn(fs, "copyFile")
+      .mockImplementationOnce(async (_source, destination) => {
+        partial = String(destination);
+        await writeFile(partial, Buffer.from(MP4).subarray(0, 4));
+        await waiting;
+        await writeFile(partial, Buffer.from(MP4));
+      });
+    try {
+      const saving = materializeArtifacts(
+        {
+          video: {
+            ...handle("local", "local.mp4", "video/mp4"),
+            kind: "screen-recording",
+            size: MP4.length,
+            hostPath: source,
+            saveDir: ".argent/recordings",
+          },
+        },
+        { toolsUrl: "http://remote:3001" }
+      );
+      await vi.waitFor(async () => expect((await stat(partial)).size).toBe(4));
+      const final = join(projectRoot, ".argent/recordings", "local.mp4");
+      expect(await absent(final)).toBe(true);
+      expect(partial).toMatch(/recording\.part$/);
+      release();
+      expect((await saving).result).toEqual({ video: final });
+      expect(await readFile(final)).toEqual(Buffer.from(MP4));
+    } finally {
+      release();
+      copying.mockRestore();
+    }
+  });
+
+  it("reaps only dead-owner partials in the current process namespace", async () => {
+    const create = vi.spyOn(fs, "mkdtemp");
+    const dir = join(projectRoot, ".argent/recordings");
+    const save = () =>
+      materializeArtifacts(
+        {
+          video: {
+            ...handle("saved", "saved.mp4", "video/mp4"),
+            size: MP4.length,
+            saveDir: ".argent/recordings",
+          },
+        },
+        {
+          toolsUrl: "http://remote:3001",
+          fetchImpl: vi.fn(async () => new Response(Buffer.from(MP4))),
+        }
+      );
+    try {
+      await save();
+      const template = String(
+        create.mock.calls.find(([p]) => String(p).includes(".argent-download-"))![0]
+      );
+      expect(template).toMatch(new RegExp(`\\.argent-download-[a-f0-9]{12}-${process.pid}-$`));
+      const prefix = template.slice(
+        template.lastIndexOf(".argent-download-"),
+        -`${process.pid}-`.length
+      );
+      const dead = `${prefix}91919191-dead`;
+      const alive = `${prefix}${process.pid}-alive`;
+      const denied = `${prefix}81818181-denied`;
+      const other = `.argent-download-${prefix.includes("000000000000") ? "111111111111" : "000000000000"}-91919191-dead`;
+      for (const name of [dead, alive, denied, other, "recording-completed"]) {
+        await mkdir(join(dir, name), { recursive: true });
+        await writeFile(join(dir, name, "recording.part"), "part");
+      }
+      const probe = vi.spyOn(process, "kill").mockImplementation((pid) => {
+        if (pid === 91919191) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        if (pid === 81818181) throw Object.assign(new Error("denied"), { code: "EPERM" });
+        return true;
+      });
+      try {
+        await save();
+        expect(await readdir(dir)).toEqual(
+          expect.arrayContaining([alive, denied, other, "recording-completed", "saved.mp4"])
+        );
+        expect(await readdir(dir)).not.toContain(dead);
+      } finally {
+        probe.mockRestore();
+      }
+    } finally {
+      create.mockRestore();
+    }
+  });
+
+  it.each(["different", "unavailable", "both unavailable"])(
+    "preserves another writer when its PID namespace is %s",
+    async (namespace) => {
+      if (namespace === "both unavailable") vi.mocked(processNamespaceId).mockResolvedValue(null);
+      const probe = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("not visible here"), { code: "ESRCH" });
+      });
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({
+        start(value) {
+          controller = value;
+        },
+      });
+      const dir = join(projectRoot, ".argent/recordings");
+      const video = {
+        ...handle("first", "first.mp4", "video/mp4"),
+        size: 8,
+        saveDir: ".argent/recordings",
+      };
+      const downloading = materializeArtifacts(
+        { video },
+        { toolsUrl: "http://remote:3001", fetchImpl: vi.fn(async () => new Response(body)) }
+      );
+      try {
+        controller.enqueue(Buffer.from("part"));
+        await vi.waitFor(async () => {
+          const staging = (await readdir(dir)).find((name) =>
+            name.startsWith(".argent-download-")
+          )!;
+          expect((await stat(join(dir, staging, "recording.part"))).size).toBe(4);
+        });
+        vi.mocked(processNamespaceId).mockResolvedValue(
+          namespace === "different" ? "bbbbbbbbbbbb" : null
+        );
+        await materializeArtifacts(
+          { video: { ...video, id: "second", filename: "second.mp4", size: MP4.length } },
+          {
+            toolsUrl: "http://remote:3001",
+            fetchImpl: vi.fn(async () => new Response(Buffer.from(MP4))),
+          }
+        );
+        expect(probe).not.toHaveBeenCalled();
+        controller.enqueue(Buffer.from("rest"));
+        controller.close();
+        expect((await downloading).result).toEqual({ video: join(dir, "first.mp4") });
+        expect((await readFile(join(dir, "first.mp4"))).toString()).toBe("partrest");
+      } finally {
+        probe.mockRestore();
+      }
+    }
+  );
+
+  it("writes recording chunks to disk before the download finishes", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(body));
+    const handle: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "stream",
+      kind: "screen-recording",
+      filename: "streamed.mp4",
+      mimeType: "video/mp4",
+      size: 8,
+      saveDir: ".argent/recordings",
+    };
+    const downloading = materializeArtifacts(
+      { video: handle },
+      { toolsUrl: "http://remote:3001", fetchImpl }
+    );
+    controller.enqueue(Buffer.from("part"));
+    const file = join(projectRoot, ".argent/recordings", "streamed.mp4");
+    const dir = join(projectRoot, ".argent/recordings");
+    await vi.waitFor(async () => {
+      const staging = (await readdir(dir)).find((name) => name.startsWith(".argent-download-"))!;
+      expect((await stat(join(dir, staging, "recording.part"))).size).toBe(4);
+    });
+    expect(await absent(file)).toBe(true);
+    controller.enqueue(Buffer.from("rest"));
+    controller.close();
+    expect((await downloading).result).toEqual({ video: file });
+    expect((await readFile(file)).toString()).toBe("partrest");
+  });
+
+  it.each(["HTTP", "body"])(
+    "preserves a flow report when recording retrieval fails at %s",
+    async (failure) => {
+      const fetchImpl = vi.fn(async () =>
+        failure === "HTTP"
+          ? new Response('{"error":"Artifact missing not found"}', { status: 404 })
+          : new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.error(new Error("connection lost"));
+                },
+              })
+            )
+      );
+      const report = {
+        verdict: "FAIL",
+        steps: [
+          { status: "fail", reason: "element not found: Pay" },
+          {
+            status: "pass",
+            result: {
+              video: {
+                ...handle("missing", "missing.mp4", "video/mp4"),
+                kind: "screen-recording",
+                hostPath: "/remote/tmp/recording.mp4",
+                size: 8,
+                saveDir: ".argent/recordings",
+              },
+              encodingComplete: false,
+              durationMs: null,
+              warning: "Incomplete encoding.",
+            },
+          },
+        ],
+      };
+      const { result } = await materializeArtifacts(report, {
+        toolsUrl: "http://remote:3001",
+        fetchImpl,
+      });
+      expect(result).toMatchObject({
+        verdict: "FAIL",
+        steps: [
+          { status: "fail", reason: "element not found: Pay" },
+          {
+            status: "pass",
+            result: {
+              video: null,
+              encodingComplete: false,
+              durationMs: null,
+              warning: expect.stringMatching(
+                /Incomplete encoding.*Could not retrieve.*already stopped/
+              ),
+            },
+          },
+        ],
+      });
+      const warning = (result as typeof report).steps[1]!.result!.warning;
+      if (failure === "HTTP") expect(warning).toContain("Artifact download failed with HTTP 404.");
+      expect(warning).toContain(
+        'retry screen-recording-stop with outputFile: "/remote/tmp/recording.mp4"'
+      );
+    }
+  );
+
+  it("treats an aborted recording download as missing without masking the signal reason", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled", "AbortError");
+    const fetchImpl = vi.fn(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+    const { result } = await materializeArtifacts(
+      {
+        video: {
+          ...handle("aborted", "aborted.mp4", "video/mp4"),
+          kind: "screen-recording",
+          size: 8,
+          saveDir: ".argent/recordings",
+        },
+      },
+      { toolsUrl: "http://remote:3001", fetchImpl, signal: controller.signal }
+    );
+    expect(result).toEqual({ video: null });
+    expect(() => controller.signal.throwIfAborted()).toThrow(reason);
+  });
+
+  it("cancels a recording download when the destination cannot be opened", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const opening = vi.spyOn(fs, "open").mockRejectedValueOnce(denied);
+    try {
+      const { result } = await materializeArtifacts(
+        {
+          video: {
+            ...handle("denied", "denied.mp4", "video/mp4"),
+            kind: "screen-recording",
+            hostPath: "/remote/capture.mp4",
+            size: 8,
+            saveDir: ".argent/recordings",
+          },
+        },
+        { toolsUrl: "http://remote:3001", fetchImpl: vi.fn(async () => new Response(body)) }
+      );
+      expect(result).toMatchObject({
+        video: null,
+        warning: expect.stringMatching(/permission denied.*already stopped/),
+      });
+      expect((result as { warning: string }).warning).toContain(
+        "Fix client storage or directory errors before retrying"
+      );
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+      expect(await absent(join(projectRoot, ".argent/recordings", "denied.mp4"))).toBe(true);
+    } finally {
+      opening.mockRestore();
+    }
+  });
+
+  it("removes a partial recording and cancels the download when a later write fails", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+      cancel,
+    });
+    const file = join(projectRoot, ".argent/recordings", "partial.mp4");
+    const openFile = fs.open;
+    let writing: ReturnType<typeof vi.spyOn> | undefined;
+    const opening = vi.spyOn(fs, "open").mockImplementationOnce(async (...args) => {
+      const output = await openFile(...args);
+      writing = vi
+        .spyOn(output, "writeFile")
+        .mockImplementationOnce(async (data) => {
+          await output.write(data as Uint8Array);
+        })
+        .mockRejectedValueOnce(Object.assign(new Error("disk full"), { code: "ENOSPC" }));
+      return output;
+    });
+    try {
+      const downloading = materializeArtifacts(
+        {
+          video: {
+            ...handle("partial", "partial.mp4", "video/mp4"),
+            kind: "screen-recording",
+            size: 8,
+            saveDir: ".argent/recordings",
+          },
+        },
+        { toolsUrl: "http://remote:3001", fetchImpl: vi.fn(async () => new Response(body)) }
+      );
+      const completed = downloading;
+      controller.enqueue(Buffer.from("part"));
+      const dir = join(projectRoot, ".argent/recordings");
+      await vi.waitFor(async () => {
+        const staging = (await readdir(dir)).find((name) => name.startsWith(".argent-download-"))!;
+        expect((await stat(join(dir, staging, "recording.part"))).size).toBe(4);
+      });
+      expect(await absent(file)).toBe(true);
+      controller.enqueue(Buffer.from("rest"));
+      expect((await completed).result).toMatchObject({
+        video: null,
+        warning: expect.stringMatching(/disk full.*already stopped/),
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+      expect(await absent(file)).toBe(true);
+    } finally {
+      writing?.mockRestore();
+      opening.mockRestore();
+    }
   });
 
   it("co-located copy never clobbers an existing recording — lands as `name (2).ext`", async () => {

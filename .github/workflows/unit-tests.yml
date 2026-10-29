@@ -37,6 +37,11 @@ jobs:
       - name: Build workspace dependencies
         run: npm run build
 
+      - name: Install video encoder
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg
+
       - name: Run tests
         run: npm test --workspaces --if-present
 

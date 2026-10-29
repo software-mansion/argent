@@ -2,11 +2,12 @@ import { z } from "zod";
 import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
   screenRecordingSessionRef,
+  assertRecordingNotTerminating,
   type ScreenRecordingSessionApi,
 } from "../../blueprints/screen-recording-session";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { assertSupported } from "../../utils/capability";
+import { assertSupported, InvalidToolInputError } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isFeatureEnabled } from "@argent/configuration-core";
 import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
@@ -16,6 +17,8 @@ import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
 const MAX_TIME_LIMIT_SECONDS = 600;
+const DEFAULT_DEBUG_TIME_LIMIT_SECONDS = 30;
+const MAX_DEBUG_TIME_LIMIT_SECONDS = 120;
 /** Comet-tail frames left behind a moving touch, so swipes/drags read as motion. */
 const POINTER_TRAIL_LENGTH = 8;
 /** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
@@ -25,6 +28,16 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+  mode: z
+    .enum(["light", "debug"])
+    .optional()
+    .describe(
+      "Default light: compact 30 fps video with static trimming and touch markers. " +
+        "Use debug for animation flicker or frame analysis: retain each JPEG delivered by the same " +
+        "simulator-server stream, with variable host-monotonic timestamps, high-quality H.264 encoding, " +
+        "no trimming or watermark, and optional touch markers (off by default). " +
+        "Timestamps mark tool-server parsing and can be delayed by server load; they are not device presentation times. Upstream compression or frame loss remains."
+    ),
   timeLimitSeconds: z
     .number()
     .int()
@@ -32,7 +45,8 @@ const zodSchema = z.object({
     .max(MAX_TIME_LIMIT_SECONDS)
     .optional()
     .describe(
-      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}, max ${MAX_TIME_LIMIT_SECONDS}). ` +
+      `Auto-stop cap in seconds: light defaults to ${DEFAULT_TIME_LIMIT_SECONDS}, max ${MAX_TIME_LIMIT_SECONDS}; ` +
+        `debug defaults to ${DEFAULT_DEBUG_TIME_LIMIT_SECONDS}, max ${MAX_DEBUG_TIME_LIMIT_SECONDS}. ` +
         `Set it to slightly more than the interaction you plan to capture.`
     ),
   trimStatic: z
@@ -43,7 +57,7 @@ const zodSchema = z.object({
         "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
         "so a long recording with brief activity comes back short instead of full of dead air. " +
         "The returned durationMs is the trimmed length; wallClockMs/trimmedMs report what was removed. " +
-        "Set false to keep a faithful real-time recording."
+        "Set false to keep the elapsed time at 30 fps. Debug mode requires false or omitted."
     ),
   showTouches: z
     .boolean()
@@ -51,7 +65,8 @@ const zodSchema = z.object({
     .describe(
       "Default true. Draw simulator-server's touch visualizer into the recording: a pulse marks each " +
         "tap, a comet trail follows swipes and drags, and paired markers show two-finger pinch/rotate, so " +
-        "the video makes clear where every interaction landed. Set false to record the raw screen with no overlay."
+        "the video makes clear where every interaction landed. Set false to record the raw screen with no overlay. " +
+        "Debug mode defaults to false; set true to correlate gestures with frames."
     ),
 });
 
@@ -72,9 +87,9 @@ export function createScreenRecordingStartTool(
         `Failed to start screen recording: ${failureSignal.error_code}`,
     },
     capability,
-    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
-By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
-By default every tap, swipe, drag, pinch and rotate is drawn into the video as an on-screen touch marker (see showTouches), so the recording shows where each interaction landed.
+    description: `Start recording the device screen to an H.264 MP4 using simulator-server's existing frame stream.
+Use mode: "light" (default) for bug reports and PR videos: 30 fps, static trimming, touch markers and the configured watermark.
+Use mode: "debug" for flicker and frame-by-frame animation inspection. It keeps every delivered frame without trimming or a watermark. Touch markers default off; enable them with showTouches: true. Timestamps mark tool-server parsing, which server load can delay, not device presentation. Upstream frames can be omitted. The final frame repeats the last image at stop time to preserve the final hold; it is not a device update. Debug saves JPEGs in temporary storage and encodes at stop, which can take longer. Capture ends early with a warning if writes fail or cannot keep up. Debug capture is not crash-safe; a hard tool-server kill can lose unencoded frames.
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
@@ -84,13 +99,30 @@ Fails if a recording is already running on the device, the device is not booted,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
     // iOS by shape, so an eager service would spawn simulator-server for a
     // device it cannot drive and hang on its ready timeout (as in `screenshot`).
-    services: (params) => ({
-      session: screenRecordingSessionRef(resolveDevice(params.udid)),
-    }),
-    async execute(services, params) {
+    services: (params) => {
+      const device = resolveDevice(params.udid);
+      assertRecordingNotTerminating(registry, device);
+      return { session: screenRecordingSessionRef(device) };
+    },
+    async execute(services, params, ctx) {
       const api = services.session as ScreenRecordingSessionApi;
       const device = resolveDevice(params.udid);
       assertSupported("screen-recording-start", capability, device);
+      const mode = params.mode ?? "light";
+      if (mode === "debug" && params.trimStatic === true) {
+        throw new InvalidToolInputError(
+          "Debug recordings require trimStatic to be false or omitted. Use light mode for static trimming."
+        );
+      }
+
+      const timeLimitSeconds =
+        params.timeLimitSeconds ??
+        (mode === "debug" ? DEFAULT_DEBUG_TIME_LIMIT_SECONDS : DEFAULT_TIME_LIMIT_SECONDS);
+      if (mode === "debug" && timeLimitSeconds > MAX_DEBUG_TIME_LIMIT_SECONDS) {
+        throw new InvalidToolInputError(
+          `Debug recordings cannot exceed ${MAX_DEBUG_TIME_LIMIT_SECONDS} seconds. Capture a shorter reproduction or use light mode.`
+        );
+      }
 
       // Distinguish tvOS from iOS by runtime — shape alone can't. tvOS has no
       // simulator-server backend, so say so here instead of failing deeper in.
@@ -105,8 +137,6 @@ Fails if a recording is already running on the device, the device is not booted,
           }
         );
       }
-
-      const timeLimitSeconds = params.timeLimitSeconds ?? DEFAULT_TIME_LIMIT_SECONDS;
 
       // The same simulator-server instance `screenshot` and the input tools use;
       // resolving here attaches to it, or starts it if nothing else needed it yet.
@@ -155,7 +185,7 @@ Fails if a recording is already running on the device, the device is not booted,
       // capture.ts arms the visualizer once the encoder is live and restores it
       // to off when the recording ends. The toggles are best-effort: a failure
       // only costs the overlay, surfaced as a warning at stop.
-      const showTouches = params.showTouches ?? true;
+      const showTouches = params.showTouches ?? mode === "light";
       const pointer: PointerControl | undefined = showTouches
         ? makePointerControl(simulator)
         : undefined;
@@ -165,11 +195,13 @@ Fails if a recording is already running on the device, the device is not booted,
       const started = await startCapture(api, {
         streamUrl,
         timeLimitSeconds,
-        watermark: isFeatureEnabled("video-watermark"),
-        trimStatic: params.trimStatic ?? true,
+        mode,
+        watermark: mode === "light" && isFeatureEnabled("video-watermark"),
+        trimStatic: mode === "light" && (params.trimStatic ?? true),
         pointer,
         followPanel,
       });
+      ctx?.onRecordingOutput?.(device.id, started.outputFile);
       return warning !== undefined ? { ...started, warning } : started;
     },
   };
@@ -192,6 +224,14 @@ Fails if a recording is already running on the device, the device is not booted,
  */
 export function makePointerControl(simulator: SimulatorServerApi): PointerControl {
   let enabling: Promise<unknown> | null = null;
+  let disabling: Promise<void> | null = null;
+
+  async function restorePointer() {
+    const pending = enabling;
+    if (pending) await pending.catch(() => {});
+    await setPointerVisible(simulator, false, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
+  }
+
   return {
     async enable() {
       const run = (async () => {
@@ -209,10 +249,9 @@ export function makePointerControl(simulator: SimulatorServerApi): PointerContro
         if (enabling === run) enabling = null;
       }
     },
-    async disable() {
-      const pending = enabling;
-      if (pending) await pending.catch(() => {});
-      await setPointerVisible(simulator, false, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
+    disable() {
+      disabling ??= restorePointer().catch(() => {});
+      return disabling;
     },
   };
 }

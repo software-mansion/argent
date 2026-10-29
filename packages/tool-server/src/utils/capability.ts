@@ -69,7 +69,8 @@ export class NotImplementedOnPlatformError extends Error {
  * named key, a newline in Android/Vega `keyboard` text, a character with no
  * keycode on iOS/chromium). A client input error, not an internal fault, so the
  * HTTP dispatcher maps it to `400 Bad Request` like the zod-validation path
- * rather than a `500`. The `.message` is safe to bubble straight to the agent.
+ * rather than a `500`. A response already streaming carries the same message
+ * in-band with its existing 200 status. The `.message` is safe to bubble straight to the agent.
  */
 export class InvalidToolInputError extends Error {
   /**

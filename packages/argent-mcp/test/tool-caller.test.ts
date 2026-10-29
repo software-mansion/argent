@@ -86,7 +86,13 @@ function readBody(req: http.IncomingMessage): Promise<string> {
  * names an upload consumes it when its body is read, and `reinstall-app` waits
  * `installMs` before it answers.
  */
-async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}): Promise<Stub> {
+async function startStub(
+  opts: {
+    dropFirst?: string[];
+    installMs?: number;
+    listingError?: { error: string; error_code: string; error_kind: string };
+  } = {}
+): Promise<Stub> {
   const dropFirst = new Set(opts.dropFirst ?? ["/tools/fast"]);
   const requests: Recorded[] = [];
   const calls = new Map<string, number>();
@@ -111,7 +117,8 @@ async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(payload));
     };
-    if (req.method === "GET" && url === "/tools") return json(200, LISTING);
+    if (req.method === "GET" && url === "/tools")
+      return opts.listingError ? json(503, opts.listingError) : json(200, LISTING);
     if (req.method === "POST" && url === "/upload") {
       const uploadId = `u-${uploads.size + 1}`;
       uploads.add(uploadId);
@@ -191,6 +198,30 @@ const postsTo = (path: string) =>
   stub.requests.filter((r) => r.method === "POST" && r.url === path);
 
 describe("createToolCaller", () => {
+  it("passes shutdown discovery guidance through the MCP caller without replaying a tool", async () => {
+    const error =
+      "The tool-server is shutting down. This call was not started. Check /server/original.mp4 after encoding finishes. A restart loses retrieval state.";
+    const draining = await startStub({
+      listingError: { error, error_code: "HTTP_SERVER_SHUTTING_DOWN", error_kind: "unknown" },
+    });
+    try {
+      const client = caller({ getHandle: () => ({ url: draining.url, token: "tok" }) });
+      await expect(
+        client.callTool("screen-recording-stop", { udid: "device" })
+      ).rejects.toMatchObject({
+        message: error,
+        errorCode: "HTTP_SERVER_SHUTTING_DOWN",
+        errorKind: "unknown",
+      });
+      expect(draining.requests.map((request) => [request.method, request.url])).toEqual([
+        ["GET", "/tools"],
+      ]);
+      expect(client.reconnect).not.toHaveBeenCalled();
+    } finally {
+      await draining.close();
+    }
+  });
+
   it("uploads a tar-upload input to POST /upload when routed to a remote server", async () => {
     const { callTool } = caller({ remote: true });
 

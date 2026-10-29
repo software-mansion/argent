@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { cleanupAbandonedFrames } from "../src/tools/screen-recording/frame-directory";
 
 const telemetryMock = vi.hoisted(() => ({
   init: vi.fn(),
@@ -13,6 +14,8 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const registryMock = vi.hoisted(() => ({
+  getSnapshot: vi.fn(() => ({ services: new Map() })),
+  beginShutdown: vi.fn(),
   dispose: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -59,6 +62,9 @@ vi.mock("@argent/configuration-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/configuration-core")>();
   return { ...actual, isFlagEnabled: vi.fn(() => false) };
 });
+vi.mock("../src/tools/screen-recording/frame-directory", () => ({
+  cleanupAbandonedFrames: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../src/utils/setup-registry", () => ({
   createRegistry: vi.fn(() => registryMock),
 }));
@@ -92,7 +98,15 @@ describe("tool-server startup telemetry", () => {
   it("drains telemetry when startup fails before the listener binds", async () => {
     const { start } = await import("../src/index");
 
+    const interval = vi.spyOn(globalThis, "setInterval");
+    const clear = vi.spyOn(globalThis, "clearInterval");
     start();
+    expect(cleanupAbandonedFrames).toHaveBeenCalledOnce();
+    const sweepIndex = interval.mock.calls.findIndex(([, delay]) => delay === 60_000);
+    expect(sweepIndex).toBeGreaterThanOrEqual(0);
+    const sweep = interval.mock.calls[sweepIndex][0] as () => void;
+    sweep();
+    expect(cleanupAbandonedFrames).toHaveBeenCalledTimes(2);
 
     // The identity warm-up is kicked off during startup (before the readiness
     // gate), so the fingerprint resolve happens off the accept path. Regression
@@ -120,7 +134,16 @@ describe("tool-server startup telemetry", () => {
     expect(watcherMock.stop).toHaveBeenCalledOnce();
     expect(httpHandleMock.dispose).toHaveBeenCalledOnce();
     expect(registryMock.dispose).toHaveBeenCalledOnce();
+    expect(registryMock.beginShutdown.mock.invocationCallOrder[0]).toBeLessThan(
+      httpHandleMock.dispose.mock.invocationCallOrder[0]
+    );
+    expect(httpHandleMock.dispose.mock.invocationCallOrder[0]).toBeLessThan(
+      registryMock.getSnapshot.mock.invocationCallOrder[0]
+    );
     expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(clear).toHaveBeenCalledWith(interval.mock.results[sweepIndex].value);
+    interval.mockRestore();
+    clear.mockRestore();
 
     process.emit("SIGTERM");
 

@@ -35,6 +35,7 @@ export function createStopAllSimulatorServersTool(
 > {
   return {
     id: "stop-all-simulator-servers",
+    longRunning: true,
     interaction: {
       // "all" only holds for the unscoped sweep; a scoped call touches just the
       // ids it was given.

@@ -1,3 +1,4 @@
+import { rethrowRegistryShutdown } from "../../utils/sub-invoke";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -224,7 +225,8 @@ export async function runSnapshot(
   if (opts.cropOn === undefined && supportsFlowTree(env.device.platform)) {
     try {
       await settleTree(env);
-    } catch {
+    } catch (err) {
+      rethrowRegistryShutdown(err);
       // tree-source outage — capture anyway, see above
     }
   }

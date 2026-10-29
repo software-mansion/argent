@@ -38,6 +38,7 @@ type ZodIssue = z.core.$ZodIssue;
 const resolvedDuringInvocation = new AsyncLocalStorage<Set<URN>>();
 
 export class Registry {
+  private shuttingDown = false;
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
@@ -112,6 +113,7 @@ export class Registry {
     params?: unknown,
     options?: InvokeToolOptions
   ): Promise<TResult> {
+    if (this.shuttingDown) throw registryShutdownError();
     const record = this.tools.get(this.toolAliases.get(id) ?? id);
     if (!record) throw new ToolNotFoundError(id);
 
@@ -184,6 +186,7 @@ export class Registry {
           for (const { alias, urn, options: resolveOptions } of refs) {
             resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
           }
+          if (this.shuttingDown) throw registryShutdownError();
           return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
         });
       };
@@ -305,6 +308,10 @@ export class Registry {
     await this._teardown(urn);
   }
 
+  beginShutdown(): void {
+    this.shuttingDown = true;
+  }
+
   async dispose(): Promise<void> {
     for (const [urn, node] of this.services) {
       if (node.state === ServiceState.RUNNING || node.state === ServiceState.STARTING) {
@@ -318,6 +325,7 @@ export class Registry {
     resolutionPath: string[],
     options?: Record<string, unknown>
   ): Promise<T> {
+    if (this.shuttingDown) return Promise.reject(registryShutdownError());
     let node = this.services.get(urn);
     if (!node) {
       let parsed: { namespace: string; payload: string };
@@ -388,6 +396,7 @@ export class Registry {
         depNode.dependents.add(urn);
       }
 
+      if (this.shuttingDown) throw registryShutdownError();
       const instance = await blueprint.factory(resolvedDeps, payload, options);
 
       // Terminated while the factory was awaited: discard the fresh instance.
@@ -468,6 +477,15 @@ export class Registry {
     node.dependents.clear();
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
+}
+
+function registryShutdownError(): FailureError {
+  return new FailureError("The registry is shutting down.", {
+    error_code: FAILURE_CODES.REGISTRY_SHUTTING_DOWN,
+    failure_stage: "registry_shutdown",
+    failure_area: "registry",
+    error_kind: "unknown",
+  });
 }
 
 /**

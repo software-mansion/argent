@@ -1,15 +1,28 @@
+import { formatErrorForAgent } from "../src/utils/format-error";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/registry";
+import {
+  getFailureSignal,
+  FAILURE_CODES,
+  ServiceState,
+  ArtifactStore,
+  type Registry,
+  type DeviceInfo,
+} from "@argent/registry";
 import type { ChildProcess } from "child_process";
 
 vi.mock("child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("child_process")>();
   return { ...actual, spawn: vi.fn() };
 });
+vi.mock("../src/tools/screen-recording/encoder", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tools/screen-recording/encoder")>()),
+  verifyDebugEncoder: vi.fn(async () => {}),
+  verifyDebugVideo: vi.fn(async () => {}),
+}));
 vi.mock("../src/tools/screen-recording/mjpeg-stream", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../src/tools/screen-recording/mjpeg-stream")>();
@@ -26,6 +39,7 @@ vi.mock("../src/tools/screen-recording/watermark", async (importOriginal) => {
 });
 
 import { spawn } from "child_process";
+import { verifyDebugEncoder, verifyDebugVideo } from "../src/tools/screen-recording/encoder";
 import {
   screenRecordingSessionBlueprint,
   type ScreenRecordingSessionApi,
@@ -38,7 +52,9 @@ import {
   type PointerControl,
 } from "../src/tools/screen-recording/capture";
 import { setPointerTrail, setPointerVisible } from "../src/utils/simulator-client";
+import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { makePointerControl } from "../src/tools/screen-recording/screen-recording-start";
+import { screenRecordingStopTool } from "../src/tools/screen-recording/screen-recording-stop";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
 import {
@@ -62,6 +78,7 @@ const ANDROID_SERIAL = "emulator-5554";
 const STREAM_URL = "http://127.0.0.1:54321/stream.mjpeg";
 /** Grace the start holds after spawning ffmpeg before declaring it live. */
 const READY_GRACE_MS = 800;
+const ENCODER_PID = 91919191;
 
 /** Minimal JPEG: SOI + SOF0 declaring the frame size + EOI. */
 function fakeJpeg(width = 1320, height = 2868): Buffer {
@@ -85,25 +102,36 @@ class FakeStdin extends EventEmitter {
     this.writes.push(chunk);
     return true;
   });
-  end = vi.fn(() => {
+  end = vi.fn((_input?: string) => {
     this.ended = true;
     this.writable = false;
   });
 }
 
 class FakeChild extends EventEmitter {
+  pid = ENCODER_PID;
   stdout = new EventEmitter();
-  stderr = new EventEmitter();
+  stderr = Object.assign(new EventEmitter(), { readableEnded: false });
   stdin = new FakeStdin();
+  reportedFrames: number | undefined;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   kill = vi.fn((_signal?: NodeJS.Signals) => true);
 
   /** Simulate the process ending: stamps exitCode/signalCode, emits 'exit'. */
-  exit(code: number | null, signal: NodeJS.Signals | null = null): void {
+  exit(code: number | null, signal: NodeJS.Signals | null = null, close = true): void {
     this.exitCode = code;
     this.signalCode = signal;
+    const input = this.stdin.end.mock.calls.at(-1)?.[0];
+    if ((code === 0 || this.reportedFrames !== undefined) && input?.startsWith("ffconcat")) {
+      const frames = this.reportedFrames ?? (input.match(/^file /gm) ?? []).length;
+      this.stderr.emit("data", Buffer.from(`frame=${frames}\n`));
+    }
     this.emit("exit", code, signal);
+    if (close) {
+      this.stderr.readableEnded = true;
+      this.emit("close", code, signal);
+    }
   }
 
   /** ffmpeg's real behaviour: stdin EOF finalizes the file and it exits. */
@@ -122,6 +150,7 @@ interface FakeStream {
   error: Error | null;
   waitForFirstFrame: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  subscribe: ReturnType<typeof vi.fn>;
 }
 
 function fakeStream(overrides: Partial<FakeStream> = {}): FakeStream {
@@ -132,6 +161,10 @@ function fakeStream(overrides: Partial<FakeStream> = {}): FakeStream {
     error: null,
     waitForFirstFrame: vi.fn(async () => frame),
     close: vi.fn(),
+    subscribe: vi.fn((listener: (frame: Buffer, receivedAtMs: number) => void) => {
+      listener(frame, performance.now());
+      return vi.fn();
+    }),
     ...overrides,
   };
   mockOpenStream.mockResolvedValueOnce(stream as never);
@@ -144,11 +177,16 @@ function fakeChild(): FakeChild {
   return child;
 }
 
-/** A PointerControl whose enable/disable calls are observable. */
-function fakePointer(enableResult = true) {
+/** A PointerControl whose enable/restore calls are observable. */
+function fakePointer(enableResult = true, restored = Promise.resolve()) {
   const enable = vi.fn(async () => enableResult);
-  const disable = vi.fn(async () => {});
-  return { enable, disable } satisfies PointerControl;
+  const restore = vi.fn(() => restored);
+  let disabling: Promise<void> | null = null;
+  return {
+    enable,
+    disable: () => (disabling ??= restore()),
+    restore,
+  } satisfies PointerControl & { restore: typeof restore };
 }
 
 async function makeSession(device: DeviceInfo): Promise<ScreenRecordingSessionApi> {
@@ -170,6 +208,7 @@ async function startAndSettle(
     watermark?: boolean;
     trimStatic?: boolean;
     pointer?: PointerControl;
+    mode?: "light" | "debug";
   } = {}
 ): Promise<Awaited<ReturnType<typeof startCapture>>> {
   const promise = startCapture(api, {
@@ -180,11 +219,15 @@ async function startAndSettle(
     // wall-clock path; trim-specific tests opt in explicitly.
     trimStatic: params.trimStatic ?? false,
     pointer: params.pointer,
+    mode: params.mode,
   });
   // Mark it handled: a start that rejects while the timers below are being
   // advanced would otherwise surface as an unhandled rejection, even though
   // the caller awaits the same promise for its error.
   promise.catch(() => {});
+  if (params.mode === "debug") {
+    await vi.waitFor(() => expect(api.pendingChild).not.toBeNull());
+  }
   await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
   return promise;
 }
@@ -214,10 +257,15 @@ beforeEach(async () => {
   mockOpenStream.mockReset();
   mockResolveFfmpeg.mockReset();
   mockResolveFfmpeg.mockResolvedValue("/fake/ffmpeg");
+  const kill = process.kill.bind(process);
+  vi.spyOn(process, "kill").mockImplementation((pid, signal) =>
+    pid === ENCODER_PID && signal === 0 ? true : kill(pid, signal)
+  );
   vi.useFakeTimers();
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   restoreTmpdir();
   await fs.rm(scratch, { recursive: true, force: true });
@@ -246,6 +294,113 @@ describe("screen-recording session blueprint", () => {
 
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     expect(instance.api.pendingChild).toBeNull();
+  });
+
+  it.each(["light", "debug"] as const)(
+    "rejects %s readiness that resolves after disposal without restarting capture",
+    async (mode) => {
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      const stream = fakeStream();
+      const child = fakeChild();
+      const starting = startCapture(instance.api, {
+        streamUrl: STREAM_URL,
+        timeLimitSeconds: 30,
+        watermark: false,
+        trimStatic: false,
+        mode,
+      });
+      const rejected = expect(starting).rejects.toThrow("torn down");
+      await vi.waitFor(() => expect(instance.api.pendingChild).not.toBeNull());
+      await instance.dispose();
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+      await rejected;
+      child.exit(null, "SIGKILL");
+      expect(stream.close).toHaveBeenCalled();
+      expect(stream.subscribe).not.toHaveBeenCalled();
+      expect(getActiveScreenRecordings()).toHaveLength(0);
+      expect(instance.api.captureProcess).toBeNull();
+      expect(instance.api.debugCapture).toBeNull();
+      const error = await stopCapture(await makeSession(iosDevice)).catch((err: unknown) => err);
+      expect(getFailureSignal(error)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+      );
+      expect(await fs.readdir(scratch)).toEqual([]);
+    }
+  );
+
+  it.each(["light", "debug"] as const)(
+    "rejects disposal during %s touch setup without killing the owned encoder",
+    async (mode) => {
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd();
+      let enabled!: (value: boolean) => void;
+      const pointer = {
+        enable: vi.fn(
+          () =>
+            new Promise<boolean>((resolve) => {
+              enabled = resolve;
+            })
+        ),
+        disable: vi.fn(async () => {}),
+      };
+      const starting = startCapture(instance.api, {
+        streamUrl: STREAM_URL,
+        timeLimitSeconds: 30,
+        watermark: false,
+        trimStatic: false,
+        mode,
+        pointer,
+      });
+      const rejected = starting.catch((error: Error) => error);
+      await vi.waitFor(() => expect(instance.api.pendingChild).not.toBeNull());
+      await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+      expect(pointer.enable).toHaveBeenCalledOnce();
+      expect(instance.api.pendingChild).toBeNull();
+      const output = instance.api.outputFile!;
+      await fs.writeFile(output, Buffer.alloc(64, 1));
+      await instance.dispose();
+      expect(child.kill).not.toHaveBeenCalled();
+      enabled(true);
+      const error = await rejected;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("torn down");
+      expect((error as Error).message).toContain(`a video may have been saved at ${output}`);
+      expect((error as Error).message).toContain("Check that path on the tool-server");
+      expect((error as Error).message).not.toMatch(/nothing was recorded/i);
+      expect(instance.api.recordingTimeout).toBeNull();
+      expect(getActiveScreenRecordings()).toHaveLength(0);
+      expect((await fs.stat(output)).size).toBeGreaterThan(0);
+    }
+  );
+
+  it("reports teardown when disposal kills the encoder before readiness expires", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    fakeStream();
+    const child = fakeChild();
+    child.kill.mockImplementation(() => {
+      child.exit(null, "SIGKILL");
+      return true;
+    });
+    const starting = startCapture(instance.api, {
+      streamUrl: STREAM_URL,
+      timeLimitSeconds: 30,
+      watermark: false,
+      trimStatic: false,
+    });
+    const rejected = expect(starting).rejects.toThrow("torn down");
+    await vi.waitFor(() => expect(instance.api.pendingChild).not.toBeNull());
+    await instance.dispose();
+    await rejected;
+    expect(getActiveScreenRecordings()).toHaveLength(0);
   });
 
   it("rejects platforms that cannot record", async () => {
@@ -304,7 +459,10 @@ describe("screen-recording session blueprint", () => {
     // service), then call `screen-recording-stop`. `Registry._teardown` nulls
     // the node's instance, so that stop resolves a BRAND NEW session — modelled
     // here by building a second one for the same device.
-    async function reapDuringCapture(): Promise<{
+    async function reapDuringCapture(
+      hasOutput = true,
+      size = 64
+    ): Promise<{
       output: string;
       fresh: ScreenRecordingSessionApi;
     }> {
@@ -315,6 +473,7 @@ describe("screen-recording session blueprint", () => {
       fakeChild().exitOnStdinEnd();
       await startAndSettle(instance.api);
       const output = instance.api.outputFile!;
+      if (hasOutput) await fs.writeFile(output, Buffer.alloc(size, 1));
 
       await instance.dispose();
 
@@ -334,10 +493,23 @@ describe("screen-recording session blueprint", () => {
       expect(message).toContain("stop-all-simulator-servers");
       // Nothing else in the process still knows this path exists.
       expect(message).toContain(output);
+      expect(message).toContain("Check that it plays");
+      expect(message).not.toContain("may already have been delivered");
       expect(getFailureSignal(err)?.error_code).toBe(
         FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
       );
     });
+
+    it.each([false, true])(
+      "does not advertise or retain an empty disposed output (exists: %s)",
+      async (exists) => {
+        const { output, fresh } = await reapDuringCapture(exists, 0);
+        await expect(fs.access(output)).rejects.toThrow();
+        const err = await stopCapture(fresh).catch((e: unknown) => e);
+        expect((err as Error).message).toContain("No recording output was saved");
+        expect((err as Error).message).not.toContain(output);
+      }
+    );
 
     it("tells the owner when the teardown hit a CAPPED capture awaiting retrieval", async () => {
       // `hadUnretrievedCapture` has three arms and only `recordingActive` was
@@ -355,6 +527,7 @@ describe("screen-recording session blueprint", () => {
       expect(instance.api.recordingActive).toBe(false);
       expect(instance.api.pendingRetrieval).toBe(true);
       const output = instance.api.outputFile!;
+      await fs.writeFile(output, Buffer.alloc(64, 1));
 
       await instance.dispose();
       const err = await stopCapture(await makeSession(iosDevice)).catch((e: unknown) => e);
@@ -454,7 +627,9 @@ describe("screen recording capture", () => {
     expect((args as string[]).at(-1)).toBe(result.outputFile);
     expect(api.recordingActive).toBe(true);
     expect(api.captureProcess).toBe(child as unknown as ChildProcess);
-    expect(getActiveScreenRecordings()).toHaveLength(1);
+    expect(getActiveScreenRecordings()).toMatchObject([
+      { deviceId: IOS_UDID, outputFile: result.outputFile },
+    ]);
   });
 
   it("stamps the watermark in the same pass when the flag is on", async () => {
@@ -605,6 +780,26 @@ describe("screen recording capture", () => {
     expect(api.recordingActive).toBe(false);
   });
 
+  it("rejects an unavailable debug encoder before accepting capture", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    vi.mocked(verifyDebugEncoder).mockRejectedValueOnce(new Error("Unknown encoder libx264"));
+    await expect(
+      startCapture(api, {
+        streamUrl: STREAM_URL,
+        timeLimitSeconds: 30,
+        watermark: false,
+        trimStatic: false,
+        mode: "debug",
+      })
+    ).rejects.toThrow("Unknown encoder libx264");
+    expect(stream.close).toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+    expect(api.recordingActive).toBe(false);
+    expect(await fs.readdir(scratch)).toEqual([]);
+  });
+
   it("fails the start when ffmpeg dies inside the fail-fast grace", async () => {
     const api = await makeSession(iosDevice);
     const stream = fakeStream();
@@ -745,7 +940,7 @@ describe("screen recording capture", () => {
       // the old one-liner otherwise leaves the suite green.
       const message = (err as Error).message;
       expect(message).toContain("stop-all-simulator-servers");
-      expect(message).toContain("nothing was recorded");
+      expect(message).toMatch(/nothing was recorded/i);
       expect(message).toContain("start the recording again");
       expect(message).toContain(IOS_UDID);
     }
@@ -967,7 +1162,7 @@ describe("touch visualizer", () => {
 
     await startAndSettle(api, { pointer });
     expect(pointer.enable).toHaveBeenCalledTimes(1);
-    expect(pointer.disable).not.toHaveBeenCalled();
+    expect(pointer.restore).not.toHaveBeenCalled();
     expect(api.pointerFailed).toBe(false);
     expect(api.pointerDisable).toBe(pointer.disable);
 
@@ -975,7 +1170,7 @@ describe("touch visualizer", () => {
     const outputFile = api.outputFile!;
     const result = await stopCapture(api);
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.pointerDisable).toBeNull();
     expect(result.warning).toBeUndefined();
     await fs.rm(outputFile, { force: true });
@@ -991,7 +1186,7 @@ describe("touch visualizer", () => {
     await startAndSettle(api, { timeLimitSeconds: 5, pointer });
     await vi.advanceTimersByTimeAsync(5_000); // cap fires
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.recordingTimedOut).toBe(true);
   });
 
@@ -1004,7 +1199,7 @@ describe("touch visualizer", () => {
 
     child.exit(1); // crash mid-capture
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.recordingExitedUnexpectedly).toBe(true);
   });
 
@@ -1062,7 +1257,7 @@ describe("touch visualizer", () => {
 
     await instance.dispose();
 
-    expect(pointer.disable).toHaveBeenCalledTimes(1);
+    expect(pointer.restore).toHaveBeenCalledTimes(1);
     expect(api.pointerDisable).toBeNull();
   });
 
@@ -1081,7 +1276,7 @@ describe("touch visualizer", () => {
     const result = await stopCapture(api);
 
     // Even a failed enable is still restored to off, best-effort.
-    expect(pointer.disable).toHaveBeenCalled();
+    expect(pointer.restore).toHaveBeenCalled();
     expect(result.warning).toContain("touch visualizer could not be enabled");
     expect(api.pointerFailed).toBe(false); // reset for the next recording
     await fs.rm(outputFile, { force: true });
@@ -1112,7 +1307,7 @@ describe("touch visualizer", () => {
     // fresh start clear it, and neither the cap nor the crash path runs stop's
     // reset. Set that residue directly instead of driving a real cap-then-start.
     // On this branch such a start is still admitted (assertNoActiveRecording gates
-    // only on recordingActive/startPending/stopPending), but #517's guard — already
+    // only on recordingActive/startPending/stopping), but #517's guard — already
     // on origin/feat/screen-recording, not yet in this base — additionally rejects a
     // start while a finalized recording awaits retrieval (`pendingRetrieval`), so a
     // cap-then-start would throw once the stack rebases. Driving the flag in
@@ -1231,6 +1426,28 @@ describe("touch visualizer wire protocol", () => {
     await control.disable(); // idle path, nothing to await first
 
     expect(ops).toEqual([{ trail: 8 }, { show: true }, { show: false }]);
+  });
+
+  it("shares pending and completed teardown without sending duplicate pointer requests", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
+      await pending;
+      return new Response(JSON.stringify({ status: "ok" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const control = makePointerControl(fakeApi);
+    const first = control.disable();
+    const second = control.disable();
+    expect(second).toBe(first);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    release();
+    await Promise.all([first, second]);
+    await control.disable();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("enable() reflects the show result even when the trail request fails", async () => {
@@ -1454,7 +1671,7 @@ describe("screen recording stop", () => {
     }
     // The session must still be startable after a failed stop.
     expect(api.recordingActive).toBe(false);
-    expect(api.stopPending).toBe(false);
+    expect(api.stopping).toBeNull();
   });
 
   it("removes the empty container rather than orphaning it when a stop fails", async () => {
@@ -1477,7 +1694,7 @@ describe("screen recording stop", () => {
     // The dead 0-byte temp must not be left behind in os.tmpdir.
     await expect(fs.access(outputFile)).rejects.toThrow();
     expect(api.recordingActive).toBe(false);
-    expect(api.stopPending).toBe(false);
+    expect(api.stopping).toBeNull();
   });
 });
 
@@ -1513,4 +1730,827 @@ describe("readJpegDimensions", () => {
     ]);
     expect(readJpegDimensions(withFill)).toEqual({ width: 640, height: 480 });
   });
+});
+
+describe("debug recording lifecycle", () => {
+  it("finalizes after the cap and restores optional markers before retrieval", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer();
+    await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2, pointer });
+    expect(pointer.enable).toHaveBeenCalledOnce();
+    expect(api.pumpTimer).toBeNull();
+    const outputFile = api.outputFile!;
+    const directory = (await fs.readdir(scratch)).find((name) =>
+      name.startsWith("argent-recording-frames-")
+    )!;
+    await fs.writeFile(outputFile, Buffer.alloc(64, 1));
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(async () => expect(await fs.readdir(scratch)).not.toContain(directory));
+    expect(api.recordingActive).toBe(false);
+    expect(api.pendingRetrieval).toBe(true);
+    expect(stream.close).toHaveBeenCalledOnce();
+    expect(pointer.restore).toHaveBeenCalledOnce();
+    const result = await stopCapture(api);
+    expect(result.encodingComplete).toBe(true);
+    expect(result.trimmedMs).toBeUndefined();
+    expect(api.debugCapture).toBeNull();
+    expect(pointer.restore).toHaveBeenCalledOnce();
+  });
+
+  it("restores touches before disposal drains queued debug writes", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const stream = fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer();
+    await startAndSettle(instance.api, { mode: "debug", pointer });
+    const debug = instance.api.debugCapture!;
+    const finish = debug.finish.bind(debug);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(debug, "finish").mockImplementationOnce(async () => {
+      await pending;
+      await finish();
+    });
+    let completed = false;
+    const disposing = instance.dispose().then(() => {
+      completed = true;
+    });
+    await vi.waitFor(() => expect(debug.finish).toHaveBeenCalledOnce());
+    expect(completed).toBe(false);
+    expect(stream.close).toHaveBeenCalledOnce();
+    expect(pointer.restore).toHaveBeenCalledOnce();
+    expect(instance.api.pointerDisable).toBeNull();
+    release();
+    await disposing;
+  });
+
+  it("disposes a debug subscription and closes the encoder", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    const stream = fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(instance.api, { mode: "debug" });
+    const debug = instance.api.debugCapture!;
+    await instance.dispose();
+    expect(debug.frameTimesUs).toHaveLength(2);
+    expect(stream.close).toHaveBeenCalledOnce();
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+    expect(instance.api.debugCapture).toBeNull();
+  });
+});
+
+describe("debug finalization safeguards", () => {
+  it("removes the JPEG directory when encoder readiness fails", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    const starting = startCapture(api, {
+      streamUrl: STREAM_URL,
+      timeLimitSeconds: 30,
+      watermark: false,
+      trimStatic: false,
+      mode: "debug",
+    });
+    starting.catch(() => {});
+    await vi.waitFor(() => expect(api.pendingChild).toBe(child));
+    expect(
+      (await fs.readdir(scratch)).some((name) => name.startsWith("argent-recording-frames-"))
+    ).toBe(true);
+    child.exit(1);
+    await expect(starting).rejects.toThrow("before the recording started");
+    expect(
+      (await fs.readdir(scratch)).some((name) => name.startsWith("argent-recording-frames-"))
+    ).toBe(false);
+  });
+
+  it("does not enable markers after debug capture already ended during attachment", async () => {
+    const api = await makeSession(iosDevice);
+    const large = Buffer.alloc(129 * 1024 * 1024);
+    fakeJpeg().copy(large);
+    fakeStream({
+      latest: large,
+      waitForFirstFrame: vi.fn(async () => large),
+      subscribe: vi.fn((listener) => {
+        listener(large, performance.now());
+        return vi.fn();
+      }),
+    });
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    const pointer = fakePointer();
+    await startAndSettle(api, { mode: "debug", pointer });
+    expect(pointer.enable).not.toHaveBeenCalled();
+    await expect(stopCapture(api)).rejects.toThrow("could not keep up");
+  });
+
+  it("reports an encoder that skipped a frame despite exiting successfully", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.reportedFrames = 1;
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const result = await stopCapture(api);
+    expect(result.encodingComplete).toBe(false);
+    expect(result.durationMs).toBeNull();
+    expect(result.warning).toContain("encoded=1, expected=2");
+  });
+
+  it("rejects a nonzero encoder exit even when every frame was encoded", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.reportedFrames = 2;
+    child.exitOnStdinEnd(1);
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const result = await stopCapture(api);
+    expect(result.encodingComplete).toBe(false);
+    expect(result.durationMs).toBeNull();
+    expect(result.warning).toContain("code=1");
+    expect(result.warning).toContain("encoded=2, expected=2");
+  });
+
+  it("waits for encoder stderr to drain after exit before checking the final frame total", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.reportedFrames = 0;
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const stopping = stopCapture(api);
+    await api.debugCapture!.finish();
+    child.exit(0, null, false);
+    await vi.advanceTimersByTimeAsync(0);
+    child.stderr.emit("data", Buffer.from("frame=2\nprogress=end\n"));
+    child.stderr.readableEnded = true;
+    child.emit("close", 0, null);
+    expect((await stopping).encodingComplete).toBe(true);
+  });
+
+  it.each(["missing encoder", "killed encoder", "disk full"])(
+    "keeps diagnostics when debug produces no video: %s",
+    async (failure) => {
+      const api = await makeSession(iosDevice);
+      const stream = fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd(1);
+      await startAndSettle(api, { mode: "debug" });
+      if (failure === "killed encoder") {
+        child.exit(null, "SIGKILL");
+      } else if (failure === "disk full") {
+        const write = vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("ENOSPC"));
+        const emit = stream.subscribe.mock.calls[0][0];
+        emit(fakeJpeg(), performance.now());
+        await api.debugCapture!.finish();
+        write.mockRestore();
+      } else {
+        child.stderr.emit("data", Buffer.from("Unknown encoder libx264"));
+      }
+      const message =
+        failure === "killed encoder"
+          ? "SIGKILL"
+          : failure === "disk full"
+            ? "ENOSPC"
+            : "Unknown encoder libx264";
+      const error = await stopCapture(api).catch((err: Error) => err);
+      expect((error as Error).message).toContain(message);
+      expect((error as Error).message).not.toMatch(
+        /returning whatever|partial video|duration is unknown/
+      );
+      expect(api.stopping).toBeNull();
+    }
+  );
+
+  it.each([false, true])(
+    "preserves the failing frame path after final encoder progress (missing: %s)",
+    async (missing) => {
+      const api = await makeSession(iosDevice);
+      fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd(1);
+      await startAndSettle(api, { mode: "debug" });
+      if (!missing) await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+      const frame = "/tmp/recording/200.jpg";
+      child.stderr.emit(
+        "data",
+        Buffer.from(
+          `[concat] Impossible to open 'file:${frame}'\n[in#0/concat] Terminating thread with return code -2\nframe=40\nfps=1.0\nstream_0_0_q=12\nbitrate=1\ntotal_size=400\nout_time_us=3000000\nout_time_ms=3000000\nout_time=00:00:03.000\ndup_frames=0\ndrop_frames=0\nspeed=1.0x\nprogress=end\n`
+        )
+      );
+      const result = await stopCapture(api).catch((error: Error) => error);
+      const message = result instanceof Error ? result.message : result.warning!;
+      expect(message).toContain(`Impossible to open 'file:${frame}'`);
+      expect(message).not.toContain("progress=end");
+      expect(message).not.toContain("out_time_us=");
+    }
+  );
+
+  it("keeps early decoder diagnostics after many split progress updates", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd(1);
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    child.stderr.emit("data", Buffer.from("No JPEG data found in image\n"));
+    for (let i = 1; i <= 200; i++) {
+      const progress = `frame=${i}\nfps=30\nstream_0_0_q=12.0\nbitrate=2300.0kbits/s\ntotal_size=123456\nout_time_us=${i * 10000}\nout_time_ms=${i * 10000}\nout_time=00:00:01.000000\ndup_frames=0\ndrop_frames=0\nspeed=0.85x\nprogress=continue\n`;
+      child.stderr.emit("data", Buffer.from(progress.slice(0, 9)));
+      child.stderr.emit("data", Buffer.from(progress.slice(9)));
+    }
+    const result = await stopCapture(api);
+    expect(result.warning).toContain("No JPEG data found in image");
+    expect(result.warning).not.toContain("out_time_us=");
+    expect(result.warning).toContain("encoded=200");
+  });
+
+  it("lets a high-rate capture encode slower than real time", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    const child = fakeChild();
+    await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2 });
+    const emit = stream.subscribe.mock.calls[0][0] as (frame: Buffer, receivedAtMs: number) => void;
+    for (let i = 1; i < 120; i++) emit(fakeJpeg(), performance.now() + (i * 1_000) / 120);
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const stopping = stopCapture(api);
+    await api.debugCapture!.finish();
+    for (let frame = 1; frame <= 4; frame++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      child.stderr.emit("data", Buffer.from(`frame=${frame}\n`));
+    }
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+    expect(api.stopping).not.toBeNull();
+    child.exit(0);
+    expect((await stopping).encodingComplete).toBe(true);
+  });
+
+  it.each([
+    { capped: false, mode: "light" },
+    { capped: true, mode: "light" },
+    { capped: false, mode: "debug" },
+    { capped: true, mode: "debug" },
+  ] as const)(
+    "waits for a concurrent $mode stop and preserves its teardown path (capped: $capped)",
+    async ({ capped, mode }) => {
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      fakeStream();
+      const child = fakeChild();
+      await startAndSettle(instance.api, { mode, timeLimitSeconds: 5 });
+      if (capped) await vi.advanceTimersByTimeAsync(5_000);
+      const outputFile = instance.api.outputFile!;
+      await fs.writeFile(outputFile, Buffer.alloc(64, 1));
+      const stopping = stopCapture(instance.api);
+      await instance.api.debugCapture?.finish();
+      let disposed = false;
+      const disposing = instance.dispose().then(() => {
+        disposed = true;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(disposed).toBe(false);
+      expect(instance.api.stopping).not.toBeNull();
+      expect(child.kill).not.toHaveBeenCalled();
+      child.exit(0);
+      expect((await stopping).encodingComplete).toBe(mode === "debug" ? true : undefined);
+      await disposing;
+      const err = await stopCapture(await makeSession(iosDevice), outputFile).catch(
+        (error: unknown) => error
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+      );
+      expect((err as Error).message).toContain(outputFile);
+    }
+  );
+
+  it.each([
+    { saved: true, removed: false },
+    { saved: true, removed: true },
+    { saved: false, removed: false },
+  ])(
+    "preserves diagnostics when teardown follows a completed stop ($saved, removed: $removed)",
+    async ({ saved, removed }) => {
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      fakeStream();
+      fakeChild().exitOnStdinEnd(saved ? 0 : 1);
+      await startAndSettle(instance.api, { mode: "debug" });
+      const outputFile = instance.api.outputFile!;
+      if (saved) await fs.writeFile(outputFile, Buffer.alloc(64, 1));
+      await stopCapture(instance.api).catch(() => {});
+      if (removed) await fs.rm(outputFile);
+      await instance.dispose();
+      const error = await stopCapture(await makeSession(iosDevice), outputFile).catch(
+        (err: Error) => err
+      );
+      expect((error as Error).message).toContain(outputFile);
+      if (!saved) expect((error as Error).message).toContain("Debug encoder exited");
+      else {
+        expect((error as Error).message).toContain("may already have been delivered");
+        expect((error as Error).message).toContain("Teardown ended its retry state");
+        if (removed) {
+          expect((error as Error).message).toContain("is no longer available at");
+          expect((error as Error).message).not.toContain("No recording output was saved");
+        }
+      }
+      expect(getFailureSignal(error)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+      );
+    }
+  );
+
+  it("describes possibly partial output after a failed stop and teardown", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    fakeStream();
+    fakeChild().exitOnStdinEnd(1);
+    await startAndSettle(instance.api, { mode: "debug" });
+    const outputFile = instance.api.outputFile!;
+    await fs.writeFile(outputFile, Buffer.alloc(64, 1));
+    mockResolveFfmpeg.mockResolvedValueOnce(null);
+    await expect(stopCapture(instance.api)).rejects.toThrow("validation did not complete");
+    await instance.dispose();
+    const error = await stopCapture(await makeSession(iosDevice)).catch((err: Error) => err);
+    expect((error as Error).message).toContain(outputFile);
+    expect((error as Error).message).toContain("Check that it plays");
+    expect((error as Error).message).not.toContain("may already have been delivered");
+  });
+
+  it.each([0, 1])("removes disposed debug JPEGs after encoder exit %s", async (exitCode) => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    fakeStream();
+    const child = fakeChild();
+    await startAndSettle(instance.api, { mode: "debug" });
+    expect(mockSpawn.mock.calls.at(-1)![2]).toMatchObject({ detached: true });
+    const directory = (await fs.readdir(scratch)).find((name) =>
+      name.startsWith(`argent-recording-frames-${child.pid}-`)
+    )!;
+    expect(directory).toBeDefined();
+    const disposing = instance.dispose();
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(getActiveScreenRecordings()).toHaveLength(0);
+    expect(child.kill).not.toHaveBeenCalled();
+    child.exit(exitCode);
+    await disposing;
+    await expect(fs.access(path.join(scratch, directory))).rejects.toThrow();
+  });
+
+  it("keeps the teardown tool pending through more than 30 seconds of debug encoding", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+      device: iosDevice,
+    } as never);
+    fakeStream();
+    const child = fakeChild();
+    await startAndSettle(instance.api, { mode: "debug" });
+    const urn = screenRecordingSessionBlueprint.getURN(iosDevice);
+    const registry = {
+      getSnapshot: () => ({ services: new Map([[urn, { state: ServiceState.RUNNING }]]) }),
+      disposeService: vi.fn(() => instance.dispose()),
+    } as unknown as Registry;
+    const tool = createStopAllSimulatorServersTool(registry);
+    expect(tool.longRunning).toBe(true);
+    let completed = false;
+    const ending = tool.execute({}, { devices: [IOS_UDID] }, {} as never).then((result) => {
+      completed = true;
+      return result;
+    });
+    await instance.api.debugCapture!.finish();
+    for (let frame = 1; frame <= 4; frame++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      child.stderr.emit("data", Buffer.from(`frame=${frame}\n`));
+    }
+    expect(completed).toBe(false);
+    expect(child.kill).not.toHaveBeenCalled();
+    child.exit(0);
+    expect((await ending).stopped).toEqual([urn]);
+    expect(instance.api.debugCapture).toBeNull();
+  });
+
+  it("describes a light finalization deadline without claiming progress stalled", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    fakeChild();
+    await startAndSettle(api);
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const stopping = stopCapture(api);
+    await vi.advanceTimersByTimeAsync(26_001);
+    const result = await stopping;
+    expect(result.warning).toContain("did not finalize");
+    expect(result.warning).not.toContain("stopped making progress");
+  });
+
+  it("kills an encoder that emits progress reports without advancing, then waits for its exit", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const stopping = stopCapture(api);
+    await api.debugCapture!.finish();
+    for (let i = 0; i < 5; i++) {
+      child.stderr.emit("data", Buffer.from("frame=0\n"));
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(api.stopping).not.toBeNull();
+    child.exit(null, "SIGKILL");
+    const result = await stopping;
+    expect(result.encodingComplete).toBe(false);
+    expect(result.warning).toContain("stopped making progress");
+    expect(api.stopping).toBeNull();
+  });
+
+  it.each(["stop", "dispose"])(
+    "waits for an automatic pointer teardown before %s completes",
+    async (operation) => {
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      const api = instance.api;
+      fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd();
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pointer = fakePointer(true, pending);
+      await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2, pointer });
+      await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pointer.restore).toHaveBeenCalledOnce();
+      let completed = false;
+      const ending = (operation === "stop" ? stopCapture(api) : instance.dispose()).then(() => {
+        completed = true;
+      });
+      await api.debugCapture!.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).toBe(false);
+      expect(api.pointerDisable).not.toBeNull();
+      await expect(
+        startCapture(api, {
+          streamUrl: STREAM_URL,
+          timeLimitSeconds: 180,
+          watermark: false,
+          trimStatic: false,
+        })
+      ).rejects.toThrow();
+      release();
+      await ending;
+      expect(completed).toBe(true);
+      expect(api.pointerDisable).toBeNull();
+      expect(pointer.restore).toHaveBeenCalledOnce();
+      if (operation === "stop") {
+        fakeStream();
+        const next = fakeChild();
+        next.exitOnStdinEnd();
+        const nextPointer = fakePointer();
+        await startAndSettle(api, { mode: "debug", pointer: nextPointer });
+        expect(nextPointer.enable).toHaveBeenCalledOnce();
+        expect(nextPointer.restore).not.toHaveBeenCalled();
+        await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+        await stopCapture(api);
+      }
+    }
+  );
+
+  it("restores touches before the debug encoder finishes", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    const pointer = fakePointer();
+    await startAndSettle(api, { mode: "debug", pointer });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    const stopping = stopCapture(api);
+    await vi.waitFor(() => expect(pointer.restore).toHaveBeenCalledOnce());
+    expect(child.exitCode).toBeNull();
+    expect(api.stopping).not.toBeNull();
+    await api.debugCapture!.finish();
+    child.exit(0);
+    await stopping;
+  });
+
+  it("rejects overlapping stop and retries its completed result without re-encoding", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    await startAndSettle(api, { mode: "debug" });
+    const file = api.outputFile!;
+    await fs.writeFile(file, Buffer.alloc(64, 1));
+    const stopping = stopCapture(api);
+    const pending = api.stopping;
+    const error = await stopCapture(api).catch((err: Error) => err);
+    expect(getFailureSignal(error)?.error_code).toBe(
+      FAILURE_CODES.SCREEN_RECORDING_STOP_IN_PROGRESS
+    );
+    expect((error as Error).message).toContain(file);
+    expect((error as Error).message).toContain("retry stop");
+    expect(api.stopping).toBe(pending);
+    await api.debugCapture!.finish();
+    child.exit(0);
+    const result = await stopping;
+    await expect(stopCapture(api)).rejects.toThrow("already stopped");
+    expect(await stopCapture(api, file)).toBe(result);
+    await expect(stopCapture(api, "/tmp/another-recording.mp4")).rejects.toThrow(
+      "not the current recording"
+    );
+    fakeStream();
+    mockResolveFfmpeg.mockResolvedValueOnce(null);
+    await expect(startAndSettle(api)).rejects.toThrow();
+    await expect(stopCapture(api)).rejects.toThrow("already stopped");
+    expect(await stopCapture(api, file)).toBe(result);
+    await fs.rm(file);
+    const missing = await stopCapture(api, file).catch((err: Error) => err);
+    const message = formatErrorForAgent(missing);
+    expect(message).toContain("The completed recording is no longer available");
+    expect(message).toContain("ENOENT");
+    expect(message).not.toContain("The recording ended");
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+    fakeStream();
+    const next = fakeChild();
+    next.exitOnStdinEnd();
+    await startAndSettle(api, { mode: "debug" });
+    expect(api.finishedRecording).toBeNull();
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    expect((await stopCapture(api)).outputFile).not.toBe(result.outputFile);
+  });
+
+  it.each([true, false])(
+    "reports the real stop output to its enclosing invocation (saved: %s)",
+    async (saved) => {
+      const api = await makeSession(iosDevice);
+      fakeStream();
+      const child = fakeChild();
+      await startAndSettle(api, { mode: "debug" });
+      const outputFile = api.outputFile!;
+      if (saved) await fs.writeFile(outputFile, Buffer.alloc(64, 1));
+      const onRecordingOutput = vi.fn();
+      const stopping = screenRecordingStopTool.execute(
+        { session: api },
+        { udid: IOS_UDID },
+        {
+          artifacts: new ArtifactStore(),
+          signal: AbortSignal.abort(),
+          onRecordingOutput,
+        }
+      );
+      const outcome = stopping.catch((err: Error) => err);
+      expect(onRecordingOutput).toHaveBeenCalledWith(IOS_UDID, outputFile);
+      await api.debugCapture!.finish();
+      child.exit(0);
+      const result = await outcome;
+      expect(result instanceof Error).toBe(!saved);
+    }
+  );
+
+  it("does not publish stale or missing captures through the stop tool", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    fakeChild().exitOnStdinEnd();
+    await startAndSettle(api);
+    const outputFile = api.outputFile!;
+    await fs.writeFile(outputFile, Buffer.alloc(64, 1));
+    const artifacts = new ArtifactStore();
+    const stop = (path?: string) =>
+      screenRecordingStopTool.execute({ session: api }, { udid: IOS_UDID, outputFile: path }, {
+        artifacts,
+      } as never);
+    const result = await stop();
+    expect(result.video.size).toBe(64);
+    await expect(stop()).rejects.toThrow("already stopped");
+    fakeStream({ waitForFirstFrame: vi.fn().mockRejectedValue(new Error("connection refused")) });
+    await expect(startAndSettle(api)).rejects.toThrow("connection refused");
+    await expect(stop()).rejects.toThrow("already stopped");
+    expect(artifacts.list()).toHaveLength(1);
+    await fs.rm(outputFile);
+    await expect(stop(outputFile)).rejects.toThrow(
+      "The completed recording is no longer available"
+    );
+    expect(artifacts.list()).toHaveLength(1);
+  });
+
+  it("repeats failed stop diagnostics only for an explicit recording retry", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd(1);
+    await startAndSettle(api, { mode: "debug" });
+    const file = api.outputFile!;
+    child.stderr.emit("data", Buffer.from("encoder failed before output"));
+    const error = await stopCapture(api).catch((err: Error) => err);
+    expect((error as Error).message).toContain("encoder failed before output");
+    await expect(stopCapture(api)).rejects.toThrow("already stopped");
+    await expect(stopCapture(api, file)).rejects.toBe(error);
+    expect(child.stdin.end).toHaveBeenCalledOnce();
+  });
+
+  it("waits for queued JPEG writes before starting the encoding stall watchdog", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    let release!: () => void;
+    const draining = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const capture = api.debugCapture!;
+    const finish = capture.finish;
+    capture.finish = vi.fn(async () => {
+      await draining;
+      await finish();
+    });
+    const stopping = stopCapture(api);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(api.stopping).not.toBeNull();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.stdin.writable).toBe(true);
+    release();
+    expect((await stopping).encodingComplete).toBe(true);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "reports a partial video when encoding fails (cap: %s)",
+    async (capped) => {
+      const api = await makeSession(iosDevice);
+      fakeStream();
+      const child = fakeChild();
+      child.exitOnStdinEnd(1);
+      await startAndSettle(api, { mode: "debug", timeLimitSeconds: 2 });
+      child.stderr.emit("data", Buffer.from("encoder failed"));
+      await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+      if (capped) {
+        await vi.advanceTimersByTimeAsync(2_000);
+        await api.debugCapture!.finish();
+      }
+      const result = await stopCapture(api);
+      expect(result.encodingComplete).toBe(false);
+      expect(result.durationMs).toBeNull();
+      expect(result.warning).toContain("encoder failed");
+      expect(result.warning).toContain("may omit captured frames");
+    }
+  );
+
+  it("does not hand over a nonempty unreadable debug container", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd(1);
+    await startAndSettle(api, { mode: "debug" });
+    const file = api.outputFile!;
+    await fs.writeFile(file, Buffer.alloc(64, 1));
+    child.stderr.emit("data", Buffer.from("Error writing trailer: No space left on device"));
+    vi.mocked(verifyDebugVideo).mockRejectedValueOnce(
+      Object.assign(new Error("moov atom not found"), { code: 1 })
+    );
+    const error = await stopCapture(api).catch((err: Error) => err);
+    expect(verifyDebugVideo).toHaveBeenCalledWith("/fake/ffmpeg", file);
+    await expect(fs.access(file)).rejects.toThrow();
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("No readable debug video");
+    expect((error as Error).message).toContain("moov atom not found");
+    expect((error as Error).message).toContain("No space left on device");
+    expect((error as Error).message).not.toMatch(/partial video|returning whatever/);
+  });
+
+  it.each([
+    { message: "validation timed out", code: null, killed: true },
+    { message: "validation killed", code: null, signal: "SIGKILL" },
+    { message: "ffmpeg is unavailable", code: "ENOENT" },
+  ])("keeps output when $message", async (failure) => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    fakeChild().exitOnStdinEnd(1);
+    await startAndSettle(api, { mode: "debug" });
+    const outputFile = api.outputFile!;
+    const bytes = Buffer.alloc(64, 1);
+    await fs.writeFile(outputFile, bytes);
+    vi.mocked(verifyDebugVideo).mockRejectedValueOnce(
+      Object.assign(new Error(failure.message), failure)
+    );
+    const error = await stopCapture(api).catch((err: Error) => err);
+    expect(await fs.readFile(outputFile)).toEqual(bytes);
+    expect((error as Error).message).toContain("validation did not complete");
+    expect((error as Error).message).toContain(outputFile);
+    expect((error as Error).message).not.toContain("No readable debug video was saved");
+  });
+
+  it("keeps output and reports uncertainty when ffmpeg cannot be resolved at stop", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    fakeChild().exitOnStdinEnd(1);
+    await startAndSettle(api, { mode: "debug" });
+    const outputFile = api.outputFile!;
+    const bytes = Buffer.alloc(64, 1);
+    await fs.writeFile(outputFile, bytes);
+    mockResolveFfmpeg.mockResolvedValueOnce(null);
+    const error = await stopCapture(api).catch((err: Error) => err);
+    expect(await fs.readFile(outputFile)).toEqual(bytes);
+    expect((error as Error).message).toContain("ffmpeg is unavailable");
+    expect((error as Error).message).toContain("validation did not complete");
+    expect((error as Error).message).not.toContain("No readable debug video was saved");
+  });
+
+  it("keeps the stop guard until deferred JPEG cleanup finishes", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    child.exitOnStdinEnd();
+    await startAndSettle(api, { mode: "debug" });
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const debug = api.debugCapture!;
+    const cleanup = debug.cleanup;
+    debug.cleanup = vi.fn(async () => {
+      await pending;
+      await cleanup();
+    });
+    const stopping = stopCapture(api);
+    await vi.waitFor(() => expect(debug.cleanup).toHaveBeenCalled());
+    expect(api.stopping).not.toBeNull();
+    await expect(
+      startCapture(api, {
+        streamUrl: STREAM_URL,
+        timeLimitSeconds: 180,
+        watermark: false,
+        trimStatic: false,
+      })
+    ).rejects.toThrow("still finalizing");
+    release();
+    await stopping;
+    expect(api.stopping).toBeNull();
+    expect(api.debugCapture).toBeNull();
+    fakeStream();
+    const next = fakeChild();
+    next.exitOnStdinEnd();
+    await startAndSettle(api, { mode: "debug" });
+    expect(api.recordingActive).toBe(true);
+    expect(api.debugCapture).not.toBeNull();
+    expect(api.wallClockStartMs).not.toBeNull();
+    await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+    await stopCapture(api);
+  });
+
+  it.each(["overflow", "disk failure"])(
+    "restores markers when debug capture ends after %s",
+    async (cause) => {
+      const api = await makeSession(iosDevice);
+      const stream = fakeStream();
+      const child = fakeChild();
+      const pointer = fakePointer();
+      await startAndSettle(api, { mode: "debug", pointer });
+      const emit = stream.subscribe.mock.calls[0][0] as (
+        frame: Buffer,
+        receivedAtMs: number
+      ) => void;
+      const write =
+        cause === "disk failure"
+          ? vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("disk full"))
+          : null;
+      try {
+        emit(
+          cause === "overflow" ? Buffer.alloc(129 * 1024 * 1024) : fakeJpeg(),
+          performance.now()
+        );
+        await api.debugCapture!.finish();
+        expect(api.recordingActive).toBe(false);
+        expect(api.debugCapture!.warning).toBeTruthy();
+        expect(pointer.restore).toHaveBeenCalledOnce();
+        expect(stream.close).toHaveBeenCalledOnce();
+      } finally {
+        write?.mockRestore();
+      }
+      expect(api.recordingExitedUnexpectedly).toBe(false);
+      child.exit(0);
+      await fs.writeFile(api.outputFile!, Buffer.alloc(64, 1));
+      const result = await stopCapture(api);
+      expect(result.warning).not.toContain("ffmpeg exited before stop");
+      expect(result.warning).toContain(cause === "overflow" ? "could not keep up" : "disk full");
+      expect(pointer.restore).toHaveBeenCalledOnce();
+    }
+  );
 });

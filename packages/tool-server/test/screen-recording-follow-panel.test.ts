@@ -10,6 +10,10 @@ vi.mock("child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("child_process")>();
   return { ...actual, spawn: vi.fn() };
 });
+vi.mock("../src/tools/screen-recording/encoder", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tools/screen-recording/encoder")>()),
+  verifyDebugEncoder: vi.fn(async () => {}),
+}));
 vi.mock("../src/tools/screen-recording/mjpeg-stream", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../src/tools/screen-recording/mjpeg-stream")>();
@@ -84,7 +88,7 @@ class FakeStdin extends EventEmitter {
     this.writes.push(chunk);
     return true;
   });
-  end = vi.fn(() => {
+  end = vi.fn((_input?: string) => {
     this.ended = true;
     this.writable = false;
   });
@@ -92,15 +96,25 @@ class FakeStdin extends EventEmitter {
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter();
-  stderr = new EventEmitter();
+  stderr = Object.assign(new EventEmitter(), { readableEnded: false });
   stdin = new FakeStdin();
+  reportedFrames: number | undefined;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   kill = vi.fn((_signal?: NodeJS.Signals) => true);
-  exit(code: number | null, signal: NodeJS.Signals | null = null): void {
+  exit(code: number | null, signal: NodeJS.Signals | null = null, close = true): void {
     this.exitCode = code;
     this.signalCode = signal;
+    const input = this.stdin.end.mock.calls.at(-1)?.[0];
+    if (code === 0 && input?.startsWith("ffconcat")) {
+      const frames = this.reportedFrames ?? (input.match(/^file /gm) ?? []).length;
+      this.stderr.emit("data", Buffer.from(`frame=${frames}\n`));
+    }
     this.emit("exit", code, signal);
+    if (close) {
+      this.stderr.readableEnded = true;
+      this.emit("close", code, signal);
+    }
   }
   exitOnStdinEnd(code = 0): void {
     this.stdin.end.mockImplementation(() => {
@@ -118,6 +132,7 @@ interface FakeStream {
   error: Error | null;
   waitForFirstFrame: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  subscribe: ReturnType<typeof vi.fn>;
 }
 
 /** One stream per open, keyed by the URL it was opened with. */
@@ -133,6 +148,10 @@ function serveStreams(frameFor: (url: string) => Buffer | Error): void {
       error: null,
       waitForFirstFrame: vi.fn(async () => frame),
       close: vi.fn(),
+      subscribe: vi.fn((listener: (frame: Buffer, receivedAtMs: number) => void) => {
+        listener(frame, performance.now());
+        return vi.fn();
+      }),
     };
     opened.push(stream);
     return stream as never;
@@ -187,7 +206,8 @@ const UNKNOWN: LivePanel = { screen: 1, source: "unknown", reason: "nothing answ
 async function startFollowing(
   api: ScreenRecordingSessionApi,
   resolveLivePanel: PanelFollow["resolveLivePanel"],
-  initial: LivePanel = live(1)
+  initial: LivePanel = live(1),
+  mode: "light" | "debug" = "light"
 ) {
   const follow: PanelFollow = {
     initial,
@@ -200,13 +220,56 @@ async function startFollowing(
     watermark: false,
     trimStatic: false,
     followPanel: follow,
+    mode,
   });
   promise.catch(() => {});
+  if (mode === "debug") await vi.waitFor(() => expect(api.pendingChild).not.toBeNull());
   await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
   return promise;
 }
 
 describe("a recording of a foldable follows the live panel", () => {
+  it("closes a delayed replacement stream when debug disposal is still encoding", async () => {
+    serveStreams(() => COVER);
+    const child = fakeChild();
+    child.stdin.end.mockImplementation(() => {
+      child.stdin.ended = true;
+      child.stdin.writable = false;
+    });
+    const device: DeviceInfo = { id: DUO, platform: "ios", kind: "simulator" };
+    const instance = await screenRecordingSessionBlueprint.factory({}, device, { device } as never);
+    let screen = 1;
+    await startFollowing(instance.api, async () => live(screen), live(1), "debug");
+    let resolve!: (frame: Buffer) => void;
+    const pending = new Promise<Buffer>((done) => {
+      resolve = done;
+    });
+    const next = {
+      latest: INNER,
+      frameCount: 1,
+      error: null,
+      waitForFirstFrame: vi.fn(() => pending),
+      close: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+    };
+    mockOpenStream.mockResolvedValueOnce(next);
+    screen = 3;
+    await vi.advanceTimersByTimeAsync(PANEL_POLL_MS);
+    expect(next.waitForFirstFrame).toHaveBeenCalledOnce();
+    const disposing = instance.dispose();
+    try {
+      await vi.waitFor(() => expect(child.stdin.end).toHaveBeenCalledOnce());
+      resolve(INNER);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(next.close).toHaveBeenCalledOnce();
+      expect(instance.api.frameStream).not.toBe(next);
+    } finally {
+      resolve(INNER);
+      child.exit(0);
+      await disposing;
+    }
+  });
+
   it("moves the frame source to the other panel's stream and keeps one ffmpeg", async () => {
     serveStreams((url) => (url.includes("screen=3") ? INNER : COVER));
     const child = fakeChild();
@@ -428,4 +491,57 @@ describe("a recording of a foldable follows the live panel", () => {
     );
     await stop(plain);
   });
+});
+
+it("closes a panel stream whose first frame arrives after a debug cap", async () => {
+  serveStreams((url) => (url.includes("screen=3") ? INNER : COVER));
+  const child = fakeChild();
+  child.stdin.end.mockImplementation(() => {
+    child.stdin.ended = true;
+    child.stdin.writable = false;
+  });
+  const api = await makeSession();
+  let resolveFrame!: (frame: Buffer) => void;
+  const firstFrame = new Promise<Buffer>((resolve) => {
+    resolveFrame = resolve;
+  });
+  const opening = mockOpenStream.getMockImplementation()!;
+  mockOpenStream.mockImplementation(async (url, timeout) => {
+    const stream = await opening(url, timeout);
+    if (url.includes("screen=3")) vi.mocked(stream.waitForFirstFrame).mockReturnValue(firstFrame);
+    return stream;
+  });
+  await startFollowing(api, async () => live(3), live(1), "debug");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(opened).toHaveLength(2);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(api.recordingActive).toBe(false);
+  resolveFrame(INNER);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(opened[1].close).toHaveBeenCalledOnce();
+  expect(api.frameStream).toBeNull();
+  expect(api.panelSwitches).toBe(0);
+  await api.debugCapture!.finish();
+  child.exit(0);
+  await stop(api);
+});
+
+it("continues saving debug frames after moving to the other panel", async () => {
+  serveStreams((url) => (url.includes("screen=3") ? INNER : COVER));
+  fakeChild();
+  const api = await makeSession();
+  await startFollowing(api, async () => live(3), live(1), "debug");
+  await vi.advanceTimersByTimeAsync(PANEL_POLL_MS);
+  await vi.waitFor(() => expect(api.panelSwitches).toBe(1));
+  const next = opened[1];
+  const emit = next.subscribe.mock.calls[0][0] as (frame: Buffer, at: number) => void;
+  emit(INNER, performance.now() + 10);
+  expect(api.debugCapture!.frameTimesUs).toHaveLength(3);
+  const directory = (await fs.readdir(os.tmpdir())).find((name) =>
+    name.startsWith("argent-recording-frames-")
+  )!;
+  await vi.waitFor(async () =>
+    expect(await fs.readFile(path.join(os.tmpdir(), directory, "2.jpg"))).toEqual(INNER)
+  );
+  expect((await stop(api)).panelSwitches).toBe(1);
 });

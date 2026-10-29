@@ -78,6 +78,74 @@ describe("POST /upload", () => {
     expect(res.body.uploadId.length).toBeGreaterThan(0);
   });
 
+  it("rejects an upload after disposal without creating a tarball", async () => {
+    const scratch = await fs.mkdtemp(path.join(tmpDir, "shutdown-"));
+    const restore = redirectTmpdir(scratch);
+    try {
+      handle.dispose();
+      const response = await supertest(handle.app)
+        .post("/upload")
+        .set("Content-Type", "application/gzip")
+        .send(Buffer.alloc(1024));
+      expect(response.status).toBe(503);
+      expect(await fs.readdir(scratch)).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("cancels an upload in progress when disposal starts", async () => {
+    const scratch = await fs.mkdtemp(path.join(tmpDir, "shutdown-in-flight-"));
+    const restore = redirectTmpdir(scratch);
+    const server = handle.app.listen(0, "127.0.0.1");
+    let request: http.ClientRequest | undefined;
+    try {
+      await new Promise<void>((resolve) => server.once("listening", resolve));
+      const { port } = server.address() as { port: number };
+      const response = new Promise<{ status: number; body: Record<string, unknown> }>(
+        (resolve, reject) => {
+          request = http.request(
+            {
+              hostname: "127.0.0.1",
+              port,
+              method: "POST",
+              path: "/upload",
+              headers: { "Content-Type": "application/gzip", "Content-Length": 1024 },
+            },
+            (res) => {
+              const chunks: Buffer[] = [];
+              res.on("data", (chunk: Buffer) => chunks.push(chunk));
+              res.on("end", () =>
+                resolve({
+                  status: res.statusCode!,
+                  body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+                })
+              );
+            }
+          );
+          request.on("error", reject);
+          request.write(Buffer.alloc(16));
+        }
+      );
+      await vi.waitFor(async () => expect(await fs.readdir(scratch)).toHaveLength(1));
+      handle.dispose();
+      expect(await response).toEqual({
+        status: 503,
+        body: {
+          error: expect.stringContaining("This call was not started"),
+          error_code: "HTTP_SERVER_SHUTTING_DOWN",
+          error_kind: "unknown",
+        },
+      });
+      await vi.waitFor(async () => expect(await fs.readdir(scratch)).toEqual([]));
+    } finally {
+      request?.destroy();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      restore();
+    }
+  });
+
   it("round-trips: an uploaded bundle is extracted and handed to the tool", async () => {
     const body = await tarballOf("MyApp.app", "app-bytes");
     const contentHash = createHash("sha256").update(body).digest("hex");

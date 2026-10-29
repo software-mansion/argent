@@ -26,6 +26,8 @@ import {
   type RoundAbandonedStats,
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
+import { cleanupAbandonedFrames } from "./tools/screen-recording/frame-directory";
+import { beginRecordingShutdown } from "./utils/recording-shutdown";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 import { renderFlagGated } from "./utils/flag-gated-text";
 
@@ -80,6 +82,13 @@ function initializeStdioTimestampWrapper(): void {
 
 export function start(): void {
   initializeStdioTimestampWrapper();
+  const cleanupFrames = () =>
+    cleanupAbandonedFrames().catch((err: unknown) => {
+      process.stderr.write(`[screen-recording] Abandoned JPEG cleanup failed: ${String(err)}\n`);
+    });
+  void cleanupFrames();
+  const frameCleanup = setInterval(() => void cleanupFrames(), 60_000);
+  frameCleanup.unref();
 
   // Exit on uncaught errors (state may be corrupted), but clean up first so
   // child processes are not orphaned.
@@ -294,6 +303,11 @@ export function start(): void {
     if (exitCode > finalExitCode) finalExitCode = exitCode;
     if (shuttingDown) return;
     shuttingDown = true;
+    const shutdownStartedAt = performance.now();
+    registry.beginShutdown();
+    httpHandle.dispose();
+    const recordingShutdown = beginRecordingShutdown(registry);
+    clearInterval(frameCleanup);
 
     eventLog?.info({
       type: "tool_server.stopping",
@@ -324,7 +338,6 @@ export function start(): void {
     previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();
-    httpHandle.dispose();
 
     // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
     // is reflected in the stop event's reason instead of being lost behind an
@@ -334,6 +347,7 @@ export function start(): void {
     } catch (err) {
       process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
     }
+    await recordingShutdown;
     try {
       await eventLog?.dispose();
     } catch (err) {
@@ -357,7 +371,10 @@ export function start(): void {
     }
 
     if (server) {
-      const forceExit = setTimeout(() => process.exit(finalExitCode), PROCESS_TIMEOUT_MS);
+      const forceExit = setTimeout(
+        () => process.exit(finalExitCode),
+        Math.max(0, PROCESS_TIMEOUT_MS - (performance.now() - shutdownStartedAt))
+      );
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       clearTimeout(forceExit);
     }

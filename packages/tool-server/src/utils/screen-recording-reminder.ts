@@ -6,6 +6,7 @@ type ScreenRecordingStatus = "recording" | "finalized";
 
 interface ActiveScreenRecording {
   deviceId: string;
+  outputFile?: string;
   startedAtMs: number;
   timeLimitSeconds: number;
   /**
@@ -23,10 +24,12 @@ const activeRecordings = new Map<string, ActiveScreenRecording>();
 export function registerActiveScreenRecording(
   deviceId: string,
   startedAtMs: number,
-  timeLimitSeconds: number
+  timeLimitSeconds: number,
+  outputFile?: string
 ): void {
   activeRecordings.set(deviceId, {
     deviceId,
+    ...(outputFile ? { outputFile } : {}),
     startedAtMs,
     timeLimitSeconds,
     status: "recording",

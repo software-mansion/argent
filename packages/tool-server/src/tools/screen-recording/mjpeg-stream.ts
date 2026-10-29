@@ -5,8 +5,8 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
  * Client for simulator-server's live frame stream — the same one the preview UI
  * renders. It is a `multipart/x-mixed-replace` producer that emits a JPEG only
  * when the device screen CHANGES (a still screen produces no frames), so this
- * client tracks just the most recent frame; turning that into an even-cadence
- * video is the pump's job in `capture.ts`.
+ * client keeps the latest frame for light mode's pump in `capture.ts` and
+ * delivers every parsed frame with its tool-server parse time to debug subscribers.
  */
 
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -18,6 +18,7 @@ export interface MjpegStream {
   readonly error: Error | null;
   /** Resolves with the first frame; rejects on timeout or a stream drop. */
   waitForFirstFrame(timeoutMs: number): Promise<Buffer>;
+  subscribe(listener: (frame: Buffer, parsedAtMs: number) => void): () => void;
   close(): void;
 }
 
@@ -79,7 +80,9 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         latest: null as Buffer | null,
         frameCount: 0,
         error: null as Error | null,
+        parsedAtMs: 0,
       };
+      const listeners = new Set<(frame: Buffer, parsedAtMs: number) => void>();
       let firstFrameResolve: ((frame: Buffer) => void) | null = null;
       let firstFrameReject: ((err: Error) => void) | null = null;
 
@@ -100,7 +103,9 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
             // alive for as long as the frame is held.
             const frame = Buffer.from(buffer.subarray(frameStart, frameEnd));
             state.latest = frame;
+            state.parsedAtMs = performance.now();
             state.frameCount++;
+            for (const listener of listeners) listener(frame, state.parsedAtMs);
             if (firstFrameResolve) {
               firstFrameResolve(frame);
               firstFrameResolve = null;
@@ -146,6 +151,11 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
         get error() {
           return state.error;
         },
+        subscribe(listener) {
+          listeners.add(listener);
+          if (state.latest) listener(state.latest, state.parsedAtMs);
+          return () => listeners.delete(listener);
+        },
         waitForFirstFrame(timeoutMs: number) {
           if (state.latest) return Promise.resolve(state.latest);
           // Already dropped, so no frame can arrive — do not wait out the timeout.
@@ -185,6 +195,7 @@ export function openMjpegStream(url: string, connectTimeoutMs = 10_000): Promise
           });
         },
         close() {
+          listeners.clear();
           // Drop the waiter hooks first so our own teardown's 'aborted'/'error'
           // does not reject a caller that has already moved on.
           firstFrameResolve = null;

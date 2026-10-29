@@ -88,7 +88,7 @@ beforeEach(async () => {
     if (req.method === "POST" && req.url === "/tools/slow") {
       if (req.headers.accept?.includes("application/x-ndjson")) {
         res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-        res.end(`${JSON.stringify({ event: "result", data: { ok: true } })}\n`);
+        res.end(`\n\n${JSON.stringify({ event: "result", data: { ok: true } })}\n`);
         return;
       }
       return json({ data: { ok: true } });
@@ -141,6 +141,59 @@ describe("createToolsClient options", () => {
     );
   });
 
+  it.each(["fetchTools", "callTool"])(
+    "preserves shutdown guidance and classification during %s discovery",
+    async (operation) => {
+      const message =
+        "The tool-server is shutting down. Check /server/original.mp4 after encoding finishes. A restart loses retrieval state.";
+      const fetchImpl = vi.fn(
+        async (_url: string, _init: RequestInit) =>
+          new Response(
+            JSON.stringify({
+              error: message,
+              error_code: "HTTP_SERVER_SHUTTING_DOWN",
+              error_kind: "unknown",
+            }),
+            {
+              status: 503,
+              statusText: "Service Unavailable",
+              headers: { "Content-Type": "application/json" },
+            }
+          )
+      );
+      const client = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        fetchImpl,
+      });
+      const error = await (
+        operation === "fetchTools"
+          ? client.fetchTools()
+          : client.callTool("screen-recording-stop", { udid: "device" })
+      ).catch((err: Error) => err);
+      expect(error).toBeInstanceOf(ToolInvocationError);
+      expect(error).toMatchObject({
+        message,
+        errorCode: "HTTP_SERVER_SHUTTING_DOWN",
+        errorKind: "unknown",
+      });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(fetchImpl.mock.calls[0][0]).toBe(`${url}/tools`);
+      const context = new Headers(fetchImpl.mock.calls[0][1].headers).get("X-Argent-Call");
+      expect(context ? JSON.parse(decodeURIComponent(context)) : null).toEqual(
+        operation === "callTool" ? { tool: "screen-recording-stop", udid: "device" } : null
+      );
+    }
+  );
+
+  it("keeps the discovery HTTP fallback for a non-JSON proxy response", async () => {
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote: false }),
+      fetchImpl: async () =>
+        new Response("unavailable", { status: 503, statusText: "Service Unavailable" }),
+    });
+    await expect(client.fetchTools()).rejects.toThrow("GET /tools failed: 503 Service Unavailable");
+  });
+
   it("routes GET /tools and POST /tools/:name through fetchImpl with the tool's longRunning flag", async () => {
     const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
     const { callTool } = createToolsClient({
@@ -148,7 +201,7 @@ describe("createToolsClient options", () => {
       fetchImpl,
     });
 
-    await callTool("slow", {});
+    expect((await callTool("slow", {})).data).toEqual({ ok: true });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenNthCalledWith(1, `${url}/tools`, expect.any(Object), {
@@ -158,7 +211,10 @@ describe("createToolsClient options", () => {
     expect(fetchImpl).toHaveBeenNthCalledWith(
       2,
       `${url}/tools/slow`,
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Accept: "application/x-ndjson" }),
+      }),
       { longRunning: true, carriesUpload: false }
     );
   });

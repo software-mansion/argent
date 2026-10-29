@@ -349,6 +349,61 @@ describe("flowRunToMcpContent", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("preserves a failed flow and encoding warnings when recording retrieval fails", async () => {
+    const cwd = process.cwd();
+    await fs.writeFile(join(root, "package.json"), "{}");
+    process.chdir(root);
+    try {
+      const blocks = await flowRunToMcpContent(
+        {
+          flow: "checkout",
+          ok: false,
+          passed: 2,
+          failed: 1,
+          steps: [
+            {
+              kind: "tool",
+              tool: "screen-recording-start",
+              status: "pass",
+              result: { status: "recording" },
+            },
+            { kind: "tool", tool: "gesture-tap", status: "fail", reason: "element not found: Pay" },
+            {
+              kind: "tool",
+              tool: "screen-recording-stop",
+              status: "pass",
+              result: {
+                video: {
+                  ...artifactHandle("video", "video.mp4", "video/mp4"),
+                  kind: "screen-recording",
+                  size: 3 * 1024 ** 3,
+                  hostPath: "/remote/video.mp4",
+                  saveDir: ".argent/recordings",
+                },
+                encodingComplete: false,
+                durationMs: null,
+                warning: "Incomplete encoding.",
+              },
+            },
+          ],
+        },
+        { toolsUrl: "http://remote:3001" }
+      );
+      const text = blocks
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("\n");
+      expect(text).toContain("element not found: Pay");
+      expect(text).toContain("FAIL — 2 passed, 1 failed");
+      expect(text).toContain('"encodingComplete": false');
+      expect(text).toContain("Incomplete encoding.");
+      expect(text).toContain("Could not retrieve recording");
+      expect(text).toContain("/remote/video.mp4");
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   it("names the same-named test a run's test hides, under the header", async () => {
     const warning =
       "/p/.argent/flows/f.yaml is not used: /p/.argent/e2e/f.yaml has the same name and is read first.";

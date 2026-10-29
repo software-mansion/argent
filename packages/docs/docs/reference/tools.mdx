@@ -101,6 +101,35 @@ Through the MCP server, an interaction tool and `await-ui-element` return a scre
 
 Call `screenshot` or `describe` to read the screen again.
 
+### Recording modes
+
+Set `mode` on `screen-recording-start`:
+
+- `light` (default): compact clips at 30 fps, with static trimming, touch markers, and the configured watermark.
+- `debug`: every delivered frame, without trimming or a watermark. Touch markers default off. Use it for flicker and animation inspection.
+
+Set `showTouches` in either mode to control touch markers. Debug requires `trimStatic` to be `false` or omitted. Setting `trimStatic: false` in light mode still samples at 30 fps.
+
+`timeLimitSeconds` defaults to 180 seconds in light mode (maximum 600), or 30 seconds in debug mode (maximum 120).
+
+Debug saves JPEGs in the server’s temporary directory before encoding. The JPEGs and MP4 need disk space at the same time. The server retains the MP4 after delivery. Remove unneeded server copies to reclaim space. Capture ends early with a warning if writes fail or cannot keep up.
+
+Debug capture is not crash-safe. A hard tool-server kill can lose unencoded frames. An encode already started can finish on the server, but its interrupted stop call cannot deliver the artifact. The start result’s `outputFile` gives the server-side path to check. A server restart loses retrieval state. Wait for recording stops to return before shutting down the server. Server shutdown allows a short recording grace and can leave output incomplete. A pending stop receives a shutdown error when this grace expires.
+
+Debug timestamps mark when the tool-server parses each frame, not device presentation. Other work on the server can delay parsing and distort frame timing. It cannot recover frames omitted by the stream. It encodes at stop, so retrieval can take longer.
+
+Argent stages local copies and downloads before publishing the completed file. Filesystems without hard links use a visible `recording-*` subdirectory. Later saves remove abandoned staging directories from dead processes in the same boot and PID namespace. Cleanup skips environments where ownership cannot be established. On Windows, or after reboot or identity detection failure, remove abandoned JPEG and staging directories manually.
+
+JPEG spools are named `argent-recording-frames-*` in the server’s temporary directory (`os.tmpdir()`). Partial client saves use hidden `.argent-download-*` directories inside `recordings.directory` (default `.argent/recordings`), containing `recording.part`. Remove only abandoned directories. Completed `recording-*` subdirectories contain saved videos.
+
+Linked recording downloads have a 2 GiB limit. Larger recordings remain on the tool-server. The result preserves its metadata and adds a retrieval warning with the server location.
+
+Extract debug frames with `ffmpeg -i recording.mp4 -fps_mode passthrough -enc_time_base 1:1000000 frame-%06d.png` to avoid resampling. Use frame PTS, not the guessed `r_frame_rate`, to inspect the recorded timeline. The final frame repeats the last image at stop time to preserve the final hold. It does not represent a device update.
+
+Call `screen-recording-stop` to retrieve the video, including after the time limit ends capture. Debug returns `encodingComplete` to indicate whether encoding succeeded. Partial videos include a warning and an unknown duration. If no readable video exists, stop fails with encoder diagnostics. Failed encoding can discard the captured JPEGs. After a lost connection, repeat stop with the `outputFile` returned by start to retrieve its completed result or failure. This result remains available until another recording starts or the session is torn down.
+
+Both modes require ffmpeg with `libx264`. Debug also requires `-fps_mode` support.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

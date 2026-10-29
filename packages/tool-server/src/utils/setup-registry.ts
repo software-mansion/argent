@@ -72,7 +72,7 @@ import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/nat
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
-import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
+import { createScreenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
 import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
@@ -140,7 +140,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createScreenshotTool(registry));
   registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));
-  registry.registerTool(screenRecordingStopTool);
+  registry.registerTool(createScreenRecordingStopTool(registry));
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);

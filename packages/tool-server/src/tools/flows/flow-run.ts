@@ -71,7 +71,11 @@ import { RECORDING_TOOL_IDS } from "./flow-add-step";
 import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
-import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import {
+  invokeSubTool,
+  describeNestedParamError,
+  rethrowRegistryShutdown,
+} from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
@@ -440,6 +444,7 @@ async function waitForNativeDevtools(
     const ref = nativeDevtoolsRef(device);
     api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
   } catch (err) {
+    rethrowRegistryShutdown(err);
     // Withheld for the same reason as the timeout below: an app the native
     // tools refuse to target was never going to be served by this service.
     if (!isInjectableBundleId(bundleId)) return null;
@@ -591,6 +596,7 @@ async function androidDevtoolsReady(
     const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
     return { ready: api.isReady() };
   } catch (err) {
+    rethrowRegistryShutdown(err);
     // The factory's own message says whether the helper is missing, could not
     // be installed or refused to start; a boolean throws all three away.
     return { ready: false, reason: err instanceof Error ? err.message : String(err) };
@@ -634,6 +640,7 @@ async function treeSourceGate(
       await registry.resolveService(ref.urn, ref.options);
       return null;
     } catch (err) {
+      rethrowRegistryShutdown(err);
       return (
         `the on-device XCUITest runner did not become ready for ${device.id}: ` +
         `${err instanceof Error ? err.message : String(err)}`
@@ -714,6 +721,7 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
       ...(launchArgs ? { launchArgs } : {}),
     });
   } catch (err) {
+    rethrowRegistryShutdown(err);
     // A cancellation makes the sub-tool reject; that rejection is the abort,
     // not an app failure, so it must not be attributed to restart-app.
     if (signal?.aborted) return ABORTED_OUTCOME;
@@ -2777,6 +2785,7 @@ async function runFold(
       ...(result.warning !== undefined ? { warning: result.warning } : {}),
     };
   } catch (err) {
+    rethrowRegistryShutdown(err);
     // The tool rejects when cancelled mid-fold; per ABORTED_OUTCOME that must
     // read as an aborted skip, never a step failure with the tool's message.
     if (signal?.aborted) return ABORTED_OUTCOME;
@@ -2852,6 +2861,7 @@ async function execLeafStep(
           ...(r.warning !== undefined ? { warning: r.warning } : {}),
         };
       } catch (err) {
+        rethrowRegistryShutdown(err);
         return { ...base, status: "error", reason: errMsg(err) };
       }
     }
@@ -2900,6 +2910,7 @@ async function execLeafStep(
           artifacts: r.artifacts,
         };
       } catch (err) {
+        rethrowRegistryShutdown(err);
         return { ...base, status: "error", reason: errMsg(err) };
       }
     }
@@ -3046,6 +3057,7 @@ async function execLeafStep(
         }
         return { ...base, status: "pass", tool: step.name, result, outputHint, args };
       } catch (err) {
+        rethrowRegistryShutdown(err);
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
         // step failure carrying the tool's own "aborted after N frames".

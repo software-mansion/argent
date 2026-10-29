@@ -8,6 +8,7 @@ import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  FailureError,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   describeParamIssues,
@@ -104,6 +105,43 @@ function isToolExposed(
   return true;
 }
 
+function serverShutdownError(
+  toolId?: string,
+  args?: unknown,
+  details: { admitted?: boolean; outputFiles?: string[] } = {}
+): FailureError {
+  const suppliedOutput =
+    toolId === "screen-recording-stop" &&
+    args &&
+    typeof args === "object" &&
+    "outputFile" in args &&
+    typeof args.outputFile === "string"
+      ? args.outputFile
+      : undefined;
+  const outputFiles = details.outputFiles?.length
+    ? [...new Set(details.outputFiles)]
+    : suppliedOutput
+      ? [suppliedOutput]
+      : [];
+  const recording =
+    toolId === "screen-recording-stop" || (details.admitted === true && outputFiles.length > 0);
+  const admission = details.admitted
+    ? "The tool may have run and may still finish. Check its effect before running it again."
+    : "This call was not started.";
+  const guidance =
+    recording || outputFiles.length > 0
+      ? `Recording finalization may continue, but this response does not confirm a saved video. Check ${outputFiles.join(", ") || "the outputFile returned by screen-recording-start"} on the tool-server after encoding finishes. A restart loses result retrieval state.`
+      : "Reconnect after the server exits. This call was not retried automatically.";
+  return new FailureError(`The tool-server is shutting down. ${admission} ${guidance}`, {
+    error_code: recording
+      ? FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+      : FAILURE_CODES.HTTP_SERVER_SHUTTING_DOWN,
+    failure_stage: "http_shutdown",
+    failure_area: "http",
+    error_kind: "unknown",
+  });
+}
+
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
   return findErrorInCauseChain(err, DependencyMissingError);
 }
@@ -138,6 +176,8 @@ function streamErrorMessage(err: unknown): string {
   if (depErr) return depErr.message;
   const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
   if (unsupportedErr) return unsupportedErr.message;
+  const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
+  if (invalidInputErr) return invalidInputErr.message;
   const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
   if (notImplementedErr) return notImplementedErr.message;
   return formatErrorForAgent(err);
@@ -341,7 +381,7 @@ interface HttpAppOptions {
 
 export interface HttpAppHandle {
   app: express.Application;
-  /** Clears the idle timer. Call on server shutdown. */
+  /** Rejects new tool calls and clears timers and uploads. Call on server shutdown. */
   dispose: () => void;
   /** Timestamp of the last tool invocation (ms since epoch). Exposed for testing. */
   getLastActivityAt: () => number;
@@ -433,6 +473,17 @@ function takeToolNote(data: unknown): string | undefined {
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
+  let disposed = false;
+  let shutdownRecordings = new Map<string, string>();
+  function rejectDuringShutdown(res: Response, toolId?: string, args?: unknown): void {
+    const outputFile =
+      toolId === "screen-recording-stop"
+        ? shutdownRecordings.get(extractDeviceArg(args) ?? "")
+        : undefined;
+    const outputFiles = outputFile ? [outputFile] : [];
+    const error = serverShutdownError(toolId, args, { outputFiles });
+    res.status(503).json({ error: error.message, ...errorSignalFields(error) });
+  }
   // 48mb: file-input wrappers may inline base64 file content when the client is
   // remote. Bounds the whole encoded request; the decoded per-file ceiling is
   // enforced in file-inputs.ts.
@@ -444,6 +495,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Consumed by the first tool call that references them; the TTL sweeper clears
   // orphans from aborted or failed calls.
   const uploads = new Map<string, UploadEntry & { expireAt: number; bytes: number }>();
+  const activeUploads = new Set<() => void>();
+  const pendingCalls = new Set<{
+    interrupt: () => void;
+    recordings: Map<string, string>;
+  }>();
   // Settled bytes plus bytes of streams still in flight, so the cap holds against
   // a burst of parallel uploads instead of only settled ones.
   let inFlightUploadBytes = 0;
@@ -596,6 +652,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // The client tars a file or dir and streams it here before the tool call.
   // express.json() ignores the body (application/gzip), so we pipe it to disk.
   app.post("/upload", (req: Request, res: Response) => {
+    if (disposed) {
+      rejectDuringShutdown(res);
+      return;
+    }
     idleTimer.touch();
     if (pendingUploadBytes() >= maxPendingUploadBytes) {
       res.status(507).json({
@@ -619,12 +679,26 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       inFlightUploadBytes -= received;
     };
 
-    const abort = (status: number, message: string): void => {
+    const abort = (status: number, error: string | FailureError): void => {
+      activeUploads.delete(cancelUpload);
       releaseInFlight();
       ws.destroy();
-      rm(tarPath, { force: true }).catch(() => {});
-      if (!res.headersSent) res.status(status).json({ error: message });
+      ws.once("close", () => {
+        void rm(tarPath, { force: true }).catch(() => {});
+      });
+      if (!res.headersSent) {
+        res
+          .status(status)
+          .json(
+            typeof error === "string"
+              ? { error }
+              : { error: error.message, ...errorSignalFields(error) }
+          );
+      }
     };
+
+    const cancelUpload = () => abort(503, serverShutdownError());
+    activeUploads.add(cancelUpload);
 
     const digest = createHash("sha256");
     req.on("data", (chunk: Buffer) => {
@@ -651,12 +725,19 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     // pipe() leaves ws open if the client disconnects mid-upload.
     req.on("close", () => {
       if (req.readableEnded) return;
+      activeUploads.delete(cancelUpload);
       releaseInFlight();
       ws.destroy();
       rm(tarPath, { force: true }).catch(() => {});
     });
     ws.on("finish", () => {
+      activeUploads.delete(cancelUpload);
       releaseInFlight();
+      if (disposed) {
+        void rm(tarPath, { force: true }).catch(() => {});
+        if (!res.headersSent) rejectDuringShutdown(res);
+        return;
+      }
       if (res.headersSent) return;
       uploads.set(id, {
         tarPath,
@@ -669,7 +750,20 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     ws.on("error", (err: Error) => abort(500, err.message));
   });
 
-  app.get("/tools", (_req: Request, res: Response) => {
+  app.get("/tools", (req: Request, res: Response) => {
+    if (disposed) {
+      let call: { tool?: string; udid?: string; outputFile?: string } | undefined;
+      try {
+        const value = JSON.parse(
+          decodeURIComponent(firstHeader(req.headers["x-argent-call"]) ?? "")
+        );
+        if (value && typeof value === "object" && typeof value.tool === "string") call = value;
+      } catch {
+        // A listing without call context receives generic shutdown guidance.
+      }
+      rejectDuringShutdown(res, call?.tool, call);
+      return;
+    }
     idleTimer.touch();
     const snapshot = registry.getSnapshot();
     const tools = snapshot.tools
@@ -723,6 +817,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       next();
     },
     async (req: Request, res: Response) => {
+      if (disposed) {
+        rejectDuringShutdown(res, req.params.name as string, req.body);
+        return;
+      }
       const name = req.params.name as string;
       const requestStartedAt = performance.now();
       const aiMeta = extractAiTelemetryMeta(req);
@@ -948,6 +1046,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
+      if (disposed) {
+        rejectDuringShutdown(res, req.params.name as string, req.body);
+        return;
+      }
+
       // Nobody is left to read the result.
       if (callerGone) return;
 
@@ -993,8 +1096,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // plain-JSON status codes — streaming is committed to only once they pass.
       const wantsStream = Boolean(req.headers.accept?.includes("application/x-ndjson"));
       const writeLine = (payload: unknown): void => {
-        res.write(`${JSON.stringify(payload)}\n`);
+        if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(payload)}\n`);
       };
+      const streamKeepAlive = wantsStream ? setInterval(() => res.write("\n"), 15_000) : null;
+      if (streamKeepAlive) {
+        streamKeepAlive.unref?.();
+        res.once("close", () => clearInterval(streamKeepAlive));
+      }
       if (wantsStream) {
         // Every line must reach the client as soon as it is written.
         // `no-transform` asks intermediaries not to compress the stream, and
@@ -1005,11 +1113,33 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           "Cache-Control": "no-cache, no-transform",
           "X-Accel-Buffering": "no",
         });
+        res.flushHeaders();
       }
 
+      const recordings = new Map<string, string>();
+      const shutdownFailure = () =>
+        serverShutdownError(name, parsedData, {
+          admitted: true,
+          outputFiles: [...recordings.values()],
+        });
+      let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+      let interrupt!: () => void;
+      const interrupted = new Promise<never>((_resolve, reject) => {
+        interrupt = () => {
+          shutdownTimer = setTimeout(() => {
+            reject(shutdownFailure());
+            controller.abort();
+          }, 1_500);
+        };
+      });
+      const pendingCall = { interrupt, recordings };
+      pendingCalls.add(pendingCall);
       try {
-        const data = await registry.invokeTool(name, parsedData, {
+        const invocation = registry.invokeTool(name, parsedData, {
           signal: controller.signal,
+          onRecordingOutput: (deviceId, outputFile) => {
+            recordings.set(deviceId, outputFile);
+          },
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
           // The argent client marks every call it sends over a link. A false
           // mark makes the recorder stricter for that caller and keeps its
@@ -1026,6 +1156,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             ? { emitProgress: (event: unknown) => writeLine({ event: "progress", data: event }) }
             : {}),
         });
+        const data = await Promise.race([invocation, interrupted]);
         // Gate on `updateInstallable`, not `updateAvailable`, and advertise the
         // version the resolver would install: both honour the release-age policy.
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
@@ -1078,7 +1209,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         } else {
           res.json({ data, ...notePayload, ...profilingPayload });
         }
-      } catch (err: unknown) {
+      } catch (error: unknown) {
+        const err =
+          getFailureSignal(error)?.error_code === FAILURE_CODES.REGISTRY_SHUTTING_DOWN ||
+          (disposed &&
+            getFailureSignal(error)?.error_code === FAILURE_CODES.REGISTRY_SERVICE_TERMINATING)
+            ? shutdownFailure()
+            : error;
         /**
          * Attribution, applied once here rather than at ~30 throw sites. A
          * failure on a provider-supplied device names the provider and points
@@ -1102,6 +1239,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             ...errorSignalFields(err),
           });
           res.end();
+          return;
+        }
+        const failureCode = getFailureSignal(err)?.error_code;
+        if (
+          failureCode === FAILURE_CODES.HTTP_SERVER_SHUTTING_DOWN ||
+          failureCode === FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+        ) {
+          res
+            .status(503)
+            .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
           return;
         }
         if (err instanceof ToolNotFoundError) {
@@ -1166,7 +1313,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           .status(500)
           .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
+        pendingCalls.delete(pendingCall);
+        clearTimeout(shutdownTimer);
         if (keepAlive) clearInterval(keepAlive);
+        if (streamKeepAlive) clearInterval(streamKeepAlive);
         releaseInvocationMeta?.();
       }
     }
@@ -1183,8 +1333,19 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   return {
     app,
     dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      shutdownRecordings = new Map([
+        ...[...pendingCalls].flatMap((call) => [...call.recordings]),
+        ...getActiveScreenRecordings().flatMap((recording) =>
+          recording.outputFile ? [[recording.deviceId, recording.outputFile] as const] : []
+        ),
+      ]);
+      for (const call of pendingCalls) call.interrupt();
       idleTimer.dispose();
       clearInterval(uploadSweeper);
+      for (const cancel of activeUploads) cancel();
+      activeUploads.clear();
       for (const entry of uploads.values()) rm(entry.tarPath, { force: true }).catch(() => {});
       uploads.clear();
     },

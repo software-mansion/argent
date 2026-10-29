@@ -116,3 +116,5 @@ export type { FailureCode } from "./failure-codes";
 export { Registry, describeParamIssues } from "./registry";
 export { attachRegistryLogger } from "./logger";
 export { zodObjectToJsonSchema } from "./zod-to-json-schema";
+
+export { processNamespaceId } from "./process-namespace";

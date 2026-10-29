@@ -2,6 +2,15 @@ import { randomUUID } from "node:crypto";
 import { FAILURE_CODES, describeParamIssues, getFailureSignal } from "@argent/registry";
 import type { InvokeToolOptions, Registry, ResolvedFileInput, ToolContext } from "@argent/registry";
 
+export function rethrowRegistryShutdown(err: unknown): void {
+  const code = getFailureSignal(err)?.error_code;
+  if (
+    code === FAILURE_CODES.REGISTRY_SHUTTING_DOWN ||
+    code === FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+  )
+    throw err;
+}
+
 /**
  * Dispatch a tool as a child of the current orchestrator invocation.
  *
@@ -40,6 +49,7 @@ export async function invokeSubTool<T = unknown>(
   const recordChildInvocation = ctx?.recordChildInvocation;
   const flowStack = extra?.flowStack ?? ctx?.flowStack;
   const forwarded = {
+    ...(ctx?.onRecordingOutput ? { onRecordingOutput: ctx.onRecordingOutput } : {}),
     ...(extra?.fileInputs ? { fileInputs: extra.fileInputs } : {}),
     ...(flowStack ? { flowStack } : {}),
   };

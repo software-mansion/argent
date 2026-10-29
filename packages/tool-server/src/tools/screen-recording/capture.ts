@@ -5,7 +5,14 @@ import { spawn } from "child_process";
 import type { LivePanel } from "../../utils/foldable";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
-import { waitForChildExit } from "../../utils/profiler-shared/lifecycle";
+import {
+  encodedFrameCount,
+  encoderDiagnostics,
+  stripEncoderProgress,
+  finalizeEncoder,
+  verifyDebugEncoder,
+  verifyDebugVideo,
+} from "./encoder";
 import {
   clearActiveScreenRecording,
   markScreenRecordingFinalized,
@@ -13,6 +20,8 @@ import {
 } from "../../utils/screen-recording-reminder";
 import { takeReapedSession } from "../../utils/reaped-sessions";
 import { openMjpegStream, readJpegDimensions, type MjpegStream } from "./mjpeg-stream";
+import { startDebugCapture } from "./debug-capture";
+import { createFrameDirectory, setFrameDirectoryOwner } from "./frame-directory";
 import {
   assertNoActiveRecording,
   assertNotDisposed,
@@ -31,9 +40,10 @@ import {
 } from "./watermark";
 
 /**
- * Screen capture off simulator-server's MJPEG stream, paced onto a fixed 30fps
+ * Screen capture off simulator-server's MJPEG stream. Light mode is paced onto a fixed 30fps
  * timeline and piped into one ffmpeg process that encodes (and optionally
- * watermarks) straight to the final mp4.
+ * watermarks) straight to the final mp4. Debug saves each delivered JPEG and
+ * encodes at stop using tool-server parse timestamps.
  *
  * Pacing here rather than letting ffmpeg read the stream is what keeps the
  * timeline honest: the device only emits a frame when the screen CHANGES, so a
@@ -50,7 +60,7 @@ import {
 export interface PointerControl {
   /** Enable the overlay; resolves false if the sim-server would not turn it on. */
   enable(): Promise<boolean>;
-  /** Restore the overlay to off. Best-effort — never throws. */
+  /** Restore the overlay to off. Best-effort — never throws; concurrent calls share teardown. */
   disable(): Promise<void>;
 }
 
@@ -106,9 +116,6 @@ export interface PanelFollow {
 }
 /** Hold briefly after spawn so bad args fail the start instead of the stop. */
 const START_FAILFAST_GRACE_MS = 800;
-/** ffmpeg finalizes on stdin EOF; bound the wait anyway. */
-const FINALIZE_WAIT_MS = 20_000;
-const SIGINT_WAIT_MS = 5_000;
 
 export function ffmpegArgs(opts: {
   outputFile: string;
@@ -119,7 +126,58 @@ export function ffmpegArgs(opts: {
    * header could not be read.
    */
   canvas: Dimensions | null;
+  mode?: "light" | "debug";
 }): string[] {
+  if (opts.mode === "debug") {
+    const args = [
+      "-hide_banner",
+      "-nostdin",
+      "-loglevel",
+      "warning",
+      "-progress",
+      "pipe:2",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-protocol_whitelist",
+      "file,pipe",
+      "-i",
+      "pipe:0",
+    ];
+    if (opts.canvas) {
+      // Pad odd edges so YUV 4:2:0 keeps every source pixel.
+      const width = Math.ceil(opts.canvas.width / 2) * 2;
+      const height = Math.ceil(opts.canvas.height / 2) * 2;
+      args.push(
+        "-vf",
+        `scale=${opts.canvas.width}:${opts.canvas.height}:force_original_aspect_ratio=decrease,format=yuv444p,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`
+      );
+    }
+    return [
+      ...args,
+      "-c:v",
+      "libx264",
+      "-crf",
+      "12",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-fps_mode",
+      "passthrough",
+      // x264 otherwise uses the microsecond timebase as a million-fps rate hint.
+      "-x264-params",
+      "fps=120/1",
+      "-enc_time_base",
+      "1:1000000",
+      "-video_track_timescale",
+      "1000000",
+      "-an",
+      "-y",
+      opts.outputFile,
+    ];
+  }
   const args = [
     "-hide_banner",
     "-nostdin",
@@ -265,9 +323,8 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
 
 /** Restore the touch visualizer to off. Best-effort, idempotent, never throws. */
 async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
-  const disable = api.pointerDisable;
+  await api.pointerDisable?.();
   api.pointerDisable = null;
-  if (disable) await disable().catch(() => {});
 }
 
 /**
@@ -285,13 +342,14 @@ function startPanelFollow(
   child: ReturnType<typeof spawn>
 ): void {
   let inFlight = false;
+  const capturing = () => api.captureProcess === child && api.recordingActive && !api.disposed;
   api.panelPollTimer = setInterval(() => {
-    if (inFlight || api.captureProcess !== child) return;
+    if (inFlight || !capturing()) return;
     inFlight = true;
     void (async () => {
       try {
         const live = await follow.resolveLivePanel();
-        if (api.captureProcess !== child) return;
+        if (!capturing()) return;
         if (live.source === "unknown") {
           api.panelReadFailures++;
           return;
@@ -309,12 +367,13 @@ function startPanelFollow(
           throw err;
         }
         // The poll may have outlived the capture while the stream connected.
-        if (api.captureProcess !== child || !api.pumpTimer) {
+        if (!capturing()) {
           next.close();
           return;
         }
         const previous = api.frameStream;
         api.frameStream = next;
+        api.debugCapture?.attach(next);
         api.activeScreen = screen;
         api.panelSwitches++;
         previous?.close();
@@ -333,6 +392,7 @@ function startPanelFollow(
 
 /** Stop pacing and release the stream subscription; safe to call repeatedly. */
 function stopPump(api: ScreenRecordingSessionApi): void {
+  void api.debugCapture?.finish();
   if (api.pumpTimer) {
     clearInterval(api.pumpTimer);
     api.pumpTimer = null;
@@ -352,13 +412,12 @@ function stopPump(api: ScreenRecordingSessionApi): void {
 }
 
 /**
- * End the capture: stop producing frames and close ffmpeg's stdin, which is
- * what makes it write the mp4 trailer.
+ * End frame capture. EOF finalizes light mode and starts debug encoding.
  */
 function finalizeCapture(api: ScreenRecordingSessionApi): void {
   stopPump(api);
   const stdin = api.captureProcess?.stdin;
-  if (stdin?.writable) stdin.end();
+  if (!api.debugCapture && stdin?.writable) stdin.end();
 }
 
 export async function startCapture(
@@ -368,6 +427,7 @@ export async function startCapture(
     timeLimitSeconds: number;
     watermark: boolean;
     trimStatic: boolean;
+    mode?: "light" | "debug";
     pointer?: PointerControl;
     /** Set for a foldable: the capture then moves with the live panel. */
     followPanel?: PanelFollow;
@@ -393,6 +453,7 @@ async function startCaptureLocked(
     timeLimitSeconds: number;
     watermark: boolean;
     trimStatic: boolean;
+    mode?: "light" | "debug";
     pointer?: PointerControl;
     followPanel?: PanelFollow;
   }
@@ -420,12 +481,24 @@ async function startCaptureLocked(
   let logoFile: string | null = null;
   let watermarkSkipped: string | null = null;
   let child: ReturnType<typeof spawn>;
+  let frameDirectory: string | null = null;
   try {
     // The first frame proves the device is drawing, and its JPEG header carries
     // the size the whole video keeps (the letterbox canvas) and the watermark
     // geometry — no ffprobe pass over a file that does not exist yet.
     const firstFrame = await stream.waitForFirstFrame(FIRST_FRAME_TIMEOUT_MS);
     const canvas = readJpegDimensions(firstFrame);
+    if (params.mode === "debug") {
+      if (!canvas)
+        throw new FailureError("The debug recording requires a readable JPEG frame size.", {
+          error_code: FAILURE_CODES.SCREEN_RECORDING_STREAM_UNAVAILABLE,
+          failure_stage: "screen_recording_frame_dimensions",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
+      await verifyDebugEncoder(ffmpeg, firstFrame);
+      frameDirectory = await createFrameDirectory();
+    }
     let graph: string | null = null;
     if (params.watermark && canvas) {
       logoFile = await writeLogoTemp();
@@ -440,31 +513,54 @@ async function startCaptureLocked(
     // while this start was suspended above, abort rather than spawn an encoder
     // the teardown can no longer reap.
     assertNotDisposed(api, "screen_recording_start");
-    child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph, canvas }), {
+    child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph, canvas, mode: params.mode }), {
       stdio: ["pipe", "ignore", "pipe"],
+      ...(params.mode === "debug" ? { detached: true } : {}),
     });
     // Visible to dispose() while the fail-fast grace is pending (captureProcess
     // is stamped success-only).
     api.pendingChild = child;
+    if (frameDirectory && child.pid)
+      frameDirectory = setFrameDirectoryOwner(frameDirectory, child.pid);
   } catch (err) {
+    api.pendingChild?.kill("SIGKILL");
     stream.close();
+    if (frameDirectory)
+      await fs.rm(frameDirectory, { recursive: true, force: true }).catch(() => {});
     if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
     throw err;
   }
 
-  const stderrRef = { text: "" };
+  const stderrRef = { text: "", pending: "", framesEncoded: 0 };
   child.stderr?.on("data", (chunk: Buffer) => {
-    stderrRef.text = (stderrRef.text + chunk.toString("utf8")).slice(-4_000);
+    if (params.mode === "debug") {
+      const lines = (stderrRef.pending + chunk.toString("utf8")).split("\n");
+      stderrRef.pending = lines.pop()!.slice(-4_000);
+      const complete = lines.join("\n");
+      stderrRef.framesEncoded = encodedFrameCount(complete) || stderrRef.framesEncoded;
+      const diagnostic = stripEncoderProgress(complete);
+      if (diagnostic.trim()) stderrRef.text = (stderrRef.text + "\n" + diagnostic).slice(-4_000);
+    } else {
+      stderrRef.text = (stderrRef.text + chunk.toString("utf8")).slice(-4_000);
+    }
+    if (params.mode === "debug" && api.outputFile === outputFile && api.lastExitInfo) {
+      api.lastExitInfo.framesEncoded = stderrRef.framesEncoded;
+      api.lastExitInfo.stderr = encoderDiagnostics(stderrRef.text + "\n" + stderrRef.pending);
+    }
   });
   // An EPIPE on a dead encoder must not crash the tool-server.
   child.stdin?.on("error", () => {});
 
   try {
     await waitForEncoderReady(child, stderrRef);
+    assertNotDisposed(api, "screen_recording_start");
   } catch (err) {
     stream.close();
+    if (frameDirectory)
+      await fs.rm(frameDirectory, { recursive: true, force: true }).catch(() => {});
     if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
     await fs.rm(outputFile, { force: true }).catch(() => {});
+    assertNotDisposed(api, "screen_recording_start");
     throw err;
   }
   // A late exec error after readiness would otherwise be an unhandled 'error'.
@@ -484,11 +580,13 @@ async function startCaptureLocked(
   api.lastExitInfo = null;
   api.lastFrameStreamError = null;
   api.outputFile = outputFile;
+  api.finishedRecording = null;
   api.logoFile = logoFile;
   api.watermarkSkipped = watermarkSkipped;
   api.trimStatic = params.trimStatic;
   api.framesWritten = 0;
   api.captureProcess = child;
+  api.pendingChild = null;
   api.frameStream = stream;
   api.activeScreen = params.followPanel?.initial.screen ?? null;
   api.panelSwitches = 0;
@@ -497,12 +595,38 @@ async function startCaptureLocked(
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
   api.timeLimitSeconds = params.timeLimitSeconds;
-  registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
+  registerActiveScreenRecording(
+    api.deviceId,
+    api.wallClockStartMs,
+    params.timeLimitSeconds,
+    outputFile
+  );
   // This recording's own stop will succeed, so an earlier teardown breadcrumb
   // would never be consumed — and would later blame a genuine "no active
   // recording" on an unrelated teardown.
   takeReapedSession("screen-recording", api.deviceId);
-  startPump(api, stream);
+  const endRecording = (reason: string) => {
+    api.recordingActive = false;
+    api.wallClockEndMs = Date.now();
+    api.pendingRetrieval = true;
+    if (api.recordingTimeout) {
+      clearTimeout(api.recordingTimeout);
+      api.recordingTimeout = null;
+    }
+    markScreenRecordingFinalized(api.deviceId, reason);
+    finalizeCapture(api);
+    void disablePointer(api);
+  };
+  api.debugCapture = null;
+  if (params.mode === "debug") {
+    api.debugCapture = startDebugCapture(child.stdin!, frameDirectory!, () => {
+      if (api.captureProcess !== child || !api.recordingActive || api.disposed) return;
+      endRecording("debug frame capture ended early");
+    });
+    api.debugCapture.attach(stream);
+  } else {
+    startPump(api, stream);
+  }
   if (params.followPanel) startPanelFollow(api, params.followPanel, child);
 
   // Arm the exit handler BEFORE the pointer-enable await below: readiness
@@ -513,13 +637,31 @@ async function startCaptureLocked(
     // Ownership guard: after this capture is superseded, its exit must not
     // clobber the newer capture's session state.
     if (api.captureProcess !== child) return;
-    api.lastExitInfo = { code, signal };
+    api.lastExitInfo = {
+      code,
+      signal,
+      ...(api.debugCapture ? { framesEncoded: stderrRef.framesEncoded } : {}),
+      ...(stderrRef.text || stderrRef.pending
+        ? {
+            stderr: api.debugCapture
+              ? encoderDiagnostics(stderrRef.text + "\n" + stderrRef.pending)
+              : clip(stderrRef.text),
+          }
+        : {}),
+    };
     api.captureProcess = null;
+    if (code === 0 && signal === null) {
+      void api.debugCapture?.cleanup().catch((err: unknown) => {
+        process.stderr.write(
+          `[screen-recording ${api.deviceId}] JPEG cleanup failed: ${String(err)}\n`
+        );
+      });
+    }
     if (api.recordingTimeout) {
       clearTimeout(api.recordingTimeout);
       api.recordingTimeout = null;
     }
-    if (api.recordingActive) {
+    if (api.recordingActive && !api.disposed) {
       // Died without stop or the cap: disk full, encoder crash, …
       api.recordingActive = false;
       api.recordingExitedUnexpectedly = true;
@@ -531,7 +673,7 @@ async function startCaptureLocked(
     }
   });
 
-  if (params.pointer) {
+  if (params.pointer && api.recordingActive && !api.disposed) {
     // Arm the touch visualizer before returning, so the very first interaction
     // is already drawn into the recording. Store the teardown first so a
     // teardown racing this await still restores the overlay; a failure only
@@ -539,6 +681,7 @@ async function startCaptureLocked(
     api.pointerDisable = params.pointer.disable;
     api.pointerFailed = !(await params.pointer.enable());
   }
+  assertNotDisposed(api, "screen_recording_start", outputFile);
 
   api.recordingTimeout = setTimeout(() => {
     api.recordingTimeout = null;
@@ -548,12 +691,7 @@ async function startCaptureLocked(
     api.recordingTimedOut = true;
     // Flip active BEFORE finalizing so the exit handler reads this as the cap,
     // not an unexpected death.
-    api.recordingActive = false;
-    api.wallClockEndMs = Date.now();
-    api.pendingRetrieval = true;
-    markScreenRecordingFinalized(api.deviceId, `it hit its ${params.timeLimitSeconds}s time limit`);
-    finalizeCapture(api);
-    void disablePointer(api);
+    endRecording(`it hit its ${params.timeLimitSeconds}s time limit`);
   }, params.timeLimitSeconds * 1_000);
 
   return {
@@ -566,11 +704,11 @@ async function startCaptureLocked(
 /**
  * Resolve once ffmpeg has survived long enough to be considered live. It stays
  * silent on a good start, so "did not die within the grace" is the signal;
- * a bad filter graph or unwritable output dies immediately and fails the start.
+ * a bad command line dies immediately and fails the start.
  */
 function waitForEncoderReady(
   child: ReturnType<typeof spawn>,
-  stderrRef: { text: string }
+  stderrRef: { text: string; pending?: string }
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -587,7 +725,7 @@ function waitForEncoderReady(
       finish(
         new FailureError(
           `ffmpeg exited (${signal ? `signal ${signal}` : `code ${code ?? "?"}`}) before the ` +
-            `recording started. stderr: ${clip(stderrRef.text)}`,
+            `recording started. stderr: ${clip(stderrRef.text + (stderrRef.pending ?? ""))}`,
           {
             error_code: FAILURE_CODES.SCREEN_RECORDING_START_EXITED,
             failure_stage: "screen_recording_encoder_ready",
@@ -619,11 +757,40 @@ function waitForEncoderReady(
   });
 }
 
-export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopRecordingFile> {
-  assertStoppableSession(api, "screen_recording_stop");
-  // Set synchronously so a concurrent stop or start is rejected while this one
-  // finalizes (see assertStoppableSession / assertNoActiveRecording).
-  api.stopPending = true;
+export async function stopCapture(
+  api: ScreenRecordingSessionApi,
+  outputFile?: string
+): Promise<StopRecordingFile> {
+  assertStoppableSession(api, "screen_recording_stop", outputFile);
+  if (api.finishedRecording) {
+    const { result } = api.finishedRecording;
+    if (result instanceof Error) throw result;
+    await statNonEmptyOutput(
+      result.outputFile,
+      "screen_recording_stop",
+      `The completed recording is no longer available at ${result.outputFile}. It may already have been delivered. Check the client's saved recordings before re-recording.`
+    );
+    return result;
+  }
+  const captureOutput = api.outputFile!;
+  api.stopping = stopCaptureLocked(api);
+  try {
+    const result = await api.stopping;
+    api.finishedRecording = { outputFile: captureOutput, result };
+    return result;
+  } catch (err) {
+    api.finishedRecording = {
+      outputFile: captureOutput,
+      result: err instanceof Error ? err : new Error(String(err)),
+    };
+    throw err;
+  } finally {
+    api.stopping = null;
+  }
+}
+
+async function stopCaptureLocked(api: ScreenRecordingSessionApi): Promise<StopRecordingFile> {
+  clearActiveScreenRecording(api.deviceId);
 
   if (api.recordingTimeout) {
     clearTimeout(api.recordingTimeout);
@@ -643,6 +810,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const pointerFailed = api.pointerFailed;
   const panelSwitches = api.panelSwitches;
   const panelReadFailures = api.panelReadFailures;
+  const debugCapture = api.debugCapture;
   let warning: string | undefined;
 
   try {
@@ -655,30 +823,18 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     }
     // Idempotent: the cap may already have finalized this capture.
     finalizeCapture(api);
+    await disablePointer(api);
+    await debugCapture?.finish();
 
-    if (child && !(await waitForChildExit(child, FINALIZE_WAIT_MS))) {
-      // ffmpeg normally exits within milliseconds of stdin EOF; escalate only
-      // if it is wedged, accepting that the container may be truncated.
-      try {
-        child.kill("SIGINT");
-      } catch {
-        // already dead
-      }
-      if (!(await waitForChildExit(child, SIGINT_WAIT_MS))) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // already dead
-        }
-        warning =
-          "ffmpeg did not finalize the video after the capture ended and had to be killed; " +
-          "the file may be truncated or unplayable.";
-      }
+    if (child && !(await finalizeEncoder(child, Boolean(debugCapture)))) {
+      warning = debugCapture
+        ? "ffmpeg stopped making progress and had to be killed; the file may be truncated or unplayable."
+        : "ffmpeg did not finalize the video after the capture ended and had to be killed; the file may be truncated or unplayable.";
     }
 
     if (endedEarly && !warning) {
       warning = api.recordingTimedOut
-        ? `Recording already ended at its ${api.timeLimitSeconds ?? "?"}s time limit; returning the finalized video.`
+        ? `Recording already ended at its ${api.timeLimitSeconds ?? "?"}s time limit; returning the captured output.`
         : `ffmpeg exited before stop was called (code=${api.lastExitInfo?.code ?? "?"}, ` +
           `signal=${api.lastExitInfo?.signal ?? "?"}); returning whatever was captured.`;
     }
@@ -708,6 +864,9 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         .filter(Boolean)
         .join(" ");
     }
+    if (debugCapture?.warning) {
+      warning = [warning, debugCapture.warning].filter(Boolean).join(" ");
+    }
     if (panelReadFailures > 0) {
       warning = [
         warning,
@@ -721,16 +880,81 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         .join(" ");
     }
 
-    const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
+    const encodingComplete = debugCapture
+      ? api.lastExitInfo?.code === 0 &&
+        api.lastExitInfo.signal === null &&
+        api.lastExitInfo.framesEncoded === debugCapture.frameTimesUs.length
+      : undefined;
+    const encodingStatus = debugCapture
+      ? `Debug encoder exited (code=${api.lastExitInfo?.code ?? "?"}, ` +
+        `signal=${api.lastExitInfo?.signal ?? "none"}, encoded=${api.lastExitInfo?.framesEncoded ?? 0}, ` +
+        `expected=${debugCapture.frameTimesUs.length}).` +
+        (api.lastExitInfo?.stderr ? ` Encoder stderr: ${api.lastExitInfo.stderr}` : "")
+      : "";
+    let size: number;
+    let validationIncomplete = false;
+    try {
+      size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
+      if (encodingComplete === false) {
+        const ffmpeg = await resolveFfmpeg();
+        if (!ffmpeg) {
+          validationIncomplete = true;
+          throw new Error("ffmpeg is unavailable to check the failed debug output.");
+        }
+        try {
+          await verifyDebugVideo(ffmpeg, outputFile);
+        } catch (err) {
+          const failure = err as Error & { code?: number; killed?: boolean };
+          if (typeof failure.code === "number" && !failure.killed) {
+            await fs.rm(outputFile, { force: true }).catch(() => {});
+          } else {
+            validationIncomplete = true;
+          }
+          throw err;
+        }
+      }
+    } catch (err) {
+      if (!debugCapture) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new FailureError(
+        (validationIncomplete
+          ? `Debug video validation did not complete. Output remains at ${outputFile}; check it before recording again. `
+          : `No readable debug video was saved at ${outputFile}. `) +
+          `Captured JPEGs are discarded after failed encoding. ${message} ` +
+          [encodingStatus, debugCapture.warning].filter(Boolean).join(" "),
+        {
+          error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
+          failure_stage: "screen_recording_stop",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          ...subprocessFailureMetadata(api.lastExitInfo ?? {}, "ffmpeg"),
+        },
+        { cause: err instanceof Error ? err : new Error(String(err)) }
+      );
+    }
+    if (encodingComplete === false) {
+      warning = [
+        warning,
+        encodingStatus,
+        "The duration is unknown; the partial video may omit captured frames.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
     // Wall-clock capture length: after the cap fires (or the encoder dies) the
     // recording is over even if stop arrives much later.
     const wallClockMs =
       startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs;
     // Length of the video the caller actually gets: with trimming that is
     // shorter than the wall clock, counting only the frames that survived.
-    const durationMs = trimStatic
+    let durationMs = trimStatic
       ? Math.round((api.framesWritten / OUTPUT_FPS) * 1_000)
       : wallClockMs;
+    if (debugCapture) {
+      durationMs = encodingComplete
+        ? Math.round(((debugCapture.frameTimesUs.at(-1) ?? 0) + 1) / 1_000)
+        : null;
+    }
     // Only surface the trim-only fields when trimming actually collapsed a
     // static stretch: otherwise a continuously-animating recording reports a
     // phantom trimmedMs of a frame or two from the framesWritten-vs-wall-clock
@@ -743,13 +967,13 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
       outputFile,
       sizeBytes: size,
       durationMs,
+      ...(encodingComplete !== undefined ? { encodingComplete } : {}),
       ...(trimmedMs !== undefined ? { wallClockMs: wallClockMs!, trimmedMs } : {}),
       ...(panelSwitches > 0 ? { panelSwitches } : {}),
       ...(warning ? { warning } : {}),
     };
   } catch (err) {
-    // A stop only throws when the container is missing or empty
-    // (statNonEmptyOutput). Drop that 0-byte temp so a retry doesn't orphan it —
+    // Drop a 0-byte temp so a retry doesn't orphan it —
     // gated on the file genuinely being empty, never on "delete unless a success
     // flag was set", so no unexpected error can ever delete a real recording.
     const empty = await fs
@@ -760,12 +984,17 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     throw err;
   } finally {
     // Always return the session to a startable state — a failed stat must not
-    // wedge the next start behind "already active". The video is host-side, so
-    // there is nothing a retried stop could recover.
+    // wedge the next start behind "already active". Successful stop results
+    // remain available for retries until the next recording starts.
     stopPump(api);
     await disablePointer(api);
+    await debugCapture?.cleanup().catch((err: unknown) => {
+      process.stderr.write(
+        `[screen-recording ${api.deviceId}] could not remove temporary JPEGs: ${String(err)}\n`
+      );
+    });
+    if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
     api.recordingActive = false;
-    api.stopPending = false;
     api.pendingRetrieval = false;
     api.captureProcess = null;
     api.outputFile = null;
@@ -774,6 +1003,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.pointerFailed = false;
     api.framesWritten = 0;
     api.trimmedAnyFrames = false;
+    api.debugCapture = null;
     api.activeScreen = null;
     api.panelSwitches = 0;
     api.panelReadFailures = 0;
@@ -785,6 +1015,5 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.lastExitInfo = null;
     api.lastFrameStreamError = null;
     clearActiveScreenRecording(api.deviceId);
-    if (logoFile) await fs.rm(logoFile, { force: true }).catch(() => {});
   }
 }
