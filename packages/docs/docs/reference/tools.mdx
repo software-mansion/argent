@@ -166,7 +166,13 @@ The device id is `macos-app-<bundle id>`. Argent accepts a bundle id that has on
 | `udid`         | A Mac app id instead of `macosAppPath`. Argent starts the app from the path of the last start, or from the newest app with this bundle id that Spotlight finds |
 | `force`        | Quit the running app and start it again. Also quit a copy of the same build that runs without the Argent library                                               |
 
-The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPath, args, booted }`. `args` are the arguments the app runs with. When the app runs already with the Argent library, `boot-device` starts nothing and adds `alreadyRunning: true`. `logPath` is the file that receives the output of the app. After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 seconds until the app shows a window. A dialog that the app shows before it finishes launching, for example a license prompt, counts as that window: the agent answers it with the other tools. When no window appears, the result has a `note`, because taps and screenshots need a window. The result also has a `note` in these cases:
+The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPath, args, booted }`:
+
+- `args` are the arguments the app runs with.
+- `logPath` is the file that receives the output of the app.
+- When the app runs already with the Argent library, `boot-device` starts nothing and adds `alreadyRunning: true`.
+
+After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 seconds until the app shows a window. A dialog that the app shows while it launches also counts as a window, for example a license prompt. The agent answers this dialog with the other tools. When no window appears, the result has a `note`, because taps and screenshots need a window. The result also has a `note` in these cases:
 
 - The app runs already with other arguments than `macosAppArgs`. Argent does not start the app again. Use `force` to start the app with the new arguments.
 - The app has no listening socket.
@@ -249,7 +255,12 @@ Use `gesture-drag` to drag and `gesture-scroll` to scroll.
 - A React Native `Text` or `View` that has a `testID` but is not an accessibility element appears as `AXStaticText`. Its identifier is the `testID`, and its label is its text.
 - A scroll area or a web view clips its content, and so does each element of a web page with an `overflow` other than `visible`. The tree leaves out each element that it has scrolled out of view, and the scroll area or the web view shows the count of these elements as `scrollHidden=<n>`. Use `gesture-scroll` to bring them into view.
 - The tree leaves out each element outside the app window and its sheets, popovers, alerts and menus, and the hint gives the count.
-- The tree leaves out each element that does not show: an element that another window of the app covers, the content of a window tab that is not the selected tab, a view with an opacity of 0 or that a transform moves out of the window, a hidden web view, a web view behind a different web view at the same place, and a panel that hides while the app is in the background.
+- The tree leaves out each element that does not show:
+  - An element that another window of the app covers.
+  - The content of a window tab that is not the selected tab.
+  - A view with an opacity of 0, or a view that a transform moves out of the window.
+  - A hidden web view, or a web view behind a different web view at the same place.
+  - A panel that hides while the app is in the background.
 - The value of a date picker is its date in ISO 8601 format, in the time zone of the Mac.
 - The tree does not show the menu bar of the app. Use [`menu-bar`](#menu-bar).
 - A password field has the `password` flag and no value.
