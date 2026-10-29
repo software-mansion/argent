@@ -387,7 +387,8 @@ Conditions:
              overall if none is visible) contains expectedText (case-insensitive substring), or exactly matches
              it when textMatch is \`equals\`. A loose selector can match several elements; only that one is
              inspected, so if a different match is the one holding the text the wait still reports failure;
-             narrow the selector to target it.
+             narrow the selector to target it.<flag:macos-apps> On a Mac app, a match in an open menu comes first,
+             then one in a sheet, alert or popover, then one in the window.</flag:macos-apps>
 
 The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
 case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
