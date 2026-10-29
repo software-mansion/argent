@@ -838,7 +838,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
   }, 20_000);
 
-  it("restart-app leaves an app that asks to save to the agent", async () => {
+  it("restart-app leaves an app that asks to save to the agent, but not a prompt open before", async () => {
     const { pid } = await run("boot-device", {
       macosAppPath: appPath,
       macosAppArgs: ["--mode=ask-save"],
@@ -849,7 +849,11 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_TERMINATE_FAILED);
     expect((err as Error).message).toMatch(/shows a prompt.*describe/);
     expect(fakeAppPids()).toEqual([pid]);
-  }, 20_000);
+
+    await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+    expect(pidAlive(pid)).toBe(false);
+    expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
+  }, 30_000);
 
   it.each([
     [

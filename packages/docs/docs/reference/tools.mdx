@@ -193,7 +193,7 @@ After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 secon
 
 `force` quits a copy of the same build that runs without the Argent library, for example a copy that Xcode Run started. The unsaved changes of that copy are lost. When a forced start fails because of the bundle or because a different build runs, the app that Argent runs continues to run.
 
-When the app that Argent runs does not quit because it shows a prompt, for example to save changes, `boot-device` with `force`, `restart-app` and a `launch` step of an e2e test fail, and the app continues to run. The agent answers the prompt, then tries again. Argent force-quits an app that does not answer.
+When the app that Argent runs answers the quit with a prompt, for example to save changes, `boot-device` with `force`, `restart-app` and a `launch` step of an e2e test fail, and the app continues to run. The agent answers the prompt, then tries again. For the panel that asks to keep a new document, the agent uses `file-panel` with `discard`. Argent force-quits an app that does not answer. A dialog that was open before the quit does not stop the force-quit.
 
 The other app tools on a Mac app:
 

@@ -192,6 +192,12 @@ export function listedWindows(reply: unknown): MacosListedWindow[] {
   return Array.isArray(windows) ? windows : [];
 }
 
+function shownPrompts(reply: unknown): MacosListedWindow[] {
+  return listedWindows(reply).filter(
+    (w) => w.isVisible === true && PROMPT_KINDS.includes(w.kind as string)
+  );
+}
+
 function notRunningError(bundleId: string): FailureError {
   return macosFailure(
     `${bundleId} is not running. Start it with boot-device (macosAppPath) or launch-app ` +
@@ -753,12 +759,16 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
   /**
    * Quits argent's own copy: `Application.terminate`, then the signals. An app
-   * that answers with a prompt (save changes?) is left to the agent.
+   * that answers with a new prompt (save changes?) is left to the agent; a
+   * dialog that was open before does not keep it from being signalled.
    */
   const terminate = async (app: { pid: number; executable: string }): Promise<void> => {
     let ch: LibraryChannel | null;
+    let open = new Set<unknown>();
     try {
       ch = await ensureChannel();
+      const before = await ch.request("Window.list", {}, 2_000).catch(() => null);
+      open = new Set(shownPrompts(before).map((w) => w.number));
       await ch.request("Application.terminate", {}, 2_000);
     } catch (err) {
       // Another tool-server drives the app: quitting it would stop that agent's work.
@@ -773,11 +783,16 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         })
       : [app.pid];
     if (ch && left.length > 0) {
-      const windows = listedWindows(await ch.request("Window.list", {}, 2_000).catch(() => null));
-      if (windows.some((w) => w.isVisible === true && PROMPT_KINDS.includes(w.kind as string))) {
+      const after = await ch.request("Window.list", {}, 2_000).catch(() => null);
+      const prompt = shownPrompts(after).find((w) => !open.has(w.number));
+      if (prompt) {
         throw macosFailure(
-          `${bundleId} did not quit: it shows a prompt, probably asking whether to save ` +
-            `changes. Answer it (describe shows it), then run this tool again.`,
+          prompt.kind === "file-panel"
+            ? `${bundleId} did not quit: it shows a file panel, probably asking whether to keep ` +
+                `a new document. Answer it with file-panel (discard closes the document without ` +
+                `saving), then try again.`
+            : `${bundleId} did not quit: it shows a prompt, probably asking whether to save ` +
+                `changes. Answer it (describe shows it), then try again.`,
           FAILURE_CODES.MACOS_APP_TERMINATE_FAILED,
           "macos_app_terminate",
           "validation"
