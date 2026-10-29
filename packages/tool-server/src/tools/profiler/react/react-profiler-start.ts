@@ -114,7 +114,7 @@ export function createReactProfilerStartTool(
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Use when you need to profile a user interaction.
-Before calling this, ask the user if they also want native profiling (native-profiler-start), and recommend running both in parallel for a complete picture.
+On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,

@@ -30,7 +30,7 @@ For native profiling on its own, see the `argent-native-profiler` skill.
 
 ## 2. Guidelines
 
-- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message), with the same `device_id` so their data can be correlated. Skip `native-profiler-start` only if the user has **already explicitly said** they don't want native profiling in this session. If the user wants only native profiling, follow `argent-native-profiler`.
+- Start `react-profiler-start` and `native-profiler-start` together, as `react-profiler-start` describes. If the user wants only native profiling, follow `argent-native-profiler`.
 - **Never move on silently after a report.** The report is the starting point: ask the user whether to investigate further with the query tools, implement fixes and re-profile, or stop.
 - **Record the interaction as an e2e test** (`argent-create-e2e` skill) before the first run when profiling needs a specific interaction sequence (scroll a list, navigate screens, trigger an animation), then replay it for every later run. This removes interaction variance from before/after comparisons. It matters most when re-profiling after a fix, comparing several sessions, or when the path is more than 2-3 steps.
 

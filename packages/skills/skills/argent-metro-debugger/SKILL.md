@@ -46,7 +46,7 @@ What the `guidance` does not tell you:
 
 ## 4. Reading Console Logs (Log Registry)
 
-Logs are written to a flat log file on disk. Call `debugger-log-registry` for the summary and the file path, then search the file with `Grep`. On `status: "not_connected"` there is no file: follow the `guidance`, and grep only a log file its `note` names as kept from before the app crashed.
+Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary and the file path.
 
 ### Flat log format
 
@@ -62,7 +62,7 @@ One entry per line: fields (whitespace-separated, `|` delimiter before message)
 
 Log files and messages can be large: **always scope your search**, and treat the file like a database, not a document.
 
-- Never `Read` the log file directly. Use `grep` or shell commands with limits; default to `-m 50` unless you need more.
+- Use `grep` with a limit; default to `-m 50` unless you need more.
 - `clusters[].message` gives you the exact text to search for.
 - Search bracketed text such as `[L:42]` or `[object Object]` with `grep -F`, or escape the brackets (`\[L:42\]`). Unescaped, `[...]` is a character class: `grep '[L:42]'` matches every line in the file.
 - If `totalEntries` exceeds 10 000, delegate the search to an `Explore` subagent: pass it the file path, the format above, the patterns you need, and rule 3's untrusted-data caveat.
