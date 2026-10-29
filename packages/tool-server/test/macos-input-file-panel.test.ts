@@ -219,18 +219,26 @@ describe("file-panel", () => {
     );
   });
 
-  it.each(["", "release-1.2", "Notes.rtfd"])(
-    "choose refuses an existing folder (%j) as the file of a save panel",
+  it("choose refuses a plain folder as the file of a save panel", async () => {
+    tracked.sandboxed = true;
+    const { invoke, calls } = harness([savePanel]);
+    const err = await errorOf(invoke({ action: "choose", path: sandbox }));
+    expect(err?.message).toMatch(/is a folder, not a file to write\. Pass a path inside it/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+    expect(nonListCalls(calls)).toEqual([]);
+    expect(issueSandboxExtension).not.toHaveBeenCalled();
+  });
+
+  it.each(["release-1.2", "Notes.rtfd"])(
+    "choose leaves a folder named %j to the app, which tells a document package from a folder",
     async (name) => {
-      tracked.sandboxed = true;
       const folder = path.join(sandbox, name);
-      fs.mkdirSync(folder, { recursive: true });
+      fs.mkdirSync(folder);
       const { invoke, calls } = harness([savePanel]);
-      const err = await errorOf(invoke({ action: "choose", path: folder }));
-      expect(err?.message).toMatch(/is a folder, not a file to write\. Pass a path inside it/);
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
-      expect(nonListCalls(calls)).toEqual([]);
-      expect(issueSandboxExtension).not.toHaveBeenCalled();
+      await invoke({ action: "choose", path: folder });
+      expect(nonListCalls(calls)).toEqual([
+        { method: "Panel.complete", params: { path: folder, panel: 42 } },
+      ]);
     }
   );
 
@@ -413,17 +421,21 @@ describe("file-panel", () => {
     expect(issueSandboxExtension).not.toHaveBeenCalled();
   });
 
-  it("stub with panelKind save refuses an existing folder, also one named like a package", async () => {
+  it("stub with panelKind save refuses a plain folder and leaves a document package to the app", async () => {
     tracked.sandboxed = true;
     const { invoke, calls } = harness();
-    const pkg = path.join(sandbox, "Deck.key");
-    fs.mkdirSync(pkg);
-    for (const folder of [sandbox, pkg]) {
-      const err = await errorOf(invoke({ action: "stub", path: folder, panelKind: "save" }));
-      expect(err?.message).toMatch(/is a folder, not a file to write/);
-    }
+    const err = await errorOf(invoke({ action: "stub", path: sandbox, panelKind: "save" }));
+    expect(err?.message).toMatch(/is a folder, not a file to write/);
     expect(calls).toEqual([]);
     expect(issueSandboxExtension).not.toHaveBeenCalled();
+    const pkg = path.join(sandbox, "Deck.key");
+    fs.mkdirSync(pkg);
+    await expect(invoke({ action: "stub", path: pkg, panelKind: "save" })).resolves.toEqual({
+      armed: true,
+      mode: "answer",
+      panelKind: "save",
+    });
+    expect(granted()).toEqual([pkg]);
   });
 
   it("stub without panelKind answers an existing folder as an open panel and grants only that folder", async () => {

@@ -139,9 +139,10 @@ async function checkPathsFor(
       throw invalid("A save panel takes one path, the file to write.", "file_panel_save_paths");
     }
     const target = paths[0]!;
-    // The app would replace the folder, and everything in it, with the document,
-    // whatever the folder's name.
-    if ((await statOrNull(target))?.isDirectory()) {
+    // The app would replace the folder, and everything in it, with the document. A
+    // folder whose name has an extension can be a document package (.rtfd), which
+    // a save panel replaces as one file: the app tells a package from a folder.
+    if ((await statOrNull(target))?.isDirectory() && path.extname(target) === "") {
       throw invalid(
         `${target} is a folder, not a file to write. Pass a path inside it for a save panel, ` +
           `such as ${path.join(target, "<name>")}.`,
@@ -312,7 +313,7 @@ Actions: list returns the open panels with their number, kind (open or save), ti
 For stub, panelKind names the kind of the next panel; without it, paths that exist mean an open panel and one path that does not exist yet means a save panel. A next panel that could not take the answer (several paths for a single selection, a folder for a panel of files or for a save panel, an extension that matches none of a save panel's formats) opens as usual.
 A sandboxed app that argent started is given access to the chosen paths only. On a save panel that offers several file formats, the path's extension must match one of them, and on macOS 15 and later it picks the format. argent does not check a path for an open panel against the panel's allowed file types.
 Returns { panels } for list, { chosen, panel, kind, paths } for choose, { cancelled, panel } for cancel, { discarded, panel } for discard, { armed, mode, panelKind? } for stub.
-Fails if no panel appears within timeoutMs, if more than one panel is open and panel is not given, if a path is relative or does not exist (a save panel needs an existing folder), if a path for a save panel is an existing folder, if choose finds a panel that cannot take the path (a folder for a panel of files, a file for a panel of folders, an extension that matches none of a save panel's formats), if discard finds no Delete or Don't Save button, or if the Mac app is not running.`,
+Fails if no panel appears within timeoutMs, if more than one panel is open and panel is not given, if a path is relative or does not exist (a save panel needs an existing folder), if a path for a save panel is an existing folder other than a document package the panel saves, if choose finds a panel that cannot take the path (a folder for a panel of files, a file for a panel of folders, an extension that matches none of a save panel's formats), if discard finds no Delete or Don't Save button, or if the Mac app is not running.`,
   searchHint: "file panel dialog open save choose pick file folder nsopenpanel nssavepanel mac app",
   zodSchema,
   capability,
