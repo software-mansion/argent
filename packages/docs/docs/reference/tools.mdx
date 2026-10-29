@@ -330,7 +330,7 @@ The menu bar is outside the app window, so `describe` does not show it and `gest
 | `list`   | `{ menuBar, items }`. `menuBar` has one line for each item. `items` is the number of items                                     |
 | `choose` | `{ chosen }`, the titles of the command as the app shows them. When you choose by identifier, the result also has `identifier` |
 
-The list stops at 2000 items and at 8 levels of submenus. The result then has `truncated: true` and a `hint`. `choose` compares each title without case, and `...` is equal to the `…` character. A command that opens an alert or a panel does not block the next tool call.
+The list stops at 2000 items and at 8 levels of submenus. The result then has `truncated: true` and a `hint`. `list` and `choose` use the titles that the menu shows at that time, for example `Undo Delete Task` or `Hide Sidebar`. `choose` compares each title without case, and `...` is equal to the `…` character. A command that opens an alert or a panel does not block the next tool call.
 
 `menu-bar` fails in these conditions:
 
