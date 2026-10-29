@@ -858,13 +858,23 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(JSON.stringify(tree)).not.toContain("Final");
   });
 
-  it("reads a checkbox or range input's value", () => {
+  it("reads a checkbox, radio, range or color input's value and an img's alt", () => {
+    const img = el({ tag: "img", attrs: { id: "logo" }, rect: BOX }) as MockElement &
+      Record<string, unknown>;
+    Object.setPrototypeOf(img, MockHTMLImageElement.prototype);
+    img.alt = "Logo";
     const { tree } = run([
       inputEl({ type: "checkbox", value: "on", attrs: { id: "cb" }, rect: BOX }),
+      inputEl({ type: "radio", value: "on", attrs: { id: "rd" }, rect: BOX }),
       inputEl({ type: "range", value: "50", attrs: { id: "rg" }, rect: BOX }),
+      inputEl({ type: "color", value: "#000000", attrs: { id: "col" }, rect: BOX }),
+      img,
     ]);
     expect(findById(tree, "cb")).toMatchObject({ label: "on" });
+    expect(findById(tree, "rd")).toMatchObject({ label: "on" });
     expect(findById(tree, "rg")).toMatchObject({ label: "50" });
+    expect(findById(tree, "col")).toMatchObject({ label: "#000000" });
+    expect(findById(tree, "logo")).toMatchObject({ label: "Logo" });
   });
 
   // ---- input focus (the flow type directive's focus wait reads this) ----
