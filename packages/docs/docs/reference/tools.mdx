@@ -199,7 +199,7 @@ These calls fail when the app that Argent runs answers the quit with a prompt, f
 - `restart-app`
 - a `launch` step of an e2e test
 
-The app continues to run. The agent answers the prompt, then tries again. The agent answers the panel that asks to keep a new document with `file-panel`, for example with `discard`. Argent force-quits an app that does not answer the quit. A dialog that was open before the quit does not stop the force-quit.
+The app continues to run. The agent answers the prompt, then tries again. For the panel that asks to keep a new document, the agent uses `file-panel`, for example with `discard`. Argent force-quits an app that does not answer the quit. A dialog that was open before the quit does not stop the force-quit.
 
 The other app tools on a Mac app:
 
