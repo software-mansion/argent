@@ -626,7 +626,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     const notConnected = (detail: string, cause?: unknown) =>
       macosFailure(
         `${bundleId} is running (pid ${app.pid}) but argent cannot reach its library: ${detail} ` +
-          `Run restart-app to start it again with the library.`,
+          `If it is paused in a debugger, continue it and try again. Otherwise run restart-app to ` +
+          `start it again with the library.`,
         FAILURE_CODES.MACOS_APP_NOT_CONNECTED,
         "macos_app_reconnect",
         "unknown",
