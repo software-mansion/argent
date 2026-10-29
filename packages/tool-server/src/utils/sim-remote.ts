@@ -272,6 +272,11 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
   }
 }
 
+// The runner may first have to spawn simulator-server (up to 30 s) before it
+// starts the recording; past the default, the CLI is killed while the runner
+// goes on recording.
+const RECORDING_START_TIMEOUT_MS = 90_000;
+
 /**
  * Start recording the remote simulator's screen, and return the recording's
  * id. Returns as soon as the runner has begun recording — the recording then
@@ -291,7 +296,7 @@ export async function screenRecordStart(
 ): Promise<string | null> {
   const args = ["screen-record", "start", stripRemotePrefix(udid)];
   if (opts.showTouches) args.push("--show-touches");
-  const { stdout } = await run(args);
+  const { stdout } = await run(args, { timeoutMs: RECORDING_START_TIMEOUT_MS });
   return stdout.trim() || null;
 }
 

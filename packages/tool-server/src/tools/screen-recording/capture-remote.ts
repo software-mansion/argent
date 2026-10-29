@@ -158,11 +158,15 @@ export async function startRemoteCapture(
     // Fetch at the cap rather than at stop: the runner is still recording
     // until this call, so waiting would let the video keep growing past the
     // limit the caller set. Errors are held for whoever calls stop.
-    api.remoteFetch = stopAndDownload(api.deviceId, recordingId, outputFile).catch(
+    const download = stopAndDownload(api.deviceId, recordingId, outputFile).catch(
       (err: unknown) => {
         api.remoteFetchError = err instanceof Error ? err : new Error(String(err));
       }
     );
+    api.remoteFetch = download;
+    // This download is the release now: a teardown waits on it rather than
+    // sending a second stop into the same file.
+    api.remoteRelease = () => download;
   }, params.timeLimitSeconds * 1_000);
 
   return {

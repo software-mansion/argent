@@ -12,6 +12,7 @@ import { promises as fs } from "fs";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 import { recordReapedSession } from "../utils/reaped-sessions";
+import { stripRemotePrefix } from "../utils/device-info";
 
 // Session for the `screen-recording-*` tools, one shape for every platform.
 // Local iOS/Android captures pace simulator-server's MJPEG stream into an
@@ -277,6 +278,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         const hadUnretrievedCapture =
           state.recordingActive || state.startPending || state.pendingRetrieval;
         const abandonedOutput = state.outputFile;
+        const abandonedRecordingId = state.remoteRecordingId;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
@@ -362,9 +364,11 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
               state.deviceId,
               abandonedOutput
                 ? state.platform === "ios-remote"
-                  ? `The runner-side recording was ended and downloaded first, so the video ` +
-                    `captured up to that point is usually playable at ${abandonedOutput} — ` +
-                    `check it before re-recording.`
+                  ? `The runner-side recording was ended and its download started, so the ` +
+                    `video captured up to that point is at ${abandonedOutput} if the download ` +
+                    `finished. Otherwise the remote machine keeps it until the machine is ` +
+                    `released: \`sim-remote screen-record fetch ${stripRemotePrefix(state.deviceId)} ` +
+                    `<FILE>${abandonedRecordingId ? ` --recording ${abandonedRecordingId}` : ""}\`.`
                   : `ffmpeg was given a moment to finalize the container first, so the video ` +
                     `captured up to that point is usually playable at ${abandonedOutput} — ` +
                     `check it before re-recording.`
