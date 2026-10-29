@@ -45,7 +45,8 @@ interface FakeChild extends EventEmitter {
 }
 
 let nextPid = 5000;
-let children: FakeChild[];
+let children: FakeChild[] = [];
+let foreignListener = false;
 
 function makeFakeChild(): FakeChild {
   const ee = new EventEmitter() as FakeChild;
@@ -70,6 +71,13 @@ beforeAll(async () => {
   appDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-"));
   fs.writeFileSync(path.join(appDir, "package.json"), JSON.stringify({ main: "main.js" }));
   cdp = http.createServer((req, res) => {
+    // The port answers only while something holds it: a live child, or a
+    // foreign runtime a test puts there.
+    const live = children.some((c) => c.exitCode === null && c.signalCode === null);
+    if (!live && !foreignListener) {
+      req.socket.destroy();
+      return;
+    }
     res.setHeader("content-type", "application/json");
     if (req.url === "/json/version") {
       res.end(JSON.stringify({ "Browser": "Chrome/Test", "Protocol-Version": "1.3" }));
@@ -89,6 +97,7 @@ afterAll(() => {
 
 beforeEach(() => {
   children = [];
+  foreignListener = false;
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => {
     const child = makeFakeChild();
@@ -149,6 +158,27 @@ describe("restart-app on Chromium", () => {
     expect(children).toHaveLength(2);
     // The dead leader's pid may be recycled, so its group is never signalled.
     expect(process.kill).not.toHaveBeenCalledWith(-children[0]!.pid, expect.anything());
+  });
+
+  it("refuses to relaunch while another process answers on the freed port", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    children[0]!.exitCode = 1;
+    children[0]!.emit("exit", 1, null);
+    foreignListener = true;
+    const registry = registryWithRestartApp();
+    const udid = `chromium-cdp-${port}`;
+
+    const err = await registry.invokeTool("restart-app", { udid, bundleId: "tag" }).then(
+      () => undefined,
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
+    expect(children).toHaveLength(1);
+
+    foreignListener = false;
+    await registry.invokeTool("restart-app", { udid, bundleId: "tag" });
+    expect(children).toHaveLength(2);
   });
 
   it("runs overlapping restarts of one port one after the other", async () => {

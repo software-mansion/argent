@@ -1,7 +1,14 @@
-import { FAILURE_CODES, FailureError, isLiveServiceState, type Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  isLiveServiceState,
+  type Registry,
+} from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { parseChromiumCdpPort } from "../../../utils/device-info";
 import { CHROMIUM_CDP_NAMESPACE } from "../../../blueprints/chromium-cdp";
+import { ensureCdpReachable } from "../../../chromium-server/cdp-session";
 import {
   assertElectronAppLaunchable,
   bootElectronApp,
@@ -30,6 +37,7 @@ export function makeChromiumImpl(
     if (!spec) throw notBooted(params.udid);
     assertElectronAppLaunchable(spec.appPath);
     await killChromiumByPortAndWait(port, spec.pid);
+    await assertPortReleased(port);
     // After the kill, so a frozen renderer cannot stall the dispose's CDP calls.
     const urn = `${CHROMIUM_CDP_NAMESPACE}:${params.udid}`;
     const entry = registry.getSnapshot().services.get(urn);
@@ -53,6 +61,30 @@ export function makeChromiumImpl(
       }
     },
   };
+}
+
+/**
+ * The boot's readiness probe accepts whatever answers on the port, so a process
+ * still there (another runtime on the freed port, or a kill that did not land)
+ * would pass for the relaunch while the new copy fails to bind.
+ */
+async function assertPortReleased(port: number): Promise<void> {
+  try {
+    await ensureCdpReachable(port);
+  } catch (err) {
+    if (getFailureSignal(err)?.error_code === FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE) return;
+  }
+  throw new FailureError(
+    `restart-app stopped the app on port ${port}, but a process still answers there, so ` +
+      `the relaunch could not bind the port. Quit the process listening on port ${port}, ` +
+      `then retry restart-app.`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE,
+      failure_stage: "chromium_restart_port_check",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 }
 
 function notBooted(udid: string): FailureError {
