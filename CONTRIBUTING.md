@@ -58,15 +58,13 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    npm run dev
    ```
 
-   On macOS this builds the native devtools dylibs from the private submodule when you have access to it, and otherwise uses the dylibs downloaded in step 3. It then builds the `@swmansion/argent` dispatcher, points `~/.claude.json`, `~/.cursor/mcp.json` and `~/.argent/cli.json` at the local build, and starts the tool-server from source via `ts-node`. Press `Ctrl+C` to stop; the script restores your global Argent configuration.
+   On macOS this builds the native devtools dylibs from the private `packages/argent-private` submodule if you have SSH access to it, and otherwise uses the ones from step 3. It then builds the dispatcher, points `~/.claude.json`, `~/.cursor/mcp.json` and `~/.argent/cli.json` at the local build, and starts the tool-server from source. Press `Ctrl+C` to stop and restore your global Argent configuration.
 
    To use a different port:
 
    ```bash
    PORT=4000 npm run dev
    ```
-
-   > **Note:** `packages/argent-private` is a private git submodule that holds the ObjC source for the native devtools dylibs. Without SSH access to it, `npm run dev` uses the dylibs from `npm run download:native-binaries` instead, and everything else works normally.
 
 That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.
 
