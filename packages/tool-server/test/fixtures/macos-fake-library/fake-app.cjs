@@ -3,7 +3,8 @@
 // descriptor and on the listening socket, and turns away a second client while
 // one is connected, as the library does.
 // `--mode=<m>` picks a misbehaviour: crash, silent, bad-protocol,
-// ignore-terminate, windowless, minimized, panel-only. Its one window appears
+// ignore-terminate, ask-save (answers quit with an alert), windowless,
+// minimized, panel-only. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
 // Network capture: like the real library, it reports requests as CDP events
@@ -18,6 +19,7 @@ const startedAt = Date.now();
 const network = { active: false, activations: 0 };
 const clients = new Set();
 let nextRequestId = 1;
+let askingToSave = false;
 const bundleId = process.env.ARGENT_INJECT_BUNDLE_ID;
 console.log(`fake app ${bundleId} pid ${process.pid} mode ${mode}`);
 if (mode === "crash") {
@@ -109,7 +111,8 @@ function handle(socket, msg) {
       return reply({ result: { windows: windows() } });
     case "Application.terminate":
       reply({ result: { terminating: true } });
-      if (mode !== "ignore-terminate") setTimeout(() => process.exit(0), 50);
+      if (mode === "ask-save") askingToSave = true;
+      else if (mode !== "ignore-terminate") setTimeout(() => process.exit(0), 50);
       return;
     default:
       return reply({ error: { message: `Unsupported method: ${method}` } });
@@ -119,6 +122,7 @@ function handle(socket, msg) {
 function windows() {
   if (mode === "windowless" || Date.now() - startedAt < 200) return [];
   const panel = mode === "panel-only";
+  const alert = { number: 2, kind: "alert", isVisible: true, isMiniaturized: false };
   return [
     {
       number: 1,
@@ -127,6 +131,7 @@ function windows() {
       isMiniaturized: mode === "minimized",
       isReference: !panel,
     },
+    ...(askingToSave ? [alert] : []),
   ];
 }
 

@@ -164,8 +164,10 @@ const HELPER_TIMEOUT_MS = 10_000;
 /** From the spawn to the handshake, which the library sends when the app finishes launching or shows a dialog before. */
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
-/** How long `Application.terminate` gets before the signals; the app may show a "save changes" sheet. */
+/** How long `Application.terminate` gets before argent looks for a prompt, then signals the app. */
 const TERMINATE_GRACE_MS = 5_000;
+/** Window kinds of `Window.list` that keep an app from quitting until the agent answers them. */
+const PROMPT_KINDS = ["alert", "sheet", "file-panel"];
 const SIGNAL_GRACE_MS = 2_000;
 const POLL_MS = 100;
 const WINDOW_TIMEOUT_MS = 10_000;
@@ -741,23 +743,42 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     }
   };
 
-  /** Quits argent's own copy: `Application.terminate`, then the signals. */
+  /**
+   * Quits argent's own copy: `Application.terminate`, then the signals. An app
+   * that answers with a prompt (save changes?) is left to the agent.
+   */
   const terminate = async (app: { pid: number; executable: string }): Promise<void> => {
-    let asked = false;
+    let ch: LibraryChannel | null;
     try {
-      await (await ensureChannel()).request("Application.terminate", {}, 2_000);
-      asked = true;
+      ch = await ensureChannel();
+      await ch.request("Application.terminate", {}, 2_000);
     } catch (err) {
       // Another tool-server drives the app: quitting it would stop that agent's work.
       if (errorCode(err) === FAILURE_CODES.MACOS_APP_IN_USE) throw err;
       // No channel or no answer: the signals stop it without the wait.
+      ch = null;
     }
-    const left = asked
+    const left = ch
       ? await pollPidsUntilGone([app.pid], {
           timeoutMs: TERMINATE_GRACE_MS,
           pollIntervalMs: POLL_MS,
         })
       : [app.pid];
+    if (ch && left.length > 0) {
+      const listed = (await ch.request("Window.list", {}, 2_000).catch(() => null)) as {
+        windows?: Array<{ kind?: unknown; isVisible?: unknown }>;
+      } | null;
+      const windows = Array.isArray(listed?.windows) ? listed.windows : [];
+      if (windows.some((w) => w.isVisible === true && PROMPT_KINDS.includes(w.kind as string))) {
+        throw macosFailure(
+          `${bundleId} did not quit: it shows a prompt, probably asking whether to save ` +
+            `changes. Answer it (describe shows it), then run this tool again.`,
+          FAILURE_CODES.MACOS_APP_TERMINATE_FAILED,
+          "macos_app_terminate",
+          "validation"
+        );
+      }
+    }
     const { survivors } = await stopProcesses(left, app.executable, true);
     closeChannel();
     if (survivors.length > 0) {
