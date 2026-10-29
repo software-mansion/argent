@@ -44,7 +44,7 @@ describe("devicectl error hints are folded into the message", () => {
 
     expect((error as Error).message).toContain("Failed to install app");
     expect((error as Error).message).toContain(
-      "Connect the device by cable, accept the Trust prompt"
+      "Connect the device by USB cable or restore its forwarded USB connection, accept the Trust prompt"
     );
   });
 

@@ -10,8 +10,9 @@ free. Setting `ARGENT_RUNNER_PORT` in the runner's environment (xcodebuild
 forwards it from `TEST_RUNNER_ARGENT_RUNNER_PORT` on the launching process)
 pins the port instead; absent or `0` means system-assigned, which is also how
 a session run straight from Xcode comes up. The listener is reachable through
-usbmux (USB cable only); the forwarded stream terminates on the device's
-loopback, so a loopback bind covers the whole transport.
+a local or forwarded USB transport through usbmux; ordinary Wi-Fi is
+unsupported. The forwarded stream terminates on the device's loopback, so a
+loopback bind covers the whole transport.
 
 The envelope is authoritative; the HTTP status is informational (200 for ok
 envelopes, 500 for error envelopes). Two rejections come from the framing

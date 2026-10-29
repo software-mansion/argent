@@ -25,6 +25,7 @@ import { postRunnerCommand } from "../src/utils/ios-device/runner-http";
 import {
   buildUsbmuxConnectError,
   createDeadline,
+  isUsbmuxDeviceAvailable,
   openUsbmuxRunnerSocket,
   writePacket,
 } from "../src/utils/ios-device/usbmux";
@@ -173,7 +174,7 @@ describe("readUsbmuxDeviceIdForSerial", () => {
     const xml =
       "<plist><dict><key>DeviceList</key><array>" +
       "<dict><key>DeviceID</key><string>not-a-number</string></dict>" +
-      `<dict><key>DeviceID</key><integer>9</integer><key>Properties</key><dict><key>SerialNumber</key><string>${DEVICE_UDID}</string></dict></dict>` +
+      `<dict><key>DeviceID</key><integer>9</integer><key>Properties</key><dict><key>SerialNumber</key><string>${DEVICE_UDID}</string><key>ConnectionType</key><string>USB</string></dict></dict>` +
       "</array></dict></plist>";
 
     expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBe(9);
@@ -181,9 +182,8 @@ describe("readUsbmuxDeviceIdForSerial", () => {
 
   it("prefers the USB entry when Wi-Fi sync lists the same phone twice, Network first", () => {
     // A phone paired for Wi-Fi sync shows up once per transport, and usbmuxd
-    // may list the Network entry first. Taking the first exact match would
-    // route every runner command over Wi-Fi on a feature that promises the
-    // cable, so the USB entry must win wherever it sits in the list.
+    // may list the Network entry first. Prefer the cable when both transports
+    // are available, regardless of list order.
     const xml = deviceListXml([
       { id: 12, serial: DEVICE_UDID, connection: "Network" },
       { id: 13, serial: DEVICE_UDID, connection: "USB" },
@@ -192,13 +192,25 @@ describe("readUsbmuxDeviceIdForSerial", () => {
     expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBe(13);
   });
 
-  it("falls back to the only exact match when no USB entry carries the serial", () => {
+  it("rejects Wi-Fi-only devices even when the exact serial is listed", () => {
     const xml = deviceListXml([
       { id: 12, serial: DEVICE_UDID, connection: "Network" },
       { id: 13, serial: "00008030-000000000000AAAA", connection: "USB" },
     ]);
 
-    expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBe(12);
+    expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBeUndefined();
+  });
+
+  it.each(["Unknown", null])("rejects a device with connection type %s", (connection) => {
+    const connectionXml = connection
+      ? `<key>ConnectionType</key><string>${connection}</string>`
+      : "";
+    const xml =
+      `<plist><dict><key>DeviceList</key><array><dict><key>DeviceID</key><integer>42</integer>` +
+      `<key>Properties</key><dict><key>SerialNumber</key><string>${DEVICE_UDID}</string>` +
+      `${connectionXml}</dict></dict></array></dict></plist>`;
+
+    expect(readUsbmuxDeviceIdForSerial(xml, DEVICE_UDID)).toBeUndefined();
   });
 });
 
@@ -310,6 +322,7 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
   const socketDirs: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(
       openServers
         .splice(0)
@@ -345,7 +358,7 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
 
   const startFakeUsbmuxd = async (
     socketPath: string,
-    devices: Array<{ id: number; serial: string }>,
+    devices: Array<{ id: number; serial: string; connection?: string }>,
     connectResult: number,
     options: { listDevicesDelayMs?: number } = {}
   ): Promise<{ connectRequests: string[] }> => {
@@ -360,7 +373,8 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
             .map(
               (device) =>
                 `<dict><key>DeviceID</key><integer>${device.id}</integer>` +
-                `<key>Properties</key><dict><key>SerialNumber</key><string>${device.serial}</string></dict></dict>`
+                `<key>Properties</key><dict><key>SerialNumber</key><string>${device.serial}</string>` +
+                `<key>ConnectionType</key><string>${device.connection ?? "USB"}</string></dict></dict>`
             )
             .join("");
           const reply = () =>
@@ -390,6 +404,45 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
     openServers.push(server);
     return { connectRequests };
   };
+
+  it.each([
+    { connection: "USB", serial: DEVICE_UDID, available: true },
+    { connection: "Network", serial: DEVICE_UDID, available: false },
+    { connection: "Network", serial: "00008030-000000000000AAAA", available: false },
+  ])(
+    "checks live $connection availability for $serial without opening a runner port",
+    async ({ connection, serial, available }) => {
+      const socketPath = await createSocketPath();
+      const fake = await startFakeUsbmuxd(socketPath, [{ id: 42, serial, connection }], 0);
+      const createConnection = net.createConnection.bind(net);
+      vi.spyOn(net, "createConnection").mockImplementationOnce(() => createConnection(socketPath));
+
+      expect(await isUsbmuxDeviceAvailable(DEVICE_UDID)).toBe(available);
+      expect(fake.connectRequests).toEqual([]);
+    }
+  );
+
+  it("reports unavailable when usbmuxd cannot be reached", async () => {
+    const socketPath = await createSocketPath();
+    const createConnection = net.createConnection.bind(net);
+    vi.spyOn(net, "createConnection").mockImplementationOnce(() => createConnection(socketPath));
+
+    await expect(isUsbmuxDeviceAvailable(DEVICE_UDID)).resolves.toBe(false);
+  });
+
+  it("refuses a Wi-Fi-only entry before opening a runner connection", async () => {
+    const socketPath = await createSocketPath();
+    const fake = await startFakeUsbmuxd(
+      socketPath,
+      [{ id: 42, serial: DEVICE_UDID, connection: "Network" }],
+      0
+    );
+
+    await expect(
+      openUsbmuxRunnerSocket({ udid: DEVICE_UDID, port: RUNNER_PORT, socketPath })
+    ).rejects.toMatchObject({ kind: "device-unattached" });
+    expect(fake.connectRequests).toEqual([]);
+  });
 
   it("resolves the mux DeviceID and connects with the port in network byte order", async () => {
     const socketPath = await createSocketPath();

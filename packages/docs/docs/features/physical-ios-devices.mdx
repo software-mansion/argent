@@ -6,19 +6,19 @@ sidebar_custom_props:
   icon: smartphone
 ---
 
-Argent drives a physical iPhone over a USB cable. The agent launches the app, reads the screen, taps, swipes and types on the real device, in the same loop it uses on a simulator. Physical iPads are not supported yet.
+Argent drives a physical iPhone through a USB connection, either local or forwarded through usbmux. The agent launches the app, reads the screen, taps, swipes and types on the real device, in the same loop it uses on a simulator. Physical iPads are not supported yet.
 
 ## Requirements
 
 - A Mac with Xcode, and an Apple ID signed into Xcode.
-- The device connected by USB cable and unlocked. Argent does not control a device over Wi-Fi.
+- The device connected by USB cable or a USB forwarder, and unlocked. Argent does not control a device over Wi-Fi.
 - Developer Mode enabled on the device: Settings > Privacy & Security > Developer Mode.
 
 You do not need a paid Apple Developer account. A free Personal Team works, with the limits below.
 
 ## How it works
 
-Apple allows one kind of process to drive arbitrary apps on real hardware: a UI test. Argent builds a small test runner, signs it with your team, and installs it on the device. The runner receives commands over the cable and executes them on the device.
+Apple allows one kind of process to drive arbitrary apps on real hardware: a UI test. Argent builds a small test runner, signs it with your team, and installs it on the device. The runner receives commands through usbmux and executes them on the device.
 
 Signing is automatic. Argent reads your Apple Development certificate from the keychain of the Mac and detects the team from it. When the keychain holds certificates from several teams, the team with the newest certificate wins, and the result names the choice and the alternatives. When the keychain holds no certificate, the error tells you to sign in to Xcode and create one: Xcode > Settings > Accounts, then Manage Certificates > + > Apple Development. To select a team yourself, set the `ARGENT_IOS_TEAM_ID` [environment variable](/docs/reference/configuration#devices) in the environment of the tool-server.
 
@@ -48,8 +48,8 @@ A web URL opens in Safari, not in the app that owns the link. The agent names th
 
 | Symptom                                           | Action                                                                                               |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| The device is missing from the device list        | Connect the cable and unlock the phone, then list again.                                             |
-| The transport is not wired                        | Connect the device by USB cable. Argent does not use Wi-Fi.                                          |
+| The device is missing from the device list        | Connect the cable or restore the forwarded USB connection, unlock the phone, then list again.        |
+| The device is unavailable through usbmux          | Connect by USB cable or restore the forwarded USB connection. Wi-Fi pairing is not supported.        |
 | A launch fails on an unlocked device              | Check the screen of the phone. A pending system prompt, for example a default-app choice, blocks it. |
 | The runner does not become ready on the first run | Trust the developer on the device: Settings > General > VPN & Device Management.                     |
 | Signing fails without a certificate               | Sign in to Xcode (Settings > Accounts), then Manage Certificates > + > Apple Development.            |
@@ -61,7 +61,7 @@ A web URL opens in Safari, not in the app that owns the link. The agent names th
 Each tool that does not exist on hardware fails with a `not supported on ios device` message. The limits on a physical device:
 
 - Argent drives iPhones only. Argent does not show iPads in the device list.
-- Argent drives the device over a USB cable only. Argent does not use Wi-Fi.
+- Argent requires a USB transport, either local or forwarded through usbmux. Ordinary Wi-Fi connections are not supported.
 - Two-finger gestures such as pinch and rotate are not possible. The agent uses the zoom controls of the app instead.
 - The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
 - The agent presses the home, volume and action buttons only. The power button and the app switcher are not available.
@@ -69,4 +69,4 @@ Each tool that does not exist on hardware fails with a `not supported on ios dev
 - The agent changes an app permission in the Settings app of the phone, not with the permissions tool.
 - JavaScript debugging, React and native profiling, native view inspection, screen recording and paste work on a simulator only.
 
-The device appears in the device list as an iOS entry with kind `device`, with state `connected` while the cable is attached. Argent drives the device with the same interaction tools it uses on simulators. The [tools reference](/docs/reference/tools#devices-and-apps) contains all tools and describes how a physical device appears in `list-devices`.
+The device appears in the device list as an iOS entry with kind `device`, with state `connected` while wired or available through a forwarded USB transport. Wi-Fi-only and disconnected pairing entries remain `paired`. Argent drives the device with the same interaction tools it uses on simulators. The [tools reference](/docs/reference/tools#devices-and-apps) contains all tools and describes how a physical device appears in `list-devices`.

@@ -29,7 +29,7 @@ const USBMUX_RESULT_CONNECTION_REFUSED = 3;
 
 /** Recovery hints. The `IosDeviceTransportError` constructor folds the hint into `.message`. */
 const DEVICE_UNATTACHED_HINT =
-  "Connect the device by cable, trust this Mac, keep it unlocked, and retry.";
+  "Connect the device by USB cable or restore its forwarded USB connection, trust this Mac, keep it unlocked, and retry.";
 const RUNNER_NOT_LISTENING_HINT =
   "The device is reachable but the runner has not bound its port yet; wait a few seconds and retry.";
 const USBMUXD_UNREACHABLE_HINT =
@@ -60,6 +60,20 @@ export async function openUsbmuxRunnerSocket(
 
   // Connect on a fresh socket becomes the raw byte pipe to the runner.
   return await connectToDevicePort(socketPath, options.udid, deviceId, options.port, deadline);
+}
+
+/** Check for a live USB transport, including forwarded USB, rather than Wi-Fi pairing. */
+export async function isUsbmuxDeviceAvailable(udid: string): Promise<boolean> {
+  try {
+    await resolveUsbmuxDeviceId(
+      USBMUXD_SOCKET_PATH,
+      udid,
+      createDeadline(USBMUX_DEFAULT_TIMEOUT_MS)
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

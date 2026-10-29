@@ -48,8 +48,8 @@ build-for-testing` (signed with the user's team; see the environment
    binds a system-assigned loopback port and logs it as
    `ARGENT_RUNNER_LISTENING port=N`; the tool-server reads that line from
    the launch log before it sends the first command.
-3. Commands travel as one HTTP POST per command over usbmux (USB cable
-   only). `PROTOCOL.md` documents the contract.
+3. Commands travel as one HTTP POST per command over a local or forwarded USB transport
+   through usbmux. Ordinary Wi-Fi is unsupported. `PROTOCOL.md` documents the contract.
 
 ## Build-time configuration
 

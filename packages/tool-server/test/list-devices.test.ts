@@ -84,6 +84,10 @@ vi.mock("../src/utils/chromium-discovery", async () => {
 // is deterministic. Defaults to none; the dedicated test overrides per-call.
 vi.mock("../src/utils/vega-sdk", () => ({ listVvdImages: vi.fn(async () => []) }));
 
+vi.mock("../src/utils/ios-device/usbmux", () => ({
+  isUsbmuxDeviceAvailable: vi.fn(async () => false),
+}));
+
 // Physical-device discovery shells out to `xcrun devicectl` with a JSON output
 // file; mock the module seam and feed rows directly. Defaults to none; the
 // physical-device test overrides per-call.
@@ -104,6 +108,7 @@ import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
+import { isUsbmuxDeviceAvailable } from "../src/utils/ios-device/usbmux";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -152,6 +157,7 @@ function simctlJson(): string {
 
 beforeEach(() => {
   execFileMock.mockReset();
+  vi.mocked(isUsbmuxDeviceAvailable).mockReset().mockResolvedValue(false);
 });
 
 describe("list-devices", () => {
@@ -529,12 +535,9 @@ describe("list-devices", () => {
     });
   });
 
-  it("derives physical iOS state from transportType alone and sorts connected first", async () => {
-    // Live-captured shapes: a cabled phone is "wired", a Wi-Fi-paired phone
-    // last seen days ago lists as "disconnected"/"localNetwork", and a freshly
-    // unplugged phone keeps tunnelState "connected" while the tunnel migrates
-    // to Wi-Fi (hardware-verified, devicectl 518.x). Only the wired one is reachable
-    // over usbmux, so only it may present as "connected".
+  it("uses wired transport or live usbmux availability and sorts connected first", async () => {
+    // CoreDevice can keep a connected tunnel after unplugging. Only a live
+    // USB mux entry lets a forwarded device pass the connection check.
     vi.mocked(listIosPhysicalDevices).mockResolvedValueOnce([
       {
         udid: "00008120-000A44443333801E",
@@ -566,7 +569,20 @@ describe("list-devices", () => {
         transportType: "localNetwork",
         tunnelState: "connected",
       },
+      {
+        udid: "00008120-000C66665555A01E",
+        name: "Forwarded iPhone",
+        model: "iPhone 15",
+        osVersion: "18.7.8",
+        developerModeEnabled: true,
+        pairingState: "paired",
+        transportType: "localNetwork",
+        tunnelState: "connected",
+      },
     ]);
+    vi.mocked(isUsbmuxDeviceAvailable).mockImplementation(
+      async (udid) => udid === "00008120-000C66665555A01E"
+    );
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "xcrun" && args[0] === "simctl" && args[1] === "list") {
         return { stdout: simctlJson(), stderr: "" };
@@ -588,17 +604,21 @@ describe("list-devices", () => {
     }>;
     expect(physical.map((d) => [d.name, d.state])).toEqual([
       ["Desk iPhone", "connected"],
+      ["Forwarded iPhone", "connected"],
       ["Office iPhone", "paired"],
       ["Unplugged iPhone", "paired"],
     ]);
     // pairingState/tunnelState ride along so callers can see WHY a row is paired.
-    expect(physical[1]).toMatchObject({ pairingState: "paired", tunnelState: "disconnected" });
+    expect(physical[2]).toMatchObject({ pairingState: "paired", tunnelState: "disconnected" });
     // The Wi-Fi-migrated tunnel reads "connected" yet usbmux cannot reach it.
-    expect(physical[2]).toMatchObject({ state: "paired", tunnelState: "connected" });
+    expect(physical[3]).toMatchObject({ state: "paired", tunnelState: "connected" });
     // The paired phone sinks below every usable device, booted simulators
     // included; flow auto-bind keys on state "connected" and skips it.
     expect(byName("Desk iPhone")).toBeLessThan(byName("Office iPhone"));
+    expect(byName("Forwarded iPhone")).toBeLessThan(byName("Office iPhone"));
     expect(byName("iPhone 16")).toBeLessThan(byName("Office iPhone"));
+    expect(isUsbmuxDeviceAvailable).toHaveBeenCalledTimes(3);
+    expect(isUsbmuxDeviceAvailable).not.toHaveBeenCalledWith("00008110-000978540290401E");
   });
 });
 

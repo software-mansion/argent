@@ -60,7 +60,7 @@ On an Android emulator:
 - On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
 - A physical device and an emulator without a hinge reject the call.
 
-Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
+Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` while the device is wired or CoreDevice reports `localNetwork` with a live `USB` transport in usbmuxd, as with forwarded USB. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until its local or forwarded USB connection is restored. Ordinary Wi-Fi connections remain unsupported. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
 ## Inspecting the screen
 
