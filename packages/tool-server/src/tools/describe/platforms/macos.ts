@@ -693,8 +693,8 @@ function toDescribe(
  * custom control draws.
  */
 export const MACOS_LOCKED_HINT =
-  "The Mac is locked, so this tree can miss elements a custom control draws. Taps and typing " +
-  "still work; screenshots may fail until the Mac is unlocked.";
+  "The Mac is locked, so this tree can miss elements a custom control draws. Taps, typing " +
+  "and screenshots still work.";
 export const MACOS_FALLBACK_HINT =
   "The app's accessibility tree is not available, so this tree comes from a fallback walk " +
   "that can miss elements a custom control draws and an open context menu.";

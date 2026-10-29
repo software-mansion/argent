@@ -149,7 +149,7 @@ Each tool that does not support a Mac app fails with a `not supported on macos a
 - The tree, the screenshot and the coordinates cover the area of the app window with its sheets, popovers, alerts and open menus. The screenshot does not show the other windows of the app.
 - Argent drives an app through a standard window. The start fails for a menu bar app that shows no standard window, and for an app that shows only panels or borderless windows.
 - The tree does not show web content in a closed shadow root or in an iframe from a different origin.
-- Screenshots, and `snapshot` steps in e2e tests, can fail while the Mac is locked. The tree, clicks and typing still work, but the tree does not show an open context menu, and a `hidden` check does not pass.
+- While the Mac is locked, the tree does not show an open context menu, a `hidden` check does not pass, and a screenshot of a window that is partly off the screen can fail. Clicks, typing and other screenshots still work.
 - Screen recording, profiling, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app` and `settings-permissions` are not available.
 
 The [tools reference](/docs/reference/tools#mac-apps) contains the tools and their behavior on a Mac app.
