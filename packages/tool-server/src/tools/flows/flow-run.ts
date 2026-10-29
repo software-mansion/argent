@@ -2224,7 +2224,8 @@ function scopeFlow(scope: StepScope): string {
 /**
  * The report attribution for a `run:` target: its basename stem
  * ({@link runTargetName}), except when that stem equals the ROOT flow's name —
- * then the as-written path with the `.yaml` extension stripped, or `./<stem>`
+ * then the as-written path with the `.yaml` extension stripped (control
+ * characters escaped, as only the basename is pattern-checked), or `./<stem>`
  * when the spelling is bare (stripping would reproduce the stem). Two
  * different files may legitimately share a stem (root `login.yaml` composing
  * `helpers/login.yaml`), and a bare-stem attribution there would make
@@ -2253,7 +2254,7 @@ function runDisplayFor(target: string, rootDisplay: string): string {
   // Parse guarantees the target ends in lowercase ".yaml", so slicing the
   // extension off never truncates a real path segment.
   const spelled = target.slice(0, -".yaml".length);
-  return spelled === stem ? `./${stem}` : spelled;
+  return spelled === stem ? `./${stem}` : escapeInline(spelled);
 }
 
 /**

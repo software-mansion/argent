@@ -528,6 +528,38 @@ describe("flow composition (run:)", () => {
     ]);
   });
 
+  it("attributes a same-stem fragment on one line whether it loads or not", async () => {
+    // Root login.yaml composing sub<LF>ok/login.yaml: on a stem collision the
+    // attribution is the as-written spelling, directory included.
+    const oddDir = path.join(tmpDir, ".argent", "flows", "sub\nok");
+    await fs.mkdir(oddDir, { recursive: true });
+    await fs.writeFile(
+      path.join(oddDir, "login.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "sub\nok/login.yaml" },
+        { kind: "run", flow: "sub\nmissing/login.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.flow}`)).toEqual([
+      "run:pass:sub\\nok/login",
+      "echo:pass:sub\\nok/login",
+      "run:error:sub\\nmissing/login",
+    ]);
+  });
+
   it("qualifies a nested fragment's bare same-stem spelling as ./<stem>", async () => {
     // Root login.yaml → helpers/steps.yaml → run: login.yaml. The bare
     // spelling resolves against the CONTAINING file's directory, so it names
@@ -2019,6 +2051,31 @@ describe("flow composition (run:)", () => {
     );
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
     expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps each refused uploaded tool: step on its own line", async () => {
+    const tools: Record<string, { fileInputs?: unknown }> = {
+      "screenshot-diff": screenshotDiffTool,
+    };
+    const registry = mockRegistry();
+    vi.mocked(registry.getTool).mockImplementation((id: string) => tools[id] as never);
+    const err = await rejectUpload(
+      [
+        { kind: "tool", name: "e2e-execute", args: { flow_path: "/client/a\nb.yaml" } },
+        { kind: "tool", name: "e2e-execute", args: { name: "a\nb" } },
+        {
+          kind: "tool",
+          name: "screenshot-diff",
+          args: { baselinePath: "/client/a\nb.png", currentPath: "/client/now.png" },
+        },
+      ],
+      registry
+    );
+    expect((err as Error).message).toContain(
+      "  - step 1: tool: e2e-execute (flow_path: /client/a\\nb.yaml)\n" +
+        "  - step 2: tool: e2e-execute (name: a\\nb)\n" +
+        "  - step 3: tool: screenshot-diff (/client/a\\nb.png, /client/now.png)\n"
+    );
   });
 
   it("files an upload whose first offending step records a flow under the recording stage", async () => {
