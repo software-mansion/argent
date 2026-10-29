@@ -212,7 +212,7 @@ describe("screenshotDiffTool", () => {
     expect(captureBaseline.description).toContain("live at full resolution");
     expect(captureCurrent.description).toContain("live at full resolution");
     expect(screenshotDiffTool.description).toContain(
-      "Both images must have identical dimensions: save baselines with screenshot scale: 1.0"
+      "Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model, orientation and foldable posture."
     );
     expect(screenshotDiffTool.description).toContain("diffPath is the diff image at input size");
 

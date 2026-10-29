@@ -515,6 +515,14 @@ describe("foldablePostureHint", () => {
     expect(devicectlCalls()).toBe(0);
   });
 
+  it("says nothing for one panel rotated", async () => {
+    mockDevicectl([duoPayload(1)]);
+    expect(
+      await foldablePostureHint(DUO, { width: 2853, height: 2007 }, { width: 2007, height: 2853 })
+    ).toBeUndefined();
+    expect(devicectlCalls()).toBe(0);
+  });
+
   it("says nothing for a device that is not foldable", async () => {
     isFoldableSimulatorMock.mockResolvedValue(false);
     expect(
@@ -525,7 +533,7 @@ describe("foldablePostureHint", () => {
 
   it("still says baselines are per posture when the panels cannot be read", async () => {
     mockDevicectl([new Error("no")]);
-    const hint = await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 2, height: 1 });
+    const hint = await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 3, height: 2 });
     expect(hint).toContain("baseline belongs to the posture that produced it");
     expect(hint).toContain("Take the baseline in the posture under test");
   });

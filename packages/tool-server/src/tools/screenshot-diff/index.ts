@@ -119,7 +119,7 @@ export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = 
   },
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
 Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device<flag:harmonyos> (iOS, Android or HarmonyOS)</flag:harmonyos>. Always provide udid so the capture backend can be resolved.
-Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model (and foldable posture). Any size difference is reported as a dimension mismatch and nothing is compared.
+Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model, orientation and foldable posture. Any size difference is reported as a dimension mismatch and nothing is compared.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
 Physical iPhones: live captures are device-wide and need no registered app.

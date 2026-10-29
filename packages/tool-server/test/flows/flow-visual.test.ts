@@ -258,7 +258,6 @@ describe("runSnapshot baselines", () => {
   it("fails a dimension-mismatch bail instead of passing its 0% mismatch", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
-    // E.g. a rotated baseline vs the capture.
     h.dimensionMismatch = {
       expected: { width: 844, height: 390 },
       actual: { width: 390, height: 844 },

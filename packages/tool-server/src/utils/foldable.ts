@@ -540,8 +540,8 @@ function postureForSize(size: Size, panels: readonly FoldablePanel[]): string | 
  * The sentence the visual tools add to their dimension-mismatch failure on a
  * foldable simulator: baselines are per posture, and here is which posture
  * produced each size. Undefined for any device that is not foldable, so the
- * message is unchanged everywhere else, and for two sizes of one aspect, which
- * are one panel at two scales rather than two postures.
+ * message is unchanged everywhere else, and for two sizes of one aspect (either
+ * way up), which are one panel at another scale or orientation, not posture.
  *
  * The panel list comes from one CoreDevice read (the pure-PNG diff of a
  * foldable's screenshots touches no simulator-server, which is where argent
@@ -552,7 +552,8 @@ export async function foldablePostureHint(
   expected: Size,
   actual: Size
 ): Promise<string | undefined> {
-  if (sameAspect(expected, actual)) return undefined;
+  const rotated = { width: actual.height, height: actual.width };
+  if (sameAspect(expected, actual) || sameAspect(expected, rotated)) return undefined;
   if (!(await isFoldableSimulator(udid))) return undefined;
   const panels = (await readCoreDeviceDisplays(udid)).displays?.panels;
   const base =
