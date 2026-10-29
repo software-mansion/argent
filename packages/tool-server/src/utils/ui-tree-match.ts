@@ -534,7 +534,7 @@ function frontmost(nodes: DescribeNode[]): DescribeNode[] {
 }
 
 // The element a reader "sees first": in the frontmost layer, smallest (y, then
-// x), matching the order format-tree renders flat iOS leaves in — in the UI's
+// x), matching the order format-tree renders flat iOS leaves in, in the UI's
 // space when the caller says how the UI lies on the frame space (see the
 // module comment).
 export function firstInReadingOrder(
@@ -664,7 +664,7 @@ function frameArea(frame: DescribeFrame): number {
 
 /**
  * Reverse lookup for recording: the smallest visible node of the frontmost
- * layer whose frame contains the tapped point — the most specific element (a
+ * layer whose frame contains the tapped point: the most specific element (a
  * button over its container). Skips the synthetic root.
  */
 export function nodeAtPoint(
