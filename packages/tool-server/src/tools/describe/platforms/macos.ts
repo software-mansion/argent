@@ -174,7 +174,7 @@ export interface MacosNode {
    * the window. `describe` counts these.
    */
   offscreen?: "scroll" | "window";
-  /** Rows of a table or an outline that the library did not read: scrolled out of view. */
+  /** Children that the library did not read because a scroll area scrolled them out of view. */
   scrolledOutRows?: number;
   /**
    * The text the library collected below a web item or an identified view,
