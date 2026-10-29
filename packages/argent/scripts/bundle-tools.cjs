@@ -514,6 +514,23 @@ export const PERFETTO_VERSION = "${version}";
   console.log(`✓ Generated bundled-meta.ts (perfetto=${version})`);
 }
 
+/** The bundles dist/cli.js lazy-imports for its subcommands. */
+const DISPATCHER_ESM_BUNDLES = [
+  { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
+  { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
+  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
+  // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
+  // null → lens falls back to a new terminal window.
+  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
+];
+
+if (process.argv.includes("--esm-only")) {
+  for (const b of DISPATCHER_ESM_BUNDLES) {
+    buildBundle({ ...b, format: "esm" });
+  }
+  process.exit(0);
+}
+
 // Must run before esbuild, so PERFETTO_VERSION is inlined into the bundles.
 generateBundledMeta();
 
@@ -590,12 +607,7 @@ buildBundle({
 //     lazy-imports it, so its workspace dep needn't resolve in the published pkg);
 //   - MCP server: the @modelcontextprotocol/sdk ESM export paths resolve.
 const ESM_BUNDLES = [
-  { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
-  { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
-  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
-  // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
-  // null → lens falls back to a new terminal window.
-  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
+  ...DISPATCHER_ESM_BUNDLES,
   // `@swmansion/argent/client`, the programmatic tool-server client.
   { entry: CLIENT_ENTRY, out: CLIENT_OUT_FILE, label: "client" },
 ];

@@ -492,7 +492,9 @@ export async function runSnapshot(
         };
       }
 
-      const within = result.mismatchPercentage <= opts.maxMismatch;
+      // Relative slack absorbs float error (7 of 1000 pixels computes
+      // 0.7000000000000001%) while staying under one pixel.
+      const within = result.mismatchPercentage <= opts.maxMismatch * (1 + 1e-14);
       const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
         return { status: "pass", reason, ...captureWarned };
