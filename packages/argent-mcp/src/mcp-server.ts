@@ -196,7 +196,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid });
-      const desc = (d.result as { description?: unknown } | null)?.description;
+      const { description: desc, hint } =
+        (d.result as { description?: unknown; hint?: unknown } | null) ?? {};
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
@@ -205,7 +206,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         chars: typeof desc === "string" ? desc.length : 0,
       });
       if (typeof desc !== "string" || desc.length === 0) return [];
-      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` }];
+      // The agent reads this tree in place of describe, so it needs describe's warnings too.
+      const hintLine = typeof hint === "string" && hint ? `Hint: ${hint}\n` : "";
+      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${hintLine}${desc}` }];
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),

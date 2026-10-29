@@ -337,6 +337,7 @@ describe("startMcpServer screen capture after an interaction", () => {
   let settled: boolean;
   let idleStatus: number;
   let screenshotStatus: number;
+  let describeHint: string | undefined;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -356,6 +357,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     settled = true;
     idleStatus = 200;
     screenshotStatus = 200;
+    describeHint = undefined;
     stub = await startStub({
       routes: {
         "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
@@ -369,7 +371,9 @@ describe("startMcpServer screen capture after an interaction", () => {
             : send(res, screenshotStatus, { error: "screenshot failed" })
         ),
         "/tools/describe": slow("describe", (res) =>
-          send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
+          send(res, 200, {
+            data: { description: "button Done (0.1,0.2,0.3,0.1)", hint: describeHint },
+          })
         ),
         "/shot.png": (res) => {
           res.writeHead(200, { "Content-Type": "image/png" });
@@ -410,6 +414,19 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
     expect(content[0]!.text).toContain('"tapped": true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  it("keeps describe's hint with the element tree", async () => {
+    describeHint = "1 element(s) lie outside the app window and were omitted.";
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(
+      "--- Elements after action (describe) ---\n" +
+        "Hint: 1 element(s) lie outside the app window and were omitted.\n" +
+        "button Done (0.1,0.2,0.3,0.1)"
+    );
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
