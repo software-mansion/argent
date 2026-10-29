@@ -148,6 +148,7 @@ Each tool that does not support a Mac app fails with a `not supported on macos a
 - Hover is not available. Mouse moves do not show tooltips or hover states.
 - A drag and drop works only inside the app. The agent cannot drag to another app, such as Finder, or drop from one.
 - Trackpad gestures are not available. The agent uses the zoom and rotate controls of the app instead of pinch and rotate.
+- On macOS 14, the agent cannot select the file format of a save panel. The app saves in the format that the panel selects when it opens.
 - Key events use the key codes of the US keyboard layout. An app that reads key codes sees the US key, also when the Mac uses a different layout.
 - The agent cannot reach a dialog that a different process draws. Examples are the permission prompts of macOS, the content of the share sheet, and the file list of an open or save panel.
 - The tree, the screenshot and the coordinates cover the area of the app window with its sheets, popovers, alerts and open menus. The screenshot does not show the other windows of the app.

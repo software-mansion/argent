@@ -150,7 +150,7 @@ See [Mac apps](/docs/features/mac-apps) for the requirements and the limits.
 
 | Tool         | Description                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------------ |
-| `file-panel` | List, answer or cancel the open and save panels of a Mac app, or answer the next panel before it opens |
+| `file-panel` | List, answer, cancel or discard the file panels of a Mac app, or answer the next panel before it opens |
 | `menu-bar`   | List the menu bar of a Mac app, and choose a command in it                                             |
 
 ### The device
@@ -304,9 +304,15 @@ For `stub` without `panelKind`, Argent finds the kind of the next panel from the
 
 Argent gives a sandboxed app access to each chosen path, and only when a panel takes the answer, as a panel does. For a save panel, this is the file, not its folder.
 
-A prepared answer that the next panel cannot take does not answer it, and the panel opens as usual. Examples are several paths for a panel with a single selection, or a folder for a panel that takes only files or for a save panel.
+A prepared answer that the next panel cannot take does not answer it, and the panel opens as usual. Examples:
 
-On a save panel that offers more than one file format (`allowedContentTypes` in the result of `list`), the extension of the path selects the format.
+- Several paths for a panel with a single selection.
+- A folder for a panel that takes only files, or for a save panel.
+- A path with an extension that matches none of the formats of a save panel.
+
+A save panel can offer more than one file format (`allowedContentTypes` in the result of `list`). Then the extension of the path must match one of the formats. On macOS 15 and later, the extension also selects the format. On macOS 14, Argent does not select the format, and the app saves in the format that the panel selects when it opens.
+
+Argent does not check a path for an open panel against the file types that the panel allows.
 
 `file-panel` fails in these conditions:
 
@@ -316,10 +322,12 @@ On a save panel that offers more than one file format (`allowedContentTypes` in 
 - A path for an open panel does not exist.
 - The folder for a save panel does not exist.
 - The path for a save panel is an existing folder. This includes a document package, such as `Notes.rtfd`.
-- The extension of the path matches none of the formats of a save panel.
 - With `discard`, the panel has no Delete or Don't Save button.
 - More than one path for a save panel, or, with `choose`, for an open panel that takes one item.
-- With `choose`, the panel cannot take the path: a folder for a panel that takes only files, or a file for a panel that takes only folders. A document package counts as a file.
+- With `choose`, the panel cannot take the path:
+  - A folder for a panel that takes only files. A document package counts as a file.
+  - A file for a panel that takes only folders.
+  - A path with an extension that matches none of the formats of a save panel.
 
 ### `menu-bar`
 
