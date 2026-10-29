@@ -17,10 +17,10 @@ Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundame
    https://github.com/software-mansion/sim-remote-releases/releases/latest
    into ~/.local/bin, make it executable, add ~/.local/bin to PATH if missing,
    and confirm with sim-remote --help.
-2. If SIM_REMOTE_API_KEY is set, run sim-remote login. If not, ask me to add
+2. If SIM_REMOTE_API_KEY is set, run `sim-remote login`. If not, ask me to add
    it to my shell profile or a secret manager. Never ask for, print or store the key.
-3. Run sim-remote simctl list devices available, pick an iPhone,
-   boot it and wait with sim-remote simctl bootstatus <UDID> -b.
+3. Run `sim-remote simctl list devices available`, pick an iPhone,
+   boot it and wait with `sim-remote simctl bootstatus <UDID> -b`.
 4. Confirm the simulator shows up in argent's list-devices as a remote device.
    Reply in at most 5 lines: machine name, UDID, state, and one sentence
    telling me what I can ask you to do on it now (e.g. "open the app and
