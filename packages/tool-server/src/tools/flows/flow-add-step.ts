@@ -711,6 +711,8 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
 
 /** Mac controls that act on where in them a click lands. */
 const MACOS_POINT_ROLES: ReadonlySet<string> = new Set(["AXSlider", "AXIncrementor", "AXTextArea"]);
+/** Mac text, which takes a click the same anywhere in it. */
+const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"]);
 
 /**
  * Whether a click is away from the centre of `frame` by more than the rounding
@@ -794,12 +796,16 @@ async function captureTapSelector(
       };
     }
     // Replay clicks the centre. On a Mac app, a click away from the centre of a
-    // slider, a stepper, a text view, a canvas, chart or map, or a container's
-    // empty space does something else there.
+    // slider, a stepper, a text view, a canvas, chart, map or seek bar, or a
+    // container's empty space does something else there, and so does a click
+    // on text with another element at its centre.
+    const pointMatters =
+      MACOS_POINT_ROLES.has(node.role) || (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
     if (
       device.platform === "macos" &&
-      (!node.clickable || MACOS_POINT_ROLES.has(node.role)) &&
-      awayFromCentre(point, resolved)
+      (pointMatters
+        ? awayFromCentre(point, resolved)
+        : !node.clickable && nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node)
     ) {
       return {
         warning: `the click is away from the centre of ${describeSelector(selector)}, where replay clicks; kept coordinates (brittle)`,

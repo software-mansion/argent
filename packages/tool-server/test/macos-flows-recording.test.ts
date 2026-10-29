@@ -202,6 +202,12 @@ describe("a tap recorded at a point of a Mac app element", () => {
       0.401,
       { selector: { identifier: "seek" } },
     ],
+    [
+      "keeps the selector of text, which takes the click anywhere in it",
+      "AXStaticText",
+      0.2,
+      { selector: { identifier: "seek" } },
+    ],
   ])("%s", async (_label, role, x, step) => {
     serve([n({ ...SEEK, role, clickable: role === "AXSlider" })], "macos-devtools");
     await start("seek");
