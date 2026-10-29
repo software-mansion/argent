@@ -175,6 +175,7 @@ The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPa
 
 - The Mac runs a macOS older than 14.4.
 - The bundle is an Electron app or a Chromium browser. Use `electronAppPath` for an Electron app.
+- The bundle is a Mac Catalyst app.
 - The bundle has the hardened runtime, and macOS does not load the Argent library into it. For a Debug build, the error names the steps of [The hardened runtime](/docs/features/mac-apps#the-hardened-runtime). For a Release build, the error says that Argent cannot drive the app.
 - The bundle id starts with `com.apple.`.
 - A copy of the app runs already without the Argent library, and `force` is not `true`. The error names `force: true`.

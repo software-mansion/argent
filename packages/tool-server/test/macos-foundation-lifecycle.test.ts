@@ -590,6 +590,26 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(helperRuns()).toBe(0);
   });
 
+  it("refuses a Mac Catalyst app, also as one slice of a universal binary", async () => {
+    const catalyst = writeBundle(path.join(root, `catalyst-${Date.now()}`), BUNDLE_ID);
+    // A 64-bit Mach-O header and one LC_BUILD_VERSION load command for platform 6, Mac Catalyst.
+    const thin = Buffer.alloc(56);
+    [0xfeedfacf, 0x0100000c, 0, 2, 1, 24].forEach((v, i) => thin.writeUInt32LE(v, i * 4));
+    [0x32, 24, 6].forEach((v, i) => thin.writeUInt32LE(v, 32 + i * 4));
+    const fat = Buffer.alloc(4096 + thin.length);
+    [0xcafebabe, 1, 0x0100000c, 0, 4096, thin.length].forEach((v, i) =>
+      fat.writeUInt32BE(v, i * 4)
+    );
+    thin.copy(fat, 4096);
+    for (const executable of [thin, fat]) {
+      fs.writeFileSync(path.join(catalyst, "Contents", "MacOS", "FakeApp"), executable);
+      await expect(run("boot-device", { macosAppPath: catalyst })).rejects.toThrow(
+        /is a Mac Catalyst \(UIKit\) app/
+      );
+    }
+    expect(helperRuns()).toBe(0);
+  });
+
   it("restart-app starts a new process under the same device id", async () => {
     const { pid } = await run("boot-device", { macosAppPath: appPath });
     const restarted = await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
@@ -1272,6 +1292,7 @@ function appInfo(hardenedRuntime: boolean, keys: string[], teamId?: string): Mac
     bundleId: "com.x",
     name: "X",
     executable: "/x.app/Contents/MacOS/X",
+    catalyst: false,
     uiElement: false,
     ...parseCodesignDisplay({
       stdout: entitlements(...keys),

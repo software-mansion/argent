@@ -558,6 +558,8 @@ export interface MacosAppInfo {
   };
   /** An Electron app or a Chromium browser, from the frameworks it ships. */
   chromium?: "electron" | "browser";
+  /** A Mac Catalyst (UIKit) app, from the platform its executable is built for. */
+  catalyst: boolean;
   /** `LSUIElement` or `LSBackgroundOnly`: the app has no Dock icon and no menu bar. */
   uiElement: boolean;
 }
@@ -576,6 +578,44 @@ function chromiumKind(appPath: string): MacosAppInfo["chromium"] {
   }
   if (frameworks.includes("Electron Framework.framework")) return "electron";
   return frameworks.some((name) => CHROMIUM_BROWSER_FRAMEWORK.test(name)) ? "browser" : undefined;
+}
+
+const FAT_MAGIC = 0xcafebabe;
+const MH_MAGIC_64 = 0xfeedfacf;
+const LC_BUILD_VERSION = 0x32;
+const PLATFORM_MACCATALYST = 6;
+
+/** Whether the platform in the executable's LC_BUILD_VERSION (of its first slice) is Mac Catalyst. */
+function isCatalystExecutable(executable: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(executable, "r");
+    const read = (length: number, position: number): Buffer => {
+      const buffer = Buffer.alloc(length);
+      return buffer.subarray(0, fs.readSync(fd!, buffer, 0, length, position));
+    };
+    let slice = 0;
+    let header = read(32, 0);
+    if (header.length === 32 && header.readUInt32BE(0) === FAT_MAGIC) {
+      slice = header.readUInt32BE(16);
+      header = read(32, slice);
+    }
+    if (header.length < 32 || header.readUInt32LE(0) !== MH_MAGIC_64) return false;
+    const commands = read(header.readUInt32LE(20), slice + 32);
+    for (let at = 0; at + 12 <= commands.length;) {
+      if (commands.readUInt32LE(at) === LC_BUILD_VERSION) {
+        return commands.readUInt32LE(at + 8) === PLATFORM_MACCATALYST;
+      }
+      const size = commands.readUInt32LE(at + 4);
+      if (size < 8) break;
+      at += size;
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 async function plistValue(plist: string, key: string): Promise<string | null> {
@@ -694,6 +734,7 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     executable,
     ...parseCodesignDisplay(codesign),
     ...(chromium ? { chromium } : {}),
+    catalyst: isCatalystExecutable(executable),
     uiElement: [uiElement, backgroundOnly].some((v) => v !== null && /^(true|yes|1)$/i.test(v)),
   };
 }

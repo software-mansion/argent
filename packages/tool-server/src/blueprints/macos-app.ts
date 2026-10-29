@@ -883,10 +883,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       );
     }
     // macOS ignores DYLD_* for Apple's own apps, and they are never the app under test.
-    const unsupported = isInjectableBundleId(bundleId)
-      ? chromiumRefusal(info)
-      : `${bundleId} is an Apple app. argent drives only apps it can load its library into, ` +
-        `such as your own builds.`;
+    const unsupported = !isInjectableBundleId(bundleId)
+      ? `${bundleId} is an Apple app. argent drives only apps it can load its library into, ` +
+        `such as your own builds.`
+      : info.catalyst
+        ? `${bundleId} is a Mac Catalyst (UIKit) app, which argent does not drive: typing, ` +
+          `paste and scrolling do not reach its views. Test its UI on an iOS simulator instead.`
+        : chromiumRefusal(info);
     if (unsupported) {
       throw macosFailure(
         unsupported,
