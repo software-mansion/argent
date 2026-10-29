@@ -21,7 +21,7 @@ Argent drives sandboxed builds and builds without the App Sandbox.
 
 ## How it works
 
-Argent starts the app with the Argent library inside the app process. Thus Argent drives only an app that Argent started. The pointer does not move, and the app stays in the background. A screenshot shows the app window, also when other windows cover it. The agent can drive the app while its window is on another Space. When you hide the app, the next action of the agent shows it again without bringing it to the front.
+Argent starts the app with the Argent library inside the app process. Thus Argent drives only an app that Argent started. The pointer does not move, and the app stays in the background. A screenshot shows the app window, also when other windows cover it. Web content in the app runs as in a visible window, also when other windows cover it. The agent can drive the app while its window is on another Space. When you hide the app, the next action of the agent shows it again without bringing it to the front.
 
 Argent starts the app in the folder `/`. The app gets only the basic variables of a login session, for example `HOME`, `USER`, `PATH` and `LANG`. The app does not get the other environment variables of the Argent tool-server.
 
