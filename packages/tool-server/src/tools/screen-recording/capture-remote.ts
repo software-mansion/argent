@@ -4,8 +4,17 @@ import { promises as fs } from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
-import { screenRecordFetch, screenRecordStart, screenRecordStop } from "../../utils/sim-remote";
+import type {
+  EndedRecording,
+  RemoteCapture,
+  ScreenRecordingSessionApi,
+} from "../../blueprints/screen-recording-session";
+import {
+  isAlreadyRecordingError,
+  screenRecordFetch,
+  screenRecordStart,
+  screenRecordStop,
+} from "../../utils/sim-remote";
 import { stripRemotePrefix } from "../../utils/device-info";
 import {
   clearActiveScreenRecording,
@@ -21,7 +30,15 @@ import {
   type StartRecordingResult,
   type StopRecordingFile,
 } from "./session-guards";
-import { buildWatermarkGraph, resolveFfmpeg, resolveFfprobe, writeLogoTemp } from "./watermark";
+import {
+  EVEN_CROP,
+  OUTPUT_FPS,
+  buildWatermarkGraph,
+  encoderArgs,
+  resolveFfmpeg,
+  resolveFfprobe,
+  writeLogoTemp,
+} from "./watermark";
 
 /**
  * Screen capture for remote (`remote:`) simulators.
@@ -39,7 +56,6 @@ import { buildWatermarkGraph, resolveFfmpeg, resolveFfprobe, writeLogoTemp } fro
  * host without ffmpeg can still be handed a perfectly good recording.
  */
 
-const OUTPUT_FPS = 30;
 /** Bound the post-pass so a wedged ffmpeg cannot hold the stop open. */
 const POST_PASS_TIMEOUT_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 15_000;
@@ -119,21 +135,28 @@ export async function startRemoteCapture(
   api.watermarkSkipped = null;
   api.outputFile = outputFile;
   api.trimStatic = params.trimStatic;
-  api.watermark = params.watermark;
-  api.remoteFetch = null;
-  api.remoteRecordingId = recordingId;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
   api.timeLimitSeconds = params.timeLimitSeconds;
-  // Lets a teardown release the runner-side buffer instead of leaving
-  // simulator-server recording into a capture nobody will ever collect. The
-  // download lands on the path this start already handed back, so what was
-  // captured is salvageable rather than discarded — the teardown breadcrumb
-  // points there.
-  api.remoteRelease = async () => {
-    await stopAndDownload(api.deviceId, recordingId, outputFile).catch(() => {});
+  // The download lands on the path this start hands back, so whichever of the
+  // cap, the stop or a teardown ends the recording, what was captured is where
+  // the stop (or the teardown breadcrumb) says it is.
+  let ended: Promise<EndedRecording> | null = null;
+  const remote: RemoteCapture = {
+    recordingId,
+    watermark: params.watermark,
+    end: () => {
+      if (!ended) {
+        ended = stopAndDownload(api.deviceId, recordingId, outputFile);
+        // The cap fires this with nobody awaiting; a failure is for the stop
+        // that awaits it later, not an unhandled rejection now.
+        ended.catch(() => {});
+      }
+      return ended;
+    },
   };
+  api.remote = remote;
   api.startPending = false;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
   // This recording's own stop will succeed, so an earlier teardown breadcrumb
@@ -150,18 +173,10 @@ export async function startRemoteCapture(
     api.wallClockEndMs = Date.now();
     api.pendingRetrieval = true;
     markScreenRecordingFinalized(api.deviceId, `it hit its ${params.timeLimitSeconds}s time limit`);
-    // Fetch at the cap rather than at stop: the runner is still recording
-    // until this call, so waiting would let the video keep growing past the
-    // limit the caller set. Errors are held for whoever calls stop.
-    const download = stopAndDownload(api.deviceId, recordingId, outputFile).catch(
-      (err: unknown) => {
-        api.remoteFetchError = err instanceof Error ? err : new Error(String(err));
-      }
-    );
-    api.remoteFetch = download;
-    // This download is the release now: a teardown waits on it rather than
-    // sending a second stop into the same file.
-    api.remoteRelease = () => download;
+    // End at the cap rather than at stop: the runner is still recording until
+    // this call, so waiting would let the video keep growing past the limit
+    // the caller set. The stop awaits the same promise.
+    void remote.end();
   }, params.timeLimitSeconds * 1_000);
 
   return {
@@ -182,7 +197,7 @@ async function startOnRunner(deviceId: string, showTouches: boolean): Promise<st
   try {
     return await screenRecordStart(deviceId, { showTouches });
   } catch (err) {
-    if (!/already recording/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    if (!isAlreadyRecordingError(err)) throw err;
     await screenRecordStop(deviceId).catch(() => {});
     return screenRecordStart(deviceId, { showTouches });
   }
@@ -190,38 +205,38 @@ async function startOnRunner(deviceId: string, showTouches: boolean): Promise<st
 
 /**
  * Stop the recording and download it: two runner operations, since only the
- * download can be retried. A stop that fails may or may not have reached the
- * runner, and a fetch by the start's id tells which, as the runner only serves
- * a recording it has stopped. A download that fails is tried once more before
- * the failure is reported.
+ * download can be retried. A stop that fails may still have reached the
+ * runner, and the fetch tells, as the runner only serves a recording it has
+ * stopped. After a stop that worked, a download that fails is tried once more;
+ * after one that did not, the runner is still recording (touch markers and
+ * all) or unreachable, so another stop keeps the video there for a fetch, and
+ * the stop's own error is the one reported.
  */
 async function stopAndDownload(
   deviceId: string,
-  startedId: string | null,
+  recordingId: string,
   outputFile: string
-): Promise<void> {
-  let recordingId: string;
-  try {
-    recordingId = await screenRecordStop(deviceId);
-  } catch (err) {
-    const fetched =
-      startedId !== null &&
-      (await screenRecordFetch(deviceId, startedId, outputFile).then(
-        () => true,
-        () => false
-      ));
-    if (fetched) return;
-    // Still recording, touch markers and all, or the runner is unreachable.
-    // Another stop keeps the video there for a fetch; the first stop's own
-    // error is the one worth reporting.
-    await screenRecordStop(deviceId).catch(() => {});
-    throw err;
-  }
+): Promise<EndedRecording> {
+  const stopError = await screenRecordStop(deviceId).then(
+    () => null,
+    (err: unknown) => (err instanceof Error ? err : new Error(String(err)))
+  );
   try {
     await screenRecordFetch(deviceId, recordingId, outputFile);
   } catch {
+    if (stopError) {
+      await screenRecordStop(deviceId).catch(() => {});
+      throw stopError;
+    }
     await screenRecordFetch(deviceId, recordingId, outputFile);
   }
+  return stopError
+    ? {
+        warning:
+          `The runner had already ended this recording (${stopError.message.trim()}); the ` +
+          `video it kept was downloaded and may be shorter than the session.`,
+      }
+    : {};
 }
 
 export async function stopRemoteCapture(
@@ -237,33 +252,29 @@ export async function stopRemoteCapture(
     api.recordingTimeout = null;
   }
 
+  // Both set together by the start that `assertStoppableSession` just vouched for.
   const rawFile = api.outputFile!;
+  const remote = api.remote!;
   const startedAtMs = api.wallClockStartMs;
   const trimStatic = api.trimStatic;
-  const watermark = api.watermark;
   const timedOut = api.recordingTimedOut;
-  const recordingId = api.remoteRecordingId;
-  const pending = api.remoteFetch;
   let outputFile = rawFile;
-  let warning: string | undefined;
+  const warnings: string[] = [];
 
   try {
-    if (pending) {
-      // The cap already ended the recording and started the download.
-      await pending;
-      if (api.remoteFetchError) throw api.remoteFetchError;
-      warning =
-        `Recording already ended at its ${api.timeLimitSeconds ?? "?"}s time limit; ` +
-        `returning the finalized video.`;
-    } else {
-      if (api.recordingActive) {
-        api.recordingActive = false;
-        api.wallClockEndMs = Date.now();
-      }
-      await stopAndDownload(api.deviceId, api.remoteRecordingId, rawFile);
+    if (api.recordingActive) {
+      api.recordingActive = false;
+      api.wallClockEndMs = Date.now();
     }
-    // The runner no longer holds anything to release.
-    api.remoteRelease = null;
+    // Once: after the cap this joins the download it started.
+    const ended = await remote.end();
+    if (timedOut) {
+      warnings.push(
+        `Recording already ended at its ${api.timeLimitSeconds ?? "?"}s time limit; ` +
+          `returning the finalized video.`
+      );
+    }
+    if (ended.warning) warnings.push(ended.warning);
 
     await statNonEmptyOutput(rawFile, "screen_recording_stop");
 
@@ -274,9 +285,9 @@ export async function stopRemoteCapture(
       (await probeDurationMs(rawFile)) ??
       (startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs);
 
-    const post = await postProcess({ rawFile, trimStatic, watermark });
+    const post = await postProcess({ rawFile, trimStatic, watermark: remote.watermark });
     if (post.outputFile) outputFile = post.outputFile;
-    if (post.warning) warning = [warning, post.warning].filter(Boolean).join(" ");
+    if (post.warning) warnings.push(post.warning);
 
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // Only a rewritten video can differ in length from the recording; without a
@@ -296,7 +307,7 @@ export async function stopRemoteCapture(
       sizeBytes: size,
       durationMs: finalMs,
       ...(trimmedMs !== undefined ? { wallClockMs: recordedMs!, trimmedMs } : {}),
-      ...(warning ? { warning } : {}),
+      ...(warnings.length ? { warning: warnings.join(" ") } : {}),
     };
   } catch (err) {
     // Nothing usable came back, so the temp names are ours to clean up. Gated
@@ -311,7 +322,7 @@ export async function stopRemoteCapture(
     }
     throw asStopFailure(err, {
       deviceId: api.deviceId,
-      recordingId,
+      recordingId: remote.recordingId,
       timeLimitSeconds: timedOut ? api.timeLimitSeconds : undefined,
     });
   } finally {
@@ -320,10 +331,7 @@ export async function stopRemoteCapture(
     api.recordingActive = false;
     api.stopPending = false;
     api.pendingRetrieval = false;
-    api.remoteRelease = null;
-    api.remoteFetch = null;
-    api.remoteRecordingId = null;
-    api.remoteFetchError = null;
+    api.remote = null;
     api.outputFile = null;
     api.watermarkSkipped = null;
     api.wallClockStartMs = null;
@@ -380,54 +388,32 @@ async function postProcess(opts: {
 
   // The watermark geometry is derived from the frame size, which only the
   // finished file knows.
-  let graph: string | null = null;
+  let dims: { width: number; height: number } | null = null;
   let logoFile: string | null = null;
   let warning: string | undefined;
   if (opts.watermark) {
-    const dims = await probeDimensions(opts.rawFile);
+    dims = await probeDimensions(opts.rawFile);
     if (dims) {
       logoFile = await writeLogoTemp();
-      graph = buildWatermarkGraph(dims);
     } else {
       warning = "The watermark was not applied (the video's frame size could not be read).";
     }
   }
 
   const outputFile = opts.rawFile.replace(/\.mp4$/, "-final.mp4");
+  const trim = opts.trimStatic ? TRIM_FILTERS : null;
   const args = ["-hide_banner", "-nostdin", "-loglevel", "warning", "-i", opts.rawFile];
-  if (logoFile && graph) {
+  if (logoFile && dims) {
     // The still logo is looped so the graph has a logo frame for every video
-    // frame; `shortest=1` in the graph ends the output with the capture.
-    args.push("-framerate", String(OUTPUT_FPS), "-loop", "1", "-i", logoFile, "-filter_complex");
-    // The graph's own `fps` normalizes the timeline, so trimming has to happen
-    // ahead of it, on the way into the graph.
-    args.push(
-      opts.trimStatic ? `[0:v]${TRIM_FILTERS}[src];${graph.replace("[0:v]", "[src]")}` : graph
-    );
+    // frame; `shortest=1` in the graph ends the output with the capture. The
+    // graph letterboxes the base to an even size for the encoder.
+    args.push("-framerate", String(OUTPUT_FPS), "-loop", "1", "-i", logoFile);
+    args.push("-filter_complex", buildWatermarkGraph(dims, { prefilter: trim ?? "" }));
     args.push("-map", "[out]");
   } else {
-    // yuv420p rejects an odd width or height, and a device whose native
-    // resolution is odd on either axis (iPhone 16 / 15 Pro / 15 / 14 Pro) would
-    // otherwise fail the encode. Dropping the odd edge pixel leaves even frames
-    // unchanged.
-    const crop = "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0";
-    args.push("-vf", opts.trimStatic ? `${TRIM_FILTERS},${crop}` : crop);
+    args.push("-vf", [trim, EVEN_CROP].filter(Boolean).join(","));
   }
-  args.push(
-    "-c:v",
-    "libx264",
-    "-crf",
-    "20",
-    "-preset",
-    "veryfast",
-    "-pix_fmt",
-    "yuv420p",
-    "-movflags",
-    "+faststart",
-    "-an",
-    "-y",
-    outputFile
-  );
+  args.push(...encoderArgs(outputFile));
 
   try {
     await execFileAsync(ffmpeg, args, { timeout: POST_PASS_TIMEOUT_MS });
@@ -513,7 +499,7 @@ function asStartFailure(err: unknown): FailureError {
  */
 function asStopFailure(
   err: unknown,
-  ctx: { deviceId: string; recordingId: string | null; timeLimitSeconds?: number | null }
+  ctx: { deviceId: string; recordingId: string; timeLimitSeconds?: number | null }
 ): FailureError {
   if (err instanceof FailureError) return err;
   const message = err instanceof Error ? err.message : String(err);
@@ -522,12 +508,11 @@ function asStopFailure(
       ? `The recording could not be retrieved from the remote simulator: ${message}.`
       : `The recording hit its ${ctx.timeLimitSeconds ?? "?"}s time limit, but the video could ` +
         `not be retrieved from the remote simulator: ${message}.`;
-  const recovery = ctx.recordingId
-    ? `If the recording was stopped there, the remote machine keeps it until the machine is ` +
-      `released. Download it with \`sim-remote screen-record fetch ` +
-      `${stripRemotePrefix(ctx.deviceId)} <FILE> --recording ${ctx.recordingId}\`. ` +
-      `Do not retry the stop.`
-    : `Start a new recording; do not retry the stop.`;
+  const recovery =
+    `If the recording was stopped there, the remote machine keeps it until the machine is ` +
+    `released. Download it with \`sim-remote screen-record fetch ` +
+    `${stripRemotePrefix(ctx.deviceId)} <FILE> --recording ${ctx.recordingId}\`. ` +
+    `Do not retry the stop.`;
   return new FailureError(
     `${what} ${recovery}`,
     {

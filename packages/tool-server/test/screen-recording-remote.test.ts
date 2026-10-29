@@ -78,7 +78,7 @@ describe("remote screen recording", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-remote-recording-"));
     restoreTmpdir = redirectTmpdir(tmpDir);
     mockStart.mockResolvedValue("rec-1");
-    mockStop.mockResolvedValue("rec-1");
+    mockStop.mockResolvedValue(undefined);
     fetchWritesVideo();
   });
 
@@ -249,6 +249,9 @@ describe("remote screen recording", () => {
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(REMOTE_UDID, "rec-1", started.outputFile);
     expect(stopped.sizeBytes).toBeGreaterThan(0);
+    // The video may predate this stop, so the caller is told rather than
+    // handed a shorter recording as if it were whole.
+    expect(stopped.warning).toContain("already ended");
   });
 
   /** When the fetch fails too, the stop's own error is the one to report. */

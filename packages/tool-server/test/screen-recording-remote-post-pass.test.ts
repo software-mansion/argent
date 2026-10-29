@@ -107,7 +107,7 @@ describe.skipIf(!hasFfmpeg())("remote recording post-pass (real ffmpeg)", () => 
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-postpass-"));
     restore = redirectTmpdir(tmpDir);
     vi.mocked(screenRecordStart).mockResolvedValue("rec-1");
-    vi.mocked(screenRecordStop).mockResolvedValue("rec-1");
+    vi.mocked(screenRecordStop).mockResolvedValue(undefined);
     vi.mocked(screenRecordFetch).mockImplementation(
       async (_u: string, _id: string, out: string) => {
         await makeSourceVideo(out);
@@ -130,14 +130,6 @@ describe.skipIf(!hasFfmpeg())("remote recording post-pass (real ffmpeg)", () => 
     const stopped = await run({ trimStatic: true, watermark: false });
     expect(stopped.warning).toBeUndefined();
     const seconds = await durationSeconds(stopped.outputFile);
-    console.log(
-      "trimmed duration:",
-      seconds,
-      "durationMs:",
-      stopped.durationMs,
-      "warning:",
-      stopped.warning
-    );
     expect(seconds).toBeLessThan(8);
     expect(seconds).toBeGreaterThan(5.5);
     expect(stopped.wallClockMs).toBeGreaterThan(9_000);

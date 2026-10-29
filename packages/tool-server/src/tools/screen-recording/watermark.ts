@@ -8,7 +8,33 @@ import { WATERMARK_PNG_BASE64, WATERMARK_PNG_WIDTH, WATERMARK_PNG_HEIGHT } from 
 const execFileAsync = promisify(execFile);
 
 /** Frame rate of the recorded video; every input in the graph runs at it. */
-const OUTPUT_FPS = 30;
+export const OUTPUT_FPS = 30;
+
+/**
+ * Drops the odd edge row or column: yuv420p rejects an odd width or height,
+ * and some devices are odd on one axis (iPhone 16 / 15 Pro / 15 / 14 Pro at
+ * 1179x2556). Even frames pass through unchanged.
+ */
+export const EVEN_CROP = "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0";
+
+/** The encoder tail of every recording's ffmpeg command line. */
+export function encoderArgs(outputFile: string): string[] {
+  return [
+    "-c:v",
+    "libx264",
+    "-crf",
+    "20",
+    "-preset",
+    "veryfast",
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    "-an",
+    "-y",
+    outputFile,
+  ];
+}
 
 // Package-manager prefixes, for hosts where the tool-server's PATH is
 // sanitized (launchd / login-shell differences).
@@ -145,8 +171,11 @@ export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox
  * `dims` is the first frame's size. The base is letterboxed into it (see
  * {@link letterboxFilter}) ahead of the split, so a frame of another size
  * mid-stream still meets a box and an overlay that lie inside it.
+ *
+ * `prefilter` is a filter chain run on input 0 before anything else — ahead
+ * of the graph's own `fps`, which would otherwise re-time what it drops.
  */
-export function buildWatermarkGraph(dims: Dimensions): string {
+export function buildWatermarkGraph(dims: Dimensions, opts?: { prefilter?: string }): string {
   // libx264 with yuv420p fails on an odd frame size, and some devices stream
   // one (1179x2556). The letterbox evens the base, and the box is derived
   // from the same evened size so the mask crop stays inside it.
@@ -162,8 +191,9 @@ export function buildWatermarkGraph(dims: Dimensions): string {
   const span = MASK_LIGHT_MIN_LUMA - MASK_DARK_MAX_LUMA;
   // High where the background is dark (-> keep the white logo), low where light.
   const maskRamp = `lut=y='clip((${MASK_LIGHT_MIN_LUMA}-val)/${span}*255,0,255)'`;
+  const prefilter = opts?.prefilter ? `${opts.prefilter},` : "";
   return [
-    `[0:v]fps=${OUTPUT_FPS}${base},split=2[base][under]`,
+    `[0:v]${prefilter}fps=${OUTPUT_FPS}${base},split=2[base][under]`,
     `[under]crop=${w}:${h}:${x}:${y},format=gray,${maskRamp},format=gbrap[mask]`,
     `[1:v]fps=${OUTPUT_FPS},format=rgba,scale=${w}:${h},split=2[white][darksrc]`,
     `[darksrc]colorchannelmixer=rr=${DARK_LOGO_LEVEL}:gg=${DARK_LOGO_LEVEL}:bb=${DARK_LOGO_LEVEL}[dark]`,

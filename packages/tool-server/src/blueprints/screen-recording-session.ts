@@ -18,11 +18,35 @@ import { stripRemotePrefix } from "../utils/device-info";
 // Local iOS/Android captures pace simulator-server's MJPEG stream into an
 // ffmpeg child that writes the mp4 host-side, so there is nothing device-side
 // to clean up; remote (`remote:`) simulators record on the runner instead and
-// leave a buffer there that a teardown has to release (`remoteRelease`).
+// leave a buffer there that a teardown has to end (`remote.end`).
 // Mirrors the native-profiler session.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+
+/** What the download of a remote recording has to say for itself. */
+export interface EndedRecording {
+  /** Set when the stop did not get through but the runner held the video anyway. */
+  warning?: string;
+}
+
+/**
+ * A recording running on a remote simulator's runner. It keeps recording until
+ * told to stop, so whoever ends the capture here — the time-limit cap, the
+ * stop, a teardown — has to end it there too.
+ */
+export interface RemoteCapture {
+  /** The runner's id for the recording: what a failed download is fetched again by. */
+  recordingId: string;
+  /** Whether the capture asked for the corner watermark; stamped after the download. */
+  watermark: boolean;
+  /**
+   * Ends the recording on the runner and downloads it to the session's
+   * `outputFile`, once: the first caller does the work, every later one gets
+   * the same promise, and a failure reaches all of them.
+   */
+  end: () => Promise<EndedRecording>;
+}
 
 export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
   return {
@@ -103,27 +127,8 @@ export interface ScreenRecordingSessionApi {
   pumpTimer: NodeJS.Timeout | null;
   /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
   trimStatic: boolean;
-  /** Whether this capture asked for the corner watermark. Remote only — the
-   * local path bakes it into the encode instead of carrying it on the session. */
-  watermark: boolean;
-  /**
-   * Remote only: the in-flight (or finished) download the time-limit cap
-   * started, so a stop arriving afterwards waits for it instead of asking the
-   * runner to stop a recording that already ended.
-   */
-  remoteFetch: Promise<void> | null;
-  /**
-   * Remote only: the runner's id for this recording, which a failed download
-   * is fetched again by. Null against a `sim-remote` that does not report one.
-   */
-  remoteRecordingId: string | null;
-  /** Remote only: why that cap-time download failed, surfaced by stop. */
-  remoteFetchError: Error | null;
-  /**
-   * Remote only: releases the runner-side recording, for a teardown that
-   * abandons the capture. Null once stop has ended it.
-   */
-  remoteRelease: (() => Promise<void>) | null;
+  /** The runner-side half of a remote (`remote:`) capture; null for a local one. */
+  remote: RemoteCapture | null;
   /** Frames the pump has fed the encoder; the output video's length in frames. */
   framesWritten: number;
   /** Whether trimming ever collapsed a static stretch (crossed the grace and dropped frames). */
@@ -176,10 +181,7 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.panelReadFailures = 0;
   state.pointerDisable = null;
   state.pointerFailed = false;
-  state.remoteFetch = null;
-  state.remoteRecordingId = null;
-  state.remoteFetchError = null;
-  state.remoteRelease = null;
+  state.remote = null;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -246,11 +248,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       panelReadFailures: 0,
       pumpTimer: null,
       trimStatic: true,
-      watermark: false,
-      remoteFetch: null,
-      remoteRecordingId: null,
-      remoteFetchError: null,
-      remoteRelease: null,
+      remote: null,
       framesWritten: 0,
       trimmedAnyFrames: false,
       pointerDisable: null,
@@ -278,7 +276,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         const hadUnretrievedCapture =
           state.recordingActive || state.startPending || state.pendingRetrieval;
         const abandonedOutput = state.outputFile;
-        const abandonedRecordingId = state.remoteRecordingId;
+        const abandonedRemote = state.remote;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
@@ -298,12 +296,12 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         // A remote capture keeps recording on the runner until someone tells
         // it to stop; abandoning it here would leave simulator-server
         // buffering frames for a video nobody will ever collect.
-        if (state.remoteRelease) {
-          const release = state.remoteRelease;
-          state.remoteRelease = null;
+        if (state.remote) {
+          const { end } = state.remote;
+          state.remote = null;
           let grace: NodeJS.Timeout | undefined;
           await Promise.race([
-            release().catch(() => {}),
+            end().catch(() => {}),
             new Promise<void>((resolve) => {
               grace = setTimeout(resolve, DISPOSE_REMOTE_RELEASE_GRACE_MS);
             }),
@@ -363,12 +361,12 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
               "screen-recording",
               state.deviceId,
               abandonedOutput
-                ? state.platform === "ios-remote"
+                ? abandonedRemote
                   ? `The runner-side recording was ended and its download started, so the ` +
                     `video captured up to that point is at ${abandonedOutput} if the download ` +
                     `finished. Otherwise the remote machine keeps it until the machine is ` +
                     `released: \`sim-remote screen-record fetch ${stripRemotePrefix(state.deviceId)} ` +
-                    `<FILE>${abandonedRecordingId ? ` --recording ${abandonedRecordingId}` : ""}\`.`
+                    `<FILE> --recording ${abandonedRemote.recordingId}\`.`
                   : `ffmpeg was given a moment to finalize the container first, so the video ` +
                     `captured up to that point is usually playable at ${abandonedOutput} — ` +
                     `check it before re-recording.`

@@ -294,7 +294,14 @@ export async function screenRecordStart(
   const args = ["screen-record", "start", stripRemotePrefix(udid)];
   if (opts.showTouches) args.push("--show-touches");
   const { stdout } = await run(args, { timeoutMs: RECORDING_START_TIMEOUT_MS });
-  return stdout.trim();
+  const id = stdout.trim();
+  if (!id) throw new Error(`sim-remote ${args.join(" ")} printed no recording id`);
+  return id;
+}
+
+/** Whether `err` is the runner refusing a start because one is already recording. */
+export function isAlreadyRecordingError(err: unknown): boolean {
+  return /already recording/i.test(err instanceof Error ? err.message : String(err));
 }
 
 // Nothing is downloaded, but the runner still muxes the whole recording before
@@ -306,15 +313,14 @@ const RECORDING_STOP_TIMEOUT_MS = 150_000;
 const RECORDING_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * Stop the recording. The runner keeps the mp4 and this returns its id, for
- * `screenRecordFetch`: ending and downloading are separate because only the
- * download can be retried.
+ * Stop the recording. The runner keeps the mp4 under the id the start printed,
+ * for `screenRecordFetch`: ending and downloading are separate because only
+ * the download can be retried.
  */
-export async function screenRecordStop(udid: string): Promise<string> {
-  const { stdout } = await run(["screen-record", "stop", stripRemotePrefix(udid)], {
+export async function screenRecordStop(udid: string): Promise<void> {
+  await run(["screen-record", "stop", stripRemotePrefix(udid)], {
     timeoutMs: RECORDING_STOP_TIMEOUT_MS,
   });
-  return stdout.trim();
 }
 
 /**
