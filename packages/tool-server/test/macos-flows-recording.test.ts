@@ -207,9 +207,9 @@ describe("a tap recorded at a point of a Mac app element", () => {
       { x: 0.38, y: 0.25 },
     ],
     [
-      "keeps the selector of a click at the centre, give or take a rounded frame",
+      "keeps the selector of a click at the centre, give or take its rounding to 2 decimals",
       "AXGroup",
-      0.401,
+      0.405,
       { selector: { identifier: "seek" } },
     ],
     [

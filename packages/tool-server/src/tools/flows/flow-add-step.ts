@@ -716,11 +716,11 @@ const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeadin
 
 /**
  * Whether a click is away from the centre of `frame` by more than the rounding
- * of a centre taken from describe's frames, which have 3 decimals.
+ * of a centre that describe prints with 3 decimals and an agent taps at with 2.
  */
 function awayFromCentre(point: { x: number; y: number }, frame: DescribeFrame): boolean {
   const centre = getDescribeTapPoint(frame);
-  return Math.abs(point.x - centre.x) > 0.0015 || Math.abs(point.y - centre.y) > 0.0015;
+  return Math.abs(point.x - centre.x) > 0.006 || Math.abs(point.y - centre.y) > 0.006;
 }
 
 /**
