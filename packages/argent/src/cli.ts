@@ -7,6 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type * as Installer from "@argent/installer";
 import type * as Mcp from "@argent/mcp";
 import type * as Cli from "@argent/cli";
@@ -20,15 +21,46 @@ import {
 } from "./installer-help.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
+// import.meta.dirname is undefined before Node 20.11, where the Node version check below must still run.
+const distDir = path.dirname(fileURLToPath(import.meta.url));
 
 function getInstalledVersion(): string | null {
   try {
-    const pkgPath = path.resolve(import.meta.dirname, "..", "package.json");
+    const pkgPath = path.resolve(distDir, "..", "package.json");
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
     return pkg.version ?? null;
   } catch {
     return null;
   }
+}
+
+/**
+ * The bundles use Node APIs newer than early Node 20 releases (`styleText`,
+ * 20.12), so an older Node dies loading them with a bare SyntaxError, before
+ * any command (`doctor` included) can say why. Check `engines.node` first.
+ */
+function exitOnUnsupportedNode(): void {
+  let range: string | undefined;
+  try {
+    const pkgPath = path.resolve(distDir, "..", "package.json");
+    range = (JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { engines?: { node?: string } })
+      .engines?.node;
+  } catch {
+    return;
+  }
+  const min = /^>=\s*(\d+)\.(\d+)\.(\d+)$/
+    .exec(range ?? "")
+    ?.slice(1)
+    .map(Number);
+  if (!min) return;
+  const current = process.versions.node.split(".").map(Number);
+  const index = min.findIndex((part, i) => current[i] !== part);
+  if (index === -1 || current[index]! > min[index]!) return;
+  console.error(
+    `argent needs Node ${range} (this is v${process.versions.node}). ` +
+      "Install a newer Node, e.g. nvm install --lts."
+  );
+  process.exit(1);
 }
 
 const [, , command, ...rest] = process.argv;
@@ -58,6 +90,7 @@ Commands:
   update      ${installerHelpEntry("update")}
   uninstall   ${installerHelpEntry("uninstall")}
   remove      ${installerHelpEntry("remove")}
+  doctor      Check that argent is installed and configured correctly
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   e2e         Run an e2e test by name or YAML path (use \`argent e2e --help\` for options)
@@ -86,12 +119,15 @@ Package: ${PACKAGE_NAME}
 // The bundles are produced at build time by scripts/bundle-tools.cjs into dist/;
 // typed against the workspace packages so calls are still checked.
 async function loadInstaller(): Promise<typeof Installer> {
+  exitOnUnsupportedNode();
   return (await import("./installer.mjs" as any)) as typeof Installer;
 }
 async function loadMcp(): Promise<typeof Mcp> {
+  exitOnUnsupportedNode();
   return (await import("./mcp-server.mjs" as any)) as typeof Mcp;
 }
 async function loadCli(): Promise<typeof Cli> {
+  exitOnUnsupportedNode();
   return (await import("./cli-cmds.mjs" as any)) as typeof Cli;
 }
 
@@ -136,6 +172,8 @@ async function main(): Promise<void> {
     case "uninstall":
     case "remove":
       return (await loadInstaller()).uninstall(rest);
+    case "doctor":
+      return (await loadCli()).doctor(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "tools":
       return (await loadCli()).tools(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "run":

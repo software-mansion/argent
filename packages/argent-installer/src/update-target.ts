@@ -21,12 +21,13 @@ interface ResolvedUpdateTarget {
  */
 export async function resolveInstallableUpdateTarget(
   pm: PackageManager,
-  current: string | null
+  current: string | null,
+  options: { deadlineMs?: number; env?: NodeJS.ProcessEnv } = {}
 ): Promise<ResolvedUpdateTarget | null> {
-  const info = await fetchRegistryInfo(`${NPM_REGISTRY}/${PACKAGE_NAME}`);
+  const info = await fetchRegistryInfo(`${NPM_REGISTRY}/${PACKAGE_NAME}`, options.deadlineMs);
   if (info === null) return null;
 
-  const minReleaseAgeMs = await detectMinReleaseAgeMsForPm(pm);
+  const minReleaseAgeMs = await detectMinReleaseAgeMsForPm(pm, options.env);
   const target = pickInstallableTarget(info.latest, info.times, current, minReleaseAgeMs);
 
   return {

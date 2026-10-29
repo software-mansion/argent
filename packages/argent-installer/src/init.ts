@@ -152,17 +152,21 @@ export async function init(args: string[]): Promise<void> {
     const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
     const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
 
-    const { adapters: writtenAdapters, lines: mcpLines } = writeMcpConfigs({
+    const {
+      adapters: writtenAdapters,
+      lines: mcpLines,
+      configured: configuredAdapters,
+    } = writeMcpConfigs({
       selectedAdapters,
       installMode: tel.installMode,
       scope,
       effectiveRoot,
       projectRoot,
     });
-    tel.editorsConfiguredCount = writtenAdapters.length;
+    tel.editorsConfiguredCount = configuredAdapters.length;
 
     track("installation:editors_select", {
-      editors: writtenAdapters.map((a) => sanitizeEditorName(a.name)),
+      editors: configuredAdapters.map((a) => sanitizeEditorName(a.name)),
       detected_editor_count: detected.length,
       scope,
       install_mode: tel.installMode,
@@ -283,7 +287,7 @@ export async function init(args: string[]): Promise<void> {
 
     printSummary({
       installMode: tel.installMode,
-      selectedAdapters: writtenAdapters,
+      selectedAdapters: configuredAdapters,
       scope,
       allowlistEnabled: allowlist.enabled,
       skillsMethod,

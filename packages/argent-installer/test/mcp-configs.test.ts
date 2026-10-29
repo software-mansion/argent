@@ -13,8 +13,11 @@ import {
   removeClaudePermission,
   copyRulesAndAgents,
   findConfiguredAdapterScopes,
+  isArgentDisabledInClaudeProject,
+  isSwitchedOffInEditor,
   getManagedContentTargets,
   injectCodexRules,
+  hasCodexRules,
   removeCodexRules,
 } from "../src/mcp-configs.js";
 
@@ -99,6 +102,32 @@ afterEach(() => {
 });
 
 // ── isArgentManagedEntry ──────────────────────────────────────────────────────
+
+describe("isArgentManagedEntry with a cwd", () => {
+  it("treats an entry's cwd as a customization", () => {
+    expect(isArgentManagedEntry({ command: "argent", args: ["mcp"], cwd: "apps/mobile" })).toBe(
+      false
+    );
+  });
+});
+
+describe("getArgentEntry with a cwd", () => {
+  it("keeps the entry's cwd, which marks it customized", () => {
+    const vscode = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
+    const configPath = path.join(tmpDir, "mcp.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        servers: {
+          argent: { command: "argent", args: ["mcp"], cwd: "${workspaceFolder}/apps/mobile" },
+        },
+      })
+    );
+    const entry = vscode.getArgentEntry(configPath);
+    expect(entry?.cwd).toBe("${workspaceFolder}/apps/mobile");
+    expect(isArgentManagedEntry(entry)).toBe(false);
+  });
+});
 
 describe("isArgentManagedEntry", () => {
   it("accepts every shape argent itself writes", () => {
@@ -264,6 +293,226 @@ describe("getArgentEntry env passthrough", () => {
       args: ["mcp"],
       env: { FOO: "bar" },
     });
+  });
+});
+
+describe("remote entries", () => {
+  it("reads a command beside a URL as a command unless the type is remote", () => {
+    const file = path.join(tmpDir, ".mcp.json");
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const command = { command: "/nonexistent/argent", args: ["mcp"] };
+    const url = "http://127.0.0.1:1/mcp";
+    for (const type of [undefined, "stdio"]) {
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { argent: { type, ...command, url } } }));
+      expect(claude.getArgentEntry(file)).toEqual(command);
+    }
+  });
+
+  it("lets Gemini's URL win over a command beside it, as gemini-cli does", () => {
+    const file = path.join(tmpDir, "settings.json");
+    const gemini = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+    const url = "http://127.0.0.1:1/mcp";
+    for (const key of ["url", "httpUrl"]) {
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ mcpServers: { argent: { command: "argent", args: ["mcp"], [key]: url } } })
+      );
+      expect(gemini.getArgentEntry(file)).toEqual({ command: "", args: [], url });
+    }
+  });
+
+  it("reads each editor's URL key, keeps the switch-off key and prefers the URL to a command", () => {
+    const read = (name: string, raw: Record<string, unknown>) => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const file = path.join(tmpDir, `${name}.json`);
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { argent: raw } }));
+      return adapter.getArgentEntry(file);
+    };
+    const url = "http://127.0.0.1:9/mcp";
+    expect(read("Claude Code", { type: "http", url, command: "argent", args: ["mcp"] })).toEqual({
+      command: "",
+      args: [],
+      url,
+    });
+    expect(read("Windsurf", { serverUrl: url, disabled: true })).toEqual({
+      command: "",
+      args: [],
+      url,
+      switchedOffBy: ["disabled"],
+    });
+    expect(read("Gemini", { httpUrl: url })?.url).toBe(url);
+    expect(isArgentManagedEntry({ command: "", args: [], url })).toBe(false);
+  });
+});
+
+describe("disabled entries", () => {
+  it("marks opencode `enabled: false` and Windsurf-style `disabled: true`", () => {
+    const opencode = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+    const opencodePath = path.join(tmpDir, "opencode.json");
+    fs.writeFileSync(
+      opencodePath,
+      JSON.stringify({ mcp: { argent: { command: ["argent", "mcp"], enabled: false } } })
+    );
+    expect(opencode.getArgentEntry(opencodePath)?.switchedOffBy).toEqual(["enabled"]);
+
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const cursorPath = path.join(tmpDir, "mcp.json");
+    fs.writeFileSync(
+      cursorPath,
+      JSON.stringify({
+        mcpServers: { argent: { command: "argent", args: ["mcp"], disabled: true } },
+      })
+    );
+    expect(cursor.getArgentEntry(cursorPath)?.switchedOffBy).toEqual(["disabled"]);
+  });
+
+  it("records both keys and counts only the one the editor honours", () => {
+    const entry = (name: string, raw: Record<string, unknown>) => {
+      const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+      const file = path.join(tmpDir, `${name}.json`);
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { argent: raw } }));
+      return { adapter, entry: adapter.getArgentEntry(file) };
+    };
+    const both = entry("Kiro", {
+      command: "argent",
+      args: ["mcp"],
+      enabled: false,
+      disabled: true,
+    });
+    expect(both.entry?.switchedOffBy).toEqual(["enabled", "disabled"]);
+    expect(isSwitchedOffInEditor(both.adapter, both.entry)).toBe(true);
+
+    const ignored = entry("Claude Code", { command: "argent", args: ["mcp"], disabled: true });
+    expect(isSwitchedOffInEditor(ignored.adapter, ignored.entry)).toBe(false);
+    const zed = ALL_ADAPTERS.find((a) => a.name === "Zed")!;
+    expect(
+      isSwitchedOffInEditor(zed, { command: "argent", args: ["mcp"], switchedOffBy: ["enabled"] })
+    ).toBe(true);
+  });
+
+  it("reads Claude Code's per-project /mcp toggle", () => {
+    homedirOverride = tmpDir;
+    const root = path.join(tmpDir, "proj");
+    fs.mkdirSync(root);
+    const write = (disabled: string[]) =>
+      fs.writeFileSync(
+        path.join(tmpDir, ".claude.json"),
+        JSON.stringify({ projects: { [root]: { disabledMcpServers: disabled } } })
+      );
+    write(["other"]);
+    expect(isArgentDisabledInClaudeProject(root)).toBe(false);
+    write(["argent"]);
+    expect(isArgentDisabledInClaudeProject(root)).toBe(true);
+  });
+
+  it("scopes the /mcp toggle to its own project", () => {
+    homedirOverride = tmpDir;
+    const projA = path.join(tmpDir, "projA");
+    const projB = path.join(tmpDir, "projB");
+    fs.mkdirSync(projA);
+    fs.mkdirSync(projB);
+    fs.writeFileSync(
+      path.join(tmpDir, ".claude.json"),
+      JSON.stringify({ projects: { [projA]: { disabledMcpServers: ["argent"] } } })
+    );
+    expect(isArgentDisabledInClaudeProject(projA)).toBe(true);
+    expect(isArgentDisabledInClaudeProject(projB)).toBe(false);
+  });
+
+  it("counts `disabled` as no switch-off for an editor that honours `enabled`", () => {
+    const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const file = path.join(tmpDir, "config.toml");
+    const read = (extra: string) => {
+      fs.writeFileSync(file, `[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n${extra}`);
+      return codex.getArgentEntry(file);
+    };
+    expect(isSwitchedOffInEditor(codex, read("disabled = true\n"))).toBe(false);
+    expect(isSwitchedOffInEditor(codex, read("enabled = false\ndisabled = true\n"))).toBe(true);
+  });
+
+  it("gives each editor the switch-off key it honours", () => {
+    expect(Object.fromEntries(ALL_ADAPTERS.map((a) => [a.name, a.switchOffKey ?? null]))).toEqual({
+      "Cursor": "disabled",
+      "Claude Code": null,
+      "VS Code": null,
+      "Windsurf": "disabled",
+      "Zed": "enabled",
+      "Gemini": null,
+      "Codex": "enabled",
+      "Hermes": "enabled",
+      "opencode": "enabled",
+      "Kiro": "disabled",
+    });
+  });
+
+  it("matches only the exact project key when asked to", () => {
+    homedirOverride = tmpDir;
+    const root = path.join(tmpDir, "proj");
+    const moved = path.join(tmpDir, "moved");
+    fs.mkdirSync(moved);
+    fs.symlinkSync(moved, root);
+    const writeProjects = (projects: Record<string, unknown>) =>
+      fs.writeFileSync(path.join(tmpDir, ".claude.json"), JSON.stringify({ projects }));
+    const exact = { exactProjectKey: true };
+
+    writeProjects({ [moved]: { disabledMcpServers: ["argent"] } });
+    expect(isArgentDisabledInClaudeProject(root)).toBe(true);
+    expect(isArgentDisabledInClaudeProject(root, exact)).toBe(false);
+
+    writeProjects({ [path.join(tmpDir, "PROJ")]: { disabledMcpServers: ["argent"] } });
+    expect(isArgentDisabledInClaudeProject(root, exact)).toBe(false);
+
+    writeProjects({ [moved]: { mcpServers: { argent: { command: "argent", args: ["mcp"] } } } });
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    expect(claude.findShadowingConfigs!(root, "global", exact)).toEqual([]);
+
+    writeProjects({ [root]: null });
+    expect(isArgentDisabledInClaudeProject(root, exact)).toBe(false);
+  });
+
+  it("matches Claude Code's forward-slash project keys on Windows", () => {
+    homedirOverride = tmpDir;
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, ".claude.json"),
+        JSON.stringify({ projects: { "C:/Users/me/proj": { disabledMcpServers: ["argent"] } } })
+      );
+      expect(
+        isArgentDisabledInClaudeProject("C:\\Users\\me\\proj", { exactProjectKey: true })
+      ).toBe(true);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("survives a ~/.claude.json that holds null", () => {
+    homedirOverride = tmpDir;
+    fs.writeFileSync(path.join(tmpDir, ".claude.json"), "null");
+    expect(isArgentDisabledInClaudeProject(path.join(tmpDir, "proj"))).toBe(false);
+  });
+
+  it("reads a recorded reject from a settings file that starts with a BOM", () => {
+    homedirOverride = tmpDir;
+    const root = path.join(tmpDir, "proj");
+    fs.mkdirSync(path.join(root, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".claude", "settings.local.json"),
+      "\uFEFF" + JSON.stringify({ disabledMcpjsonServers: ["argent"] })
+    );
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const findings = claude.findShadowingConfigs!(root, "local");
+    expect(findings.map((f) => f.location)).toContain(".claude/settings.local.json");
+  });
+
+  it("reads a Codex config.toml that starts with a BOM", () => {
+    const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      '\uFEFF[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n'
+    );
+    expect(codex.getArgentEntry(configPath)).toEqual({ command: "argent", args: ["mcp"] });
   });
 });
 
@@ -850,6 +1099,14 @@ describe("Codex adapter", () => {
     const content = fs.readFileSync(configPath, "utf8");
     expect(content).toContain("[mcp_servers.argent]");
     expect(content).toContain('command = "argent"');
+  });
+
+  it("refuses to rewrite a config.toml that does not parse", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    const broken = 'model = "o3"\n[mcp_servers.other]\nargs = ["x"\n';
+    fs.writeFileSync(configPath, broken);
+    expect(() => adapter.write(configPath, getMcpEntry())).toThrow(/not valid TOML/);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(broken);
   });
 
   it("removes argent entry and returns true", () => {
@@ -1845,6 +2102,22 @@ describe("injectCodexRules / removeCodexRules", () => {
       path.join(rulesDir, "argent.md"),
       "---\ndescription: Test rule\nalwaysApply: true\n---\n\nUse argent tools for simulator control."
     );
+  });
+
+  it("tells whether a config carries argent's rules", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(configPath, 'model = "o3"\n');
+    expect(hasCodexRules(configPath)).toBe(false);
+    injectCodexRules(configPath, rulesDir);
+    expect(hasCodexRules(configPath)).toBe(true);
+  });
+
+  it("does not count the user's own developer_instructions as argent's rules", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(configPath, 'developer_instructions = "Always answer in English."\n');
+    expect(hasCodexRules(configPath)).toBe(false);
+    injectCodexRules(configPath, rulesDir);
+    expect(hasCodexRules(configPath)).toBe(true);
   });
 
   it("injects rules content with frontmatter stripped", () => {

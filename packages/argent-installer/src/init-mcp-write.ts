@@ -3,6 +3,7 @@ import pc from "picocolors";
 import {
   getMcpEntryForScope,
   isArgentManagedEntry,
+  isSwitchedOffInEditor,
   resolveLocalCommandMode,
   type McpConfigAdapter,
   type McpCommandMode,
@@ -18,6 +19,8 @@ interface McpWriteResult {
   adapters: McpConfigAdapter[];
   /** One summary line per adapter. */
   lines: string[];
+  /** `adapters` minus those whose entry the editor has switched off, left as they were. */
+  configured: McpConfigAdapter[];
 }
 
 // Step 1c — write the MCP config files. Local mode points project-scope
@@ -87,12 +90,29 @@ export function writeMcpConfigs(args: {
     } catch {
       return false;
     }
-    return (
-      existing !== null && existing.command !== MCP_BINARY_NAME && isArgentManagedEntry(existing)
-    );
+    if (existing === null || existing.command === MCP_BINARY_NAME) return false;
+    // A cwd makes the entry customized, which is all the more reason to keep it.
+    const { cwd: _cwd, ...withoutCwd } = existing;
+    return isArgentManagedEntry(withoutCwd);
   };
 
   const lines: string[] = [];
+  const switchedOff: McpConfigAdapter[] = [];
+
+  // Rewriting an entry the editor has switched off would drop the switch and
+  // silently turn argent back on.
+  const keepsSwitchOff = (adapter: McpConfigAdapter, configPath: string): boolean => {
+    try {
+      if (!isSwitchedOffInEditor(adapter, adapter.getArgentEntry(configPath))) return false;
+    } catch {
+      return false;
+    }
+    lines.push(
+      `${pc.yellow("!")} ${adapter.name} left a switched-off entry untouched ${pc.dim(configPath)}`
+    );
+    switchedOff.push(adapter);
+    return true;
+  };
 
   for (const adapter of adapters) {
     const configPath =
@@ -107,6 +127,7 @@ export function writeMcpConfigs(args: {
           );
           continue;
         }
+        if (keepsSwitchOff(adapter, fallback)) continue;
         try {
           adapter.write(fallback, entryFor("local"));
           lines.push(`${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`);
@@ -115,6 +136,7 @@ export function writeMcpConfigs(args: {
         }
       } else if (scope !== "global" && adapter.globalPath()) {
         const fallback = adapter.globalPath()!;
+        if (keepsSwitchOff(adapter, fallback)) continue;
         try {
           adapter.write(fallback, entryFor("global"));
           lines.push(
@@ -137,6 +159,7 @@ export function writeMcpConfigs(args: {
       );
       continue;
     }
+    if (keepsSwitchOff(adapter, configPath)) continue;
     try {
       adapter.write(configPath, entryFor(normalizedScope));
       lines.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
@@ -145,5 +168,5 @@ export function writeMcpConfigs(args: {
     }
   }
 
-  return { adapters, lines };
+  return { adapters, lines, configured: adapters.filter((a) => !switchedOff.includes(a)) };
 }

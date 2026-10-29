@@ -40,8 +40,11 @@ describe("resolveInstallableUpdateTarget", () => {
 
     const result = await resolveInstallableUpdateTarget("npm", "1.0.0");
 
-    expect(mockFetchRegistryInfo).toHaveBeenCalledWith(`${NPM_REGISTRY}/${PACKAGE_NAME}`);
-    expect(mockDetectMinReleaseAgeMsForPm).toHaveBeenCalledWith("npm");
+    expect(mockFetchRegistryInfo).toHaveBeenCalledWith(
+      `${NPM_REGISTRY}/${PACKAGE_NAME}`,
+      undefined
+    );
+    expect(mockDetectMinReleaseAgeMsForPm).toHaveBeenCalledWith("npm", undefined);
     expect(result).toEqual({
       latestVersion: "99.0.0",
       latestPublishedAt: "2026-05-31T00:00:00Z",
@@ -62,6 +65,21 @@ describe("resolveInstallableUpdateTarget", () => {
 
     expect(result?.latestVersion).toBe("99.0.0");
     expect(result?.targetVersion).toBeNull();
+  });
+
+  it("passes the deadline to the fetch and the env to the policy probe", async () => {
+    mockFetchRegistryInfo.mockResolvedValue({
+      latest: { version: "99.0.0", publishedAt: null },
+      times: {},
+    });
+    mockDetectMinReleaseAgeMsForPm.mockResolvedValue(0);
+    mockPickInstallableTarget.mockReturnValue(null);
+    const env = { PATH: "/usr/bin" };
+
+    await resolveInstallableUpdateTarget("pnpm", "1.0.0", { deadlineMs: 5_000, env });
+
+    expect(mockFetchRegistryInfo).toHaveBeenCalledWith(`${NPM_REGISTRY}/${PACKAGE_NAME}`, 5_000);
+    expect(mockDetectMinReleaseAgeMsForPm).toHaveBeenCalledWith("pnpm", env);
   });
 
   it("returns null without probing when the registry is unreachable", async () => {

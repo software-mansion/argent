@@ -16,12 +16,15 @@ export interface RegistryInfo {
 /**
  * Fetches the full packument (not `/latest`) — only it carries the `time` map
  * the release-age gate needs. Resolves null on any failure; never throws, so
- * an update check cannot crash its caller.
+ * an update check cannot crash its caller. The socket timeout restarts with
+ * every chunk, so `deadlineMs` caps a slow download as a whole.
  */
-export function fetchRegistryInfo(url: string): Promise<RegistryInfo | null> {
+export function fetchRegistryInfo(url: string, deadlineMs?: number): Promise<RegistryInfo | null> {
   return new Promise((resolve) => {
     let resolved = false;
+    let deadline: NodeJS.Timeout | undefined;
     const safeResolve = (value: RegistryInfo | null) => {
+      clearTimeout(deadline);
       if (!resolved) {
         resolved = true;
         resolve(value);
@@ -68,5 +71,11 @@ export function fetchRegistryInfo(url: string): Promise<RegistryInfo | null> {
       req.destroy();
       safeResolve(null);
     });
+    if (deadlineMs !== undefined) {
+      deadline = setTimeout(() => {
+        req.destroy();
+        safeResolve(null);
+      }, deadlineMs);
+    }
   });
 }

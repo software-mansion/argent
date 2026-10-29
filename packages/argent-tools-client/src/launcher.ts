@@ -708,7 +708,7 @@ export function readProcessCommandLine(
  * Guards kills against PID reuse. A command line `ps` declines to produce
  * answers false — fail safe, don't kill.
  */
-function couldBeOurToolServer(pid: number, marker: string | undefined): boolean {
+export function couldBeOurToolServer(pid: number, marker: string | undefined): boolean {
   if (!marker) return false;
   // Windows ships no `ps`: the check can never confirm anything there, and a
   // false would veto every kill and leave the servers running. Callers there

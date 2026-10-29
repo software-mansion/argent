@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findStablePackageDir } from "../src/bundled-paths.js";
+import { classifyInstall, findStablePackageDir } from "../src/bundled-paths.js";
 
 // findStablePackageDir resolves the version-STABLE node_modules symlink for the
 // running package — the one that survives a pnpm store prune. The bug it fixes:
@@ -79,5 +79,33 @@ describe("findStablePackageDir", () => {
     linkTo(proj, other);
 
     expect(findStablePackageDir(proj, store)).toBeUndefined();
+  });
+});
+
+describe("classifyInstall", () => {
+  it("counts a project linked into pnpm's global virtual store as a local install", () => {
+    const store = path.join(tmpDir, "Library", "pnpm", "store", "v11", "links", "argent");
+    fs.mkdirSync(store, { recursive: true });
+    const proj = path.join(tmpDir, "proj");
+    const link = linkTo(proj, store);
+    fs.writeFileSync(
+      path.join(proj, "package.json"),
+      JSON.stringify({ devDependencies: { [PKG]: "^0.30.0" } })
+    );
+
+    expect(classifyInstall(store, proj)).toEqual({
+      kind: "local",
+      projectRoot: proj,
+      stablePackageDir: link,
+    });
+  });
+
+  it("keeps a copy no project links to global", () => {
+    const store = path.join(tmpDir, "global", "lib", "node_modules", PKG);
+    fs.mkdirSync(store, { recursive: true });
+    const proj = path.join(tmpDir, "proj");
+    fs.mkdirSync(proj);
+
+    expect(classifyInstall(store, proj)).toEqual({ kind: "global" });
   });
 });

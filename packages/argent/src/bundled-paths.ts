@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ToolsServerPaths } from "@argent/tools-client";
+
+// import.meta.dirname is undefined before Node 20.11, and this module loads before cli.ts checks the Node version.
+const distDir = path.dirname(fileURLToPath(import.meta.url));
 
 // Installed package version, read from the shipped package.json. Feeds the
 // launcher's version gate as the fallback for its on-disk read, so an in-place
@@ -10,9 +14,9 @@ import type { ToolsServerPaths } from "@argent/tools-client";
 // PnP, locked-down CI), which is why argent ships no postinstall script.
 function readPackageVersion(): string | undefined {
   try {
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(import.meta.dirname, "..", "package.json"), "utf8")
-    ) as { version?: string };
+    const pkg = JSON.parse(fs.readFileSync(path.join(distDir, "..", "package.json"), "utf8")) as {
+      version?: string;
+    };
     return pkg.version;
   } catch {
     return undefined;
@@ -80,23 +84,15 @@ export function findStablePackageDir(startDir: string, packageRoot: string): str
 // start, while cwd is still trustworthy; the launcher forwards both as
 // ARGENT_INSTALL_KIND / ARGENT_PROJECT_ROOT so update-argent doesn't re-infer
 // them from the detached server's editor-chosen cwd.
-function classifyInstall(): {
+export function classifyInstall(
+  packageRoot: string,
+  cwd: string
+): {
   kind: "global" | "local";
   projectRoot?: string;
   stablePackageDir?: string;
 } {
-  let packageRoot: string;
-  let dir: string;
-  let cwd: string;
-  try {
-    packageRoot = fs.realpathSync(path.join(import.meta.dirname, ".."));
-    // cwd throws (ENOENT) when the shell's directory was deleted, and this runs
-    // at module import, before fatal handlers are installed.
-    cwd = process.cwd();
-    dir = cwd;
-  } catch {
-    return { kind: "global" };
-  }
+  let dir = cwd;
   for (;;) {
     try {
       const nmReal = fs.realpathSync(path.join(dir, "node_modules"));
@@ -117,6 +113,13 @@ function classifyInstall(): {
     if (parent === dir) break;
     dir = parent;
   }
+  // pnpm's global virtual store (enableGlobalVirtualStore) keeps the package
+  // outside every node_modules; only the project's link leads to it.
+  const stablePackageDir = findStablePackageDir(cwd, packageRoot);
+  if (stablePackageDir) {
+    const linkRoot = path.dirname(path.dirname(path.dirname(stablePackageDir)));
+    return { kind: "local", projectRoot: findDeclaringRoot(cwd) ?? linkRoot, stablePackageDir };
+  }
   // Yarn PnP has no node_modules anywhere: the package runs from the project's
   // .yarn dir. Falling through to "global" would point the update at a global
   // install the user may not even have.
@@ -127,11 +130,21 @@ function classifyInstall(): {
   return { kind: "global" };
 }
 
-const classifiedInstall = classifyInstall();
+function classifyRunningInstall(): ReturnType<typeof classifyInstall> {
+  try {
+    // cwd throws (ENOENT) when the shell's directory was deleted, and this runs
+    // at module import, before fatal handlers are installed.
+    return classifyInstall(fs.realpathSync(path.join(distDir, "..")), process.cwd());
+  } catch {
+    return { kind: "global" };
+  }
+}
 
-// import.meta.dirname is dist/ in the published package, so ".." is the
+const classifiedInstall = classifyRunningInstall();
+
+// distDir is dist/ in the published package, so ".." is the
 // package root; prefer the version-stable alias when classification found one.
-const packageDir = classifiedInstall.stablePackageDir ?? path.join(import.meta.dirname, "..");
+const packageDir = classifiedInstall.stablePackageDir ?? path.join(distDir, "..");
 
 export const BUNDLED_RUNTIME_PATHS: ToolsServerPaths = {
   bundlePath: path.join(packageDir, "dist", "tool-server.cjs"),

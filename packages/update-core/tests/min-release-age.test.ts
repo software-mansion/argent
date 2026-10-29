@@ -108,6 +108,17 @@ describe("detectMinReleaseAgeMsForPm (known PM)", () => {
     expect(mockExec).toHaveBeenCalledTimes(1);
   });
 
+  it("runs the probe with the env it is given", async () => {
+    stubPmConfig({});
+    const env = { PATH: "/usr/bin", COREPACK_ENABLE_NETWORK: "0" };
+    await detectMinReleaseAgeMsForPm("pnpm", env);
+    expect(mockExec).toHaveBeenCalledWith(
+      "pnpm config get minimumReleaseAge",
+      expect.objectContaining({ env }),
+      expect.any(Function)
+    );
+  });
+
   it("returns 0 for bun (no `config get`, covered by the override instead)", async () => {
     stubPmConfig({});
     expect(await detectMinReleaseAgeMsForPm("bun")).toBe(0);

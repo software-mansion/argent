@@ -42,11 +42,11 @@ function overrideMs(): number | null {
   return Number.isFinite(days) && days > 0 ? days * DAY_MS : 0;
 }
 
-function probe(p: PmPolicyProbe): Promise<number> {
+function probe(p: PmPolicyProbe, env?: NodeJS.ProcessEnv): Promise<number> {
   return new Promise((resolve) => {
     // Shell (not execFile) so Windows `.cmd`/`.ps1` shims resolve via PATH;
     // commands are compile-time constants, never caller input.
-    exec(p.command, { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+    exec(p.command, { timeout: PROBE_TIMEOUT_MS, windowsHide: true, env }, (err, stdout) => {
       if (err) {
         resolve(0); // not installed or errored — no policy
         return;
@@ -60,12 +60,15 @@ function probe(p: PmPolicyProbe): Promise<number> {
  * Minimum-release-age policy in ms (0 = none) for a known package manager.
  * Use when a specific PM is about to run (e.g. `argent update`).
  */
-export async function detectMinReleaseAgeMsForPm(pm: PackageManagerName): Promise<number> {
+export async function detectMinReleaseAgeMsForPm(
+  pm: PackageManagerName,
+  env?: NodeJS.ProcessEnv
+): Promise<number> {
   const override = overrideMs();
   if (override !== null) return override;
 
   const p = PM_PROBES[pm];
-  return p ? probe(p) : 0;
+  return p ? probe(p, env) : 0;
 }
 
 /**
@@ -77,6 +80,6 @@ export async function detectMinReleaseAgeMs(): Promise<number> {
   const override = overrideMs();
   if (override !== null) return override;
 
-  const ages = await Promise.all(Object.values(PM_PROBES).map(probe));
+  const ages = await Promise.all(Object.values(PM_PROBES).map((p) => probe(p)));
   return ages.reduce((max, ms) => Math.max(max, ms), 0);
 }

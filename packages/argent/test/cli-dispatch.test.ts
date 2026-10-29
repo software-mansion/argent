@@ -54,6 +54,7 @@ const FAKE_CLI_BUNDLE =
   RECORD_SNIPPET +
   [
     "startMcpServer",
+    "doctor",
     "tools",
     "run",
     "e2e",
@@ -259,6 +260,13 @@ describe("cli dispatcher: non-installer commands and top-level arms", () => {
     expect(fs.readFileSync(marker, "utf8")).toBe("run:gesture-tap --help");
   });
 
+  it("forwards `doctor` and its flags to the doctor command", async () => {
+    const marker = freshMarker();
+    const { exitCode } = await runCli(["doctor", "--offline", "--json"], marker);
+    expect(exitCode).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("doctor:--offline --json");
+  });
+
   it("forwards `tools --help` to the tools bundle", async () => {
     const marker = freshMarker();
     const { exitCode } = await runCli(["tools", "--help"], marker);
@@ -280,6 +288,7 @@ describe("cli dispatcher: non-installer commands and top-level arms", () => {
     );
     expect(stdout).toContain("(--global [default] installs on PATH; --local commits a");
     expect(stdout).toContain("Alias for init");
+    expect(stdout).toContain("doctor      Check that argent is installed and configured correctly");
     // Pin the e2e row to the current interface: `argent e2e run` takes
     // either form, a saved test's name or any YAML file's path. `flow` is a
     // silent alias, so it has no row.

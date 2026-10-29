@@ -698,7 +698,7 @@ interface AvdInfo {
 // letters, digits, `.`, `_` and `-`, so matching that shape drops the
 // diagnostics the emulator prints on the same stream (`INFO    | ...`, `HAX is
 // working and emulator runs in fast virt mode.`).
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+export const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /**
  * List available AVDs via `emulator -list-avds`; `[]` when the emulator binary

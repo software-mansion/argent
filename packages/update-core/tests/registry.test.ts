@@ -73,4 +73,18 @@ describe("fetchRegistryInfo", () => {
     mockResponseBody(200, "not json");
     expect(await fetchRegistryInfo(URL)).toBeNull();
   });
+
+  it("gives up on a download that outlasts the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const req = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+      vi.mocked(https.get).mockImplementation(() => req as unknown as ReturnType<typeof https.get>);
+      const info = fetchRegistryInfo(URL, 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await info).toBeNull();
+      expect(req.destroy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

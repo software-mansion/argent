@@ -12,17 +12,21 @@ import { isYarnPnp } from "./preflight.js";
 // update/uninstall probe and handle each independently.
 
 // `which argent` also matches temp package runners (npx / pnpm dlx / bunx /
-// yarn dlx), which prepend their cache .bin/ dir to PATH.
-const TEMP_RUNNER_MARKERS = [
-  "_npx",
-  "/dlx-",
-  "\\dlx-",
-  "bun/install/cache",
-  ".bun\\install\\cache",
+// yarn dlx / yarn berry scripts), which prepend their cache .bin/ dir to PATH.
+// Each marker matches whole path segments, so a permanent install under e.g.
+// `/mnt/xfs-data` or `/home/dlx` still counts.
+const TEMP_RUNNER_SEGMENTS: RegExp[] = [
+  /\/_npx\//,
+  /\/dlx-\d+\//,
+  /\/[^/]*(?:cache|pnpm)[^/]*\/dlx\//i,
+  /\/bunx-\d+-/,
+  /\/xfs-[0-9a-f]{8}\//,
+  /\/\.?bun\/install\/cache\//,
 ];
 
-function isTempRunnerPath(binaryPath: string): boolean {
-  return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
+export function isTempRunnerPath(binaryPath: string): boolean {
+  const posixPath = binaryPath.replaceAll("\\", "/");
+  return TEMP_RUNNER_SEGMENTS.some((segment) => segment.test(posixPath));
 }
 
 /**
@@ -105,11 +109,10 @@ interface ManifestDeps {
   optionalDependencies?: Record<string, string>;
 }
 
-function readManifestDeclaration(projectRoot: string): string | null {
+export function readManifestDeclaration(projectRoot: string): string | null {
   try {
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")
-    ) as ManifestDeps;
+    const text = fs.readFileSync(path.join(projectRoot, "package.json"), "utf8");
+    const pkg = JSON.parse(text.replace(/^\uFEFF/, "")) as ManifestDeps;
     const spec =
       pkg.devDependencies?.[PACKAGE_NAME] ??
       pkg.dependencies?.[PACKAGE_NAME] ??
