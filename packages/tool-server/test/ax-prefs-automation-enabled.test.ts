@@ -43,6 +43,10 @@ function defaultsError(stderr: string): Error & { stderr: string } {
   return Object.assign(new Error("Command failed"), { stderr });
 }
 
+function preBootKeys(): Array<string | undefined> {
+  return calls.filter((c) => c.cmd === "plutil" && c.args[0] === "-replace").map((c) => c.args[1]);
+}
+
 beforeEach(() => {
   calls.length = 0;
   nextError = null;
@@ -104,13 +108,21 @@ describe("AutomationEnabled, which leaves Full Keyboard Access unable to move fo
     stderr.mockRestore();
   });
 
-  it("setAccessibilityPrefsPreBoot never writes AutomationEnabled", async () => {
-    await setAccessibilityPrefsPreBoot("UDID-4");
+  it("setAccessibilityPrefsPreBoot never writes AutomationEnabled on an iOS sim", async () => {
+    await setAccessibilityPrefsPreBoot("UDID-4", { isTvOs: false });
 
-    const keys = calls
-      .filter((c) => c.cmd === "plutil" && c.args[0] === "-replace")
-      .map((c) => c.args[1]);
-    expect(keys).toEqual([
+    expect(preBootKeys()).toEqual([
+      "IgnoreAXServerEntitlements",
+      "AccessibilityEnabled",
+      "ApplicationAccessibilityEnabled",
+    ]);
+  });
+
+  it("setAccessibilityPrefsPreBoot writes AutomationEnabled on an Apple TV sim", async () => {
+    await setAccessibilityPrefsPreBoot("UDID-7", { isTvOs: true });
+
+    expect(preBootKeys()).toEqual([
+      "AutomationEnabled",
       "IgnoreAXServerEntitlements",
       "AccessibilityEnabled",
       "ApplicationAccessibilityEnabled",

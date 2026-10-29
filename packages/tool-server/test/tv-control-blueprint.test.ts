@@ -143,8 +143,9 @@ vi.mock("node:net", async () => {
   return { ...actual, createConnection, default: { ...actual, createConnection } };
 });
 
+const ensureAutomationEnabledMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/blueprints/ax-service", () => ({
-  ensureAutomationEnabled: vi.fn().mockResolvedValue(undefined),
+  ensureAutomationEnabled: ensureAutomationEnabledMock,
 }));
 
 vi.mock("@argent/native-devtools-ios", () => ({
@@ -194,6 +195,7 @@ beforeEach(() => {
   xcodePending.value = false;
   listIosSimulatorsMock.mockReset();
   cacheSimulatorRuntimeKindMock.mockReset();
+  ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
   listIosSimulatorsMock.mockResolvedValue([
     { udid: UDID, name: "Apple TV", runtime: "tvOS 17.0", runtimeKind: "tv", state: "Booted" },
   ]);
@@ -202,6 +204,7 @@ beforeEach(() => {
 describe("tvControlBlueprint — ax respawn coalescing", () => {
   it("spawns the ax + hid daemons and serves describe over their sockets", async () => {
     const instance = await buildService();
+    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(UDID);
     expect(axSpawnCount()).toBe(1); // one ax spawn at init
     const res = await instance.api.describe();
     expect(res.bundleId).toBe("com.example.tvapp");
