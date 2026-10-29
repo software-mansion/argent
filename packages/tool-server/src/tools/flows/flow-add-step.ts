@@ -63,7 +63,7 @@ import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
@@ -140,6 +140,11 @@ function fallbackSourceWarning(source: DescribeSource, platform: string): string
 // both its trees are the iOS ones — it earns the iOS prose, not the fallback.
 function platformOf(udid: unknown): string | undefined {
   return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
+}
+
+/** Whether this device has a flow tree at all, so a silent source is absent rather than down. */
+function hasRunnerTree(udid: unknown): boolean {
+  return typeof udid === "string" && supportsFlowTree(resolveDevice(udid).platform);
 }
 
 /**
@@ -519,6 +524,13 @@ async function probeAgainstRunnerTree(
     return {};
   }
   if (typeof args.udid !== "string") return {}; // nothing to probe against
+  if (!hasRunnerTree(args.udid)) {
+    return {
+      warning:
+        `this platform's e2e runner has no UI tree, so an \`await:\`/\`assert:\` conversion of ` +
+        `this step always fails there; keep it as a \`tool:\` step.`,
+    };
+  }
   // No try/catch: a tree read that fails throws inside `fetchFlowTree`, which
   // the probe already reports as indeterminate.
   const device = resolveDevice(args.udid);

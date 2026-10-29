@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { Registry } from "@argent/registry";
 import { gestureCustomTool } from "../../src/tools/gesture-custom";
 import { InvalidToolInputError } from "../../src/utils/capability";
 import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
@@ -105,5 +106,40 @@ describe("gesture-custom on a physical iOS device", () => {
     expect(gestureCustomTool.services({ udid: DEVICE_UDID, events: moveAtDestination })).toEqual(
       {}
     );
+  });
+});
+
+describe("gesture-custom coordinate bounds", () => {
+  const coordinates = ["x", "y", "x2", "y2"] as const;
+  const withEvent = (patch: Record<string, number>) => ({
+    udid: "emulator-5554",
+    events: [{ ...twoFinger[0], ...patch }, twoFinger[1]],
+  });
+
+  for (const coordinate of coordinates) {
+    it.each([-0.1, 1.1, 540])(`rejects ${coordinate} = %s and names it`, (value) => {
+      const parsed = gestureCustomTool.zodSchema!.safeParse(withEvent({ [coordinate]: value }));
+      expect(parsed.success).toBe(false);
+      expect(parsed.error!.issues[0].path).toEqual(["events", 0, coordinate]);
+    });
+
+    it.each([0, 1])(`accepts ${coordinate} = %s`, (value) => {
+      expect(
+        gestureCustomTool.zodSchema!.safeParse(withEvent({ [coordinate]: value })).success
+      ).toBe(true);
+    });
+  }
+
+  it("rejects pixel coordinates before reaching the device", async () => {
+    const registry = new Registry();
+    registry.registerTool(gestureCustomTool);
+    const resolveService = vi
+      .spyOn(registry, "resolveService")
+      .mockRejectedValue(new Error("Unexpected service resolution"));
+
+    await expect(
+      registry.invokeTool("gesture-custom", withEvent({ x: 200, y: 390 }))
+    ).rejects.toThrow(/Invalid params.*events\.0\.x/);
+    expect(resolveService).not.toHaveBeenCalled();
   });
 });

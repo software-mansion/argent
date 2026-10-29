@@ -322,4 +322,25 @@ describe("long-press: execution", () => {
     expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
     expect(result.calls).toHaveLength(0);
   }, 15000);
+
+  it("rejects a coordinate long-press on HarmonyOS instead of dispatching gesture-custom", async () => {
+    // `invokeTool` skips the capability gate, so the flow must refuse this itself.
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    await writeFlow("press-harmony", {
+      executionPrerequisite: "",
+      steps: [{ kind: "long-press", x: 0.5, y: 0.5 }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(calls)).execute(
+        {},
+        { name: "press-harmony", project_root: tmpDir, device: "harmony-127.0.0.1:5555" }
+      )
+    );
+
+    expect(result.steps[0]).toMatchObject({ kind: "long-press", status: "fail" });
+    expect(result.steps[0].reason).toMatch(/long-press is unsupported on HarmonyOS/);
+    expect(result.steps[0].reason).not.toMatch(/does not support platform/);
+    expect(calls).toHaveLength(0);
+  });
 });

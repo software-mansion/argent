@@ -55,10 +55,13 @@ function formatAttr(name: string, value: string | undefined): string {
   return ` ${name}="${escapeForLine(value)}"`;
 }
 
-function formatFlags(n: DescribeNode): string {
+/** Sources whose platform cannot long-press, so `long-clickable` would be a dead end. */
+const NO_LONG_PRESS_SOURCES: ReadonlySet<DescribeSource> = new Set(["harmony-uitest"]);
+
+function formatFlags(n: DescribeNode, source: DescribeSource): string {
   const flags: string[] = [];
   if (n.clickable) flags.push("clickable");
-  if (n.longClickable) flags.push("long-clickable");
+  if (n.longClickable && !NO_LONG_PRESS_SOURCES.has(source)) flags.push("long-clickable");
   if (n.scrollable) flags.push("scrollable");
   // The Chromium walker reports `checked` without `checkable`, so the state
   // flag cannot be gated on the pair.
@@ -95,7 +98,7 @@ function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
   return hasContent(n) || contentRoles.has(n.role);
 }
 
-function formatLine(n: DescribeNode, indent: number): string {
+function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
   const pad = "  ".repeat(indent);
   // iOS reports a text input's placeholder as both label and value; printing
   // it twice costs bytes for no signal.
@@ -103,21 +106,29 @@ function formatLine(n: DescribeNode, indent: number): string {
   const labelPart = formatLabel(n.label);
   const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
-  const flagPart = formatFlags(n);
+  const flagPart = formatFlags(n, source);
   const annotations = `${labelPart}${valuePart}${idPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
 
-function renderFlat(root: DescribeNode, contentRoles: ReadonlySet<string>): string[] {
+function renderFlat(
+  root: DescribeNode,
+  contentRoles: ReadonlySet<string>,
+  source: DescribeSource
+): string[] {
   return root.children
     .filter((n) => shouldEmit(n, contentRoles))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
-    .map((n) => formatLine(n, 1));
+    .map((n) => formatLine(n, 1, source));
 }
 
-function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): string[] {
+function renderNested(
+  root: DescribeNode,
+  contentRoles: ReadonlySet<string>,
+  source: DescribeSource
+): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees can't overflow the stack.
   // Start at depth 1: the header already prints the root as its ROOT line.
@@ -129,7 +140,7 @@ function renderNested(root: DescribeNode, contentRoles: ReadonlySet<string>): st
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
     if (shouldEmit(node, contentRoles) || node.children.length > 0) {
-      lines.push(formatLine(node, depth));
+      lines.push(formatLine(node, depth, source));
     }
     for (let i = node.children.length - 1; i >= 0; i--) {
       stack.push({ node: node.children[i]!, depth: depth + 1 });
@@ -151,6 +162,7 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     opts.source === "android-devtools" ||
     opts.source === "cdp-dom" ||
     opts.source === "vega-automation" ||
+    opts.source === "harmony-uitest" ||
     // Physical iOS: the runner reports a parent/child tree. Nested mode keeps that structure.
     opts.source === "xcuitest-runner"
       ? "nested"
@@ -188,6 +200,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
 
   // Vega's lowercase toolkit roles count as content only for its own source.
   const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
-  const body = mode === "flat" ? renderFlat(root, contentRoles) : renderNested(root, contentRoles);
+  const body =
+    mode === "flat"
+      ? renderFlat(root, contentRoles, opts.source)
+      : renderNested(root, contentRoles, opts.source);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }

@@ -67,7 +67,7 @@ Steps:
 7. screenshot → verify home screen appeared
 ```
 
-> **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side so the value never enters agent context. It comes from the `ARGENT_SECRET_<NAME>` environment variable or an argent secrets file (`.argent/secrets.env` in the project, `~/.argent/secrets.env`, or an `ARGENT_SECRET_`-prefixed key in the project's `.env` / `.env.local`). If the name is not defined, the failure lists the available names and every path it checked; ask the user to add it to one of those files (which applies immediately) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
+> **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side so the value never enters agent context. It comes from the `ARGENT_SECRET_<NAME>` environment variable or an argent secrets file (`.argent/secrets.env` in the project, `~/.argent/secrets.env`, or an `ARGENT_SECRET_`-prefixed key in the project's `.env` / `.env.local`); over a link with `forward-secrets` on, the client's own sources come first. If the name is not defined, the failure lists the available names and every path it checked; ask the user to add it to one of those files (which applies immediately) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 
 ### Scroll and navigation
 
@@ -98,8 +98,7 @@ Steps:
 ```
 1. gesture-tap { x: 0.5, y: 0.7 } → trigger an action that fetches data
 2. screenshot → loading spinner is showing
-3. await-ui-element { condition: hidden, selector: { text: "Loading" } } → block until the fetch finishes and the spinner disappears
-4. describe / screenshot → verify the fetched content rendered
+3. await-ui-element { condition: hidden, selector: { text: "Loading" } } → block until the fetch finishes and the spinner disappears; its result carries the screenshot and element tree, so verify the fetched content rendered from it
 ```
 
 ---

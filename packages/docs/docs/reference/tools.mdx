@@ -12,31 +12,31 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                   |
-| ---------------------------- | --------------------------------------------------------------------------------------------- |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, and Vega (Fire TV) devices |
-| `boot-device`                | Boot a simulator, emulator, or Vega Virtual Device, or spawn an Electron app                  |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                      |
-| `restart-app`                | Terminate then relaunch an app                                                                |
-| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                            |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                        |
-| `open-url`                   | Open a URL or URL scheme on the device                                                        |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                 |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                    |
-| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle     |
-| `shake`                      | Shake the device                                                                              |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                 |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                            |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                              |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons              |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                              |
+| Tool                         | Description                                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators |
+| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, or spawn an Electron app                              |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                      |
+| `restart-app`                | Terminate then relaunch an app                                                                                                |
+| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                            |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                        |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                                        |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                 |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                                                    |
+| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                     |
+| `shake`                      | Shake the device                                                                                                              |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                 |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                            |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                              |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons                                              |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                              |
 
 `launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
 
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
-- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android) or a `.vpkg` file (Vega).
-- `bundleId` does not match the bundle id in the `.app` or the package name in the `.apk`. On a remote simulator, Argent does not compare the bundle id.
+- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).
+- `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
 
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
@@ -92,7 +92,14 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, and `gesture-drag` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+
+Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
+
+- Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.
+- Argent does not send a capture call again after a timeout.
+
+Call `screenshot` or `describe` to read the screen again.
 
 ## JavaScript runtime debugging
 
@@ -149,6 +156,16 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
 
+While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
+
+When two or more devices use one Metro, `react-profiler-start` takes the `logicalDeviceId` of Metro, not the device id. Interaction tools take the device id. Thus Argent finds the device of the React profile:
+
+1. The app writes a marker line to the device log.
+2. Argent reads the logs of the connected Android devices and the booted iOS simulators.
+3. The device whose log contains the marker is the device of the React profile.
+
+When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
+
 <a id="flows" />
 
 ## E2E
@@ -183,6 +200,8 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 | `dismiss-update`        | Silence update reminders for a number of hours             |
 
 ## Footnotes
+
+Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
 
 `terminate-app`, `ui-tree`, `foreground-app` and `fill` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 

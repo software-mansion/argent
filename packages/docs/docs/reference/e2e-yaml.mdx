@@ -119,6 +119,7 @@ The runner resolves a selector against a different tree than the `describe` tool
 | Android         | Full accessibility hierarchy                  | Trimmed interactable nodes |
 | Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
 | Vega            | Toolkit page source                           | Same source                |
+| HarmonyOS       | None                                          | `uitest` layout dump       |
 
 On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
 
@@ -292,6 +293,8 @@ The identity selector must exist only on the destination. `idle` waits until the
 
 One outcome stops the run: the runner cannot read the UI tree at all. Argent marks the step as errored and skips the later steps.
 
+On HarmonyOS, the runner has no UI tree, so `idle` cannot run. The step errors immediately, names `wait:` as the replacement, and Argent skips the later steps.
+
 `idle` has no `assert` form and no `when` form.
 
 ## Optional steps
@@ -312,11 +315,12 @@ The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ p
 
 A `run:` path resolves against the directory of the e2e test file that contains the step. When nothing is there, the e2e test file is in `.argent/e2e/` or `.argent/flows/`, and the path has no `/`, Argent looks in the other of these directories. The `.yaml` suffix is optional. When you record a nested `e2e-execute` of an e2e test that is only in the other directory, the recorder writes its path from the recording, for example `run: ../flows/login.yaml`.
 
-| Platform     | Behavior                                                                                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| iOS, Android | A nested fragment or standalone e2e test runs inline. A nested launch restarts the app                                                                                                      |
-| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected |
-| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                                                            |
+| Platform     | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS, Android | A nested fragment or standalone e2e test runs inline. A nested launch restarts the app                                                                                                                                                                                                                                                                                                                                              |
+| Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected                                                                                                                                                                                                                                         |
+| Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                                                                                                                                                                                                                                                                                                    |
+| HarmonyOS    | Pass the device with `--device harmony-<connectKey>`. Argent never detects a HarmonyOS device, and `--platform` and `when: { platform }` do not accept `harmony`. The runner has no UI tree, so each step with a selector fails. A coordinate `tap`, a `swipe` or `pinch` without a selector, `launch` with an app id or `native`, `snapshot` without `cropOn`, `wait` and `tool` steps run. `long-press` and `rotate` are rejected |
 
 A fragment whose `run:` chain reaches a launch cannot declare `executionPrerequisite`. Parsing accepts the file, the run rejects it.
 
@@ -366,6 +370,7 @@ Argent runs the script with the project root as the working directory. Argent gi
 - The Windows platform names
 - The proxy names and the TLS certificate names
 - The Node, npm, Android, Java and Apple toolchain names
+- The adb server names `ANDROID_ADB_SERVER_PORT`, `ANDROID_ADB_SERVER_ADDRESS` and `ADB_SERVER_SOCKET`. Thus `adb` in a script uses the same adb server as the tool-server. This includes a server that [`android.adbServerPort`](/docs/reference/configuration#available-keys) selects
 - `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
 
 Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.

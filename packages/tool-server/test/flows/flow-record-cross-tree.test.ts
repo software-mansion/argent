@@ -1213,6 +1213,24 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(await recordedSteps("blind")).toHaveLength(1);
   });
 
+  it("warns without probing on a platform whose runner has no UI tree", async () => {
+    // The served tree agrees, so a probe that ran would raise no warning at all.
+    await startRecording("harmony");
+
+    const result = await recordWait("harmony", {
+      udid: "harmony-127.0.0.1:5555",
+      condition: "visible",
+      selector: { text: "Continue" },
+    });
+
+    expect(warningOf(result, "harmony")).toBe(
+      "this platform's e2e runner has no UI tree, so an `await:`/`assert:` conversion of " +
+        "this step always fails there; keep it as a `tool:` step."
+    );
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("harmony")).toHaveLength(1);
+  });
+
   // The recorder's tree is the accessibility tree only on iOS and Android.
   it("does not call the recorder's tree the accessibility tree on Chromium", async () => {
     fetchRunnerTree = async () => {

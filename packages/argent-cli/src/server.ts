@@ -149,7 +149,7 @@ export function parseStartFlags(argv: string[]): StartFlags {
   }
   return {
     port: options.port === undefined ? null : parsePort(options.port as string),
-    host: (options.host as string | undefined) ?? "127.0.0.1",
+    host: (options.host as string | undefined)?.trim() || "127.0.0.1",
     idleTimeoutMinutes:
       options["idle-timeout"] === undefined ? 0 : parseIdle(options["idle-timeout"] as string),
     detach: options.detach === true,
@@ -214,7 +214,7 @@ function isLoopback(host: string): boolean {
 }
 
 function isWildcard(host: string): boolean {
-  return host === "0.0.0.0" || host === "::" || host === "::0" || host === "";
+  return host === "0.0.0.0" || host === "::" || host === "::0";
 }
 
 /** First non-internal IPv4, to suggest a reachable host when bound to a wildcard. */

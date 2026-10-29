@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import * as net from "node:net";
-import { adbServerAddress, adbServerShell } from "../src/utils/adb-server";
+import { adbServerAddress, adbServerShell, configuredAdbServerPort } from "../src/utils/adb-server";
 
 /**
  * A fake adb server speaking just enough of the real protocol (4-hex-digit
@@ -140,5 +140,20 @@ describe("adbServerAddress", () => {
       host: "127.0.0.1",
       port: 5037,
     });
+  });
+});
+
+describe("configuredAdbServerPort", () => {
+  it("returns the configured port when the environment names no server", () => {
+    expect(configuredAdbServerPort({}, 5038)).toBe("5038");
+  });
+
+  it("leaves a server the environment names alone, as adb does", () => {
+    expect(configuredAdbServerPort({ ANDROID_ADB_SERVER_PORT: "6000" }, 5038)).toBeNull();
+    expect(configuredAdbServerPort({ ADB_SERVER_SOCKET: "tcp:5555" }, 5038)).toBeNull();
+  });
+
+  it("returns null when nothing is configured", () => {
+    expect(configuredAdbServerPort({}, null)).toBeNull();
   });
 });
