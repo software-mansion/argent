@@ -35,7 +35,7 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
 
 function isMissingDefault(err: unknown): boolean {
   const stderr = (err as { stderr?: unknown } | null)?.stderr;
-  return typeof stderr === "string" && /not found|does not exist/.test(stderr);
+  return typeof stderr === "string" && /not found/.test(stderr);
 }
 
 /**

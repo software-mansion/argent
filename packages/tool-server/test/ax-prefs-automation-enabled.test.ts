@@ -72,13 +72,18 @@ describe("AutomationEnabled, which leaves Full Keyboard Access unable to move fo
     ]);
   });
 
-  it.each([
-    "Domain (com.apple.Accessibility) not found.\nDefaults have not been changed.",
-    "Key AutomationEnabled does not exist in domain com.apple.Accessibility; leaving defaults unchanged",
-  ])("clearAutomationEnabled treats a missing pref as cleared (%s)", async (stderr) => {
-    nextError = defaultsError(stderr);
+  it("clearAutomationEnabled treats a missing pref as cleared", async () => {
+    nextError = defaultsError(
+      "Domain (com.apple.Accessibility) not found.\nDefaults have not been changed."
+    );
 
     await expect(clearAutomationEnabled("UDID-2")).resolves.toBeUndefined();
+  });
+
+  it("clearAutomationEnabled surfaces simctl's error for a missing device set", async () => {
+    nextError = defaultsError("Provided set path does not exist: /x");
+
+    await expect(clearAutomationEnabled("UDID-6")).rejects.toThrow("Command failed");
   });
 
   it("clearAutomationEnabled surfaces simctl's error when the sim is not booted", async () => {
