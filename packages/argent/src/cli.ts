@@ -95,6 +95,32 @@ async function loadCli(): Promise<typeof Cli> {
   return (await import("./cli-cmds.mjs" as any)) as typeof Cli;
 }
 
+// Bin dirs that hold Homebrew's adb, pod and yarn, which a macOS editor
+// launched from the Dock does not have on PATH.
+const FALLBACK_BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/**
+ * A pinned `<node> cli.js mcp` entry (#1287) starts us in an editor that never
+ * had the shell PATH, so `node`/`npm` are not resolvable even though node is
+ * running us. Appends this node's dir (as the entry names it: argv0 keeps
+ * Homebrew's `bin/node` where execPath is the Cellar keg `brew upgrade`
+ * deletes) and the fallback bin dirs. The tool-server inherits this PATH and
+ * is shared with later sessions. Appending never shadows the editor's own PATH.
+ */
+function putLaunchDirsOnPath(): void {
+  // An unset or empty PATH means the OS default search path to execvp.
+  const PATH = process.env.PATH || (process.platform === "win32" ? "" : "/usr/bin:/bin");
+  const entries = PATH.split(path.delimiter);
+  const nodeBin = path.isAbsolute(process.argv0) ? process.argv0 : process.execPath;
+  const nodeDir = path.dirname(nodeBin);
+  if (entries.includes(nodeDir)) return;
+  const missing = [
+    nodeDir,
+    ...FALLBACK_BIN_DIRS.filter((dir) => !entries.includes(dir) && fs.existsSync(dir)),
+  ];
+  process.env.PATH = [...(PATH ? [PATH] : []), ...missing].join(path.delimiter);
+}
+
 async function main(): Promise<void> {
   // The installers forward argv to side-effecting functions that ignore
   // `--help` (so `argent uninstall --help` would run the real, destructive
@@ -109,6 +135,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "mcp": {
+      putLaunchDirsOnPath();
       const mcp = await loadMcp();
       /**
        * Best-effort heal of `~/.argent/cli.json`, off the startup path. A

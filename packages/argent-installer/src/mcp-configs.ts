@@ -23,6 +23,7 @@ import {
   editJsoncFile,
   isYarnPnp,
   getLocalArgentBinRelPath,
+  getGloballyInstalledLaunchPaths,
   RULES_DIR,
   AGENTS_DIR,
   ARGENT_SKILL_PREFIX,
@@ -105,9 +106,13 @@ type CodexConfig = {
 // How the MCP entry locates the argent executable. local-npx is the fallback for
 // when the bin path is unverifiable; `--no-install` keeps it from silently
 // network-installing, and never a bare `npx -y`, which can hang a TTY-less
-// stdio server.
+// stdio server. global-node pins absolute node + cli.js paths: clients started
+// outside a login shell (JetBrains ACP, GUI-launched editors) often inherit a
+// PATH without the user's version manager, where a bare `argent` is ENOENT
+// (#1287). Bare `argent` remains the fallback when the install is unresolvable.
 export type McpCommandMode =
   | { kind: "global" }
+  | { kind: "global-node"; node: string; cli: string }
   | { kind: "local-node"; binRelPath: string }
   | { kind: "local-pnp" }
   | { kind: "local-npx" };
@@ -124,6 +129,8 @@ function buildMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntr
       return { command: "yarn", args: ["argent", "mcp"] };
     case "local-npx":
       return { command: "npx", args: ["--no-install", "argent", "mcp"] };
+    case "global-node":
+      return { command: mode.node, args: [mode.cli, "mcp"] };
     default:
       return { command: MCP_BINARY_NAME, args: ["mcp"] };
   }
@@ -140,16 +147,51 @@ export function resolveLocalCommandMode(root: string): McpCommandMode {
   return { kind: "local-npx" };
 }
 
+// Pins the global install's cli.js with a node that launches it (see
+// getGloballyInstalledLaunchPaths). Gated by isGlobalNodeEntry so argent only
+// writes a shape it will recognise as its own in update/cleanup: an `npm link`
+// checkout outside node_modules, or no real node on PATH (bunx, whose `node`
+// is a link to bun), stays bare.
+export function resolveGlobalCommandMode(): McpCommandMode {
+  const launch = getGloballyInstalledLaunchPaths();
+  if (!launch?.node) return { kind: "global" };
+  const mode: McpCommandMode = { kind: "global-node", node: launch.node, cli: launch.cli };
+  return isGlobalNodeEntry(getMcpEntry(mode)) ? mode : { kind: "global" };
+}
+
 // Shared by `init` and `update`: only a local-mode PROJECT-scope entry runs the
-// repo-local copy; everything else keeps the bare `argent` command.
+// repo-local copy, and only a global-mode GLOBAL-scope entry pins absolute
+// paths; project files stay portable (#238), so everything else keeps the bare
+// `argent` command.
 export function getMcpEntryForScope(
   installMode: "global" | "local",
   configScope: "local" | "global",
-  localCmdMode: McpCommandMode | null
+  localCmdMode: McpCommandMode | null,
+  globalCmdMode: McpCommandMode = { kind: "global" }
 ): McpServerEntry {
-  return installMode === "local" && configScope === "local" && localCmdMode
-    ? getMcpEntry(localCmdMode)
-    : getMcpEntry({ kind: "global" });
+  if (installMode === "local" && configScope === "local" && localCmdMode) {
+    return getMcpEntry(localCmdMode);
+  }
+  if (installMode === "global" && configScope === "global") return getMcpEntry(globalCmdMode);
+  return getMcpEntry({ kind: "global" });
+}
+
+// The global-node shape: absolute node binary + absolute cli.js inside a
+// node_modules copy of the package. Customized env is judged separately.
+export function isGlobalNodeEntry(entry: McpServerEntry | null): boolean {
+  if (entry === null) return false;
+  const { command, args } = entry;
+  if (!path.isAbsolute(command) || !/^node(\.exe)?$/i.test(path.basename(command))) return false;
+  if (args.length !== 2 || args[1] !== "mcp" || !path.isAbsolute(args[0])) return false;
+  return args[0].split("\\").join("/").includes(`node_modules/${PACKAGE_NAME}/`);
+}
+
+// A global-node entry names its files outright: dead once either is gone (an
+// nvm prune, an uninstalled global). Returns the missing path, or null.
+export function missingGlobalNodeFile(entry: McpServerEntry | null): string | null {
+  if (entry === null || !isGlobalNodeEntry(entry)) return null;
+  if (!fs.existsSync(entry.command)) return entry.command;
+  return fs.existsSync(entry.args[0]!) ? null : entry.args[0]!;
 }
 
 function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<string, string> } {
@@ -221,9 +263,10 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
 }
 
 // A shape argent itself writes; anything else is a customization that
-// refresh/cleanup flows must not rewrite or remove. The node form accepts any
+// refresh/cleanup flows must not rewrite or remove. The `node` form accepts any
 // RELATIVE path into a node_modules copy of the package (everything
-// getLocalArgentBinRelPath can emit); absolute or out-of-tree is hand-tuned.
+// getLocalArgentBinRelPath can emit); out-of-tree is hand-tuned. Absolute paths
+// are only argent's when the node binary is absolute too (isGlobalNodeEntry).
 export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
   if (entry === null || hasCustomizingEnv(entry)) return false;
   const { command, args } = entry;
@@ -243,7 +286,7 @@ export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
         args.length === 3 && args[0] === "--no-install" && args[1] === "argent" && args[2] === "mcp"
       );
     default:
-      return false;
+      return isGlobalNodeEntry(entry);
   }
 }
 

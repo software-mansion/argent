@@ -400,3 +400,146 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     expect(entry.args).toEqual(["mcp"]);
   });
 });
+
+describe.skipIf(process.platform === "win32")("update — pinned MCP entries (#1287)", () => {
+  type Entry = { command: string; args: string[] };
+
+  function readArgentEntry(file: string): Entry {
+    return (JSON.parse(fs.readFileSync(file, "utf8")) as { mcpServers: { argent: Entry } })
+      .mcpServers.argent;
+  }
+
+  function writeArgentEntry(file: string, entry: Entry): void {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ mcpServers: { argent: entry } }));
+  }
+
+  // A global npm prefix holding the package; `which` resolves into it unless
+  // `onPath` is false.
+  function stageGlobalPrefix({ onPath = true } = {}): { node: string; cli: string } {
+    const prefix = path.join(fs.realpathSync(tmpDir), "prefix");
+    const pkg = path.join(prefix, "lib", "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({
+        name: "@swmansion/argent",
+        version: "99.0.0",
+        bin: { argent: "dist/cli.js" },
+      })
+    );
+    const cli = path.join(pkg, "dist", "cli.js");
+    fs.writeFileSync(cli, "");
+    const bin = path.join(prefix, "bin");
+    fs.mkdirSync(bin);
+    fs.symlinkSync(cli, path.join(bin, "argent"));
+    const node = path.join(bin, "node");
+    fs.symlinkSync(process.execPath, node);
+    childProcessMock.which.mockImplementation(((_bin: string, args: string[]) =>
+      onPath ? `${path.join(bin, args[args.length - 1]!)}\n` : "") as never);
+    return { node, cli };
+  }
+
+  function landGlobalUpdate(): void {
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
+        topologyState.globalVersion = "99.0.0";
+      }
+      return undefined;
+    }) as never);
+  }
+
+  function notedLines(): string {
+    return promptsMock.note.mock.calls.map((call) => String(call[0])).join("\n");
+  }
+
+  afterEach(() => {
+    childProcessMock.which.mockImplementation((() => "/usr/local/bin/argent\n") as never);
+  });
+
+  it("pins a bare global-scope entry to the updated install's node and cli.js", async () => {
+    const { node, cli } = stageGlobalPrefix();
+    const cursorGlobal = path.join(tmpDir, ".cursor", "mcp.json");
+    writeArgentEntry(cursorGlobal, { command: "argent", args: ["mcp"] });
+    landGlobalUpdate();
+
+    await update(["--yes"]);
+
+    expect(readArgentEntry(cursorGlobal)).toEqual({ command: node, args: [cli, "mcp"] });
+  });
+
+  it("keeps a live pinned global-scope entry that the install on PATH can't re-pin", async () => {
+    const { node, cli } = stageGlobalPrefix({ onPath: false });
+    const cursorGlobal = path.join(tmpDir, ".cursor", "mcp.json");
+    writeArgentEntry(cursorGlobal, { command: node, args: [cli, "mcp"] });
+    const before = fs.readFileSync(cursorGlobal, "utf8");
+    landGlobalUpdate();
+
+    await update(["--yes"]);
+
+    expect(fs.readFileSync(cursorGlobal, "utf8")).toBe(before);
+    expect(notedLines()).toContain(
+      "kept the pinned global entry (this run can't re-pin it: argent couldn't resolve " +
+        "absolute node and cli.js paths for the global install on PATH)"
+    );
+  });
+
+  it("replaces a pinned global-scope entry whose node is gone with bare argent", async () => {
+    const { node, cli } = stageGlobalPrefix({ onPath: false });
+    const cursorGlobal = path.join(tmpDir, ".cursor", "mcp.json");
+    writeArgentEntry(cursorGlobal, { command: node, args: [cli, "mcp"] });
+    fs.rmSync(node);
+    landGlobalUpdate();
+
+    await update(["--yes"]);
+
+    expect(readArgentEntry(cursorGlobal)).toEqual({ command: "argent", args: ["mcp"] });
+    expect(notedLines()).toContain(`replaced a pinned entry whose ${node} no longer exists`);
+  });
+
+  it("leaves a pinned entry in a local-mode project's file untouched", async () => {
+    const { node, cli } = stageGlobalPrefix({ onPath: false });
+    topologyState.globalInstalled = false;
+    fs.writeFileSync(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(projDir, "package-lock.json"), "{}");
+    const pkgDir = path.join(projDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    const stageLocalPkg = (version: string): void => {
+      fs.writeFileSync(
+        path.join(pkgDir, "package.json"),
+        JSON.stringify({ name: "@swmansion/argent", version, bin: { argent: "dist/cli.js" } })
+      );
+    };
+    stageLocalPkg("1.0.0");
+    fs.writeFileSync(path.join(pkgDir, "dist", "cli.js"), "");
+    const mcpJson = path.join(projDir, ".mcp.json");
+    writeArgentEntry(mcpJson, { command: node, args: [cli, "mcp"] });
+    const before = fs.readFileSync(mcpJson, "utf8");
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
+        stageLocalPkg("99.0.0");
+      }
+      return undefined;
+    }) as never);
+
+    await update(["--yes"]);
+
+    expect(fs.readFileSync(mcpJson, "utf8")).toBe(before);
+  });
+
+  it("refreshes the file Cursor shares between both scopes at $HOME only as the global entry", async () => {
+    const { node, cli } = stageGlobalPrefix();
+    const cursorGlobal = path.join(tmpDir, ".cursor", "mcp.json");
+    writeArgentEntry(cursorGlobal, { command: node, args: [cli, "mcp"] });
+    landGlobalUpdate();
+    process.chdir(tmpDir);
+
+    await update(["--yes", "--project-root", tmpDir]);
+
+    expect(readArgentEntry(cursorGlobal)).toEqual({ command: node, args: [cli, "mcp"] });
+    expect(notedLines()).not.toContain("customized");
+  });
+});

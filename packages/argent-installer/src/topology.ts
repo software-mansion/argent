@@ -25,31 +25,47 @@ function isTempRunnerPath(binaryPath: string): boolean {
   return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
 }
 
+// Binaries that must never be pinned into a global MCP entry, on top of the
+// temp runners: any `node_modules/.bin` (npx / npm exec prepend the cwd's and
+// every ancestor's, current pnpm dlx and versioned bunx use one too) and yarn
+// berry's per-command `xfs-<hash>` node wrapper. Kept out of
+// isGloballyInstalled, because yarn v1 links its global bin into a `.bin` dir.
+const UNPINNABLE_MARKERS = ["node_modules/.bin", "node_modules\\.bin", "/xfs-", "\\xfs-"];
+
+// `which -a` echoes a relative PATH entry (`.`, `bin`) as-is, which names
+// whatever the cwd of this run holds; never pin from one.
+function isPinnablePath(binaryPath: string): boolean {
+  return (
+    path.isAbsolute(binaryPath) &&
+    !isTempRunnerPath(binaryPath) &&
+    !UNPINNABLE_MARKERS.some((marker) => binaryPath.includes(marker))
+  );
+}
+
+/** Every `name` on PATH, in PATH order (`which -a` / `where`). */
+function whichAll(name: string): string[] {
+  try {
+    const [cmd, args] = process.platform === "win32" ? ["where", [name]] : ["which", ["-a", name]];
+    const output = execFileSync(cmd, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Path of the globally-installed argent binary, or null when argent is not
  * permanently on PATH. Checks every match so a concurrent temp-runner
  * invocation does not mask a real global install.
  */
 function getGlobalBinaryPath(): string | null {
-  try {
-    const [cmd, args] =
-      process.platform === "win32"
-        ? ["where", [MCP_BINARY_NAME]]
-        : ["which", ["-a", MCP_BINARY_NAME]];
-    const output = execFileSync(cmd, args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return (
-      output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line)) ?? null
-    );
-  } catch {
-    return null;
-  }
+  return whichAll(MCP_BINARY_NAME).find((line) => !isTempRunnerPath(line)) ?? null;
 }
 
 /** True iff argent is permanently on PATH, not run from an npx / dlx cache. */
@@ -63,7 +79,10 @@ export function isGloballyInstalled(): boolean {
  * version and to scope tool-server teardown to THIS install.
  */
 export function getGloballyInstalledPackageRoot(): string | null {
-  const binaryPath = getGlobalBinaryPath();
+  return packageRootOfBinary(getGlobalBinaryPath());
+}
+
+function packageRootOfBinary(binaryPath: string | null): string | null {
   if (!binaryPath) return null;
   try {
     const realPath = fs.realpathSync(binaryPath);
@@ -78,6 +97,109 @@ export function getGloballyInstalledPackageRoot(): string | null {
     return pkg.name === PACKAGE_NAME ? root : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * `<root>/<bin>` (`dist/cli.js`) of an argent package root, when that CLI
+ * entrypoint exists. Callers pick the root: the cli.json record and the
+ * global-scope MCP entry each resolve their own.
+ */
+export function cliEntryOf(packageRoot: string | null): string | null {
+  if (!packageRoot) return null;
+  const binSub = argentBinSubpath(packageRoot);
+  if (!binSub) return null;
+  const cli = path.join(packageRoot, binSub);
+  return fs.existsSync(cli) ? cli : null;
+}
+
+// Before 0.27.0 the MCP server spawned its tool-server with a bare `node`,
+// which an editor started without the shell PATH can't resolve, so a pinned
+// entry still fails there.
+const MIN_PINNABLE_VERSION = "0.27.0";
+
+/**
+ * Absolute paths that launch the global install without PATH: its CLI
+ * entrypoint (`<root>/dist/cli.js`) and a `node` binary that satisfies the
+ * package's `engines`, preferring the one beside its bin link (the version
+ * that installed it), else the first on PATH. Both keep the bin dir's own
+ * name, not the binary's realpath: Homebrew's `bin/node` and
+ * `opt/node@22/bin/node` links survive `brew upgrade` where the Cellar path
+ * they resolve to does not. Only an fnm multishell dir (per-shell, gone at
+ * logout) is resolved, to the version dir behind it. Null when there is no
+ * global install, its layout can't be resolved, or it predates
+ * MIN_PINNABLE_VERSION.
+ */
+export function getGloballyInstalledLaunchPaths(): { cli: string; node: string | null } | null {
+  const binaryPath = whichAll(MCP_BINARY_NAME).find(isPinnablePath) ?? null;
+  const packageRoot = packageRootOfBinary(binaryPath);
+  const cli = cliEntryOf(packageRoot);
+  if (!binaryPath || !packageRoot || !cli) return null;
+  const manifest = readLaunchManifest(packageRoot);
+  const version = semver.valid(manifest.version ?? null);
+  if (!version || semver.lt(version, MIN_PINNABLE_VERSION)) return null;
+  const binDirs = [binaryPath, ...whichAll("node").filter(isPinnablePath)].map((bin) =>
+    path.dirname(bin)
+  );
+  const node = binDirs
+    .map(nodeBeside)
+    .find(
+      (candidate) =>
+        candidate !== null &&
+        !isBunShim(candidate) &&
+        runsEngines(candidate, manifest.engines?.node)
+    );
+  return { cli, node: node ?? null };
+}
+
+function readLaunchManifest(packageRoot: string): {
+  version?: string;
+  engines?: { node?: string };
+} {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function nodeBeside(binDir: string): string | null {
+  let dir = binDir;
+  if (isFnmMultishell(binDir)) {
+    try {
+      dir = fs.realpathSync(binDir);
+    } catch {
+      // keep the unresolved dir
+    }
+  }
+  const node = path.join(dir, process.platform === "win32" ? "node.exe" : "node");
+  return fs.existsSync(node) ? node : null;
+}
+
+// bunx and `bun --bun` put a temp dir on PATH whose `node` links to bun itself.
+function isBunShim(node: string): boolean {
+  try {
+    return /^bun(\.exe)?$/i.test(path.basename(fs.realpathSync(node)));
+  } catch {
+    return false;
+  }
+}
+
+function isFnmMultishell(dir: string): boolean {
+  return dir.split(path.sep).includes("fnm_multishells");
+}
+
+function runsEngines(node: string, range: string | undefined): boolean {
+  if (!range) return true;
+  try {
+    const version = execFileSync(node, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    }).trim();
+    return semver.satisfies(version, range, { includePrerelease: true });
+  } catch {
+    return false;
   }
 }
 
@@ -210,7 +332,7 @@ export function readLocalPackageVersionUncached(projectRoot: string): string | n
  * read from the installed `package.json`'s `bin` rather than hard-coded, so a
  * rename can never leave a caller pointing at a file that isn't there.
  */
-export function argentBinSubpath(pkgDir: string): string | null {
+function argentBinSubpath(pkgDir: string): string | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
       bin?: string | Record<string, string>;

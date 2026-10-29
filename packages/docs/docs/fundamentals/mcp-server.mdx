@@ -28,6 +28,32 @@ npx @swmansion/argent@latest init
 
 The wizard detects your editor and writes the MCP server entry to the editor config. See [Installation](/docs/fundamentals/installation) for the prerequisites and the team setup.
 
+Some editors start the MCP server without your shell `PATH`, for example an editor that you open from the Dock. These editors cannot find the `argent` command when a Node version manager such as nvm installed Argent. For a global install, the wizard writes absolute paths to `node` and to the Argent CLI in global config files. These editors then find Argent.
+
+The wizard writes these entries:
+
+| Install | Global config file                           | Project config file                                     |
+| ------- | -------------------------------------------- | ------------------------------------------------------- |
+| Global  | `node` and the Argent CLI, as absolute paths | `argent`                                                |
+| Local   | Not written                                  | `node` and the path to the Argent CLI in `node_modules` |
+
+The wizard cannot find the absolute paths for some installs, for example when Volta or pnpm installed Argent, or for a global install older than 0.27.0. Then the wizard writes the `argent` command and shows a warning. Project config files do not get absolute paths, because your team shares them.
+
+The `node` path names the `node` next to the global install. When that `node` is missing or too old for Argent, the path names the first `node` on your `PATH`. Under nvm, fnm or mise, this path names one exact Node version. If you remove the Node version that the global config file names, run `npx @swmansion/argent@latest init` again. At the prompt `Install MCP server globally or locally?`, select **Global**. The wizard writes the new paths to the global config file. When you select **Local**, the wizard keeps the global config file and shows a warning about the removed `node`. `argent update` replaces such an entry with the `argent` command when it cannot write new paths.
+
+The first `argent update` from a version that writes only the `argent` command keeps that command, because the old version runs the update. Run `argent update` once more to write the absolute paths.
+
+In Claude Code, a project config file with the `argent` command has priority over the global config file. When the global config file has absolute paths, `init` and `argent update` show a warning for such a project config file. An editor that you open from a terminal can run that project entry.
+
+The `update-argent` tool stops in these cases:
+
+- The `argent` command is not on the `PATH` of the tool-server.
+- The `npm` on the `PATH` of the tool-server installs global packages for a different Node installation, for example the Node runtime of a JetBrains IDE.
+
+Then run `argent update` in a terminal and restart the editor.
+
+The absolute paths belong to one machine. If you sync a global config file such as `~/.cursor/mcp.json` between machines, `argent update` on each machine rewrites it with the paths of that machine.
+
 ## Add the MCP server by hand
 
 Install the package and add the server to the MCP config of your editor:
@@ -46,6 +72,10 @@ npm install -g @swmansion/argent
   }
 }
 ```
+
+If the editor shows `Executable not found in $PATH: argent`, the editor does not use your shell `PATH`. Run the wizard and select **Global** at the prompt `Install MCP server globally or locally?`. The wizard writes absolute paths to the global config file. In Claude Code, a project config file with the `argent` command has priority over the global config file. Remove the Argent entry from that project config file too.
+
+`claude mcp add` also writes a local-scope entry for each project to `~/.claude.json`. The wizard removes this entry only for the current project. For each other project with such an entry, run `claude mcp remove argent -s local` in that project.
 
 The key of the top-level object depends on the editor. Claude Code, Cursor and Windsurf use `mcpServers`. VS Code uses `servers`. See [Supported editors](/docs/reference/editors) for the config file of each editor.
 

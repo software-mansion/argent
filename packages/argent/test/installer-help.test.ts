@@ -246,7 +246,8 @@ describe("mcp is intercepted like the installers", () => {
   });
 
   it("leaves a real server launch alone", () => {
-    // Every generated editor config invokes a bare `argent mcp`.
+    // Every generated editor config passes just `mcp`: a bare `argent mcp`, or
+    // `node <cli.js> mcp` when init pins absolute paths.
     expect(installerHelpRequested("mcp", [])).toBe(false);
   });
 

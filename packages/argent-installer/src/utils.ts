@@ -34,6 +34,7 @@ export {
   isGloballyInstalled,
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
+  getGloballyInstalledLaunchPaths,
   isDeclaredLocally,
   isLocallyInstalled,
   getLocallyInstalledVersion,
@@ -345,6 +346,24 @@ export function realpathOrSelf(p: string): string {
   } catch {
     return p;
   }
+}
+
+// The realpath of the nearest existing ancestor with the missing tail
+// re-joined, so a config file not written yet still matches through a
+// symlinked parent (a symlinked $HOME).
+function realpathThroughMissing(p: string): string {
+  const abs = path.resolve(p);
+  try {
+    return fs.realpathSync(abs);
+  } catch {
+    const parent = path.dirname(abs);
+    if (parent === abs) return abs;
+    return path.join(realpathThroughMissing(parent), path.basename(abs));
+  }
+}
+
+export function isSamePath(a: string, b: string): boolean {
+  return a === b || realpathThroughMissing(a) === realpathThroughMissing(b);
 }
 
 // The path a copy destination names: itself, or — when it is a symlink — the

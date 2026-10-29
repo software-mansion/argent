@@ -7,7 +7,9 @@ import { parse as parseJsonc } from "jsonc-parser";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
+  getMcpEntryForScope,
   isArgentManagedEntry,
+  isGlobalNodeEntry,
   resolveLocalCommandMode,
   addClaudePermission,
   removeClaudePermission,
@@ -146,6 +148,25 @@ describe("isArgentManagedEntry", () => {
     expect(isArgentManagedEntry({ command: "npx", args: ["--no-install", "argent", "mcp"] })).toBe(
       true
     );
+    // The global-node shape (#1287): absolute node + absolute global cli.js.
+    expect(
+      isArgentManagedEntry({
+        command: "/Users/me/.nvm/versions/node/v24.1.0/bin/node",
+        args: [
+          "/Users/me/.nvm/versions/node/v24.1.0/lib/node_modules/@swmansion/argent/dist/cli.js",
+          "mcp",
+        ],
+      })
+    ).toBe(true);
+    expect(
+      isArgentManagedEntry({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [
+          "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@swmansion\\argent\\dist\\cli.js",
+          "mcp",
+        ],
+      })
+    ).toBe(process.platform === "win32");
   });
 
   it("rejects customized and unrecognizable entries", () => {
@@ -167,6 +188,56 @@ describe("isArgentManagedEntry", () => {
     expect(isArgentManagedEntry({ command: "", args: [] })).toBe(false);
     expect(isArgentManagedEntry(null)).toBe(false);
     expect(isArgentManagedEntry({ command: "docker", args: ["run", "argent", "mcp"] })).toBe(false);
+    // Absolute paths that aren't the global-node shape: a non-node runtime,
+    // a cli.js outside any node_modules copy, or env on top.
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/local/bin/bun",
+        args: ["/usr/local/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/local/bin/node",
+        args: ["/home/dev/argent/cli.js", "mcp"],
+      })
+    ).toBe(false);
+    expect(
+      isArgentManagedEntry({
+        command: "/usr/local/bin/node",
+        args: ["/usr/local/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+        env: { PATH: "/custom" },
+      })
+    ).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("isGlobalNodeEntry", () => {
+  const node = "/Users/me/.nvm/versions/node/v24.1.0/bin/node";
+  const cli = "/Users/me/.nvm/versions/node/v24.1.0/lib/node_modules/@swmansion/argent/dist/cli.js";
+
+  it("accepts exactly absolute node + absolute cli.js + mcp", () => {
+    expect(isGlobalNodeEntry({ command: node, args: [cli, "mcp"] })).toBe(true);
+  });
+
+  it("rejects a relative node, which the dead check would resolve against cwd", () => {
+    expect(isGlobalNodeEntry({ command: "node", args: [cli, "mcp"] })).toBe(false);
+    expect(isGlobalNodeEntry({ command: "bin/node", args: [cli, "mcp"] })).toBe(false);
+  });
+
+  it("rejects extra or missing args, so update never strips user flags", () => {
+    expect(isGlobalNodeEntry({ command: node, args: [cli, "mcp", "--verbose"] })).toBe(false);
+    expect(isGlobalNodeEntry({ command: node, args: [cli] })).toBe(false);
+    expect(isGlobalNodeEntry({ command: node, args: [cli, "serve"] })).toBe(false);
+  });
+
+  it("rejects a relative cli.js", () => {
+    expect(
+      isGlobalNodeEntry({
+        command: node,
+        args: ["lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+      })
+    ).toBe(false);
   });
 });
 
@@ -282,6 +353,40 @@ describe("getMcpEntry", () => {
 
   it("defaults to the global command when no mode is passed", () => {
     expect(getMcpEntry({ kind: "global" })).toEqual({ command: "argent", args: ["mcp"] });
+  });
+
+  it("global-node runs absolute node + cli.js, so the client's PATH doesn't matter", () => {
+    expect(
+      getMcpEntry({
+        kind: "global-node",
+        node: "/opt/node/bin/node",
+        cli: "/opt/node/lib/node_modules/@swmansion/argent/dist/cli.js",
+      })
+    ).toEqual({
+      command: "/opt/node/bin/node",
+      args: ["/opt/node/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+    });
+  });
+
+  it("pins absolute paths only into global-scope entries of a global install", () => {
+    const globalNode = {
+      kind: "global-node",
+      node: "/opt/node/bin/node",
+      cli: "/opt/node/lib/node_modules/@swmansion/argent/dist/cli.js",
+    } as const;
+    expect(getMcpEntryForScope("global", "global", null, globalNode).command).toBe(
+      "/opt/node/bin/node"
+    );
+    // Project files are committed and shared (#238): never a per-machine path.
+    expect(getMcpEntryForScope("global", "local", null, globalNode)).toEqual({
+      command: "argent",
+      args: ["mcp"],
+    });
+    // Unresolvable global install: the bare command is the fallback.
+    expect(getMcpEntryForScope("global", "global", null)).toEqual({
+      command: "argent",
+      args: ["mcp"],
+    });
   });
 
   it("local-node runs `node <relative bin path> mcp`", () => {

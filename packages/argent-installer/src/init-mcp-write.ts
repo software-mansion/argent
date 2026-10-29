@@ -3,13 +3,15 @@ import pc from "picocolors";
 import {
   getMcpEntryForScope,
   isArgentManagedEntry,
+  isGlobalNodeEntry,
+  resolveGlobalCommandMode,
   resolveLocalCommandMode,
   type McpConfigAdapter,
   type McpCommandMode,
   type McpServerEntry,
 } from "./mcp-configs.js";
 import { MCP_BINARY_NAME } from "./constants.js";
-import { isDeclaredLocally, readInstallRecord } from "./utils.js";
+import { isDeclaredLocally, isSamePath, readInstallRecord } from "./utils.js";
 import type { InstallMode } from "./install-record.js";
 import type { Scope } from "./init-scope.js";
 
@@ -21,8 +23,9 @@ interface McpWriteResult {
 }
 
 // Step 1c — write the MCP config files. Local mode points project-scope
-// entries at the repo-local copy and drops global-only adapters; everything
-// else keeps the bare `argent` command.
+// entries at the repo-local copy and drops global-only adapters; a global
+// install pins absolute node + cli.js paths into global config files (#1287);
+// everything else keeps the bare `argent` command.
 export function writeMcpConfigs(args: {
   selectedAdapters: McpConfigAdapter[];
   installMode: InstallMode;
@@ -65,8 +68,24 @@ export function writeMcpConfigs(args: {
     }
   }
 
-  const entryFor = (configScope: "local" | "global"): McpServerEntry =>
-    getMcpEntryForScope(installMode, configScope, localCmdMode);
+  const globalCmdMode = installMode === "global" ? resolveGlobalCommandMode() : undefined;
+  let wroteBareGlobal = false;
+  const entryFor = (configScope: "local" | "global"): McpServerEntry => {
+    const entry = getMcpEntryForScope(installMode, configScope, localCmdMode, globalCmdMode);
+    if (installMode === "global" && configScope === "global" && entry.command === MCP_BINARY_NAME) {
+      wroteBareGlobal = true;
+    }
+    return entry;
+  };
+  // A global install's entry follows the file, not the scope label: for
+  // Cursor, Gemini, Kiro and Codex, a project at $HOME shares its config file
+  // with the global scope, so it gets the pinned global entry.
+  const scopeOfFile = (adapter: McpConfigAdapter, configPath: string): "local" | "global" => {
+    const globalPath = adapter.globalPath();
+    return installMode === "global" && globalPath !== null && isSamePath(configPath, globalPath)
+      ? "global"
+      : normalizedScope;
+  };
 
   const stillLocalMode = (root: string): boolean =>
     readInstallRecord(root)?.mode === "local" || isDeclaredLocally(root);
@@ -88,7 +107,10 @@ export function writeMcpConfigs(args: {
       return false;
     }
     return (
-      existing !== null && existing.command !== MCP_BINARY_NAME && isArgentManagedEntry(existing)
+      existing !== null &&
+      existing.command !== MCP_BINARY_NAME &&
+      !isGlobalNodeEntry(existing) &&
+      isArgentManagedEntry(existing)
     );
   };
 
@@ -138,11 +160,20 @@ export function writeMcpConfigs(args: {
       continue;
     }
     try {
-      adapter.write(configPath, entryFor(normalizedScope));
+      adapter.write(configPath, entryFor(scopeOfFile(adapter, configPath)));
       lines.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
     } catch (err) {
       lines.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
     }
+  }
+
+  if (wroteBareGlobal) {
+    // Shim-based managers (Volta, pnpm global, npm's Windows wrappers) don't
+    // expose a node + cli.js pair to pin.
+    p.log.warn(
+      `Could not resolve absolute node and cli.js paths for the global install; wrote ` +
+        `${pc.cyan("argent mcp")}, which an editor started without your shell PATH can't find.`
+    );
   }
 
   return { adapters, lines };

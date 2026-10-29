@@ -180,9 +180,10 @@ export async function init(args: string[]): Promise<void> {
       installMode: tel.installMode,
       scope: normalizedScope,
       effectiveRoot,
-      // Removals in global config files get one confirmation: the "dead" verdict
-      // is a PATH probe in THIS shell, which an nvm-style split can fool. No
-      // confirmer non-interactively, so the sweep reports them instead.
+      // Removals in global config files get one confirmation: for bare `argent`
+      // the "dead" verdict is a PATH probe in THIS shell, which an nvm-style
+      // split can fool. No confirmer non-interactively, so the sweep reports
+      // them instead.
       confirmCrossProjectRemovals: parsed.nonInteractive
         ? undefined
         : async (items) => {

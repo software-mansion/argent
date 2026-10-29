@@ -6,16 +6,31 @@ import * as path from "node:path";
 // Mock child_process and update-checker before importing the module under test.
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
+  execFileSync: vi.fn(),
 }));
+
+// The tool derives the root of the install serving it from its own location;
+// tests that need it to be a staged global install redirect that one realpath.
+const serving = vi.hoisted(() => ({ from: "", to: "" }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    realpathSync: (p: string, ...rest: []) =>
+      serving.to && p === serving.from ? serving.to : actual.realpathSync(p, ...rest),
+  };
+});
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(),
 }));
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { getUpdateState } from "../src/utils/update-checker";
 
 const mockSpawn = vi.mocked(spawn);
+const mockExecFileSync = vi.mocked(execFileSync);
 const mockGetUpdateState = vi.mocked(getUpdateState);
 
 function makeChild() {
@@ -84,6 +99,9 @@ describe("update-argent tool", () => {
     vi.useFakeTimers();
     vi.resetModules();
     mockSpawn.mockReturnValue(makeChild());
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("npm is not stubbed in this test");
+    });
     mockGetUpdateState.mockReturnValue(stateWithUpdate());
     // Pin the running-install classification: the fallback cwd-walk would
     // otherwise pick up whatever repository the test process runs in.
@@ -96,6 +114,10 @@ describe("update-argent tool", () => {
     // A cwd with no ancestor declaring argent, so findDeclaringProjectRoot is
     // deterministic (os.tmpdir() ancestors never declare the package).
     process.chdir(tmpDir);
+    // An `argent` on PATH that belongs to no argent package, unless a test
+    // stages one.
+    fs.writeFileSync(path.join(tmpDir, "argent"), "");
+    vi.stubEnv("PATH", tmpDir);
     const mod = await import("../src/tools/system/update-argent");
     updateArgentTool = mod.updateArgentTool;
   });
@@ -107,6 +129,8 @@ describe("update-argent tool", () => {
     else process.env.ARGENT_INSTALL_KIND = savedInstallKind;
     if (savedProjectRoot === undefined) delete process.env.ARGENT_PROJECT_ROOT;
     else process.env.ARGENT_PROJECT_ROOT = savedProjectRoot;
+    vi.unstubAllEnvs();
+    serving.to = "";
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -115,6 +139,124 @@ describe("update-argent tool", () => {
     const result = await updateArgentTool.execute({}, {}, undefined);
     expect((result as { message: string }).message).toContain("1.0.0 -> v99.0.0");
     expect((result as { message: string }).message).toContain("restart");
+  });
+
+  // An npm-style global prefix holding the package, its `argent` link on PATH.
+  // Returns the package root as the tool resolves it.
+  function stagePathInstall(): { root: string; bin: string; npmRoot: string } {
+    const npmRoot = path.join(tmpDir, "prefix", "lib", "node_modules");
+    const root = path.join(npmRoot, "@swmansion", "argent");
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent" })
+    );
+    fs.writeFileSync(path.join(root, "dist", "cli.js"), "");
+    const bin = path.join(tmpDir, "prefix", "bin");
+    fs.mkdirSync(bin);
+    fs.symlinkSync(path.join(root, "dist", "cli.js"), path.join(bin, "argent"));
+    vi.stubEnv("PATH", bin);
+    return { root: fs.realpathSync(root), bin, npmRoot };
+  }
+
+  function serveFrom(root: string): void {
+    serving.from = path.resolve(__dirname, "../src/tools");
+    serving.to = root;
+  }
+
+  function npmRootIs(dir: string): void {
+    mockExecFileSync.mockImplementation((() => `${dir}\n`) as never);
+  }
+
+  it.skipIf(process.platform === "win32")(
+    "refuses when `argent` on PATH is a different global install than the one serving",
+    async () => {
+      const { root } = stagePathInstall();
+
+      const result = await updateArgentTool.execute({}, {}, undefined);
+      vi.advanceTimersByTime(5000);
+
+      const message = (result as { message: string }).message;
+      expect(message).toContain(root);
+      expect(message).toContain("`argent update` in a terminal");
+      expect(mockSpawn).not.toHaveBeenCalled();
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "updates when the install on PATH is the one serving and PATH's npm installs into it",
+    async () => {
+      const { root, npmRoot } = stagePathInstall();
+      serveFrom(root);
+      npmRootIs(npmRoot);
+
+      await updateArgentTool.execute({}, {}, undefined);
+      vi.advanceTimersByTime(5000);
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses when PATH's npm installs global packages into another Node (an editor's runtime)",
+    async () => {
+      const { root } = stagePathInstall();
+      serveFrom(root);
+      const ideRuntime = path.join(tmpDir, "ide-runtime", "lib", "node_modules");
+      fs.mkdirSync(ideRuntime, { recursive: true });
+      npmRootIs(ideRuntime);
+
+      const result = await updateArgentTool.execute({}, {}, undefined);
+      vi.advanceTimersByTime(5000);
+
+      const message = (result as { message: string }).message;
+      expect(message).toContain(`installs global packages outside ${root}`);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not refuse a local-serving session that targets a global install on PATH",
+    async () => {
+      stagePathInstall();
+      process.env.ARGENT_INSTALL_KIND = "local";
+      process.env.ARGENT_PROJECT_ROOT = stageDeclaringProject();
+
+      await updateArgentTool.execute({}, { target: "global" }, undefined);
+      vi.advanceTimersByTime(5000);
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "judges the first `argent` on PATH even when it is a shim (Volta ahead of an old npm global)",
+    async () => {
+      const { bin } = stagePathInstall();
+      const volta = path.join(tmpDir, "volta");
+      fs.mkdirSync(path.join(volta, "bin"), { recursive: true });
+      fs.writeFileSync(path.join(volta, "volta-shim"), "");
+      fs.symlinkSync(path.join(volta, "volta-shim"), path.join(volta, "bin", "argent"));
+      vi.stubEnv("PATH", [path.join(volta, "bin"), bin].join(path.delimiter));
+
+      await updateArgentTool.execute({}, {}, undefined);
+      vi.advanceTimersByTime(5000);
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("refuses a global update when no `argent` is on PATH for the updater to find", async () => {
+    const emptyDir = path.join(tmpDir, "empty");
+    fs.mkdirSync(emptyDir);
+    vi.stubEnv("PATH", emptyDir);
+
+    const result = await updateArgentTool.execute({}, {}, undefined);
+    vi.advanceTimersByTime(5000);
+
+    const message = (result as { message: string }).message;
+    expect(message).toContain("not on this tool server's PATH");
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it("spawns `argent update` with a pinned target flag (not npx) after 2 seconds", async () => {

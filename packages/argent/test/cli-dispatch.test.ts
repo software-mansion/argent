@@ -52,8 +52,8 @@ const FAKE_INSTALLER =
 
 const FAKE_CLI_BUNDLE =
   RECORD_SNIPPET +
+  `export function startMcpServer(rest) { record("startMcpServer", [process.env.PATH]); }` +
   [
-    "startMcpServer",
     "tools",
     "run",
     "e2e",
@@ -75,14 +75,21 @@ interface RunResult {
   stderr: string;
 }
 
-function runCli(args: string[], markerPath: string): Promise<RunResult> {
+function runCli(
+  args: string[],
+  markerPath: string,
+  env: Record<string, string | undefined> = {},
+  node = process.execPath,
+  argv0?: string
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliEntry, ...args], {
+    const child = spawn(node, [cliEntry, ...args], {
       cwd: stageRoot,
+      argv0,
       // stdin is /dev/null: a real interactive uninstall prompt would read EOF
       // here, so a regression can't silently hang the suite.
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ARGENT_E2E_MARKER: markerPath },
+      env: { ...process.env, ARGENT_E2E_MARKER: markerPath, ...env },
     });
     let stdout = "";
     let stderr = "";
@@ -178,6 +185,74 @@ describe("cli dispatcher: installer-help guard", () => {
     await runCli(["mcp"], marker);
     expect(fs.existsSync(marker)).toBe(true);
     expect(fs.readFileSync(marker, "utf8")).toContain("startMcpServer");
+  });
+
+  it("`mcp` puts its own node on a PATH that lacks one (pinned entry, #1287)", async () => {
+    // An editor started without the shell PATH launches `<node> cli.js mcp`;
+    // the tool-server spawn and the `node`/`npm` probes must still resolve.
+    const marker = freshMarker();
+    const bare = ["/usr/bin", "/bin"].join(path.delimiter);
+    await runCli(["mcp"], marker, { PATH: bare });
+    const recorded = fs
+      .readFileSync(marker, "utf8")
+      .slice("startMcpServer:".length)
+      .split(path.delimiter);
+    expect(recorded.slice(0, 2)).toEqual(["/usr/bin", "/bin"]);
+    expect(recorded).toContain(path.dirname(process.execPath));
+    for (const dir of ["/opt/homebrew/bin", "/usr/local/bin"].filter((d) => fs.existsSync(d))) {
+      expect(recorded).toContain(dir);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "`mcp` appends the node dir the entry names, not the resolved execPath (Homebrew keg)",
+    async () => {
+      const marker = freshMarker();
+      const linkDir = path.join(stageRoot, "brew-bin");
+      fs.mkdirSync(linkDir, { recursive: true });
+      const linkedNode = path.join(linkDir, "node");
+      fs.symlinkSync(process.execPath, linkedNode);
+      await runCli(["mcp"], marker, { PATH: "/usr/bin" }, linkedNode);
+      const recorded = fs
+        .readFileSync(marker, "utf8")
+        .slice("startMcpServer:".length)
+        .split(path.delimiter);
+      expect(recorded).toContain(linkDir);
+      expect(recorded).not.toContain(path.dirname(fs.realpathSync(process.execPath)));
+    }
+  );
+
+  function recordedMcpPath(marker: string): string[] {
+    return fs.readFileSync(marker, "utf8").slice("startMcpServer:".length).split(path.delimiter);
+  }
+
+  it.skipIf(process.platform === "win32")(
+    "`mcp` keeps the OS default search path when it starts with no PATH",
+    async () => {
+      for (const PATH of [undefined, ""]) {
+        const marker = freshMarker();
+        await runCli(["mcp"], marker, { PATH });
+        const recorded = recordedMcpPath(marker);
+        expect(recorded.slice(0, 2)).toEqual(["/usr/bin", "/bin"]);
+        expect(recorded).toContain(path.dirname(process.execPath));
+        expect(recorded).not.toContain("");
+      }
+    }
+  );
+
+  it("`mcp` started through `#!/usr/bin/env node` (argv0 `node`) uses execPath's dir", async () => {
+    const marker = freshMarker();
+    const full = ["/usr/bin", path.dirname(process.execPath)].join(path.delimiter);
+    await runCli(["mcp"], marker, { PATH: full }, process.execPath, "node");
+    expect(fs.readFileSync(marker, "utf8")).toBe(`startMcpServer:${full}`);
+  });
+
+  it("`mcp` leaves a PATH that already has its node alone", async () => {
+    const marker = freshMarker();
+    const nodeDir = path.dirname(process.execPath);
+    const full = ["/usr/bin", nodeDir].join(path.delimiter);
+    await runCli(["mcp"], marker, { PATH: full });
+    expect(fs.readFileSync(marker, "utf8")).toBe(`startMcpServer:${full}`);
   });
 
   it("`mcp` with a non-help argument still starts the server", async () => {

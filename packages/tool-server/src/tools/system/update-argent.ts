@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
@@ -91,6 +91,70 @@ function findDeclaringProjectRoot(startDir: string): string | null {
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
+  }
+}
+
+// Package root of the first `argent` on PATH: the install `argent update
+// --global` resolves as its target. Null when there is none or it is not a
+// symlink into an argent package (Windows wrappers, Volta / pnpm shims).
+function pathGlobalInstallRoot(): string | null {
+  const dir = (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .find((entry) => entry !== "" && fs.existsSync(path.join(entry, "argent")));
+  if (!dir) return null;
+  try {
+    const root = path.dirname(path.dirname(fs.realpathSync(path.join(dir, "argent"))));
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
+      name?: string;
+    };
+    return pkg.name === PACKAGE_NAME ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether the `npm` the spawned updater runs installs global packages into
+// `root`. An editor can put its own Node runtime first on PATH (JetBrains'
+// ACP agents), whose npm has a prefix of its own. Unknown counts as yes.
+function npmInstallsGloballyInto(root: string): boolean {
+  let npmRoot: string;
+  try {
+    npmRoot = execFileSync("npm", ["root", "-g"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    }).trim();
+  } catch {
+    return true;
+  }
+  try {
+    return fs.realpathSync(path.join(npmRoot, PACKAGE_NAME)) === root;
+  } catch {
+    return false;
+  }
+}
+
+const ARGENT_BIN_NAMES =
+  process.platform === "win32" ? ["argent.cmd", "argent.exe", "argent"] : ["argent"];
+
+function isArgentOnPath(): boolean {
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .some(
+      (dir) => dir !== "" && ARGENT_BIN_NAMES.some((name) => fs.existsSync(path.join(dir, name)))
+    );
+}
+
+// npx / dlx / bunx caches, which serve a session without being the global
+// install an update targets.
+const TEMP_RUNNER_MARKERS = ["_npx", `${path.sep}dlx-`, path.join("bun", "install", "cache")];
+
+function runningGlobalInstallRoot(): string | null {
+  try {
+    const root = fs.realpathSync(path.dirname(__dirname));
+    return TEMP_RUNNER_MARKERS.some((marker) => root.includes(marker)) ? null : root;
+  } catch {
+    return null;
   }
 }
 
@@ -192,6 +256,44 @@ export const updateArgentTool: ToolDefinition<{
             "Argent found an installable update, but could not determine its version. Please try again later.",
         };
       }
+    }
+
+    // A pinned MCP entry can serve a global install other than the first one
+    // on PATH (two nvm versions); the spawned updater would update the PATH
+    // one and leave this session's server running the old version.
+    if (running.kind === "global" && effectiveTarget !== "local") {
+      const servingRoot = runningGlobalInstallRoot();
+      const pathRoot = pathGlobalInstallRoot();
+      if (servingRoot && pathRoot && servingRoot !== pathRoot) {
+        return {
+          message:
+            `This session runs Argent from ${servingRoot}, but \`argent\` on PATH is the install at ` +
+            `${pathRoot}, which is the one an update would change. Ask the user to run ` +
+            "`argent update` in a terminal and then restart the editor, which reconnects it to the " +
+            "updated install.",
+        };
+      }
+      if (pathRoot && !npmInstallsGloballyInto(pathRoot)) {
+        return {
+          message:
+            `The \`npm\` on this tool server's PATH installs global packages outside ${pathRoot}, ` +
+            "so an update would land in another Node installation (the editor likely put its own " +
+            "Node runtime first on PATH). Ask the user to run `argent update` in a terminal and " +
+            "then restart the editor.",
+        };
+      }
+    }
+
+    // The spawned `argent update --global` finds its target through PATH; a
+    // pinned MCP entry lets an editor started without the shell PATH serve
+    // this session, and the updater would then report nothing to update.
+    if (running.kind === "global" && effectiveTarget === "global" && !isArgentOnPath()) {
+      return {
+        message:
+          "`argent` is not on this tool server's PATH (the editor was likely started outside a " +
+          "terminal), so the updater could not find the global install to update. Ask the user " +
+          "to run `argent update` in a terminal and then restart the editor.",
+      };
     }
 
     if (updateScheduled) {
