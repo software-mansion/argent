@@ -243,20 +243,25 @@ The `text` comparators:
 
 `matches` reads an element with no text as an empty string. Use `'^$'` to check that an element has no text, or `'^(?!.*@)'` to check that its text does not contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text.
 
+The text of an element includes the text of its children. It does not include the text of a child with its own `id`, or of a password field on Android or Chromium. So `'^$'` passes on a container that has all its text in such children.
+
 Argent reads text from these elements also when they are empty, so `'^$'` never passes on them:
 
-| Platform | Empty element                                                            | Text that Argent reads  |
-| -------- | ------------------------------------------------------------------------ | ----------------------- |
-| Android  | A password field                                                         | `[password]`            |
-| Android  | A field with a hint                                                      | The hint                |
-| Android  | A field with a content description                                       | The content description |
-| Chromium | A password `input`                                                       | `[password]`            |
-| Chromium | An element with an `aria-label` or `aria-labelledby` label that has text | The label               |
-| Chromium | An `input` or `textarea` with a `placeholder`                            | The placeholder         |
-| Chromium | An element with a `title`                                                | The title               |
-| Chromium | A `textarea` with default text, which is the text between its tags       | The default text        |
+| Platform | Empty element                                                            | Text that Argent reads                     |
+| -------- | ------------------------------------------------------------------------ | ------------------------------------------ |
+| Android  | A password field                                                         | `[password]`                               |
+| Android  | A field with a hint                                                      | The hint                                   |
+| Android  | A field with a content description                                       | The content description                    |
+| Chromium | A password `input`                                                       | `[password]`                               |
+| Chromium | An element with an `aria-label` or `aria-labelledby` label that has text | The label                                  |
+| Chromium | An `input` or `textarea` with a `placeholder`                            | The placeholder                            |
+| Chromium | An element with a `title`                                                | The title                                  |
+| Chromium | A `textarea` with default text, which is the text between its tags       | The default text                           |
+| Chromium | A checkbox, radio, range or color `input`                                | Its value, for example `on` for a checkbox |
 
-On a simulator, Argent cannot read the typed text of an iOS text field. A filled field can read as empty, so `'^$'` never passes on an iOS text field. In an app on the old React Native architecture, Argent identifies a `<Text>` as a text field too.
+An element that matches more than one row can read a different text, for example the content description and then the hint.
+
+On a simulator, Argent cannot read the typed text of an iOS text field. A filled field can read as empty, so `'^$'` never passes on an iOS text field. On a physical iPhone, `'^$'` also never passes on a text field. In an app on the old React Native architecture, Argent identifies a `<Text>` as a text field too.
 
 When an element holds text, Argent reads it like this:
 
@@ -265,7 +270,11 @@ When an element holds text, Argent reads it like this:
 - A Chromium element other than an `input` or `textarea`, with an `aria-label`, `aria-labelledby` or `title`, reads that label or title, and then its text.
 - An Android field with a content description reads the description, and then the typed text.
 
-An `aria-label` that holds only spaces, or an `aria-labelledby` target that has no text, gives a Chromium element an empty label. Argent then ignores the `placeholder`, `title` and typed text of the element. `'^$'` can pass on a filled `input` or `textarea` with an empty label.
+`'^$'` can pass on these filled Chromium elements:
+
+- A `select`, also when it shows a selected option.
+- A `number` `input` with text that is not a complete number, for example `-`.
+- An `input` or `textarea` with an empty label. An `aria-label` that holds only spaces, or an `aria-labelledby` target that has no text, gives an element an empty label. Argent then ignores the `placeholder`, `title` and typed text of an `input` or `textarea`, and the `title` of other elements.
 
 A Chromium `textarea` also reads its default text. The default text does not change when the user types. React is an exception: for a `textarea` with a `value` prop, React sets the default text to the typed text.
 
