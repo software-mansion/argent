@@ -675,7 +675,8 @@ describe("sanitize", () => {
     it("drops the whole property when a value is not a zod issue code", () => {
       const out = sanitize("tool:fail", {
         ...base,
-        invalid_param_issues: ["too_big", "timeoutMs=300000"],
+        // Identifier-shaped, so only the closed vocabulary rejects it.
+        invalid_param_issues: ["too_big", "password"],
       });
       expect("invalid_param_issues" in out).toBe(false);
     });

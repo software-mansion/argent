@@ -133,6 +133,23 @@ describe("deriveInvalidParamIssues", () => {
     expect(JSON.stringify(out)).not.toMatch(/ssn|123-45/);
   });
 
+  it("reports the codes nested in a union, so its causes stay apart", () => {
+    // tv-remote's button schema.
+    const buttons = ["up", "down"] as const;
+    const schema = z.object({
+      button: z.union([z.enum(buttons), z.array(z.enum(buttons)).min(1).max(64)]),
+    });
+    expect(deriveInvalidParamIssues(issuesFor(schema, { button: ["up", "bogus"] }))).toEqual([
+      "invalid_union",
+      "invalid_value",
+    ]);
+    expect(deriveInvalidParamIssues(issuesFor(schema, { button: 7 }))).toEqual([
+      "invalid_type",
+      "invalid_union",
+      "invalid_value",
+    ]);
+  });
+
   it("knows exactly the issue codes the installed zod can raise", () => {
     expectTypeOf<ZodIssueCode>().toEqualTypeOf<z.core.$ZodIssueCode>();
   });
