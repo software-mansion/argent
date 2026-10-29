@@ -75,9 +75,9 @@ async function assertPortReleased(port: number): Promise<void> {
     if (getFailureSignal(err)?.error_code === FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE) return;
   }
   throw new FailureError(
-    `restart-app stopped the app on port ${port}, but a process still answers there, so ` +
-      `the relaunch could not bind the port. Quit the process listening on port ${port}, ` +
-      `then retry restart-app.`,
+    `restart-app did not relaunch the app: a process still answers on port ${port}, so a ` +
+      `new copy could not bind it. Quit the process listening on port ${port}, then retry ` +
+      `restart-app.`,
     {
       error_code: FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE,
       failure_stage: "chromium_restart_port_check",
