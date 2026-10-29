@@ -125,10 +125,9 @@ async function statOrNull(p: string): Promise<Stats | null> {
 
 /**
  * Checks the paths against the panel, before anything is sent to the app. The
- * panel's allowed file types are not checked here: matching a file against them
- * needs the type conformance that only the app's process knows. The app checks
- * the extension only for a save panel that offers several formats; nothing checks
- * a path for an open panel against its types.
+ * panel's allowed file types are not checked: matching a file against them needs
+ * the type conformance that only the app's process knows (it checks a save panel
+ * that offers several formats).
  */
 async function checkPathsFor(
   panel: Pick<MacosPanel, "kind" | "allowsMultiple">,
@@ -139,9 +138,10 @@ async function checkPathsFor(
       throw invalid("A save panel takes one path, the file to write.", "file_panel_save_paths");
     }
     const target = paths[0]!;
-    // The app would replace the folder, and everything in it, with the document. A
-    // folder whose name has an extension can be a document package (.rtfd), which
-    // a save panel replaces as one file: the app tells a package from a folder.
+    // A document package (.rtfd, .pages, .bundle) is a folder on disk that a save
+    // panel writes as one file. A plain folder is not a file to write: answered
+    // with one, the app would get a folder URL and the grant would be its parent.
+    // The app tells a package from a folder.
     if ((await statOrNull(target))?.isDirectory() && path.extname(target) === "") {
       throw invalid(
         `${target} is a folder, not a file to write. Pass a path inside it for a save panel, ` +

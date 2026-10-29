@@ -436,14 +436,14 @@ interface TreeBuild {
   menus: MacosNode[];
 }
 
-// The `layer` of a root by its window kind, one more in each sheet or popover
-// attached over it (an alert over a sheet over the window), and MENU_LAYER in
-// an open menu, which lies over everything.
+// The `layer` of a root by its window kind (an alert over the sheets of the
+// windows), one more in each sheet or popover attached over it (an alert over a
+// sheet over the window), and MENU_LAYER in an open menu, which lies over everything.
 const MENU_LAYER = 100;
 const KIND_LAYERS = new Map([
   ["menu", MENU_LAYER],
   ["sheet", 1],
-  ["alert", 1],
+  ["alert", 2],
   ["popover", 1],
   ["file-panel", 1],
 ]);

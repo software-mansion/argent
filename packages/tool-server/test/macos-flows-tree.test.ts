@@ -385,6 +385,10 @@ describe("macOS describe and flow trees of one read", () => {
           identifier: "sheet.cancel",
           title: "Cancel",
         }),
+        axNode("AXButton", rect(0.31, 0.56, 0.05, 0.02), {
+          identifier: "sheet.apply",
+          title: "Apply",
+        }),
         // An alert over the sheet.
         axNode("AXSheet", rect(0.4, 0.35, 0.2, 0.15), {}, [
           axNode("AXButton", rect(0.42, 0.45, 0.07, 0.03), {
@@ -398,6 +402,16 @@ describe("macOS describe and flow trees of one read", () => {
         ]),
       ])
     );
+    // An app-modal alert window over the window with the sheet.
+    (tree.windows as Json[]).push({
+      kind: "alert",
+      root: axNode("AXWindow", rect(0.6, 0.62, 0.3, 0.2), {}, [
+        axNode("AXButton", rect(0.75, 0.75, 0.1, 0.04), {
+          identifier: "modal.apply",
+          title: "Apply",
+        }),
+      ]),
+    });
     (tree.windows as Json[]).push({
       kind: "menu",
       root: axNode("AXMenu", rect(0.15, 0.14, 0.26, 0.09), {}, [
@@ -415,6 +429,7 @@ describe("macOS describe and flow trees of one read", () => {
       expect(firstInReadingOrder(findAll(t, { text: "Done" }))?.identifier).toBe("sheet.done");
       expect(selectorToFrame(t, { text: "Cancel" })).toEqual(frame("alert.cancel"));
       expect(firstInReadingOrder(findAll(t, { text: "Cancel" }))?.identifier).toBe("alert.cancel");
+      expect(selectorToFrame(t, { text: "Apply" })).toEqual(frame("modal.apply"));
       expect(nodeAtPoint(t, { x: 0.35, y: 0.21 })?.identifier).toBe("ctx.delete");
     }
   });

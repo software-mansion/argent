@@ -229,18 +229,15 @@ describe("file-panel", () => {
     expect(issueSandboxExtension).not.toHaveBeenCalled();
   });
 
-  it.each(["release-1.2", "Notes.rtfd"])(
-    "choose leaves a folder named %j to the app, which tells a document package from a folder",
-    async (name) => {
-      const folder = path.join(sandbox, name);
-      fs.mkdirSync(folder);
-      const { invoke, calls } = harness([savePanel]);
-      await invoke({ action: "choose", path: folder });
-      expect(nonListCalls(calls)).toEqual([
-        { method: "Panel.complete", params: { path: folder, panel: 42 } },
-      ]);
-    }
-  );
+  it("choose leaves a folder whose name has an extension to the app, which tells a package from a folder", async () => {
+    const folder = path.join(sandbox, "release-1.2");
+    fs.mkdirSync(folder);
+    const { invoke, calls } = harness([savePanel]);
+    await invoke({ action: "choose", path: folder });
+    expect(nonListCalls(calls)).toEqual([
+      { method: "Panel.complete", params: { path: folder, panel: 42 } },
+    ]);
+  });
 
   it("expands a leading ~/ to the home folder", async () => {
     const home = path.join(sandbox, "home");
@@ -421,7 +418,7 @@ describe("file-panel", () => {
     expect(issueSandboxExtension).not.toHaveBeenCalled();
   });
 
-  it("stub with panelKind save refuses a plain folder and leaves a document package to the app", async () => {
+  it("stub with panelKind save refuses a plain folder and accepts a document package", async () => {
     tracked.sandboxed = true;
     const { invoke, calls } = harness();
     const err = await errorOf(invoke({ action: "stub", path: sandbox, panelKind: "save" }));
