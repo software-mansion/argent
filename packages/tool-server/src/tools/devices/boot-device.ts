@@ -48,7 +48,7 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { listEmulatorPidsForAvd } from "../../utils/emulator-process";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
-import { listIosSimulators } from "../../utils/ios-devices";
+import { scanIosSimulators, simctlListTimeoutAdvice } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import {
   androidGuestVulkanFromEnv,
@@ -642,12 +642,24 @@ async function bootIos(
   }
   await ensureDep("xcrun");
 
-  const simMatch = await listIosSimulators()
-    .then((sims) => sims.find((s) => s.udid === udid))
-    .catch(() => undefined);
+  const scan = await scanIosSimulators().catch(() => undefined);
+  const simMatch = scan?.simulators.find((s) => s.udid === udid);
+  // Booting without the state would skip the pre-boot AX prefs below, leaving
+  // describe degraded until the next reboot.
+  if (!simMatch && scan?.timedOut) {
+    throw new FailureError(
+      `Could not read the state of iOS simulator ${udid}: ${simctlListTimeoutAdvice("boot-device")}`,
+      {
+        error_code: FAILURE_CODES.BOOT_IOS_SIMCTL_LIST_TIMEOUT,
+        failure_stage: "boot_ios_state_probe",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      }
+    );
+  }
   const simState = simMatch?.state;
   const isTvOs = simMatch?.runtimeKind === "tv";
-  // listIosSimulators above already learned which device set owns this UDID,
+  // The scan above already learned which device set owns this UDID,
   // so this resolves from cache; every simctl below targets that set.
   const deviceSet = await deviceSetForUdid(udid);
   const prefix = simctlPrefix(deviceSet);

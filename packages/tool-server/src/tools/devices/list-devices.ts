@@ -10,7 +10,7 @@ import {
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
   scanIosSimulators,
-  SIMCTL_LIST_TIMEOUT_MS,
+  simctlListTimeoutAdvice,
   type IosSimulator,
 } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
@@ -139,11 +139,9 @@ const EXTERNAL_DEVICES_HINT =
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
 
-const IOS_LIST_TIMED_OUT_HINT =
-  `iOS simulators may be missing from this list: \`xcrun simctl list\` did not answer within ` +
-  `${SIMCTL_LIST_TIMEOUT_MS / 1000}s. CoreSimulatorService is probably still starting, which can take ` +
-  `about a minute after a reboot, so call list-devices again shortly. If it keeps timing out, ` +
-  `restart CoreSimulatorService.`;
+const IOS_LIST_TIMED_OUT_HINT = `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice(
+  "list-devices"
+)}`;
 
 function sortIos(a: IosDevice, b: IosDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;

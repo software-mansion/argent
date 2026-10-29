@@ -43,7 +43,16 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
-export const SIMCTL_LIST_TIMEOUT_MS = 10_000;
+const SIMCTL_LIST_TIMEOUT_MS = 10_000;
+
+/** What to tell an agent after a `simctl list` timeout; `retry` names the call to repeat. */
+export function simctlListTimeoutAdvice(retry: string): string {
+  return (
+    `\`xcrun simctl list\` did not answer within ${SIMCTL_LIST_TIMEOUT_MS / 1000}s. ` +
+    `CoreSimulatorService is probably still starting, which can take about a minute after a ` +
+    `reboot, so call ${retry} again shortly. If it keeps timing out, restart CoreSimulatorService.`
+  );
+}
 
 interface IosSimulatorScan {
   simulators: IosSimulator[];
