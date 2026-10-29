@@ -1,5 +1,6 @@
 export { TypedEventEmitter } from "./event-emitter";
 export {
+  CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   ServiceState,
