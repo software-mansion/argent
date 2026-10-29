@@ -103,6 +103,21 @@ export async function adbServerShell(
   });
 }
 
+/**
+ * The `ANDROID_ADB_SERVER_PORT` to put in the tool-server's environment for a
+ * configured `android.adbServerPort`, or null when the environment already
+ * names a server (it wins, as it does for adb) or nothing is configured. Set
+ * once at start, every adb, simulator-server and direct protocol call the
+ * tool-server makes then reads the same server.
+ */
+export function configuredAdbServerPort(
+  env: NodeJS.ProcessEnv,
+  configured: number | null
+): string | null {
+  if (configured === null || env.ADB_SERVER_SOCKET || env.ANDROID_ADB_SERVER_PORT) return null;
+  return String(configured);
+}
+
 /** Where the adb client would look for its server, from the same env it reads. */
 export function adbServerAddress(env: NodeJS.ProcessEnv): { host: string; port: number } {
   // `ADB_SERVER_SOCKET=tcp:host:port` wins, exactly as it does for the client.

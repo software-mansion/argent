@@ -330,6 +330,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   alwaysLoad: true,
   searchHint:
     "list devices simulators emulators avd serial udid ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>app fire tv session start",
+  readOnly: true,
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {

@@ -303,6 +303,22 @@ describe("runSnapshot baselines", () => {
     });
   });
 
+  it("passes a diff exactly at maxMismatch despite float error, and fails one pixel over", async () => {
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    // 3000x4800: 100800 px is exactly 0.7% but computes 0.7000000000000001.
+    h.mismatchPercentage = (100800 / 14_400_000) * 100;
+    expect((await runSnapshot(env, opts({ maxMismatch: 0.7 }))).status).toBe("pass");
+
+    h.mismatchPercentage = (100801 / 14_400_000) * 100;
+    expect((await runSnapshot(env, opts({ maxMismatch: 0.7 }))).status).toBe("fail");
+
+    // 1206x2622: 59505 px is one over 1.8818%, yet within 1e-9 points of it.
+    h.mismatchPercentage = (59505 / 3_162_132) * 100;
+    expect((await runSnapshot(env, opts({ maxMismatch: 1.8818 }))).status).toBe("fail");
+  });
+
   it("fails without a diff artifact when the differ produced no context image", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());

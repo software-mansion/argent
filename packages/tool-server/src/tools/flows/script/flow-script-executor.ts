@@ -134,6 +134,10 @@ const ALLOWED_ENV_NAMES: readonly string[] = [
   "ANDROID_SDK_ROOT",
   "ANDROID_AVD_HOME",
   "ANDROID_USER_HOME",
+  // The adb server the tool-server uses, so a script's `adb` reaches the same devices.
+  "ANDROID_ADB_SERVER_PORT",
+  "ANDROID_ADB_SERVER_ADDRESS",
+  "ADB_SERVER_SOCKET",
   "JAVA_HOME",
   "GRADLE_USER_HOME",
   "DEVELOPER_DIR",
