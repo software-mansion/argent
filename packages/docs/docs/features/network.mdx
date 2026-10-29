@@ -27,6 +27,8 @@ Argent captures the traffic in three different layers.
 
 Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
 
+The native layer loads each request that it captures with the shared cookie store of the app (`HTTPCookieStorage.shared`). A session of the app with a cookie store of its own thus uses the shared store while the capture is on.
+
 In React Native, the JS runtime layer records each request where the request leaves the JavaScript code. The JS runtime layer records the requests in these functions:
 
 - `XMLHttpRequest`. Axios and the `fetch()` function of React Native use `XMLHttpRequest`.
