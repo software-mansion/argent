@@ -38,7 +38,7 @@ Read this for a Mac app. `argent-device-interact` still applies for everything n
 
 A click that opens an open or save panel shows a file list that `describe` cannot read. Never click in that list.
 
-1. After the click: `file-panel {action: "choose", path: "/abs/path"}`. It waits up to `timeoutMs` (default 5000) for the panel. A save panel takes the file to write, in an existing folder.
+1. After the click: `file-panel {action: "choose", path: "/abs/path"}`. It waits up to `timeoutMs` (default 5000) for the panel. A save panel takes the file to write, in an existing folder; its extension picks the file format.
 2. To close it instead: `file-panel {action: "cancel"}`.
 3. To skip the panel: `file-panel {action: "stub", path: "/abs/path"}` before the click; the next panel is answered without appearing.
 4. With more than one panel open, `file-panel {action: "list"}`, then pass `panel`.

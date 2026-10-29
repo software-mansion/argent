@@ -123,8 +123,8 @@ async function statOrNull(p: string): Promise<Stats | null> {
 
 /**
  * Checks the paths against the panel, before anything is sent to the app. The
- * panel's allowed file types are not checked: matching a file against them needs
- * the type conformance that only the app's process knows.
+ * panel's allowed file types are checked by the app: matching a file against them
+ * needs the type conformance that only the app's process knows.
  */
 async function checkPathsFor(
   panel: Pick<MacosPanel, "kind" | "allowsMultiple">,
@@ -306,9 +306,9 @@ export const filePanelTool: ToolDefinition<Params, Result> = {
 Use when a click in a Mac app opens an open or save panel (list shows whether one is open), or before such a click, to answer the next panel without it ever appearing.
 Actions: list returns the open panels with their number, kind (open or save), title, folder and options. choose answers a panel with path, or paths for a multiple selection: an existing file or folder for an open panel, the file to write for a save panel; it waits up to timeoutMs for the panel to appear after the click. cancel cancels a panel. stub arms a one-shot answer (stubMode answer, with path) or a cancel (stubMode cancel) for the next panel the app presents; stubMode off disarms it.
 For stub, panelKind names the kind of the next panel; without it, paths that exist mean an open panel and one path that does not exist yet means a save panel. A next panel that could not take the answer (several paths for a single selection, a folder for a panel of files or for a save panel) opens as usual.
-A sandboxed app that argent started is given access to the chosen paths only. argent does not check a path against the panel's allowed file types.
+A sandboxed app that argent started is given access to the chosen paths only. On a save panel that offers several file formats, the path's extension picks the format.
 Returns { panels } for list, { chosen, panel, kind, paths } for choose, { cancelled, panel } for cancel, { armed, mode, panelKind? } for stub.
-Fails if no panel appears within timeoutMs, if more than one panel is open and panel is not given, if a path is relative or does not exist (a save panel needs an existing folder), if the panel cannot take it (a folder for a panel of files, a file for a panel of folders, an existing folder for a save panel), or if the Mac app is not running.`,
+Fails if no panel appears within timeoutMs, if more than one panel is open and panel is not given, if a path is relative or does not exist (a save panel needs an existing folder), if the panel cannot take it (a folder for a panel of files, a file for a panel of folders, an existing folder for a save panel, an extension that matches none of a save panel's formats), or if the Mac app is not running.`,
   searchHint: "file panel dialog open save choose pick file folder nsopenpanel nssavepanel mac app",
   zodSchema,
   capability,

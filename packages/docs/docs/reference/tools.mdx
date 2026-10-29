@@ -301,7 +301,7 @@ Argent gives a sandboxed app access to each chosen path, and only when a panel t
 
 A prepared answer that the next panel cannot take does not answer it, and the panel opens as usual. Examples are several paths for a panel with a single selection, or a folder for a panel that takes only files or for a save panel.
 
-Argent does not check a path against the file types that the panel allows (`allowedContentTypes` in the result of `list`).
+On a save panel that offers more than one file format (`allowedContentTypes` in the result of `list`), the extension of the path selects the format.
 
 `file-panel` fails in these conditions:
 
@@ -311,6 +311,7 @@ Argent does not check a path against the file types that the panel allows (`allo
 - A path for an open panel does not exist.
 - The folder for a save panel does not exist.
 - The path for a save panel is an existing folder. This includes a document package, such as `Notes.rtfd`.
+- The extension of the path matches none of the formats of a save panel.
 - More than one path for a save panel, or, with `choose`, for an open panel that takes one item.
 - With `choose`, the panel cannot take the path: a folder for a panel that takes only files, or a file for a panel that takes only folders. A document package counts as a file.
 
