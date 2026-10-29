@@ -1,6 +1,6 @@
 # Argent Privacy Notice (Telemetry)
 
-Effective date: 7 September 2026 · Version: 1.04
+Effective date: 29 October 2026 · Version: 1.05
 
 This notice is a product-specific supplement to the [Software Mansion Privacy Policy](https://swmansion.com/) (the "Policy") and applies to telemetry collected by Argent, a Software Mansion Software Product. Capitalised terms used but not defined here (including Personal Data, Usage Data, Legitimate Interest, EEA and Software Mansion Software Product) have the meaning given to them in the Policy. Where this notice and the Policy differ in respect of Argent telemetry, this notice prevails.
 
