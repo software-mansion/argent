@@ -139,13 +139,16 @@ describe("terminate-app", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  it("propagates other simctl failures", async () => {
+  it.each([
+    ["iOS", IOS_UDID, /Command failed/],
+    ["ios-remote", `remote:${IOS_UDID}`, /Unable to lookup in current state: Shutdown/],
+  ])("propagates other simctl failures on %s", async (_name, udid, expected) => {
     execFailure = {
       message: "Command failed: xcrun simctl terminate",
       stderr:
         "An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=405):\n" +
         "Unable to lookup in current state: Shutdown",
     };
-    await expect(run(IOS_UDID)).rejects.toThrow(/Command failed/);
+    await expect(run(udid)).rejects.toThrow(expected);
   });
 });

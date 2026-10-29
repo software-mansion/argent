@@ -104,7 +104,8 @@ Succeeds when the app is not running or not installed.`,
     vega: {
       requires: ["vega"],
       handler: async (_services, { udid, bundleId }) => {
-        // Always true, as on Android: the CLI exits 0 whether or not the app was running.
+        // Always true, as on Android: the CLI exits 0 for a running or stopped app and
+        // errors on one that is not installed.
         await tolerateNothingToTerminate(
           vegaDevice(udid, ["terminate-app", "-a", bundleId], { timeoutMs: 40_000 }),
           VEGA_NOT_INSTALLED
