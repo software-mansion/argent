@@ -143,6 +143,28 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(evaluateCondition("text", "^$", pw, "matches")).toBe(false);
   });
 
+  // reference/e2e-yaml.mdx documents that a container reads none of an identified child's text.
+  it("reads a container whose text is all in identified children as empty, so '^$' passes", () => {
+    const row = { x: 0.1, y: 0.1, width: 0.5, height: 0.04 };
+    const tree = adaptChromiumTreeForFlows(
+      el({
+        role: "html",
+        children: [
+          el({
+            identifier: "box",
+            frame: row,
+            children: [el({ identifier: "msg", value: "Hi", frame: row })],
+          }),
+          el({ identifier: "plain", frame: row, children: [el({ value: "Hi", frame: row })] }),
+        ],
+      })
+    );
+    const emptyPasses = (id: string) =>
+      evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches");
+    expect(emptyPasses("box")).toBe(true);
+    expect(emptyPasses("plain")).toBe(false);
+  });
+
   it("never emits the root as a leaf, even when <html> carries an identifier", () => {
     // The walker reads id/data-testid off every element including <html>; the
     // iOS/Android adapters iterate children only and never project their root.

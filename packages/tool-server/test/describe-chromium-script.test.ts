@@ -858,6 +858,15 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(JSON.stringify(tree)).not.toContain("Final");
   });
 
+  it("reads a checkbox or range input's value", () => {
+    const { tree } = run([
+      inputEl({ type: "checkbox", value: "on", attrs: { id: "cb" }, rect: BOX }),
+      inputEl({ type: "range", value: "50", attrs: { id: "rg" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "cb")).toMatchObject({ label: "on" });
+    expect(findById(tree, "rg")).toMatchObject({ label: "50" });
+  });
+
   // ---- input focus (the flow type directive's focus wait reads this) ----
   it("marks the document's activeElement as focused, excluding the body", () => {
     const focusedInput = el({ tag: "input", attrs: { id: "focused-input" }, rect: BOX });
