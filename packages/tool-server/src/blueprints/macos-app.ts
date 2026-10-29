@@ -161,7 +161,7 @@ const MACOS_LIBRARY_PROTOCOL = 1;
 
 const DEFAULT_CALL_TIMEOUT_MS = 10_000;
 const HELPER_TIMEOUT_MS = 10_000;
-/** From the spawn to the handshake, which the library sends after the app finishes launching. */
+/** From the spawn to the handshake, which the library sends when the app finishes launching or shows a dialog before. */
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
 /** How long `Application.terminate` gets before the signals; the app may show a "save changes" sheet. */
@@ -1033,7 +1033,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         invalid
           ? `${errorMessage(err)} ${stopped}`
           : `${bundleId} started, but the argent library did not connect (${errorMessage(err)}), ` +
-              `so ${stopped} Check that the app is not a Release build with the hardened runtime, ` +
+              `so ${stopped} Check that nothing blocks the app's main thread while it launches, ` +
               `and that its executable is not a launcher script or shell wrapper that starts the app.` +
               readLogTail(logPath),
         invalid

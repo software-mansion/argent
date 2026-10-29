@@ -166,7 +166,7 @@ The device id is `macos-app-<bundle id>`. Argent accepts a bundle id that has on
 | `udid`         | A Mac app id instead of `macosAppPath`. Argent starts the app from the path of the last start, or from the newest app with this bundle id that Spotlight finds |
 | `force`        | Quit the running app and start it again. Also quit a copy of the same build that runs without the Argent library                                               |
 
-The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPath, args, booted }`. `args` are the arguments the app runs with. When the app runs already with the Argent library, `boot-device` starts nothing and adds `alreadyRunning: true`. `logPath` is the file that receives the output of the app. After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 seconds until the app shows a window. When no window appears, the result has a `note`, because taps and screenshots need a window. The result also has a `note` in these cases:
+The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPath, args, booted }`. `args` are the arguments the app runs with. When the app runs already with the Argent library, `boot-device` starts nothing and adds `alreadyRunning: true`. `logPath` is the file that receives the output of the app. After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 seconds until the app shows a window. A dialog that the app shows before it finishes launching, for example a license prompt, counts as that window: the agent answers it with the other tools. When no window appears, the result has a `note`, because taps and screenshots need a window. The result also has a `note` in these cases:
 
 - The app runs already with other arguments than `macosAppArgs`. Argent does not start the app again. Use `force` to start the app with the new arguments.
 - The app has no listening socket.
@@ -181,7 +181,7 @@ The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPa
 - With `force`, a copy of the app without the Argent library does not quit, for example a process of a different user. Argent does not start the app.
 - A copy of a different build of the app runs without the Argent library, for example the build of another git worktree. This also fails with `force`. The error names the bundle path and the process id of the copy.
 - The app runs already with the Argent library from a different bundle path, and `force` is not `true`. Argent does not return that copy and does not replace it, because the copy can belong to another agent.
-- The Argent library does not connect within 20 seconds. Argent stops the app again, and the error shows the last lines of the app log.
+- The Argent library does not connect within 20 seconds, for example because something blocks the main thread of the app while it launches. Argent stops the app again, and the error shows the last lines of the app log.
 - The app shows no window that Argent can drive: a menu bar app without a standard window, or an app that shows only panels or borderless windows. Argent stops the app again.
 
 `force` quits a copy of the same build that runs without the Argent library, for example a copy that Xcode Run started. The unsaved changes of that copy are lost. When a forced start fails because of the bundle or because a different build runs, the app that Argent runs continues to run.

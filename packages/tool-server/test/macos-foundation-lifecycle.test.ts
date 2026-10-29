@@ -825,7 +825,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       "EXITED_BEFORE_READY",
       /crashing on purpose/,
     ],
-    ["never answers", "--mode=silent", "HANDSHAKE_TIMEOUT", /hardened runtime/],
+    ["never answers", "--mode=silent", "HANDSHAKE_TIMEOUT", /main thread/],
     ["speaks another protocol", "--mode=bad-protocol", "HANDSHAKE_INVALID", /protocol 2/],
     ["is refused by the helper", "--helper-fails", "SPAWN_FAILED", /refused on purpose/],
   ] as const)(
