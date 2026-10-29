@@ -184,7 +184,8 @@ async function sandboxTokens(app: MacosAppApi, paths: string[]): Promise<{ token
     )
   );
   const tokens: string[] = [];
-  for (const target of new Set(resolved)) {
+  // One token per path, in the order of the paths: the app matches them by position.
+  for (const target of resolved) {
     tokens.push(await issueSandboxExtension(target, { readOnly: tracked.userSelectedReadOnly }));
   }
   return { tokens };
