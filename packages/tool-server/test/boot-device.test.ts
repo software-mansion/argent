@@ -136,6 +136,10 @@ describe("boot-device — iOS path", () => {
     expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
     );
+    const bootstatusCallOrder = mockExecFile.mock.invocationCallOrder[1];
+    expect(clearAutomationEnabledOrWarnMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      bootstatusCallOrder
+    );
 
     expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
       ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
