@@ -330,8 +330,8 @@ const FLOW_STEP_DEFINITIONS: {
   },
   "run": {
     summary: (step) => escapeInline(step.flow),
-    // The as-written path, so a report line shows exactly what the flow
-    // references (`run ../shared/login.yaml`), not just the attribution stem.
+    // The as-written path (control characters escaped), so a report line shows
+    // what the flow references (`run ../shared/login.yaml`), not just the attribution stem.
     target: (step) => escapeInline(step.flow),
   },
   "when": {

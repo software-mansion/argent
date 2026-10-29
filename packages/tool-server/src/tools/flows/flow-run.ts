@@ -251,8 +251,8 @@ export interface StepReport {
   /**
    * The fragment a step belongs to (set on `run` and the steps it expands) —
    * the target's basename stem; when that stem collides with the top-level
-   * flow's name, the as-written path minus `.yaml` (`./<stem>` for a bare
-   * spelling). Renderers distinguish fragment steps by this differing from the
+   * flow's name, the as-written path minus `.yaml`, control characters escaped
+   * (`./<stem>` for a bare spelling). Renderers distinguish fragment steps by this differing from the
    * report's `flow`, which the collision fallback guarantees: both
    * disambiguated shapes contain a `/`, which FLOW_NAME_PATTERN forbids.
    */
@@ -1400,7 +1400,10 @@ function assertUploadSelfContained(
         ? closure.project.runMember(anchorDir, target)
         : closure.project.savedTestMember(entry.paths);
     if (member?.state === "refused") {
-      offending.push({ kind: entry.kind, line: `${entry.line} (${member.error})` });
+      offending.push({
+        kind: entry.kind,
+        line: `${entry.line} (${escapeInline(String(member.error))})`,
+      });
     } else if (
       member?.state === "present" &&
       member.canonical !== undefined &&
@@ -1415,7 +1418,7 @@ function assertUploadSelfContained(
       queue.push({
         flow: next,
         canonical: member.canonical,
-        within: ` in ${member.canonical}`,
+        within: ` in ${escapeInline(member.canonical)}`,
         hop: file.hop + 1,
       });
     }
@@ -2562,7 +2565,7 @@ async function execRunStep(
       status: "error",
       flow: display,
       target: stepTarget(step),
-      reason,
+      reason: escapeInline(reason),
       ...depthOf(scope),
       durationMs: Date.now() - startedAt,
     });

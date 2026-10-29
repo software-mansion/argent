@@ -526,11 +526,14 @@ describe("flow composition (run:)", () => {
       "echo:pass:undefined",
       "run:error:sub\\nmissing/frag.yaml",
     ]);
+    expect(result.steps[2]!.reason).toMatch(
+      /^could not load fragment "sub\\nmissing\/frag\.yaml": ENOENT[^\n]*sub\\nmissing\/frag\.yaml'$/
+    );
   });
 
   it("attributes a same-stem fragment on one line whether it loads or not", async () => {
     // Root login.yaml composing sub<LF>ok/login.yaml: on a stem collision the
-    // attribution is the as-written spelling, directory included.
+    // attribution keeps the directory, line break included.
     const oddDir = path.join(tmpDir, ".argent", "flows", "sub\nok");
     await fs.mkdir(oddDir, { recursive: true });
     await fs.writeFile(

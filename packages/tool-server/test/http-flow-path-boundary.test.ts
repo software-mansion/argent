@@ -1202,6 +1202,24 @@ describe("flow-execute over a link, from the real argent client", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("keeps each refused step of a sent fragment on its own line", async () => {
+    const root = await tapThenRun('"sub\\nok/mid.yaml"');
+    const mid = await write(
+      ".argent/flows/sub\nok/mid.yaml",
+      'steps:\n  - script: { path: seed.mjs }\n  - run: "../../../../o\\nx/outside.yaml"\n'
+    );
+    const where = (await fs.realpath(mid)).replace("\n", "\\n");
+
+    const err = await callFlow(true, root).catch((e: unknown) => e);
+
+    expect(String(err)).toContain(
+      `  - step 1 in ${where}: script: { path: seed.mjs }\n` +
+        `  - step 2 in ${where}: run: ../../../../o\\nx/outside.yaml ` +
+        "(../../../../o\\nx/outside.yaml is outside every root this client serves"
+    );
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("tells a client that sends a run: flow without its fragments to update", async () => {
     const root = await tapThenRun("frag.yaml");
     await write(".argent/flows/frag.yaml", "steps:\n  - echo: frag\n");
