@@ -1,4 +1,8 @@
-import { MACOS_NO_WINDOW_MESSAGE, type MacosAppApi } from "../../../blueprints/macos-app";
+import {
+  listedWindows,
+  MACOS_NO_WINDOW_MESSAGE,
+  type MacosAppApi,
+} from "../../../blueprints/macos-app";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { assertLaunchTargetsDevice } from "../../../utils/macos-apps";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
@@ -16,9 +20,7 @@ export const macosImpl: PlatformImpl<{ macosApp: MacosAppApi }, LaunchAppParams,
       const { args, alreadyRunning, note } = await services.macosApp.launch();
       if (!alreadyRunning) return { launched: true, bundleId, args, ...(note ? { note } : {}) };
       // A restart would lose the state of an app that only closed its last window.
-      const { windows } = await services.macosApp
-        .call<{ windows?: Array<{ isReference?: unknown }> }>("Window.list")
-        .catch(() => ({ windows: undefined }));
+      const windows = await services.macosApp.call("Window.list").then(listedWindows, () => null);
       const shown =
         windows && !windows.some((w) => w.isReference === true)
           ? `The app was already running with the argent library. ${MACOS_NO_WINDOW_MESSAGE}`

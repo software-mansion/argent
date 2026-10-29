@@ -177,6 +177,21 @@ export const MACOS_NO_WINDOW_MESSAGE =
   "The app has no open window. Open one with the app's own command, such as File > New, " +
   "through menu-bar or its keyboard shortcut.";
 
+/** One window of a `Window.list` reply. */
+interface MacosListedWindow {
+  number?: unknown;
+  kind?: unknown;
+  isReference?: unknown;
+  isVisible?: unknown;
+  isMiniaturized?: unknown;
+}
+
+/** The windows of a `Window.list` reply, or none when it has no list. */
+export function listedWindows(reply: unknown): MacosListedWindow[] {
+  const windows = (reply as { windows?: unknown } | null)?.windows;
+  return Array.isArray(windows) ? windows : [];
+}
+
 function notRunningError(bundleId: string): FailureError {
   return macosFailure(
     `${bundleId} is not running. Start it with boot-device (macosAppPath) or launch-app ` +
@@ -693,15 +708,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     for (;;) {
       let shown = false;
       try {
-        const listed = (await ch.request("Window.list", {}, 2_000)) as {
-          windows?: Array<{
-            kind?: unknown;
-            isReference?: unknown;
-            isVisible?: unknown;
-            isMiniaturized?: unknown;
-          }>;
-        };
-        const windows = (Array.isArray(listed?.windows) ? listed.windows : []).filter(
+        const windows = listedWindows(await ch.request("Window.list", {}, 2_000)).filter(
           (w) => w.isVisible === true && w.isMiniaturized !== true
         );
         if (windows.some((w) => w.isReference === true)) return {};
@@ -766,10 +773,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         })
       : [app.pid];
     if (ch && left.length > 0) {
-      const listed = (await ch.request("Window.list", {}, 2_000).catch(() => null)) as {
-        windows?: Array<{ kind?: unknown; isVisible?: unknown }>;
-      } | null;
-      const windows = Array.isArray(listed?.windows) ? listed.windows : [];
+      const windows = listedWindows(await ch.request("Window.list", {}, 2_000).catch(() => null));
       if (windows.some((w) => w.isVisible === true && PROMPT_KINDS.includes(w.kind as string))) {
         throw macosFailure(
           `${bundleId} did not quit: it shows a prompt, probably asking whether to save ` +
