@@ -442,6 +442,11 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(result.pid).toBe(getTrackedMacosApp(BUNDLE_ID)!.pid);
       expect(pidAlive(result.pid)).toBe(true);
       expect(app.isConnected()).toBe(true);
+      // A restart would lose the state of an app that closed its last window.
+      const again = await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+      expect(again.note).toMatch(
+        mode === "windowless" ? /no open window.*menu-bar/ : /restart-app/
+      );
     }
   );
 
@@ -465,6 +470,9 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     const failed = await app.call("Fail").catch((e: unknown) => e);
     expect((failed as Error).message).toBe("boom from the library");
     expect(codeOf(failed)).toBe(FAILURE_CODES.MACOS_APP_RPC_ERROR);
+    await expect(app.call("Fail", { message: "No window" })).rejects.toThrow(
+      /File > New.*menu-bar/
+    );
     await expect(app.call("No.such")).rejects.toThrow("Unsupported method: No.such");
 
     const hung = await app.call("Hang", {}, { timeoutMs: 200 }).catch((e: unknown) => e);

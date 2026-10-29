@@ -102,7 +102,7 @@ function handle(socket, msg) {
       reply({ result: {} });
       return setTimeout(() => socket.destroy(), 20);
     case "Fail":
-      return reply({ error: { message: "boom from the library" } });
+      return reply({ error: { message: params.message ?? "boom from the library" } });
     case "Hang":
       return;
     case "Window.list":

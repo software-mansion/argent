@@ -1,4 +1,4 @@
-import type { MacosAppApi } from "../../../blueprints/macos-app";
+import { MACOS_NO_WINDOW_MESSAGE, type MacosAppApi } from "../../../blueprints/macos-app";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { assertLaunchTargetsDevice } from "../../../utils/macos-apps";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
@@ -14,9 +14,15 @@ export const macosImpl: PlatformImpl<{ macosApp: MacosAppApi }, LaunchAppParams,
       const bundleId = assertLaunchTargetsDevice(params.bundleId, device);
       // No `args`: a stopped app starts again with the arguments of its last start.
       const { args, alreadyRunning, note } = await services.macosApp.launch();
-      const shown = alreadyRunning
-        ? "The app was already running with the argent library; use restart-app for a new process."
-        : note;
-      return { launched: true, bundleId, args, ...(shown ? { note: shown } : {}) };
+      if (!alreadyRunning) return { launched: true, bundleId, args, ...(note ? { note } : {}) };
+      // A restart would lose the state of an app that only closed its last window.
+      const { windows } = await services.macosApp
+        .call<{ windows?: Array<{ isReference?: unknown }> }>("Window.list")
+        .catch(() => ({ windows: undefined }));
+      const shown =
+        windows && !windows.some((w) => w.isReference === true)
+          ? `The app was already running with the argent library. ${MACOS_NO_WINDOW_MESSAGE}`
+          : "The app was already running with the argent library; use restart-app for a new process.";
+      return { launched: true, bundleId, args, note: shown };
     },
   };

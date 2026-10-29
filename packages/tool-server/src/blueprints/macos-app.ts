@@ -170,6 +170,11 @@ const SIGNAL_GRACE_MS = 2_000;
 const POLL_MS = 100;
 const WINDOW_TIMEOUT_MS = 10_000;
 
+/** Replaces the library's bare "No window", which leaves the agent without a way back. */
+export const MACOS_NO_WINDOW_MESSAGE =
+  "The app has no open window. Open one with the app's own command, such as File > New, " +
+  "through menu-bar or its keyboard shortcut.";
+
 function notRunningError(bundleId: string): FailureError {
   return macosFailure(
     `${bundleId} is not running. Start it with boot-device (macosAppPath) or launch-app ` +
@@ -450,11 +455,13 @@ class LibraryChannel {
       call.resolve(msg.payload.result);
       return;
     }
+    const message =
+      typeof error.message === "string" && error.message
+        ? error.message
+        : `${call.method} failed in ${this.bundleId}.`;
     call.reject(
       macosFailure(
-        typeof error.message === "string" && error.message
-          ? error.message
-          : `${call.method} failed in ${this.bundleId}.`,
+        message === "No window" ? MACOS_NO_WINDOW_MESSAGE : message,
         FAILURE_CODES.MACOS_APP_RPC_ERROR,
         "macos_app_rpc",
         "unknown"
