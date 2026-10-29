@@ -11,7 +11,6 @@ import { resolveDevice } from "./utils/device-info";
 import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "./utils/foldable";
 import { classifyDeviceForTelemetry } from "./utils/telemetry-platform";
 import { shutdownDevice } from "./utils/device-shutdown";
-import { listDevicesTool } from "./tools/devices/list-devices";
 import {
   variantProposalStore,
   type StoreSnapshot,
@@ -133,7 +132,7 @@ export function createPreviewRouter(registry: Registry): Router {
     knownDevicesInFlight = registry
       .invokeTool<{
         devices: Array<{ platform: string; udid?: string; serial?: string }>;
-      }>(listDevicesTool.id)
+      }>("list-devices")
       .then((data) => {
         rememberDevices(data.devices);
         return knownDevices!.ids;
@@ -159,7 +158,7 @@ export function createPreviewRouter(registry: Registry): Router {
             }
           | { platform: "chromium"; id: string; title: string; port: number }
         >;
-      }>(listDevicesTool.id);
+      }>("list-devices");
       // The preview UI keys off `udid` and `state === "Booted"` — iOS
       // terminology — so Android serials are mapped onto the same shape for one
       // dropdown. Chromium is excluded: the UI can only render simulator-server's
@@ -348,7 +347,7 @@ export function createPreviewRouter(registry: Registry): Router {
       // user-initiated — never hot-polled — so one fresh list is affordable.
       const data = await registry.invokeTool<{
         devices: Array<{ platform: string; udid?: string; serial?: string; state?: string }>;
-      }>(listDevicesTool.id);
+      }>("list-devices");
       rememberDevices(data.devices);
       const entry = data.devices.find((d) => (d.platform === "ios" ? d.udid : d.serial) === udid);
       if (!entry) {

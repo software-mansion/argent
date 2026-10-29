@@ -82,6 +82,14 @@ export interface ServiceNode<T = unknown> {
   dependents: Set<string>;
 }
 
+/** One service's entry in `Registry.getSnapshot()`. */
+export interface ServiceSnapshot {
+  state: ServiceState;
+  dependents: string[];
+  /** Epoch ms a tool invocation last resolved this service; absent if none ever has. */
+  lastUsedAt?: number;
+}
+
 /** URN, optionally with options forwarded to the blueprint factory. */
 export type ServiceRef = string | { urn: string; options?: Record<string, unknown> };
 

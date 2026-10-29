@@ -10,6 +10,7 @@ export type {
   ServiceInstance,
   ServiceBlueprint,
   ServiceNode,
+  ServiceSnapshot,
   ToolDefinition,
   ToolRecord,
   RegistryEvents,

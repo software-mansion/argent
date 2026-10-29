@@ -102,7 +102,8 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
-import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { Registry, TypedEventEmitter } from "@argent/registry";
+import { createListDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import {
   __resetExternalDeviceCacheForTesting,
@@ -110,6 +111,8 @@ import {
 } from "../src/utils/external-devices";
 import { __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 import { listVvdImages } from "../src/utils/vega-sdk";
+
+const listDevicesTool = createListDevicesTool(new Registry());
 
 function simctlJson(): string {
   return JSON.stringify({
@@ -599,6 +602,58 @@ describe("list-devices", () => {
     // included; flow auto-bind keys on state "connected" and skips it.
     expect(byName("Desk iPhone")).toBeLessThan(byName("Office iPhone"));
     expect(byName("iPhone 16")).toBeLessThan(byName("Office iPhone"));
+  });
+
+  it("annotates a device a tool is driving with inUse and the seconds since that tool call", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\nemulator-5554\tdevice\n" };
+      }
+      return { stderr: "", stdout: "" };
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    try {
+      const registry = new Registry();
+      for (const namespace of ["SimulatorServer", "NativeDevtools"]) {
+        registry.registerBlueprint({
+          namespace,
+          getURN: (id: string) => `${namespace}:${id}`,
+          factory: async () => ({
+            api: {},
+            dispose: async () => {},
+            events: new TypedEventEmitter(),
+          }),
+        });
+      }
+      // Agents pass UDIDs in whatever case they were given.
+      registry.registerTool({
+        id: "tap",
+        services: () => ({ sim: "SimulatorServer:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }),
+        execute: async () => ({}),
+      });
+      await registry.invokeTool("tap");
+      // The simulator watcher's own attach, made outside any tool call.
+      await registry.resolveService("NativeDevtools:BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB");
+      vi.setSystemTime(1_042_900);
+
+      const result = await createListDevicesTool(registry).execute!({}, {});
+
+      const byId = (id: string) =>
+        result.devices.find((d) => ("udid" in d ? d.udid : "serial" in d ? d.serial : null) === id);
+      expect(byId("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")).toMatchObject({
+        inUse: true,
+        idleSeconds: 42,
+      });
+      for (const id of ["BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", "emulator-5554"]) {
+        expect(byId(id)).toBeDefined();
+        expect(byId(id)).not.toHaveProperty("inUse");
+        expect(byId(id)).not.toHaveProperty("idleSeconds");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

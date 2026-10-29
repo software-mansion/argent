@@ -2,6 +2,7 @@ import { TypedEventEmitter } from "./event-emitter";
 import {
   ServiceState,
   ServiceNode,
+  ServiceSnapshot,
   ServiceInstance,
   ServiceBlueprint,
   ToolDefinition,
@@ -43,6 +44,11 @@ export class Registry {
   private tools = new Map<string, ToolRecord>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
+  /**
+   * When a tool invocation last resolved each service, in epoch ms. Resolves
+   * outside an invocation (background watchers, dependency chains) are not use.
+   */
+  private lastUsedAt = new Map<URN, number>();
   /**
    * Injected so the registry needs no dependency on the flag store; the
    * tool-server wires the real check. The default enables every flag, so a
@@ -87,7 +93,11 @@ export class Registry {
      * Most tools declare nothing in `services()` and resolve here instead. One
      * of those can be holding just as dead a handle as a declared one.
      */
-    resolvedDuringInvocation.getStore()?.add(urn);
+    const invocation = resolvedDuringInvocation.getStore();
+    if (invocation) {
+      invocation.add(urn);
+      this.lastUsedAt.set(urn, Date.now());
+    }
     return this._resolve<T>(urn, [], options);
   }
 
@@ -255,15 +265,17 @@ export class Registry {
   }
 
   getSnapshot(): {
-    services: Map<string, { state: ServiceState; dependents: string[] }>;
+    services: Map<string, ServiceSnapshot>;
     namespaces: string[];
     tools: string[];
   } {
-    const services = new Map<string, { state: ServiceState; dependents: string[] }>();
+    const services = new Map<string, ServiceSnapshot>();
     for (const [urn, node] of this.services) {
+      const lastUsedAt = this.lastUsedAt.get(urn);
       services.set(urn, {
         state: node.state,
         dependents: [...node.dependents],
+        ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
       });
     }
     return {
