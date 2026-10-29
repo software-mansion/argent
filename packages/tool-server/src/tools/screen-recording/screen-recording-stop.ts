@@ -64,6 +64,9 @@ export const screenRecordingStopTool: ToolDefinition<
       `Failed to stop screen recording: ${failureSignal.error_code}`,
   },
   capability,
+  // A remote stop waits for the runner to finish the mp4, downloads it and
+  // re-encodes it locally, which routinely exceeds the 30s MCP fetch timeout.
+  longRunning: true,
   description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the video: frame capture ends and ffmpeg finalizes the mp4.
 Also retrieves the video when the recording already ended on its own (time limit reached, capture process died); call it even after the cap fired.
 On a remote (\`remote:\`) simulator this is what ends the runner-side recording and downloads the mp4, so a large capture takes a moment to transfer.

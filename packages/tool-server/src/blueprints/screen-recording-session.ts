@@ -151,6 +151,11 @@ export interface ScreenRecordingSessionApi {
 // finalize contract.
 const DISPOSE_FINALIZE_GRACE_MS = 1_500;
 const DISPOSE_REAP_MS = 1_000;
+// A remote release ends the runner-side recording and downloads it, which can
+// take minutes. Once the stop has reached the runner it finishes there anyway
+// and the recording is kept for `sim-remote screen-record fetch`, so a
+// teardown waits only this long for the download.
+const DISPOSE_REMOTE_RELEASE_GRACE_MS = 5_000;
 
 function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.recordingActive = false;
@@ -294,7 +299,14 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         if (state.remoteRelease) {
           const release = state.remoteRelease;
           state.remoteRelease = null;
-          await release().catch(() => {});
+          let grace: NodeJS.Timeout | undefined;
+          await Promise.race([
+            release().catch(() => {}),
+            new Promise<void>((resolve) => {
+              grace = setTimeout(resolve, DISPOSE_REMOTE_RELEASE_GRACE_MS);
+            }),
+          ]);
+          clearTimeout(grace);
         }
 
         // The overlay is sim-server global state that must not outlive the

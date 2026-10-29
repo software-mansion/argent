@@ -77,6 +77,9 @@ export function createScreenRecordingStartTool(
         `Failed to start screen recording: ${failureSignal.error_code}`,
     },
     capability,
+    // A remote start first ends a leftover runner-side recording, which can
+    // take minutes, past the 30s MCP fetch timeout.
+    longRunning: true,
     description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
 By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
 By default every tap, swipe, drag, pinch and rotate is drawn into the video as an on-screen touch marker (see showTouches), so the recording shows where each interaction landed.
