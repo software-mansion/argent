@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { argentHomeDir, configFilePath } from "../src/paths.js";
-import { readConfigObject, updateConfig } from "../src/config.js";
+import { configDocumentProblem, readConfigObject, updateConfig } from "../src/config.js";
 import {
   getRememberedAgent,
   setRememberedAgent,
@@ -114,4 +114,43 @@ describe("remembered agent (lens config)", () => {
     expect(() => clearRememberedAgent()).not.toThrow();
     expect(getRememberedAgent()).toBeNull();
   });
+});
+
+// `readConfigObject` reads an absent, unreadable and unparseable file alike as
+// an empty document, which is silent for a key with no default.
+describe("configDocumentProblem", () => {
+  it("says nothing for a host with no document or one that reads and parses", () => {
+    expect(configDocumentProblem()).toBeUndefined();
+    updateConfig((config) => ({ ...config, telemetry: { enabled: false } }));
+    expect(configDocumentProblem()).toBeUndefined();
+  });
+
+  it.each([
+    ["half-written JSON", '{"scripts":{"bash":"/bin/ba', "is not valid JSON"],
+    ["a document that is not a JSON object", "[1,2,3]", "does not hold a JSON object"],
+  ])("names the file and the problem for %s", (_label, document, says) => {
+    fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+    fs.writeFileSync(configFilePath(), document);
+
+    const problem = configDocumentProblem();
+
+    expect(problem).toContain(configFilePath());
+    expect(problem).toContain(says);
+    // The read itself is unchanged: still an empty document, still no throw.
+    expect(readConfigObject()).toEqual({});
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "names the file and the read error for one it may not open",
+    () => {
+      fs.mkdirSync(path.dirname(configFilePath()), { recursive: true });
+      fs.writeFileSync(configFilePath(), "{}");
+      fs.chmodSync(configFilePath(), 0o000);
+      try {
+        expect(configDocumentProblem()).toContain("could not be read");
+      } finally {
+        fs.chmodSync(configFilePath(), 0o600);
+      }
+    }
+  );
 });

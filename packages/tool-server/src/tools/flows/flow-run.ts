@@ -1320,7 +1320,7 @@ function fragmentLoadRefusal(
  * in the flow or in any flow its `run:` and nested `tool: flow-execute` steps
  * reach — before anything executes, so a mid-run or guard-gated error cannot
  * execute half the flow first. All of them read or write project files, which
- * stay on the client: a script step's `.mjs` (and whatever it imports), a
+ * stay on the client: a script step's own file (and whatever it imports), a
  * snapshot's baselines (against a per-call temp materialization a plain
  * snapshot can only fail, while updateBaselines writes PNGs no later run can
  * find), the flow a nested `flow-execute` names under the client's

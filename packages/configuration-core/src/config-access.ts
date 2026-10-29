@@ -95,7 +95,7 @@ export class ConfigScopeError extends Error {
 }
 
 /**
- * Thrown when a value fails the schema's `parse` validator. Carries what the key
+ * Thrown when a value fails `validateWrite` (or `parse`). Carries what the key
  * accepts and an example, so a caller can tell the user what to type instead.
  */
 export class ConfigValidationError extends Error {
@@ -143,7 +143,7 @@ export function setConfigValue(
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
-  const parsed = def.parse(rawValue);
+  const parsed = (def.validateWrite ?? def.parse)(rawValue);
   if (parsed === undefined)
     throw new ConfigValidationError(def.key, describeExpectedValue(def), def.example);
   updateConfig((config) => setAtPath(config, key, parsed), scope, options);

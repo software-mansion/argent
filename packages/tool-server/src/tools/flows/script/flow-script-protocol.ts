@@ -7,6 +7,11 @@
  * and any subprocess the script starts land in one stream in written order, and
  * so that a limit can apply while draining rather than after a whole message
  * has been serialized.
+ *
+ * `interpreter` picks the runner's mode. In `node` mode it preloads in front of
+ * the script and the document crosses this channel both ways. In `bash` mode it
+ * spawns bash, which reads and writes the document in the file the request names;
+ * the runner reads it back after bash exits and returns it here.
  */
 
 export const SCRIPT_MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -22,8 +27,16 @@ export const SCRIPT_MAX_OUTPUT_BYTES = 1024 * 1024;
 export const SCRIPT_MAX_FAILURE_MESSAGE_CHARS = 8 * 1024;
 export const SCRIPT_MAX_FAILURE_STACK_CHARS = 16 * 1024;
 
-export interface ScriptExecuteRequest {
+type ScriptInterpreter = "node" | "bash";
+
+interface ScriptExecuteCommon {
   type: "execute";
+  deadlineMs: number;
+  maxOutputBytes: number;
+}
+
+interface ScriptExecuteNodeRequest extends ScriptExecuteCommon {
+  interpreter: Extract<ScriptInterpreter, "node">;
   /**
    * The script, as the real-path file URL Node resolved its entry module to.
    * The runner re-imports it — a cache hit — to tell a script that finished
@@ -31,11 +44,29 @@ export interface ScriptExecuteRequest {
    */
   scriptUrl: string;
   outputJson: string;
-  deadlineMs: number;
-  maxOutputBytes: number;
 }
 
-export type ScriptFailureType = "load" | "runtime" | "output" | "exit" | "protocol";
+interface ScriptExecuteBashRequest extends ScriptExecuteCommon {
+  interpreter: Extract<ScriptInterpreter, "bash">;
+  /** Absolute, resolved by the parent; the runner runs what it is told. */
+  interpreterPath: string;
+  /** bash's one argument, and `$0`. Forward slashes on every platform. */
+  scriptPath: string;
+  /** `$ARGENT_OUTPUT`: the document, in and out. Created by the parent. */
+  outputFile: string;
+  /** What the parent seeded {@link outputFile} with, to tell whether the script wrote it. */
+  outputJson: string;
+  /**
+   * The parent's own time limit, so the runner's wait for a group signal never
+   * outlives the parent's timer.
+   */
+  timeoutMs: number;
+}
+
+export type ScriptExecuteRequest = ScriptExecuteNodeRequest | ScriptExecuteBashRequest;
+
+export type ScriptFailureType =
+  "load" | "runtime" | "output" | "exit" | "protocol" | "spawn" | "signal";
 
 /**
  * Child → parent. `started` is the only thing that lets the parent tell "the
@@ -62,7 +93,17 @@ const FAILURE_TYPES: readonly ScriptFailureType[] = [
   "protocol",
 ];
 
-export function parseScriptResponse(raw: unknown): ScriptResponse | null {
+/**
+ * Failures only the bash-mode runner can report, since it spawns bash itself.
+ * Refused in node mode, where the script runs inside the runner and must not be
+ * able to forge a `spawn` ("nothing ran") answer for itself.
+ */
+const BASH_ONLY_FAILURE_TYPES: readonly ScriptFailureType[] = ["spawn", "signal"];
+
+export function parseScriptResponse(
+  raw: unknown,
+  interpreter: ScriptInterpreter
+): ScriptResponse | null {
   if (typeof raw !== "object" || raw === null) return null;
   const msg = raw as Record<string, unknown>;
   switch (msg.type) {
@@ -75,7 +116,9 @@ export function parseScriptResponse(raw: unknown): ScriptResponse | null {
     case "failure": {
       const failureType = msg.failureType;
       if (typeof failureType !== "string") return null;
-      if (!FAILURE_TYPES.includes(failureType as ScriptFailureType)) return null;
+      const accepted =
+        interpreter === "bash" ? [...FAILURE_TYPES, ...BASH_ONLY_FAILURE_TYPES] : FAILURE_TYPES;
+      if (!accepted.includes(failureType as ScriptFailureType)) return null;
       if (typeof msg.message !== "string") return null;
       return {
         type: "failure",

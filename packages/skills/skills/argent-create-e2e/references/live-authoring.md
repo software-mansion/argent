@@ -32,7 +32,7 @@ args: "{\"udid\":\"DEVICE\",\"x\":0.5,\"y\":0.35}"
 
 A recorded `e2e-execute` has two names. The top-level `name` identifies the recording. `args.name` identifies the sibling test captured as `run:`.
 
-When the user requests a script, call `e2e-add-script` at the point where it must run. Read [E2E YAML: Local scripts](e2e-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
+When the user requests a script, call `e2e-add-script` at the point where it must run. Use a local `.mjs` or `.sh` file. Read [E2E YAML: Local scripts](e2e-yaml.md#local-scripts) first. If the call fails, check its changes before you retry.
 
 Over a link, `e2e-add-step` refuses a call whose step a replay over the same link rejects, and runs nothing. It also refuses an `e2e-execute` call whose test does not pass. That test can have changed the device before it stopped. In both cases the recorder records no step. See [Replay](#replay) for the steps that a replay over a link rejects.
 

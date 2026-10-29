@@ -2,7 +2,7 @@
 // two scopes merge. `argent config`, the merged reader (config-access.ts) and
 // validation all read this registry.
 
-import { isAbsolute } from "node:path";
+import * as path from "node:path";
 import type { FlagScope } from "./flags.js";
 import type { MergePolicy } from "./merge.js";
 
@@ -16,6 +16,11 @@ export interface ConfigDefinition<T = unknown> {
   readonly scopes: readonly FlagScope[];
   /** Validate + normalize a raw JSON value; `undefined` means absent/invalid. */
   readonly parse: (raw: unknown) => T | undefined;
+  /**
+   * The check `argent config set` applies instead of {@link parse}, for a key
+   * whose `parse` deliberately keeps any present value. When absent, `parse` is used.
+   */
+  readonly validateWrite?: (raw: unknown) => T | undefined;
   /** How the project and global values combine into the effective value. */
   readonly merge: MergePolicy<T>;
   /** Effective value when no scope contributes one. */
@@ -49,6 +54,34 @@ export function asString(raw: unknown): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
+/**
+ * Any present value, as text, for a key whose own reader checks it and reports
+ * what it found. `null` is absent, as for every other parser here.
+ */
+function asPresentText(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "string") return raw.trim();
+  // Config files are JSON; `??` covers a live value with no JSON form.
+  return JSON.stringify(raw) ?? "(a value with no JSON form)";
+}
+
+/**
+ * A rooted Windows path: a drive letter or a UNC share. Shared with the tool
+ * server's interpreter check, since `path.win32.isAbsolute("/usr/bin/bash")` is true.
+ */
+export const WINDOWS_ROOTED_PATH_RE = /^(?:[A-Za-z]:[\\/]|[\\/][\\/])/;
+
+/** A non-blank string that is an absolute path under this host's own platform rules. */
+function asAbsolutePath(raw: unknown): string | undefined {
+  const text = asString(raw);
+  if (text === undefined) return undefined;
+  const win32 = process.platform === "win32";
+  // Explicit win32 semantics so the Windows rule is testable from a POSIX host.
+  if (!(win32 ? path.win32 : path.posix).isAbsolute(text)) return undefined;
+  if (win32 && !WINDOWS_ROOTED_PATH_RE.test(text)) return undefined;
+  return text;
+}
+
 /** Accept a finite JSON number. */
 export function asNumber(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
@@ -62,7 +95,7 @@ export const MIN_SCRIPT_HEAP_LIMIT_MB = 32;
 
 /**
  * The smallest ceiling a flow `script` step can run under and still report on
- * the script rather than on the host. The step starts a Node process before
+ * the script rather than on the host. The step starts a process before
  * the script runs, and that start alone costs tens of milliseconds, so under
  * this the same script passes or times out according to how busy the machine
  * was. Floored rather than defaulted for the reason the heap limit is: the
@@ -164,7 +197,8 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     scopes: ["project", "global"],
     parse: (raw) => {
       const value = asString(raw);
-      return value !== undefined && (value === "~" || value.startsWith("~/") || isAbsolute(value))
+      return value !== undefined &&
+        (value === "~" || value.startsWith("~/") || path.isAbsolute(value))
         ? value
         : undefined;
     },
@@ -186,15 +220,16 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     example: "~/Movies/argent",
   },
   // Global-scope only: a checked-in `.argent/config.json` must not raise the
-  // ceiling on how much of the machine a script step may occupy. `merge` is
-  // nominal here — the project scope of a global-only key is never read.
+  // ceiling on how much of the machine a script step may occupy, or pin a bash
+  // path for one OS on a mixed-OS team. `merge` is nominal for all three - the
+  // project scope of a global-only key is never read.
   {
     key: "scripts.maxTimeoutMs",
     description:
       "Upper bound, in milliseconds, on the time limit an e2e test `script` step may ask for " +
       "(default 300000 — five minutes). Bounds how long one script can occupy the host. " +
-      `Values below ${MIN_SCRIPT_TIMEOUT_MS} ms are refused: the step starts a Node process ` +
-      "before the script runs, so a smaller ceiling ends a script that did nothing wrong.",
+      `Values below ${MIN_SCRIPT_TIMEOUT_MS} ms are refused: the step starts a process before ` +
+      "the script runs, so a smaller ceiling ends a script that did nothing wrong.",
     scopes: ["global"],
     parse: (raw) => {
       const value = asPositiveInteger(raw);
@@ -208,7 +243,8 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "scripts.heapLimitMb",
     description:
-      "Old-space heap limit, in MiB, given to each e2e test `script` process (default 512). " +
+      "Old-space heap limit, in MiB, given to each e2e test `.mjs` `script` process (default 512). " +
+      "This limit does not apply to Bash. " +
       `Values below ${MIN_SCRIPT_HEAP_LIMIT_MB} MiB are refused: that is already below what ` +
       "importing a real npm dependency needs, and under about 5 MiB the process dies inside " +
       "V8's own startup before any script runs.",
@@ -221,6 +257,24 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     merge: "prioritize-global",
     default: 512,
     example: "512",
+  },
+  {
+    key: "scripts.bash",
+    description:
+      "Absolute path to Bash for `.sh` flow scripts. Global scope only. " +
+      "If unset, Argent searches PATH, then standard install locations. " +
+      "On Windows, use Bash from Git for Windows.",
+    scopes: ["global"],
+    // Deliberately permissive: a value `parse` rejects reads as an absent key and
+    // would silently fall through to PATH. The resolver checks it and names the key.
+    parse: asPresentText,
+    validateWrite: asAbsolutePath,
+    expected:
+      "an absolute path to Bash on the tool-server host (`/bin/bash`; on Windows, `C:\\...\\bash.exe`)",
+    merge: "prioritize-global",
+    // Host-specific, since it is printed back as a command to run: `/bin/bash`
+    // exists on macOS and mainstream Linux; Git for Windows' default on Windows.
+    example: process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/bash",
   },
 ] as const;
 

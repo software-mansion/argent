@@ -286,6 +286,16 @@ describe("argent config — a rejected value says what to type instead", () => {
     expect(err).toContain("Example: argent config set lens.agent claude");
   });
 
+  // `scripts.bash`'s reader keeps whatever it is given, so its `parse` accepts
+  // `["bin/bash"]`; a suggestion is checked against the write gate instead.
+  it("suggests no wrapping for a key whose reader keeps a value its writer refuses", () => {
+    expect(() => config(["set", "scripts.bash", "bin/bash"])).toThrow(ExitError);
+
+    const err = errors();
+    expect(err).toContain("expected an absolute path to Bash on the tool-server host");
+    expect(err).not.toContain("Did you mean");
+  });
+
   it("keeps the global default out of the suggestion when no scope was given", () => {
     expect(() => config(["set", "ios.additionalDeviceSets", "/a"])).toThrow(ExitError);
 

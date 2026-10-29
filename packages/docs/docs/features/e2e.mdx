@@ -59,7 +59,7 @@ A fragment declares its start state in a prerequisite. The prerequisite is a sen
 
 An e2e test can contain more than taps and text. A step can wait for an element, wait for the screen to settle, check a condition, take a screenshot and compare it to a baseline, run a different e2e test, or run a local script. See [Baselines in e2e tests](/docs/features/visual-regression#baselines-in-e2e-tests) for the screenshot comparison.
 
-Use a local script for setup or cleanup that device steps cannot do. Ask the agent to add the script at the required point in the e2e test.
+Use a local script for setup or cleanup that device steps cannot do. A script is an `.mjs` file or a `.sh` file. Ask the agent to add the script at the required point in the e2e test.
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 

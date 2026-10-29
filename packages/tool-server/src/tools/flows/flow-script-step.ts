@@ -6,7 +6,7 @@ import {
   resolveFlowRelativeFile,
   SCRIPT_FILE_NAME_PATTERN,
 } from "@argent/registry";
-import type { FlowStep } from "./flow-utils";
+import { hasScriptExtension, scriptInterpreter, type FlowStep } from "./flow-utils";
 import {
   flowScriptExecutor,
   type FlowScriptFailureKind,
@@ -92,6 +92,10 @@ export async function runFlowScriptStep(
 
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
+    // From the canonical path, the file the executor really runs: `aliased.sh` may
+    // link to a `.mjs`. A target with neither extension falls back to the step's
+    // own spelling, which the parser holds to `SCRIPT_FILE_NAME_PATTERN`.
+    interpreter: scriptInterpreter(hasScriptExtension(canonical) ? canonical : target),
     output: {},
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,

@@ -196,13 +196,13 @@ export type OnDiskSpelling =
 /**
  * Classify the supplied basename against `dir`'s listing. One classifier serves
  * every route that turns a caller's spelling into a file it will open — a flow,
- * or since the `script:` step a plain `.mjs` — so they can never drift apart in
- * which spellings they accept.
+ * or since the `script:` step a plain `.mjs` or `.sh` — so they can never drift
+ * apart in which spellings they accept.
  *
  * readdir, not realpath: realpath rewrites a symlinked flow to its target's
  * name, and a flow deliberately runs — and composes — under the link's own
  * name. Every call site hands a pure-ASCII basename (the flow-name charset,
- * plus ".yaml" or ".mjs"), so Unicode-normalizing filesystems cannot make the
+ * plus ".yaml", ".mjs" or ".sh"), so Unicode-normalizing filesystems cannot make the
  * comparison lie.
  *
  * What an `absent` verdict means is the caller's to decide, and they differ:

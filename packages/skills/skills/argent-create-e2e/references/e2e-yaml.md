@@ -241,21 +241,28 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 
 ## Local scripts
 
-Use a local `.mjs` script only when the user requests one. Record it with `e2e-add-script` at the point where it must run.
+Use a local `.mjs` or `.sh` script only when the user requests one. Record it with `e2e-add-script` at the point where it must run.
 
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
+- script: { path: ../../scripts/seed-order.sh }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
 ```
 
+An `.mjs` file runs under Node.js. A `.sh` file runs under Bash.
+
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-- **`path`** is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case.
+- **`path`** is relative to the test file that contains the step. Use the lowercase extension `.mjs` or `.sh`. Match the file name's letter case.
 - **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 
+Argent uses `project_root` as the working directory of the script.
+
 If a script fails, check its changes before you retry.
+
+For Bash scripts, a nonzero exit code fails the step. Write failure explanations to stderr.
 
 ## Snapshots and CLI runs
 

@@ -125,7 +125,8 @@ describe("setConfigValue — validation", () => {
   it("rejects a project write for a global-only value via ConfigScopeError", () => {
     // A settable, global-only definition supplied through the registry param,
     // so this checks the scope rule alone: a shipped global-only key — today
-    // `scripts.maxTimeoutMs` and `scripts.heapLimitMb`, covered further down —
+    // `scripts.maxTimeoutMs`, `scripts.heapLimitMb` and `scripts.bash`, covered
+    // further down —
     // brings its own value parsing along, and would decide the case here on
     // whichever rule refused first.
     const registry: ConfigDefinition[] = [
@@ -377,7 +378,10 @@ describe("every schema entry can describe itself", () => {
     // reproducing the error it exists to fix.
     for (const def of CONFIG_SCHEMA) {
       if (!def.example) continue;
-      expect(def.parse(coerceCliValue(def.example)), `key: ${def.key}`).not.toBeUndefined();
+      expect(
+        (def.validateWrite ?? def.parse)(coerceCliValue(def.example)),
+        `key: ${def.key}`
+      ).not.toBeUndefined();
     }
   });
 });
@@ -468,4 +472,112 @@ describe("flow script host bounds", () => {
       expect(() => setConfigValue(key, 60_000, "project", opts())).toThrow();
     }
   );
+});
+
+describe("scripts.bash — schema entry", () => {
+  const configured = path.join(path.sep, "opt", "homebrew", "bin", "bash");
+
+  function writeGlobal(config: unknown): void {
+    const file = configFilePath("global", opts());
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(config));
+  }
+
+  // The reader keeps a wrong value so the resolver can name it: one it dropped
+  // would read as absent and fall through to whatever bash is on PATH. A `null`
+  // is what a generator writes for no value, and reads as unset.
+  it.each([
+    ["a wrong hand-edited value", "bin/bash", "bin/bash"],
+    ["a null", null, undefined],
+  ])("reads %s back as the resolver needs it", (_label, value, read) => {
+    writeGlobal({ scripts: { bash: value } });
+
+    expect(getConfigValueByKey("scripts.bash", opts())).toBe(read);
+  });
+
+  it.each([
+    ["a value that is not a string", 42],
+    ["a value that is not text at all", { a: 1 }],
+    ["a boolean", true],
+    ["an empty value", ""],
+    ["a whitespace-only value", "   "],
+    ["a relative path", path.join("bin", "bash")],
+  ])("refuses %s being typed in, though the reader would keep it", (_label, value) => {
+    expect(() => setConfigValue("scripts.bash", value, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(readConfigObject("global", opts())).toEqual({});
+  });
+
+  it("accepts an absolute path, trimmed", () => {
+    expect(setConfigValue("scripts.bash", `  ${configured}  `, "global", opts())).toBe(configured);
+    expect(readConfigObject("global", opts())).toEqual({ scripts: { bash: configured } });
+  });
+
+  // An absolute path judged against `process.platform` suits no mixed-OS team,
+  // so a committed project value is neither written nor read. No global value
+  // beside it, because `prioritize-global` would let one win regardless.
+  it("takes the global scope only, and neither writes nor reads a project value", () => {
+    expect(getConfigDefinition("scripts.bash")!.scopes).toEqual(["global"]);
+    expect(() => setConfigValue("scripts.bash", configured, "project", opts())).toThrow(
+      ConfigScopeError
+    );
+    const projectFile = configFilePath("project", opts());
+    fs.mkdirSync(path.dirname(projectFile), { recursive: true });
+    fs.writeFileSync(
+      projectFile,
+      JSON.stringify({ scripts: { bash: "C:\\Program Files\\Git\\bin\\bash.exe" } })
+    );
+
+    expect(getConfigValueByKey("scripts.bash", opts())).toBeUndefined();
+  });
+
+  // The refusal names the host the shape is judged against, and its example is
+  // printed back as a value to type, so it has to exist on this host.
+  it("says what it wants, with an example this host has", () => {
+    const def = getConfigDefinition("scripts.bash")!;
+    const expected = describeExpectedValue(def);
+    expect(expected).toContain("an absolute path to Bash");
+    expect(expected).toContain("the tool-server host");
+    expect(expected).toContain("on Windows");
+    if (process.platform !== "win32") {
+      expect(fs.existsSync(def.example!)).toBe(true);
+      expect(expected).toContain(def.example);
+    }
+  });
+
+  // The write side of the rule the tool server reads back, so `argent config
+  // set` cannot store a value every `.sh` step then refuses.
+  describe("under Windows rules", () => {
+    const realPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    });
+
+    it.each([
+      ["a drive-rooted path", "C:\\Program Files\\Git\\bin\\bash.exe"],
+      ["a drive-rooted path with forward slashes", "C:/Program Files/Git/bin/bash.exe"],
+      ["a UNC share", "\\\\build01\\tools\\git\\bin\\bash.exe"],
+    ])("writes %s", (_label, value) => {
+      expect(setConfigValue("scripts.bash", value, "global", opts())).toBe(value);
+      expect(readConfigObject("global", opts())).toEqual({ scripts: { bash: value } });
+    });
+
+    it.each([
+      // `path.win32.isAbsolute` accepts both of these, and neither names a drive.
+      ["a POSIX path", "/usr/bin/bash"],
+      ["a path rooted on no drive", "\\Git\\bin\\bash.exe"],
+      ["a relative path", "bin\\bash.exe"],
+    ])("refuses %s", (_label, value) => {
+      expect(() => setConfigValue("scripts.bash", value, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+      expect(readConfigObject("global", opts())).toEqual({});
+    });
+  });
 });

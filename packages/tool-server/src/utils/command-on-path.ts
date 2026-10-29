@@ -13,8 +13,14 @@ const execFileAsync = promisify(execFile);
  * resolves the executable extension (`adb` → `adb.exe`). `where` searches the
  * current directory *before* PATH, so CWD matches are dropped: an `adb.exe`
  * planted in the tool-server's working directory must never beat the real one.
+ *
+ * `accept` filters the matches, e.g. to skip the WSL launcher `System32\bash.exe`.
+ * `where` lists every match, so a later one can win; `command -v` gives just one.
  */
-export async function commandOnPath(name: string): Promise<string | null> {
+export async function commandOnPath(
+  name: string,
+  accept?: (candidate: string) => boolean
+): Promise<string | null> {
   // Bare binary names only: keeps the POSIX `/bin/sh -c` interpolation safe and
   // stops `where`'s glob matching (`adb*`) resolving something else.
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
@@ -29,14 +35,19 @@ export async function commandOnPath(name: string): Promise<string | null> {
         .map((line) => line.trim())
         .filter(Boolean)
         // Windows paths are case-insensitive, so compare normalized + lowercased.
-        .find((candidate) => pathWin32.resolve(pathWin32.dirname(candidate)).toLowerCase() !== cwd);
+        .find(
+          (candidate) =>
+            pathWin32.resolve(pathWin32.dirname(candidate)).toLowerCase() !== cwd &&
+            (accept?.(candidate) ?? true)
+        );
       return match ?? null;
     }
     const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
       timeout: 2_000,
     });
     const trimmed = stdout.trim();
-    return trimmed || null;
+    if (!trimmed) return null;
+    return (accept?.(trimmed) ?? true) ? trimmed : null;
   } catch {
     return null;
   }

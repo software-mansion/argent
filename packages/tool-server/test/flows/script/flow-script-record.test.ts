@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,6 +22,7 @@ import {
   type FlowStep,
 } from "../../../src/tools/flows/flow-utils";
 import { SCRIPT_STEP_LOG_LIMIT_BYTES } from "../../../src/tools/flows/script/flow-script-executor";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 /** Real child processes, so the budgets are generous. */
 vi.setConfig({ testTimeout: 30_000 });
@@ -107,6 +108,17 @@ function parseError(scriptYaml: string): string {
     return err instanceof Error ? err.message : String(err);
   }
   throw new Error(`expected parseFlow to reject "${scriptYaml}"`);
+}
+
+let noBash: string | undefined;
+
+beforeAll(async () => {
+  const found = await resolveHostBash();
+  if (!("path" in found)) noBash = found.problem;
+});
+
+function skipWithoutBash(ctx: { skip: (note?: string) => void }): void {
+  if (noBash) ctx.skip(`this host has no bash to run a .sh step with: ${noBash}`);
 }
 
 beforeEach(async () => {
@@ -494,7 +506,7 @@ describe("recording a script step", () => {
     expect(result.logTruncated).toBe(true);
     expect(result.log!.length).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
     // The cut leaves nothing in the text, which is why the flag is the only
-    // signal and the tool description tells the caller to read it.
+    // signal.
     expect(result.log).not.toContain("truncated");
     expect(await steps("chatty")).toHaveLength(1);
   });
@@ -518,6 +530,32 @@ describe("recording a script step", () => {
     expect(result.logTruncated).toBe(true);
     expect(result.log).toMatch(/\[6 V8 stack frames omitted]/);
     expect(Buffer.byteLength(result.log!, "utf8")).toBeLessThan(SCRIPT_STEP_LOG_LIMIT_BYTES / 2);
+  });
+});
+
+describe("recording a bash step", () => {
+  it("runs a .sh after a .mjs, appends both in order, and hands back what the .sh wrote", async (ctx) => {
+    skipWithoutBash(ctx);
+    await write("scripts/first.mjs", `output.user = { id: "u_1" };`);
+    await write(
+      "scripts/seed.sh",
+      `set -euo pipefail\n` +
+        `echo "seeded order 4711"\n` +
+        `printf '{"order":{"id":4711}}' > "$ARGENT_OUTPUT"\n`
+    );
+    await start("mixed");
+
+    const first = await addScript("mixed", "../../scripts/first.mjs");
+    const second = await addScript("mixed", "../../scripts/seed.sh");
+
+    expect([first.status, second.status]).toEqual(["pass", "pass"]);
+    expect(second.log).toContain("seeded order 4711");
+    expect(second.outputJson).toBe('{"order":{"id":4711}}');
+    expect(second.recorded).toBe("2. script: ../../scripts/seed.sh");
+    expect(await steps("mixed")).toEqual([
+      { kind: "script", path: "../../scripts/first.mjs" },
+      { kind: "script", path: "../../scripts/seed.sh" },
+    ]);
   });
 });
 

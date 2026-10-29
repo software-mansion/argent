@@ -64,14 +64,16 @@ async function withFakeRunner(source: string, extra: Partial<FlowScriptRequest> 
 
 describe("script response parsing", () => {
   it("accepts the three valid shapes", () => {
-    const started: ScriptResponse | null = parseScriptResponse({ type: "started" });
+    const started: ScriptResponse | null = parseScriptResponse({ type: "started" }, "node");
     expect(started).toEqual({ type: "started" });
-    expect(parseScriptResponse({ type: "result", outputJson: "{}" })).toEqual({
+    expect(parseScriptResponse({ type: "result", outputJson: "{}" }, "node")).toEqual({
       type: "result",
       outputJson: "{}",
     });
     const runtime: ScriptFailureType = "runtime";
-    expect(parseScriptResponse({ type: "failure", failureType: runtime, message: "x" })).toEqual({
+    expect(
+      parseScriptResponse({ type: "failure", failureType: runtime, message: "x" }, "node")
+    ).toEqual({
       type: "failure",
       failureType: runtime,
       message: "x",
@@ -80,12 +82,30 @@ describe("script response parsing", () => {
 
   it("carries a stack when there is one, and drops one that is not a string", () => {
     expect(
-      parseScriptResponse({ type: "failure", failureType: "runtime", message: "x", stack: "at y" })
+      parseScriptResponse(
+        { type: "failure", failureType: "runtime", message: "x", stack: "at y" },
+        "node"
+      )
     ).toEqual({ type: "failure", failureType: "runtime", message: "x", stack: "at y" });
     expect(
-      parseScriptResponse({ type: "failure", failureType: "runtime", message: "x", stack: 7 })
+      parseScriptResponse(
+        { type: "failure", failureType: "runtime", message: "x", stack: 7 },
+        "node"
+      )
     ).toEqual({ type: "failure", failureType: "runtime", message: "x" });
   });
+
+  // In node mode the script shares the runner's protocol descriptor, and a
+  // `spawn` failure reads as "nothing ran", which a script must not be able to
+  // claim for itself.
+  it.each(["spawn", "signal"] as const)(
+    "accepts the failure type %s from a bash runner only",
+    (failureType) => {
+      const raw = { type: "failure", failureType, message: "x" };
+      expect(parseScriptResponse(raw, "bash")).toEqual(raw);
+      expect(parseScriptResponse(raw, "node")).toBeNull();
+    }
+  );
 
   it.each([
     ["a non-object", "started"],
@@ -99,7 +119,8 @@ describe("script response parsing", () => {
       { type: "failure", failureType: "weird", message: "x" },
     ],
   ])("rejects %s", (_label, raw) => {
-    expect(parseScriptResponse(raw)).toBeNull();
+    expect(parseScriptResponse(raw, "node")).toBeNull();
+    expect(parseScriptResponse(raw, "bash")).toBeNull();
   });
 });
 
@@ -416,15 +437,20 @@ describe("flow script executor — the runner's reporting path survives the scri
   });
 });
 
+function nestedDocument(depth: number, leaf: string): string {
+  let json = JSON.stringify(leaf);
+  for (let i = 0; i < depth; i++) json = `{"nested":${json}}`;
+  return json;
+}
+
 describe("flow script executor — redacting a document from a runner", () => {
-  it("scrubs a document too deep for a recursive walk", async () => {
-    const depth = 20_000;
-    let json = JSON.stringify("token sk-live-9d3f0a1b2c3d4e5f");
-    for (let i = 0; i < depth; i++) json = `{"nested":${json}}`;
+  // At the deepest the parent admits.
+  it("scrubs a document at the depth bound", async () => {
+    const depth = 256;
     const result = await withFakeRunner(
       `process.on("message", () => {
          process.send({ type: "started" });
-         process.send({ type: "result", outputJson: ${JSON.stringify(json)} }, () => process.exit(0));
+         process.send({ type: "result", outputJson: ${JSON.stringify(nestedDocument(depth, "token sk-live-9d3f0a1b2c3d4e5f"))} }, () => process.exit(0));
        });`,
       { secrets: [{ name: "TOKEN", value: "sk-live-9d3f0a1b2c3d4e5f" }] }
     );
@@ -433,6 +459,19 @@ describe("flow script executor — redacting a document from a runner", () => {
     let node: unknown = result.output;
     for (let i = 0; i < depth; i++) node = (node as Record<string, unknown>).nested;
     expect(node).toBe("token {{secret:TOKEN}}");
+  }, 30_000);
+
+  // `execute` owes its caller a verdict, however deep a hostile runner's document.
+  it("answers a document past the depth bound with a verdict, not a throw", async () => {
+    const result = await withFakeRunner(
+      `process.on("message", () => {
+         process.send({ type: "started" });
+         process.send({ type: "result", outputJson: ${JSON.stringify(nestedDocument(20_000, "deep"))} }, () => process.exit(0));
+       });`
+    );
+
+    expect(result.failure?.kind).toBe("output");
+    expect(result.failure?.message).toContain("nests deeper than");
   }, 30_000);
 });
 
@@ -528,6 +567,42 @@ describe("flow script runner — the watchdogs, driven directly", () => {
         scriptUrl: "file:///x",
         outputJson: "{}",
         deadlineMs: "soon",
+        maxOutputBytes: 1,
+      },
+    ],
+    // The protocol carries no version field, so an interpreter the runner does
+    // not know is malformed rather than a default.
+    [
+      "a request naming an interpreter the runner does not know",
+      {
+        type: "execute",
+        interpreter: "zsh",
+        scriptUrl: "file:///x",
+        outputJson: "{}",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
+    [
+      "a bash request with no interpreter path",
+      {
+        type: "execute",
+        interpreter: "bash",
+        scriptPath: "/tmp/x.sh",
+        outputFile: "/tmp/o.json",
+        outputJson: "{}",
+        deadlineMs: 1,
+        maxOutputBytes: 1,
+      },
+    ],
+    [
+      "a bash request with no exchange file",
+      {
+        type: "execute",
+        interpreter: "bash",
+        interpreterPath: "/bin/bash",
+        scriptPath: "/tmp/x.sh",
+        deadlineMs: 1,
         maxOutputBytes: 1,
       },
     ],

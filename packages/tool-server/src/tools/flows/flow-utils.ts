@@ -3038,7 +3038,7 @@ function parseScriptStep(raw: unknown, body: unknown): FlowStep {
   if (typeof body === "string") {
     badEntry(
       raw,
-      "a `script` step takes a map, not a bare path — write `script: { path: scripts/seed.mjs }`"
+      "a `script` step takes a map, not a bare path — write `script: { path: scripts/seed.sh }`"
     );
   }
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
@@ -3058,7 +3058,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
     badEntry(
       raw,
-      "a `script` step needs a `path` — a .mjs file path relative to this e2e test's file, e.g. `script: { path: scripts/seed.mjs }`"
+      "a `script` step needs a `path` — a .mjs or .sh file path relative to this e2e test's file, e.g. `script: { path: scripts/seed.mjs }`"
     );
   }
   if (value.includes("\\")) {
@@ -3070,22 +3070,33 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     badEntry(raw, "a `script` path must be relative to the e2e test file that references it");
   }
-  if (!value.endsWith(".mjs")) {
-    if (value.toLowerCase().endsWith(".mjs")) {
-      badEntry(raw, "a `script` path must use the lowercase .mjs extension");
+  if (!SCRIPT_EXTENSIONS.some((extension) => value.endsWith(extension))) {
+    const miscased = SCRIPT_EXTENSIONS.find((extension) => value.toLowerCase().endsWith(extension));
+    if (miscased) {
+      badEntry(raw, `a \`script\` path must use the lowercase ${miscased} extension`);
     }
     badEntry(
       raw,
-      "a `script` path must end in .mjs — the extension pins the module type whatever the project's package.json says"
+      "a `script` path must end in .mjs or .sh — the extension is what picks the interpreter, and .mjs also pins the module type whatever the project's package.json says"
     );
   }
   if (!SCRIPT_FILE_NAME_PATTERN.test(path.posix.basename(value))) {
     badEntry(
       raw,
-      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the .mjs`
+      `a \`script\` path's filename must match ${SCRIPT_FILE_NAME_PATTERN} — letters, digits, underscore, hyphen before the extension`
     );
   }
   return value;
+}
+
+export function scriptInterpreter(scriptPath: string): "node" | "bash" {
+  return scriptPath.endsWith(".sh") ? "bash" : "node";
+}
+
+const SCRIPT_EXTENSIONS = [".mjs", ".sh"] as const;
+
+export function hasScriptExtension(scriptPath: string): boolean {
+  return SCRIPT_EXTENSIONS.some((extension) => scriptPath.endsWith(extension));
 }
 
 /**
@@ -3102,6 +3113,9 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
  * than from the script — a fork, a Node boot, the runner preload and the
  * script's own import all run before the first line the limit is meant to
  * bound.
+ *
+ * A `.sh` adds the interpreter lookup and bash's own start, a few milliseconds
+ * more; the floor stands for both.
  *
  * No other millisecond option shares that floor. Each draws its bound from the
  * work it measures: `await`'s `timeout` takes 1
@@ -3123,8 +3137,9 @@ export function parseScriptTimeout(raw: unknown, value: unknown): number {
     badEntry(
       raw,
       `script.timeout is in milliseconds and needs at least ${MIN_SCRIPT_TIMEOUT_MS} — the step ` +
-        `spends its first tens of milliseconds starting the Node process, so ${value} leaves the ` +
-        `script too little to run in and errors the step (30 seconds is \`timeout: 30000\`)`
+        `spends its first tens of milliseconds starting the process the script runs in, so ` +
+        `${value} leaves the script too little to run in and errors the step (30 seconds is ` +
+        `\`timeout: 30000\`)`
     );
   }
   return value as number;

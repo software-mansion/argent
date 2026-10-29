@@ -102,7 +102,7 @@ wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
 e2e test, record a restart-app of the app under test as the FIRST step (captured
 as the e2e test's \`launch\` step); for a reusable fragment, skip that and pass
 executionPrerequisite instead. Use e2e-add-echo to add labels, and
-e2e-add-script to run a local .mjs file and record it as a \`script:\` step.
+e2e-add-script to run a local .mjs or .sh file and record it as a \`script:\` step.
 Call e2e-finish-recording when done.
 
 If a recorded step turns out to be wrong, edit the .yaml file directly to

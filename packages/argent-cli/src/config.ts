@@ -287,8 +287,8 @@ function suggestCorrectedSet(
   if (!(err instanceof ConfigValidationError)) return null;
   const def = getConfigDefinition(key);
   if (!def) return null;
-  // A successful parse of the wrapped value is the confidence test.
-  const wrapped = def.parse([rawValue]);
+  // A successful write-check of the wrapped value is the confidence test.
+  const wrapped = (def.validateWrite ?? def.parse)([rawValue]);
   if (wrapped === undefined) return null;
   const scopeFlag = scope ? ` --scope ${scope}` : "";
   return `argent config set ${key} ${quoteForShell(JSON.stringify([rawValue]))}${scopeFlag}`;

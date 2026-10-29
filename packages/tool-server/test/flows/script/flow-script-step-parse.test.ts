@@ -4,7 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import type { Registry } from "@argent/registry";
-import { parseFlow, serializeFlow, type FlowStep } from "../../../src/tools/flows/flow-utils";
+import { SCRIPT_FILE_NAME_PATTERN } from "@argent/registry";
+import {
+  parseFlow,
+  scriptInterpreter,
+  serializeFlow,
+  type FlowStep,
+} from "../../../src/tools/flows/flow-utils";
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../../src/tools/flows/flow-finish-recording";
@@ -164,19 +170,27 @@ describe("script path rules, shared with a run: target", () => {
 
   it("refuses an uppercase extension, saying which spelling it wants", () => {
     expect(() => step("{ path: scripts/SEED.MJS }")).toThrow(/lowercase .mjs extension/);
+    expect(() => step("{ path: scripts/seed.SH }")).toThrow(/lowercase .sh extension/);
   });
 
   it("refuses any other extension, and never completes a bare name", () => {
-    for (const body of ["{ path: seed }", "{ path: seed.js }", "{ path: seed.cjs }"]) {
-      expect(() => step(body), body).toThrow(/must end in .mjs/);
+    for (const body of [
+      "{ path: seed }",
+      "{ path: seed.js }",
+      "{ path: seed.cjs }",
+      // One spelling per language.
+      "{ path: seed.bash }",
+    ]) {
+      expect(() => step(body), body).toThrow(/must end in .mjs or .sh/);
     }
   });
 
-  it("refuses a basename outside the charset", () => {
+  it("refuses a basename outside the charset, before it looks at the extension", () => {
     for (const body of [
       "{ path: 'my seed.mjs' }",
       "{ path: seed.step.mjs }",
       "{ path: 'sc/.mjs' }",
+      "{ path: seed.step.sh }",
     ]) {
       expect(() => step(body), body).toThrow(/filename must match/);
     }
@@ -186,6 +200,29 @@ describe("script path rules, shared with a run: target", () => {
     expect(step("{ path: ../../shared/seed.mjs }")).toEqual([
       { kind: "script", path: "../../shared/seed.mjs" },
     ]);
+  });
+});
+
+describe("the second language", () => {
+  it("parses a .sh path like a .mjs one", () => {
+    expect(step("{ path: ../../scripts/seed-order.sh, timeout: 45000 }")).toEqual([
+      { kind: "script", path: "../../scripts/seed-order.sh", timeout: 45000 },
+    ]);
+  });
+
+  // Every route enforces the pattern and `scriptInterpreter` picks the
+  // interpreter, so the two must agree on every name the pattern accepts.
+  // Asked of extensions rather than of the source, where an alternation added
+  // outside the group would still read `(mjs|sh)`.
+  it("maps exactly the names the pattern accepts to an interpreter", () => {
+    const interpreters: Record<string, "node" | "bash"> = { mjs: "node", sh: "bash" };
+    for (const extension of ["mjs", "sh", "js", "cjs", "mts", "bash", "zsh", "py", "SH", "MJS"]) {
+      const name = `seed-order_2.${extension}`;
+      expect(SCRIPT_FILE_NAME_PATTERN.test(name), name).toBe(extension in interpreters);
+      if (extension in interpreters) {
+        expect(scriptInterpreter(`scripts/${name}`), name).toBe(interpreters[extension]);
+      }
+    }
   });
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
 import { stepRequiresDevice } from "../../../src/tools/flows/flow-device";
+import { resolveHostBash } from "../../helpers/host-bash";
 
 /**
  * The `script:` step in a run; the executor's own behaviour is covered beside
@@ -48,6 +49,18 @@ async function write(relative: string, contents: string): Promise<string> {
 
 function flow(name: string, yaml: string): Promise<string> {
   return write(path.join(".argent", "flows", `${name}.yaml`), yaml);
+}
+
+function markPath(mark: string): string {
+  return path.join(root, `${mark}.mark`);
+}
+
+function readMark(mark: string): string | undefined {
+  try {
+    return fsSync.readFileSync(markPath(mark), "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 function boundaryCtx(flowPath: string): ToolContext {
@@ -96,6 +109,17 @@ async function until(predicate: () => boolean, label: string, timeoutMs = 15_000
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`timed out waiting for ${label}`);
+}
+
+let noBash: string | undefined;
+
+beforeAll(async () => {
+  const found = await resolveHostBash();
+  if (!("path" in found)) noBash = found.problem;
+});
+
+function skipWithoutBash(ctx: { skip: (note?: string) => void }): void {
+  if (noBash) ctx.skip(`this host has no bash to run a .sh step with: ${noBash}`);
 }
 
 beforeEach(async () => {
@@ -177,6 +201,43 @@ describe("a script step in a run", () => {
   it("classifies as needing no device", () => {
     const registry = mockRegistry().registry;
     expect(stepRequiresDevice(registry, { kind: "script", path: "seed.mjs" })).toBe(false);
+    expect(stepRequiresDevice(registry, { kind: "script", path: "seed.sh" })).toBe(false);
+  });
+});
+
+describe("a bash step in a run", () => {
+  it("runs a .sh beside a .mjs and carries what it printed into the report", async (ctx) => {
+    skipWithoutBash(ctx);
+    await write(
+      "scripts/first.mjs",
+      `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(markPath("mixed-mjs"))}, "ran");`
+    );
+    await write(
+      "scripts/seed.sh",
+      `set -euo pipefail\n` +
+        `echo "seeded order 4711"\n` +
+        `echo "and a warning" >&2\n` +
+        `printf 'ran' > ${JSON.stringify(markPath("seed-sh"))}\n`
+    );
+    await flow(
+      "mixed",
+      "steps:\n" +
+        "  - script: { path: ../../scripts/first.mjs }\n" +
+        "  - script: { path: ../../scripts/seed.sh }\n"
+    );
+
+    const { result, invokeTool } = await runFlow("mixed");
+
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => s.status)).toEqual(["pass", "pass"]);
+    expect(result.steps[1]).toMatchObject({ kind: "script", target: "../../scripts/seed.sh" });
+    expect(result.steps[1]!.scriptLog).toContain("seeded order 4711");
+    expect(result.steps[1]!.scriptLog).toContain("and a warning");
+    expect(result.steps[1]!.scriptLogTruncated).toBeUndefined();
+    expect(readMark("mixed-mjs")).toBe("ran");
+    expect(readMark("seed-sh")).toBe("ran");
+    expect(result.device).toBe("");
+    expect(listedDevices(invokeTool)).toBe(false);
   });
 });
 
@@ -560,8 +621,7 @@ describe("which project root a script runs from", () => {
    * `flow-add-script` runs the script with the RECORDING's `project_root`; the
    * runner uses the ROOT run's. A fragment recorded in one project and composed
    * by a flow in another therefore runs its script somewhere else than where it
-   * was recorded — which is what the tool's "it ran here as a replay of this
-   * flow will" is qualified against.
+   * was recorded.
    */
   it("gives a composed fragment's script the ROOT run's project root", async () => {
     const composer = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-composer-"));

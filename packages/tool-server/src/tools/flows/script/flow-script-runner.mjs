@@ -1,8 +1,11 @@
 // Imports nothing from the tool-server, so it needs no build step: it is copied
 // next to the compiled executor and resolves its watchdogs against its own URL.
 
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import { isMainThread, Worker } from "node:worker_threads";
+import { stopOwnGroup } from "./flow-script-watchdog-deadline.mjs";
 
 const LIFELINE_WATCHDOG = "flow-script-watchdog-lifeline.mjs";
 const DEADLINE_WATCHDOG = "flow-script-watchdog-deadline.mjs";
@@ -24,6 +27,45 @@ let probing = false;
 let idleResources = [];
 
 let runnerIsSending = false;
+
+/** Bash mode leaves a child bash that nobody else reaps; read by `exitOnParentDisconnect`. */
+let bashMode = false;
+
+/**
+ * The signals a script can aim at its own process group, which this process
+ * leads in bash mode; held rather than acted on (see `holdGroupSignals`).
+ * SIGQUIT too: Node's default kills on it while GNU bash ignores it.
+ */
+const GROUP_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
+
+const heldSignals = new Set();
+
+/**
+ * A stray carriage return as it lands in a file name: U+000D, or U+F00D under
+ * msys2 bash on Windows, which maps control characters into the private-use area.
+ */
+const STRAY_SUFFIXES = ["\r", "\uF00D"];
+
+/**
+ * `O_NONBLOCK` so a named pipe swapped in after `irregularFileKind`'s `stat`
+ * cannot block the open; a no-op on a regular file.
+ */
+const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
+
+/** Strict, so invalid UTF-8 is refused rather than replaced; see `readOutputFile`. */
+const STRICT_UTF8 = new TextDecoder("utf8", { fatal: true });
+
+/**
+ * How long bash's death by a signal waits for the same signal to arrive here
+ * before it is read as one from outside the group. Under the parent's stop grace.
+ */
+const GROUP_SIGNAL_SETTLE_MS = 1_000;
+
+/**
+ * How much of the step's time limit the wait above leaves alone, so the verdict
+ * reaches the parent before its timer fires and reports a timeout instead.
+ */
+const GROUP_SIGNAL_SETTLE_GUARD_MS = 250;
 
 const ENTRY_SETTLE_PROBE_MS = 1_000;
 
@@ -48,11 +90,15 @@ const realExit = process.exit.bind(process);
  * The protocol channel's own descriptor, read before any script code runs:
  * `process.channel` is a property a script may replace, and a wrong descriptor
  * would put the verdict into some other file. See `sendSynchronously`.
+ *
+ * None on Windows, where libuv frames each IPC message with its own header, so a
+ * raw line would be unreadable; there the queued `process.send` frames it.
  */
 const channelHandle = /** @type {{ fd?: number } | undefined} */ (
   /** @type {unknown} */ (process.channel)
 );
-const channelFd = typeof channelHandle?.fd === "number" ? channelHandle.fd : -1;
+const channelFd =
+  process.platform !== "win32" && typeof channelHandle?.fd === "number" ? channelHandle.fd : -1;
 
 /**
  * `JSON.stringify` and `JSON.parse` as they were before any script code ran: a
@@ -64,6 +110,26 @@ const encodeJson = JSON.stringify;
 const decodeJson = JSON.parse;
 
 const runnerListeners = [];
+
+/**
+ * Set by the deadline watchdog before it stops this tree, so a bash killed first
+ * by Windows' one-at-a-time `taskkill /t` is not reported as exit code 1.
+ */
+const deadlineFired = new Int32Array(new SharedArrayBuffer(4));
+
+// Every pattern the functions below read is declared above the activation call:
+// in bash mode `prepare` never returns, so a `const` declared after it stays in
+// its temporal dead zone for the life of the process.
+const POSIX_ERRNO_RE = /^E[A-Z]+$/;
+
+/** Node's module loader, ESM and CommonJS alike. */
+const LOADER_FRAME_RE = /node:internal\/modules\//;
+
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+const MAX_CAUSE_DEPTH = 8;
+const CAUSED_BY = " — caused by: ";
+const ALSO = "; ";
 
 if (isMainThread && process.env[ACTIVATION_ENV] === "1") {
   delete process.env[ACTIVATION_ENV];
@@ -84,6 +150,8 @@ async function prepare() {
 
   maxOutputBytes = request.maxOutputBytes;
   startWatchdogs(request.deadlineMs);
+
+  if (request.interpreter === "bash") return runBash(request);
 
   try {
     globalThis.output = decodeJson(request.outputJson);
@@ -151,6 +219,335 @@ async function prepare() {
   // Read last, so it is the loop as the script inherits it. Node awaits this
   // module before it loads the entry, so there is no later point that holds.
   idleResources = process.getActiveResourcesInfo();
+}
+
+/**
+ * Bash mode: bash is an ordinary child in the group this process leads, so every
+ * stop reaches it and the parent classifies it as it does a `.mjs` step.
+ */
+function runBash(request) {
+  bashMode = true;
+  // As close to the moment the parent armed its own timer as this side can see.
+  const startedAt = Date.now();
+  holdGroupSignals();
+  // Registered here for the reason node mode registers it here: Node references
+  // the IPC channel while a `disconnect` listener exists.
+  keepListener("disconnect", exitOnParentDisconnect);
+
+  let child;
+  // fds 3-5 point at the null device: in this process 4 is the lifeline and 5 the
+  // protocol channel, so a bash `echo … >&5` could otherwise forge a verdict.
+  // Node's close-on-exec of inherited fds is a startup detail, not a contract.
+  const nulls = [];
+  try {
+    for (let slot = 0; slot < 3; slot++) nulls.push(fs.openSync(os.devNull, "r+"));
+    // Announced before the spawn, straight to the channel: the script's first
+    // line can kill this process (`kill -9 $PPID`) before a queued message goes
+    // out. A spawn that then fails still sends its own terminal failure.
+    announceStarted();
+    child = spawn(request.interpreterPath, [request.scriptPath], {
+      // The environment the parent built; the exchange name is all this side adds.
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ARGENT_OUTPUT: request.outputFile,
+      },
+      // `bash <file>`, never `shell: true` or the shebang, so the path is one
+      // argument, no execute bit is needed and the resolved bash is the one that
+      // runs. stdin is the null device; stdout/stderr go to the parent's capture.
+      stdio: ["ignore", "inherit", "inherit", ...nulls],
+      // bash joins this process's group on POSIX; on Windows the parent's
+      // `taskkill /t` on this process walks to it.
+      windowsHide: true,
+    });
+  } catch (err) {
+    finish(spawnFailure(request, err));
+    return never();
+  } finally {
+    for (const fd of nulls) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Already closed by a spawn that threw after taking it.
+      }
+    }
+  }
+
+  child.on("error", (err) => finish(spawnFailure(request, err)));
+  child.on("exit", (code, signal) => {
+    // Both null is a spawn that failed, which the `error` handler reports.
+    if (code === null && signal === null) return;
+    // A group signal reaches this process too; wait for it so the report names it.
+    if (signal) {
+      whenGroupSignalHeld(
+        signal,
+        () => finish(bashOutcome(request, code, signal)),
+        groupSignalBudget(request, startedAt)
+      );
+    } else finish(bashOutcome(request, code, signal));
+  });
+  return never();
+}
+
+/**
+ * Take the group's signals away from Node's default of ending this process:
+ * `trap 'kill 0' EXIT` signals the whole group, and the runner must survive to
+ * read `$ARGENT_OUTPUT` and send a verdict. Bash's own exit is the verdict.
+ */
+function holdGroupSignals() {
+  for (const signal of GROUP_SIGNALS) {
+    try {
+      process.on(signal, () => heldSignals.add(signal));
+    } catch {
+      // A platform that does not know the name; the default stands for it.
+    }
+  }
+}
+
+/**
+ * What is left of the settle above once the step's time limit is taken into
+ * account: past the parent's timer, an answer only turns into a timeout.
+ */
+function groupSignalBudget(request, startedAt) {
+  if (!Number.isFinite(request.timeoutMs)) return GROUP_SIGNAL_SETTLE_MS;
+  const left = request.timeoutMs - (Date.now() - startedAt) - GROUP_SIGNAL_SETTLE_GUARD_MS;
+  return Math.min(GROUP_SIGNAL_SETTLE_MS, left);
+}
+
+/**
+ * Run `report` once `signal` is one this process holds, or once the window above
+ * has passed. A listener, since the child's exit routinely arrives before the
+ * signal; the holding listener was registered first, so `heldSignals` is current.
+ */
+function whenGroupSignalHeld(signal, report, budgetMs = GROUP_SIGNAL_SETTLE_MS) {
+  if (heldSignals.has(signal) || !GROUP_SIGNALS.includes(signal) || budgetMs <= 0) {
+    report();
+    return;
+  }
+  let waited = false;
+  const settle = () => {
+    if (waited) return;
+    waited = true;
+    clearTimeout(timer);
+    process.off(signal, settle);
+    report();
+  };
+  const timer = setTimeout(settle, budgetMs);
+  try {
+    process.on(signal, settle);
+  } catch {
+    // A platform that does not know the name; the timer is the whole wait.
+  }
+}
+
+/**
+ * `started`, on the channel before this call returns (only queued on Windows,
+ * which has no descriptor; see `channelFd`).
+ */
+function announceStarted() {
+  if (sendSynchronously({ type: "started" })) return;
+  try {
+    sendToParent({ type: "started" });
+  } catch {
+    // The channel is gone; the parent's own exit verdict is what is left.
+  }
+}
+
+function spawnFailure(request, err) {
+  return {
+    type: "failure",
+    failureType: "spawn",
+    message: `bash (${request.interpreterPath}) could not be started: ${errorMessage(err)}`,
+  };
+}
+
+/**
+ * A non-zero exit status is the whole verdict, `128+N` included: the script ran
+ * that command and could have handled its status. A signal on bash itself is
+ * read by whether this process received it too.
+ */
+function bashOutcome(request, code, signal) {
+  if (signal) {
+    // A signal this process received too went to the group, which is the step's
+    // own, so it is the script's answer: an `exit`. The document is not read here.
+    if (heldSignals.has(signal)) {
+      return {
+        type: "failure",
+        failureType: "exit",
+        message:
+          `The step's process group was sent ${signal}, which killed bash before it exited ` +
+          `(bash: ${request.interpreterPath}), so the step fails on the signal and reports no ` +
+          "document — whatever the script had written to $ARGENT_OUTPUT before it. " +
+          "`kill 0` reaches bash itself, not only the background jobs it is usually written " +
+          "for: signal each job's own pid instead.",
+      };
+    }
+    return {
+      type: "failure",
+      failureType: "signal",
+      message:
+        `The script was killed by ${signal} before it exited ` +
+        `(bash: ${request.interpreterPath}).` +
+        // A `kill 0` in the script's body kills bash alone, so it arrives here
+        // the same way and the message names both causes.
+        (GROUP_SIGNALS.includes(signal)
+          ? " A `kill 0` in the body of the script ends bash the same way and is not " +
+            "distinguishable from this: signal each job's own pid instead."
+          : ""),
+    };
+  }
+  const status = code ?? 0;
+  if (status !== 0) {
+    // The reason is on stderr, which the parent captures and appends.
+    return {
+      type: "failure",
+      failureType: "exit",
+      message:
+        `The script exited with code ${status} (bash: ${request.interpreterPath}).` +
+        exitCodeHint(status),
+    };
+  }
+  const read = readOutputFile(request.outputFile, request.maxOutputBytes);
+  // Only when the document is missing or still the seed: a stray `\r` sibling
+  // beside a document the script did write is not a CRLF problem.
+  if (read.error || read.json === request.outputJson) {
+    const strayed = carriageReturnProblem(request);
+    if (strayed) return { type: "failure", failureType: "output", message: strayed };
+  }
+  return read.error
+    ? { type: "failure", failureType: "output", message: read.error }
+    : { type: "result", outputJson: read.json };
+}
+
+/**
+ * The one silent CRLF symptom: a CRLF `.sh` writes to `output.json\r`, leaving
+ * the seeded document in place and exiting 0. A name with a carriage return
+ * after it is the proof.
+ */
+function carriageReturnProblem(request) {
+  if (!strayedByCarriageReturn(request.outputFile)) return null;
+  return carriageReturnHint("$ARGENT_OUTPUT", "so the document Argent read is the one it seeded");
+}
+
+/** Whether the script wrote one carriage return past the name it was given. */
+function strayedByCarriageReturn(file) {
+  return STRAY_SUFFIXES.some((suffix) => fs.existsSync(`${file}${suffix}`));
+}
+
+/** The one CRLF sentence, with the consequence its caller can see. */
+function carriageReturnHint(name, consequence) {
+  return (
+    `the script wrote to a file one carriage return past the one ${name} names, ${consequence}: ` +
+    "the script has CRLF line endings, and the carriage return ends every line inside the word " +
+    "before it. Convert the file to LF (`*.sh text eol=lf` in .gitattributes)"
+  );
+}
+
+function exitCodeHint(status) {
+  if (status === 127) {
+    return (
+      " Code 127 is bash's own \"command not found\": a tool missing from the tool server's PATH " +
+      "snapshot, or a script checked out with CRLF line endings."
+    );
+  }
+  if (status === 126) {
+    return (
+      ' Code 126 is bash\'s own "found, but could not be run": a file bash may not READ ' +
+      "(`chmod +r` on the script), or a command in it that is found and not executable " +
+      "(`chmod +x` on that command)."
+    );
+  }
+  return "";
+}
+
+/**
+ * The document, after exit 0, in one bounded read of `maxOutputBytes + 1` bytes;
+ * the parent parses and validates it.
+ */
+function readOutputFile(file, maxOutputBytes) {
+  const irregular = irregularFileKind(file);
+  if (irregular) {
+    return {
+      error:
+        irregular === "missing"
+          ? "the file named by $ARGENT_OUTPUT is gone, so the script returned no output document"
+          : `the file named by $ARGENT_OUTPUT is ${irregular} rather than a regular file, so there is no document to read`,
+    };
+  }
+  let fd;
+  try {
+    fd = fs.openSync(file, READ_FLAGS);
+  } catch (err) {
+    return {
+      error:
+        err && err.code === "ENOENT"
+          ? "the file named by $ARGENT_OUTPUT is gone, so the script returned no output document"
+          : `the file named by $ARGENT_OUTPUT could not be read: ${errorMessage(err)}`,
+    };
+  }
+  try {
+    const cap = maxOutputBytes + 1;
+    const buffer = Buffer.alloc(cap);
+    const read = readInto(fd, buffer, cap);
+    if (read > maxOutputBytes) {
+      return {
+        error:
+          `the document the script wrote to $ARGENT_OUTPUT is over the ` +
+          `${describeBytes(maxOutputBytes)} limit`,
+      };
+    }
+    if (read === 0) {
+      return {
+        error:
+          "the file named by $ARGENT_OUTPUT is empty — a redirection truncates it before the " +
+          "command writing it runs, so write to a sibling and `mv` it into place",
+      };
+    }
+    // Decoded strictly: replacement characters would silently corrupt the value
+    // and make the size here (file bytes) disagree with the parent's.
+    try {
+      return { json: STRICT_UTF8.decode(buffer.subarray(0, read)) };
+    } catch {
+      return {
+        error:
+          "the document the script wrote to $ARGENT_OUTPUT is not valid UTF-8, and Argent will " +
+          "not rewrite the bytes a script emitted: write the document as UTF-8 (a JSON document " +
+          "is UTF-8 by definition)",
+      };
+    }
+  } catch (err) {
+    return { error: `the file named by $ARGENT_OUTPUT could not be read: ${errorMessage(err)}` };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * What is at `file` when it is not a regular file, asked before the open so the
+ * report names it. A symlink is followed: one to a regular file is a document.
+ */
+function irregularFileKind(file) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch (err) {
+    return err && err.code === "ENOENT" ? "missing" : null;
+  }
+  if (stat.isFile()) return null;
+  if (stat.isDirectory()) return "a directory";
+  if (stat.isFIFO()) return "a named pipe";
+  if (stat.isSocket()) return "a socket";
+  return "a device";
+}
+
+function readInto(fd, buffer, cap) {
+  let read = 0;
+  while (read < cap) {
+    const chunk = fs.readSync(fd, buffer, read, cap - read, null);
+    if (chunk === 0) break;
+    read += chunk;
+  }
+  return read;
 }
 
 /**
@@ -311,9 +708,17 @@ function acknowledge(args) {
 /**
  * Only reached while the event loop is still turning; a synchronous infinite
  * loop never gets here, which is what the lifeline watchdog thread is for.
+ *
+ * In bash mode it takes the group down first, as the lifeline watchdog does, so
+ * bash is not left running under a runner that is gone.
  */
 function exitOnParentDisconnect() {
-  realExit(0);
+  if (!bashMode) {
+    realExit(0);
+    return;
+  }
+  stopOwnGroup();
+  process.kill(process.pid, "SIGKILL");
 }
 
 function nextRequest() {
@@ -330,13 +735,23 @@ function never() {
   return new Promise(() => {});
 }
 
+/** An absent `interpreter` is an older executor's request, which means node. */
 function parseRequest(raw) {
   if (typeof raw !== "object" || raw === null) return null;
   if (raw.type !== "execute") return null;
-  if (typeof raw.scriptUrl !== "string") return null;
-  if (typeof raw.outputJson !== "string") return null;
   if (!Number.isFinite(raw.deadlineMs) || raw.deadlineMs <= 0) return null;
   if (!Number.isFinite(raw.maxOutputBytes) || raw.maxOutputBytes <= 0) return null;
+  const interpreter = raw.interpreter ?? "node";
+  if (interpreter === "node") {
+    if (typeof raw.scriptUrl !== "string") return null;
+    if (typeof raw.outputJson !== "string") return null;
+    return { ...raw, interpreter };
+  }
+  if (interpreter !== "bash") return null;
+  if (typeof raw.interpreterPath !== "string" || raw.interpreterPath === "") return null;
+  if (typeof raw.scriptPath !== "string" || raw.scriptPath === "") return null;
+  if (typeof raw.outputFile !== "string" || raw.outputFile === "") return null;
+  if (typeof raw.outputJson !== "string") return null;
   return raw;
 }
 
@@ -352,7 +767,7 @@ function startWatchdogs(deadlineMs) {
   // Read here rather than in the worker: `process.ppid` is a property script
   // code may replace, and the worker's own `process` is not the main thread's.
   start(new URL(LIFELINE_WATCHDOG, here), { parentPid: process.ppid });
-  start(new URL(DEADLINE_WATCHDOG, here), { deadlineMs });
+  start(new URL(DEADLINE_WATCHDOG, here), { deadlineMs, fired: deadlineFired });
 
   function start(url, workerData) {
     try {
@@ -404,11 +819,6 @@ function classifyScriptError(err) {
   if (typeof code === "string" && POSIX_ERRNO_RE.test(code)) return fromLoader ? "load" : "runtime";
   return "runtime";
 }
-
-const POSIX_ERRNO_RE = /^E[A-Z]+$/;
-
-/** Node's module loader, ESM and CommonJS alike. */
-const LOADER_FRAME_RE = /node:internal\/modules\//;
 
 /**
  * True only for a loader frame with no frame naming a file above it. A file
@@ -551,8 +961,6 @@ function isPlainObject(value) {
   return proto === Object.prototype || proto === null;
 }
 
-const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-
 function memberPath(key) {
   return IDENTIFIER_RE.test(key) ? `.${key}` : `[${encodeJson(key)}]`;
 }
@@ -600,10 +1008,6 @@ function addPart(parts, joiner, text) {
   if (text && !parts.some((part) => part.text.includes(text))) parts.push({ joiner, text });
 }
 
-const MAX_CAUSE_DEPTH = 8;
-const CAUSED_BY = " — caused by: ";
-const ALSO = "; ";
-
 function visitError(err, depth, joiner, parts, seen) {
   if (depth > MAX_CAUSE_DEPTH) return;
   if (!(err instanceof Error)) {
@@ -645,6 +1049,8 @@ function safeStringify(value) {
 function finish(response) {
   if (finished) return;
   finished = true;
+  // The deadline watchdog is stopping this tree; the parent's timer answers for it.
+  if (Atomics.load(deadlineFired, 0) === 1) return;
   const bounded = boundFailureText(response);
   const exit = () => realExit(0);
   let pending = 2;

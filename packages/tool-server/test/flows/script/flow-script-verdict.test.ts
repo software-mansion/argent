@@ -111,8 +111,9 @@ const VERDICTS: Record<FlowScriptFailureKind, "fail" | "error"> = {
  * Whether each failure leaves the author something to clean up, judged from the
  * KIND alone — the answer for a failure the executor did not mark `beforeFork`.
  * Total over the kinds, like {@link VERDICTS}: the dangerous mapping is a kind
- * that DID fork being told "nothing ran", and a table listing only some kinds
- * stays green while a kind moves in or out of the never-forked set.
+ * whose script could have started being told "nothing ran", and a table listing
+ * only some kinds stays green while a kind moves in or out of the never-forked
+ * set.
  */
 const RAN: Record<FlowScriptFailureKind, ScriptRan> = {
   queue: "no",
@@ -229,7 +230,7 @@ describe("the recorder reports the verdict the runner will", () => {
   it.each(Object.entries(RAN) as [FlowScriptFailureKind, ScriptRan][])(
     "tells the author whether a %s failure left anything behind",
     async (kind, ran) => {
-      // The executor answers three of its failures WITHOUT forking anything, so
+      // The executor answers three of its failures before the script could start, so
       // "there is a result" does not mean "something ran", and telling an
       // author to clean up after a queue that was full sends them hunting for
       // state that was never created. `cancelled` counts as ran only once the
@@ -255,8 +256,9 @@ describe("the recorder reports the verdict the runner will", () => {
   );
 
   // The executor's own answer outranks the table above: `cancelled` is the one
-  // kind that reaches this tool from both sides of the fork, and the executor
-  // marks the failures it raised before there was a child to run anything.
+  // kind whose answer turns on which side of the fork it came from, and the
+  // executor marks the failures it raised before there was a child to run
+  // anything.
   it.each(Object.keys(RAN) as FlowScriptFailureKind[])(
     "believes the executor over the kind when a %s failure never forked",
     async (kind) => {
@@ -304,4 +306,39 @@ describe("the recorder reports the verdict the runner will", () => {
 
     expect("signal" in executedRequest()).toBe(false);
   });
+});
+
+// The one place a step's language is decided, for the runner and the recorder
+// alike. It is read off the CANONICAL file the executor runs; a `.sh` link to a
+// file with no extension (`seed.sh -> ../tools/seed`) falls back to the step's
+// own spelling.
+describe("which interpreter the step asks the executor for", () => {
+  it.each([
+    ["seed.mjs", undefined, "node"],
+    ["seed.sh", undefined, "bash"],
+    ["linked.sh", "seed", "bash"],
+    ["linked.sh", "seed.mjs", "node"],
+  ] as [string, string | undefined, string][])(
+    "asks for %s (linked to %s) to run under %s",
+    async (file, target, interpreter) => {
+      const step = path.join(root, "scripts", file);
+      if (target) {
+        await fs.mkdir(path.join(root, "tools"), { recursive: true });
+        await fs.writeFile(path.join(root, "tools", target), "");
+        await fs.symlink(path.join(root, "tools", target), step);
+      } else {
+        await fs.writeFile(step, "");
+      }
+      await fs.writeFile(
+        path.join(root, ".argent", "flows", "verdict.yaml"),
+        `steps:\n  - script: { path: ../../scripts/${file} }\n`,
+        "utf8"
+      );
+      executeMock.mockResolvedValue(outcome({ ok: true, output: {} }));
+
+      await runScript();
+
+      expect(executedRequest().interpreter).toBe(interpreter);
+    }
+  );
 });
