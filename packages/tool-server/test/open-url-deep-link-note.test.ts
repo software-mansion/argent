@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { DeviceInfo } from "@argent/registry";
+import type { DeviceInfo, Registry } from "@argent/registry";
 
 // iosImpl shells out via execFileAsync(promisify(execFile)). Stub the round-trip
 // so the handler resolves without a real `xcrun simctl openurl`, letting us
@@ -37,11 +37,14 @@ vi.mock("../src/utils/sim-remote", async () => {
 });
 
 import { httpDeepLinkNote } from "../src/tools/open-url/deep-link-note";
-import { iosImpl } from "../src/tools/open-url/platforms/ios";
+import { makeIosImpl } from "../src/tools/open-url/platforms/ios";
 import { androidImpl } from "../src/tools/open-url/platforms/android";
 import { iosRemoteImpl } from "../src/tools/open-url/platforms/ios-remote";
 
-const device = { platform: "ios", udid: "SIM" } as unknown as DeviceInfo;
+const device = { id: "SIM", platform: "ios", kind: "simulator" } as DeviceInfo;
+const ensureEnvReadyMock = vi.fn();
+const resolveServiceMock = vi.fn();
+const iosImpl = makeIosImpl({ resolveService: resolveServiceMock } as unknown as Registry);
 const androidDevice = { platform: "android", udid: "emulator-5554" } as unknown as DeviceInfo;
 
 beforeEach(() => {
@@ -51,6 +54,8 @@ beforeEach(() => {
   adbShellMock.mockResolvedValue("Starting: Intent { act=android.intent.action.VIEW }");
   simctlOpenUrlMock.mockReset();
   simctlOpenUrlMock.mockResolvedValue(undefined);
+  ensureEnvReadyMock.mockReset().mockResolvedValue(undefined);
+  resolveServiceMock.mockReset().mockResolvedValue({ ensureEnvReady: ensureEnvReadyMock });
 });
 
 describe("httpDeepLinkNote", () => {
@@ -104,6 +109,41 @@ describe("open-url iOS handler surfaces the caveat only for web URLs", () => {
     const res = await iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
     expect(res.opened).toBe(true);
     expect(res.note).toBeUndefined();
+  });
+});
+
+describe("open-url iOS handler arms native-devtools injection", () => {
+  it("applies the launchd env before simctl openurl, which can cold-launch the app", async () => {
+    await iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
+
+    expect(resolveServiceMock).toHaveBeenCalledWith(
+      "NativeDevtools:SIM",
+      expect.objectContaining({ device })
+    );
+    expect(ensureEnvReadyMock).toHaveBeenCalledTimes(1);
+    expect(ensureEnvReadyMock.mock.invocationCallOrder[0]).toBeLessThan(
+      execFileMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it.each([
+    [
+      "the service cannot be resolved",
+      () => resolveServiceMock.mockRejectedValueOnce(new Error("x")),
+    ],
+    ["the env cannot be applied", () => ensureEnvReadyMock.mockRejectedValueOnce(new Error("x"))],
+  ])("still opens the URL when %s", async (_label, fail) => {
+    fail();
+
+    const res = await iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
+
+    expect(res.opened).toBe(true);
+    expect(execFileMock).toHaveBeenCalledWith("xcrun", [
+      "simctl",
+      "openurl",
+      "SIM",
+      "bluesky://profile/x",
+    ]);
   });
 });
 

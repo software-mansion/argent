@@ -1,11 +1,11 @@
 import { z } from "zod";
-import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
-import { iosImpl } from "./platforms/ios";
+import { makeIosImpl } from "./platforms/ios";
 import { iosDeviceImpl } from "./platforms/ios-device";
 import { androidImpl } from "./platforms/android";
 import { harmonyImpl } from "./platforms/harmony";
@@ -55,46 +55,48 @@ const capability: ToolCapability = {
   harmony: { device: true },
 };
 
-export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
-  id: "open-url",
-  interaction: {
-    startedMsg: ({ params }) => `Opening ${safeDestination(params.url)}`,
-    completedMsg: ({ params }) => `Opened ${safeDestination(params.url)}`,
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to open ${safeDestination(params.url)}: ${failureSignal.error_code}`,
-  },
-  description: `Open a URL or URL scheme on the device.
+export function createOpenUrlTool(registry: Registry): ToolDefinition<Params, OpenUrlResult> {
+  return {
+    id: "open-url",
+    interaction: {
+      startedMsg: ({ params }) => `Opening ${safeDestination(params.url)}`,
+      completedMsg: ({ params }) => `Opened ${safeDestination(params.url)}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to open ${safeDestination(params.url)}: ${failureSignal.error_code}`,
+    },
+    description: `Open a URL or URL scheme on the device.
 Use to navigate to a web page or deep-link into an app. On Chromium, this navigates the primary renderer to the given URL.
 Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.<flag:harmonyos> HarmonyOS resolves any scheme through \`aa start -U\`.</flag:harmonyos>
 Deep-linking caveat: an https:// link opens the native app only when an installed app is verified for the link's domain (iOS Universal Links / Android App Links); otherwise it opens in the browser, and on iOS simulators it may open in Safari even when the owning app is installed. To reliably open an installed app, use its custom scheme (scheme://path) or launch-app with its bundle id.
 On a physical iPhone, http(s) URLs default to Safari and any other scheme needs bundleId; the receiving app becomes the app under automation.
 Returns { opened, url, note? }. note carries the deep-linking caveat when a web URL was opened on a native device<flag:harmonyos>; on HarmonyOS every URL carries a note, because \`aa start -U\` reports success whenever the system accepts the URI - a web URL can leave the screen unchanged, and a scheme the system routes to its app selector (tel:, mailto:) can leave a modal "No options to open with" dialog covering it - so confirm with describe or screenshot before treating the link as followed</flag:harmonyos>. Fails if no app is registered to handle the URI (iOS/Android<flag:harmonyos>, and on HarmonyOS whenever \`aa start -U\` refuses the URI, as it does a scheme nothing claims</flag:harmonyos>) or the renderer rejects the navigation (Chromium).`,
-  zodSchema,
-  capability,
-  services: (params): Record<string, ServiceRef> => {
-    const device = resolveDevice(params.udid);
-    if (device.platform === "chromium") {
-      return { chromium: chromiumCdpRef(device) };
-    }
-    return {};
-  },
-  execute: dispatchByPlatform<
-    OpenUrlServices,
-    OpenUrlServices,
-    Params,
-    OpenUrlResult,
-    OpenUrlChromiumServices,
-    OpenUrlServices,
-    OpenUrlServices,
-    OpenUrlServices
-  >({
-    toolId: "open-url",
+    zodSchema,
     capability,
-    ios: iosImpl,
-    iosDevice: iosDeviceImpl,
-    android: androidImpl,
-    harmony: harmonyImpl,
-    iosRemote: iosRemoteImpl,
-    chromium: chromiumImpl,
-  }),
-};
+    services: (params): Record<string, ServiceRef> => {
+      const device = resolveDevice(params.udid);
+      if (device.platform === "chromium") {
+        return { chromium: chromiumCdpRef(device) };
+      }
+      return {};
+    },
+    execute: dispatchByPlatform<
+      OpenUrlServices,
+      OpenUrlServices,
+      Params,
+      OpenUrlResult,
+      OpenUrlChromiumServices,
+      OpenUrlServices,
+      OpenUrlServices,
+      OpenUrlServices
+    >({
+      toolId: "open-url",
+      capability,
+      ios: makeIosImpl(registry),
+      iosDevice: iosDeviceImpl,
+      android: androidImpl,
+      harmony: harmonyImpl,
+      iosRemote: iosRemoteImpl,
+      chromium: chromiumImpl,
+    }),
+  };
+}

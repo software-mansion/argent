@@ -36,6 +36,7 @@ vi.mock("node:child_process", async () => {
 import type { Registry } from "@argent/registry";
 import { makeIosImpl as makeLaunchIosImpl } from "../src/tools/launch-app/platforms/ios";
 import { makeIosImpl as makeRestartIosImpl } from "../src/tools/restart-app/platforms/ios";
+import { makeIosImpl as makeOpenUrlIosImpl } from "../src/tools/open-url/platforms/ios";
 import { resolveDevice } from "../src/utils/device-info";
 import {
   __resetExternalDeviceCacheForTesting,
@@ -100,7 +101,7 @@ afterEach(() => {
   fs.rmSync(temporaryDirectory, { force: true, recursive: true });
 });
 
-describe("launch-app and restart-app on a device a provider claims", () => {
+describe("launch-app, restart-app and open-url on a device a provider claims", () => {
   it.each([
     ["the ext: id", DEVICE_ID],
     ["the raw udid", IOS_UDID],
@@ -132,6 +133,23 @@ describe("launch-app and restart-app on a device a provider claims", () => {
     );
 
     expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the ext: id", DEVICE_ID],
+    ["the raw udid", IOS_UDID],
+  ])("opens a URL through %s without resolving native-devtools", async (_label, udid) => {
+    const { registry, resolveService } = refusingRegistry();
+
+    await makeOpenUrlIosImpl(registry).handler({}, { udid, url: "myapp://x" }, resolveDevice(udid));
+
+    expect(resolveService).not.toHaveBeenCalled();
+    expect(execFileMock).toHaveBeenCalledWith("xcrun", [
+      "simctl",
+      "openurl",
+      IOS_UDID,
+      "myapp://x",
+    ]);
   });
 
   it("still resolves native-devtools for a device argent booted itself", async () => {

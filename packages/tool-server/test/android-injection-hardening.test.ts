@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
-import { openUrlTool } from "../src/tools/open-url";
+import { createOpenUrlTool } from "../src/tools/open-url";
 import { reinstallAppTool } from "../src/tools/reinstall-app";
 import { createDescribeTool } from "../src/tools/describe";
 import { Registry } from "@argent/registry";
@@ -12,6 +12,7 @@ import { Registry } from "@argent/registry";
 // independent — a throwaway Registry is fine.
 const launchAppTool = createLaunchAppTool(new Registry());
 const restartAppTool = createRestartAppTool(new Registry());
+const openUrlTool = createOpenUrlTool(new Registry());
 
 /**
  * Regressions for the command-injection review finding (#1) and the

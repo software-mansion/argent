@@ -406,9 +406,9 @@ export function start(): void {
   // Bind once the identity warm-up settles, so the accept path never pays for it.
   // Not on the watcher's first poll: a cold CoreSimulatorService can hold that
   // `simctl list` for close to a minute, past the launcher's 15s ready timeout.
-  // launch-app / restart-app arm injection themselves; open-url and the native
-  // profiler's malloc relaunch do not, so on a simulator booted before startup
-  // they can start an app ahead of that poll.
+  // launch-app, restart-app and open-url arm injection themselves; the native
+  // profiler's malloc relaunch does not, so on a simulator booted before startup
+  // it can start an app ahead of that poll.
   identityWarm
     .then(() => {
       server = httpHandle.app.listen(PORT, HOST, () => {

@@ -79,7 +79,7 @@ vi.mock("../src/tools/describe/platforms/harmony", async (orig) => ({
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { reinstallAppTool } from "../src/tools/reinstall-app";
-import { openUrlTool } from "../src/tools/open-url";
+import { createOpenUrlTool } from "../src/tools/open-url";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { createDescribeTool } from "../src/tools/describe";
 
@@ -117,7 +117,7 @@ const cases = [
   {
     name: "open-url",
     stub: openUrlStub,
-    tool: () => openUrlTool,
+    tool: () => createOpenUrlTool(registry),
     params: { udid: HARMONY_UDID, url: "https://example.com" },
     result: { opened: true, url: "https://example.com" },
   },
