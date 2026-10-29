@@ -27,7 +27,7 @@ Argent captures the traffic in three different layers.
 
 Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
 
-The native layer loads each request that it captures with the shared cookie store of the app (`HTTPCookieStorage.shared`). A session of the app with a cookie store of its own thus uses the shared store while the capture is on.
+While the native layer captures, each request of the app uses the shared cookie store of the app (`HTTPCookieStorage.shared`). This is also true for a session of the app that has a cookie store of its own.
 
 In React Native, the JS runtime layer records each request where the request leaves the JavaScript code. The JS runtime layer records the requests in these functions:
 
@@ -81,7 +81,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - Argent does not capture the requests that the app sends before the capture starts. Do the operation again after the capture starts. Argent starts the capture at these moments:
   - JS runtime layer: the agent reads the network log for the first time.
   - Chrome DevTools Protocol layer: Argent attaches to the Chromium app.
-  - Native `NSURLProtocol` layer: you activate the native inspection. On a Mac app, the native capture stays on when the app restarts after the first activation.
+  - Native `NSURLProtocol` layer: you activate the native inspection. On a Mac app, the native capture stays on when the app restarts after the first activation. On a Mac app, the native capture stops when the tool-server disconnects from the app. The next read of the network log starts the capture again.
 - A reload or a restart of the app clears the network log of the JS runtime layer. Argent starts the capture again when the agent reads the network log.
 - After an upgrade of Argent, the network capture of the earlier version stays in the app until the app reloads. The earlier network capture keeps no records, but it still reads a copy of each `fetch()` response. Reload the app to remove the earlier network capture.
 - Expo `fetch()` does not always report a connection that breaks in the middle of the response body. The app then gets a part of the body, or its read of the body does not end. The record shows the same: that part of the body, or a pending request. If the app does not read the body, the record shows a finished request.
