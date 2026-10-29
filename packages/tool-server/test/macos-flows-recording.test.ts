@@ -190,6 +190,28 @@ describe("a tap recorded on the empty space of a Mac app container", () => {
   });
 });
 
+describe("a tap recorded at a point of a Mac app element", () => {
+  const SEEK = { identifier: "seek", frame: { x: 0.1, y: 0.2, width: 0.6, height: 0.1 } };
+
+  it.each([
+    ["keeps the coordinates on a canvas, chart or seek bar", "AXGroup", 0.2, { x: 0.2, y: 0.25 }],
+    ["keeps the coordinates on a slider", "AXSlider", 0.2, { x: 0.2, y: 0.25 }],
+    [
+      "keeps the selector of a click at the centre, give or take a rounded frame",
+      "AXGroup",
+      0.401,
+      { selector: { identifier: "seek" } },
+    ],
+  ])("%s", async (_label, role, x, step) => {
+    serve([n({ ...SEEK, role, clickable: role === "AXSlider" })], "macos-devtools");
+    await start("seek");
+
+    await record("seek", "gesture-tap", { x, y: 0.25 });
+
+    expect(await recordedSteps("seek")).toEqual([{ kind: "tap", ...step }]);
+  });
+});
+
 describe("a right tap recorded on a Mac app", () => {
   const BOX = n({
     identifier: "box.context",

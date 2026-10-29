@@ -131,7 +131,7 @@ On a Mac app:
 - The runner reads the tree again when elements did not answer or Argent could not read the web content.
 - The runner calls a password field `[password]`, so only an `id` or `role` selector matches it.
 - When several elements match, an action and a `text` condition choose a match in an open menu first, then a match in a sheet, an alert or a popover, then a match in a window.
-- A recorded click on an element that is not clickable keeps its coordinates when another element is at the center of the element. A replay clicks the center, so a selector would reach the other element.
+- A recorded click away from the center of an element keeps its coordinates when the element is not clickable, or is a slider, a stepper or a text area. Examples are a click on a canvas, a chart, a map, a seek bar or the empty space of a container. A replay of a selector clicks the center, and there the click does something else.
 
 ## Directives
 

@@ -68,7 +68,7 @@ import { MACOS_DESCRIBE_LIMITS, MACOS_JUDGING_LIMITS } from "../describe/platfor
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
-import { getDescribeTapPoint, type DescribeSource } from "../describe/contract";
+import { getDescribeTapPoint, type DescribeFrame, type DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
@@ -709,6 +709,21 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
   );
 }
 
+/** Mac controls that act on where in them a click lands. */
+const MACOS_POINT_ROLES: ReadonlySet<string> = new Set(["AXSlider", "AXIncrementor", "AXTextArea"]);
+
+/**
+ * Whether a click is away from the centre of `frame` by more than the rounding
+ * of a describe frame: 5% of the element's size, and at least 0.005 of the window.
+ */
+function awayFromCentre(point: { x: number; y: number }, frame: DescribeFrame): boolean {
+  const centre = getDescribeTapPoint(frame);
+  return (
+    Math.abs(point.x - centre.x) > Math.max(0.005, 0.05 * frame.width) ||
+    Math.abs(point.y - centre.y) > Math.max(0.005, 0.05 * frame.height)
+  );
+}
+
 /**
  * The reason without the layers wrapped around it: the registry tags a service
  * failure with `[<namespace>:<id>] ` and the tree source prefixes its own
@@ -778,15 +793,16 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
-    // Replay clicks the centre. On a Mac app, a click on a container's empty
-    // space would then reach whatever lies at its centre.
+    // Replay clicks the centre. On a Mac app, a click away from the centre of a
+    // slider, a stepper, a text view, a canvas, chart or map, or a container's
+    // empty space does something else there.
     if (
       device.platform === "macos" &&
-      !node.clickable &&
-      nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node
+      (!node.clickable || MACOS_POINT_ROLES.has(node.role)) &&
+      awayFromCentre(point, resolved)
     ) {
       return {
-        warning: `selector ${describeSelector(selector)} names a container with another element at its centre; kept coordinates (brittle)`,
+        warning: `the click is away from the centre of ${describeSelector(selector)}, where replay clicks; kept coordinates (brittle)`,
       };
     }
     const warnings = [
