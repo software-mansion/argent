@@ -53,6 +53,8 @@ A path value is absolute, starts with `~`, or is relative. For `ios.additionalDe
 
 Argent resolves `recordings.directory` on the client host, the machine that receives the mp4. A relative value always resolves against the project root, or the home directory when there is no project, regardless of which file set the value.
 
+`android.adbServerPort` does not change the adb server of the agent's own shell. When Argent uses an adb server other than the default, the result of `list-devices` shows the agent how to reach that server. The agent puts the environment variables from that result before each `adb` command that it runs itself.
+
 ### Storage
 
 Argent stores the keys as JSON in two files:
