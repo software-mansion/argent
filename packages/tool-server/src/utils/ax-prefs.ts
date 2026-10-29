@@ -115,10 +115,16 @@ async function accessibilityPlistPath(udid: string): Promise<string> {
  *   subsystem bootstrap; without them SB never spawns `AccessibilityUIServer`
  *   and describe returns an empty ROOT even though the entitlement check passes.
  *
+ * Apple TV sims also get `AutomationEnabled`, which opts the simctl-spawned
+ * tvOS ax-service in as an AX client.
+ *
  * Caller must ensure the sim is Shutdown — in-sim cfprefsd would otherwise
  * overwrite this file on flush.
  */
-export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> {
+export async function setAccessibilityPrefsPreBoot(
+  udid: string,
+  { isTvOs }: { isTvOs: boolean }
+): Promise<void> {
   const plistPath = await accessibilityPlistPath(udid);
   await fsAsync.mkdir(path.dirname(plistPath), { recursive: true });
   const exists = await fsAsync
@@ -128,11 +134,13 @@ export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> 
   if (!exists) {
     await execFileAsync("plutil", ["-create", "binary1", plistPath]);
   }
-  for (const key of [
+  const keys = [
     "IgnoreAXServerEntitlements",
     "AccessibilityEnabled",
     "ApplicationAccessibilityEnabled",
-  ]) {
+  ];
+  if (isTvOs) keys.unshift("AutomationEnabled");
+  for (const key of keys) {
     await execFileAsync("plutil", ["-replace", key, "-bool", "true", plistPath]);
   }
 }

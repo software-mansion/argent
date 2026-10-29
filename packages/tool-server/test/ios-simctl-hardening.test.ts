@@ -81,6 +81,13 @@ describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", (
     }
   });
 
+  it("ensureAutomationEnabled writes AutomationEnabled as true inside the simulator", async () => {
+    await ensureAutomationEnabled("UDID-4");
+    expect(xcrunCalls().map((c) => c.args.slice(c.args.indexOf("defaults")))).toEqual([
+      ["defaults", "write", "com.apple.Accessibility", "AutomationEnabled", "-bool", "true"],
+    ]);
+  });
+
   it("clearAutomationEnabled passes killSignal SIGKILL + a finite timeout", async () => {
     await clearAutomationEnabled("UDID-3");
     const simctl = xcrunCalls();

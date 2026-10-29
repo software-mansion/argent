@@ -47,6 +47,7 @@ vi.mock("node:fs", async () => {
 const listIosSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
 const clearAutomationEnabledOrWarnMock = vi.fn();
+const ensureAutomationEnabledMock = vi.fn();
 const isEntitlementBypassActiveMock = vi.fn();
 
 vi.mock("../src/utils/ios-devices", () => ({
@@ -56,6 +57,7 @@ vi.mock("../src/utils/ios-devices", () => ({
 vi.mock("../src/utils/ax-prefs", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
   clearAutomationEnabledOrWarn: (...args: unknown[]) => clearAutomationEnabledOrWarnMock(...args),
+  ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
@@ -95,6 +97,7 @@ describe("boot-device — iOS path", () => {
     ]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
@@ -123,7 +126,8 @@ describe("boot-device — iOS path", () => {
     // first init.
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledTimes(1);
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111"
+      "11111111-1111-1111-1111-111111111111",
+      { isTvOs: false }
     );
     expect(setAccessibilityPrefsPreBootMock.mock.invocationCallOrder[0]).toBeLessThan(
       mockExecFile.mock.invocationCallOrder[0]
@@ -447,7 +451,8 @@ describe("boot-device — iOS path", () => {
     });
 
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
-      "22222222-2222-2222-2222-222222222222"
+      "22222222-2222-2222-2222-222222222222",
+      { isTvOs: false }
     );
     const execCalls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
     expect(execCalls[0]).toEqual([
@@ -501,9 +506,10 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: TV_UDID });
 
     expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(TV_UDID, { isTvOs: true });
   });
 
-  it("leaves AutomationEnabled in place on a tvOS sim, where tv-control writes it", async () => {
+  it("writes AutomationEnabled on a tvOS sim instead of clearing it", async () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
     ]);
@@ -516,6 +522,7 @@ describe("boot-device — iOS path", () => {
 
     await tool.execute!({}, { udid: TV_UDID });
 
+    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(TV_UDID);
     expect(clearAutomationEnabledOrWarnMock).not.toHaveBeenCalled();
   });
 

@@ -31,7 +31,11 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
-import { clearAutomationEnabledOrWarn, setAccessibilityPrefsPreBoot } from "../../utils/ax-prefs";
+import {
+  clearAutomationEnabledOrWarn,
+  ensureAutomationEnabled,
+  setAccessibilityPrefsPreBoot,
+} from "../../utils/ax-prefs";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -498,7 +502,7 @@ async function bootIos(
 
   const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
   if (needsPreBoot) {
-    await setAccessibilityPrefsPreBoot(udid).catch((err: unknown) => {
+    await setAccessibilityPrefsPreBoot(udid, { isTvOs }).catch((err: unknown) => {
       process.stderr.write(
         `[boot-device ${udid.slice(0, 8)}] pre-boot AX pref write failed (${
           err instanceof Error ? err.message : String(err)
@@ -548,7 +552,8 @@ async function bootIos(
     });
   }
 
-  if (!isTvOs) await clearAutomationEnabledOrWarn(udid);
+  if (isTvOs) await ensureAutomationEnabled(udid).catch(() => undefined);
+  else await clearAutomationEnabledOrWarn(udid);
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
