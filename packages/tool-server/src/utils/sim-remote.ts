@@ -286,49 +286,42 @@ const RECORDING_START_TIMEOUT_MS = 90_000;
  * `showTouches` draws the touch visualizer into the capture; it stays on in
  * the live stream until the stop turns it off. How much the runner buffers is
  * its own business, so nothing here sizes it.
- *
- * The id is null against a `sim-remote` that predates it. A recording made
- * there still stops and downloads; it only cannot be fetched a second time.
  */
 export async function screenRecordStart(
   udid: string,
   opts: { showTouches: boolean }
-): Promise<string | null> {
+): Promise<string> {
   const args = ["screen-record", "start", stripRemotePrefix(udid)];
   if (opts.showTouches) args.push("--show-touches");
   const { stdout } = await run(args, { timeoutMs: RECORDING_START_TIMEOUT_MS });
-  return stdout.trim() || null;
+  return stdout.trim();
 }
 
+// Nothing is downloaded, but the runner still muxes the whole recording before
+// it answers, which it allows up to two minutes.
+const RECORDING_STOP_TIMEOUT_MS = 150_000;
 // The whole video crosses the control connection, so a download gets its own
 // budget rather than the default: a long capture of a high-resolution device
 // is hundreds of megabytes.
 const RECORDING_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
-// Nothing is downloaded, but the runner still muxes the whole recording before
-// it answers, which it allows up to two minutes.
-const RECORDING_END_TIMEOUT_MS = 150_000;
-
-/** Stop the recording and download the mp4 to `outputFile`, overwriting it. */
-export async function screenRecordStop(udid: string, outputFile: string): Promise<void> {
-  await run(["screen-record", "stop", stripRemotePrefix(udid), outputFile, "--force"], {
-    timeoutMs: RECORDING_DOWNLOAD_TIMEOUT_MS,
-  });
-}
 
 /**
- * Stop the recording without downloading it. The runner keeps the mp4, so
- * this is for a recording that only has to end.
+ * Stop the recording. The runner keeps the mp4 and this returns its id, for
+ * `screenRecordFetch`: ending and downloading are separate because only the
+ * download can be retried.
  */
-export async function screenRecordEnd(udid: string): Promise<void> {
-  await run(["screen-record", "stop", stripRemotePrefix(udid)], {
-    timeoutMs: RECORDING_END_TIMEOUT_MS,
+export async function screenRecordStop(udid: string): Promise<string> {
+  const { stdout } = await run(["screen-record", "stop", stripRemotePrefix(udid)], {
+    timeoutMs: RECORDING_STOP_TIMEOUT_MS,
   });
+  return stdout.trim();
 }
 
 /**
- * Download a recording the runner kept from an earlier stop. It keeps the
- * latest recordings of a simulator until the machine is released, so a
- * download that broke off is repeated here instead of costing the recording.
+ * Download a recording the runner kept from a stop, overwriting `outputFile`.
+ * It keeps the latest recordings of a simulator until the machine is
+ * released, so a download that broke off is repeated here instead of costing
+ * the recording.
  */
 export async function screenRecordFetch(
   udid: string,

@@ -10,7 +10,6 @@ vi.mock("../src/utils/sim-remote", async (importOriginal) => {
     ...actual,
     screenRecordStart: vi.fn(),
     screenRecordStop: vi.fn(),
-    screenRecordEnd: vi.fn(),
     screenRecordFetch: vi.fn(),
   };
 });
@@ -33,12 +32,7 @@ import {
   startRemoteCapture,
   stopRemoteCapture,
 } from "../src/tools/screen-recording/capture-remote";
-import {
-  screenRecordEnd,
-  screenRecordFetch,
-  screenRecordStart,
-  screenRecordStop,
-} from "../src/utils/sim-remote";
+import { screenRecordFetch, screenRecordStart, screenRecordStop } from "../src/utils/sim-remote";
 import {
   __resetActiveScreenRecordingsForTesting,
   getActiveScreenRecordings,
@@ -48,7 +42,6 @@ import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 const mockStart = vi.mocked(screenRecordStart);
 const mockStop = vi.mocked(screenRecordStop);
-const mockEnd = vi.mocked(screenRecordEnd);
 const mockFetch = vi.mocked(screenRecordFetch);
 
 const REMOTE_UDID = "remote:6DBF83B4-0000-0000-0000-000000000000";
@@ -67,9 +60,9 @@ async function makeSession(): Promise<ScreenRecordingSessionApi> {
   return instance.api;
 }
 
-/** Make `screenRecordStop` produce a plausible mp4 at the path it is given. */
-function stopWritesVideo(bytes = "mp4 bytes"): void {
-  mockStop.mockImplementation(async (_udid: string, outputFile: string) => {
+/** Make `screenRecordFetch` produce a plausible mp4 at the path it is given. */
+function fetchWritesVideo(bytes = "mp4 bytes"): void {
+  mockFetch.mockImplementation(async (_udid: string, _id: string, outputFile: string) => {
     await fs.writeFile(outputFile, bytes);
   });
 }
@@ -85,8 +78,8 @@ describe("remote screen recording", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-remote-recording-"));
     restoreTmpdir = redirectTmpdir(tmpDir);
     mockStart.mockResolvedValue("rec-1");
-    mockEnd.mockResolvedValue(undefined);
-    stopWritesVideo();
+    mockStop.mockResolvedValue("rec-1");
+    fetchWritesVideo();
   });
 
   afterEach(async () => {
@@ -111,7 +104,8 @@ describe("remote screen recording", () => {
     expect(getActiveScreenRecordings()).toHaveLength(1);
 
     const stopped = await stopRemoteCapture(api);
-    expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID, started.outputFile);
+    expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID);
+    expect(mockFetch).toHaveBeenCalledWith(REMOTE_UDID, "rec-1", started.outputFile);
     expect(stopped.outputFile).toBe(started.outputFile);
     expect(stopped.sizeBytes).toBeGreaterThan(0);
     expect(getActiveScreenRecordings()).toHaveLength(0);
@@ -151,7 +145,6 @@ describe("remote screen recording", () => {
     expect(api.startPending).toBe(false);
     expect(getActiveScreenRecordings()).toHaveLength(0);
 
-    stopWritesVideo();
     await expect(
       startRemoteCapture(api, {
         timeLimitSeconds: 60,
@@ -180,7 +173,8 @@ describe("remote screen recording", () => {
 
       expect(mockStop).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID, started.outputFile);
+      expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID);
+      expect(mockFetch).toHaveBeenCalledWith(REMOTE_UDID, "rec-1", started.outputFile);
 
       const stopped = await stopRemoteCapture(api);
       // Exactly once: the stop must not ask the runner to end a recording that
@@ -218,9 +212,30 @@ describe("remote screen recording", () => {
 
   /**
    * The runner keeps a stopped recording, so a download that broke off is
-   * asked for again by id instead of costing the video.
+   * asked for again instead of costing the video.
    */
-  it("fetches the recording again when the stop's download fails", async () => {
+  it("fetches the recording again when the download fails", async () => {
+    const api = await makeSession();
+    const started = await startRemoteCapture(api, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: false,
+    });
+    mockFetch.mockRejectedValueOnce(new Error("connection reset"));
+
+    const stopped = await stopRemoteCapture(api);
+    expect(mockStop).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenLastCalledWith(REMOTE_UDID, "rec-1", started.outputFile);
+    expect(stopped.sizeBytes).toBeGreaterThan(0);
+  });
+
+  /**
+   * A stop whose reply was lost may still have ended the recording. The fetch
+   * by the start's id settles it: the runner serves only a stopped recording.
+   */
+  it("fetches by the start's id when the stop's reply was lost", async () => {
     const api = await makeSession();
     const started = await startRemoteCapture(api, {
       timeLimitSeconds: 60,
@@ -229,11 +244,9 @@ describe("remote screen recording", () => {
       showTouches: false,
     });
     mockStop.mockRejectedValueOnce(new Error("connection reset"));
-    mockFetch.mockImplementation(async (_udid: string, _id: string, outputFile: string) => {
-      await fs.writeFile(outputFile, "mp4 bytes");
-    });
 
     const stopped = await stopRemoteCapture(api);
+    expect(mockStop).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(REMOTE_UDID, "rec-1", started.outputFile);
     expect(stopped.sizeBytes).toBeGreaterThan(0);
   });
@@ -277,7 +290,7 @@ describe("remote screen recording", () => {
     mockFetch.mockRejectedValueOnce(new Error("could not reach sim-router"));
 
     await expect(stopRemoteCapture(api)).rejects.toThrow("could not reach sim-router");
-    expect(mockEnd).toHaveBeenCalledWith(REMOTE_UDID);
+    expect(mockStop).toHaveBeenCalledTimes(2);
   });
 
   /**
@@ -299,8 +312,8 @@ describe("remote screen recording", () => {
     expect(started.status).toBe("recording");
     expect(mockStart).toHaveBeenCalledTimes(2);
     // Ended on the runner, not downloaded: the leftover is nobody's video here.
-    expect(mockEnd).toHaveBeenCalledWith(REMOTE_UDID);
-    expect(mockStop).not.toHaveBeenCalled();
+    expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   /**
@@ -310,7 +323,7 @@ describe("remote screen recording", () => {
   it("starts again even when stopping the leftover fails", async () => {
     const api = await makeSession();
     mockStart.mockRejectedValueOnce(new Error("simulator X is already recording"));
-    mockEnd.mockRejectedValueOnce(new Error("no frames to export"));
+    mockStop.mockRejectedValueOnce(new Error("no frames to export"));
 
     await expect(
       startRemoteCapture(api, {
@@ -331,9 +344,7 @@ describe("remote screen recording", () => {
       trimStatic: false,
       showTouches: false,
     });
-    mockStop.mockImplementation(async (_udid: string, outputFile: string) => {
-      await fs.writeFile(outputFile, "");
-    });
+    fetchWritesVideo("");
 
     const err = await stopRemoteCapture(api).catch((e: unknown) => e);
     expect(getFailureSignal(err as Error)?.error_code).toBe(
@@ -394,7 +405,8 @@ describe("remote screen recording", () => {
     await instance.dispose?.();
     // Downloaded onto the path the start handed back, so the partial video is
     // where the teardown breadcrumb says it is.
-    expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID, started.outputFile);
+    expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID);
+    expect(mockFetch).toHaveBeenCalledWith(REMOTE_UDID, "rec-1", started.outputFile);
     expect(getActiveScreenRecordings()).toHaveLength(0);
   });
 
@@ -426,7 +438,7 @@ describe("remote screen recording", () => {
     expect(getFailureSignal(err)?.error_code).toBe(
       FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
     );
-    expect(mockEnd).toHaveBeenCalledWith(REMOTE_UDID);
+    expect(mockStop).toHaveBeenCalledWith(REMOTE_UDID);
     expect(getActiveScreenRecordings()).toHaveLength(0);
   });
 });

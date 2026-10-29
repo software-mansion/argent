@@ -25,7 +25,7 @@ import {
   startRemoteCapture,
   stopRemoteCapture,
 } from "../src/tools/screen-recording/capture-remote";
-import { screenRecordStart, screenRecordStop } from "../src/utils/sim-remote";
+import { screenRecordFetch, screenRecordStart, screenRecordStop } from "../src/utils/sim-remote";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 const execFileAsync = promisify(execFile);
@@ -107,9 +107,12 @@ describe.skipIf(!hasFfmpeg())("remote recording post-pass (real ffmpeg)", () => 
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-postpass-"));
     restore = redirectTmpdir(tmpDir);
     vi.mocked(screenRecordStart).mockResolvedValue("rec-1");
-    vi.mocked(screenRecordStop).mockImplementation(async (_u: string, out: string) => {
-      await makeSourceVideo(out);
-    });
+    vi.mocked(screenRecordStop).mockResolvedValue("rec-1");
+    vi.mocked(screenRecordFetch).mockImplementation(
+      async (_u: string, _id: string, out: string) => {
+        await makeSourceVideo(out);
+      }
+    );
   });
   afterEach(async () => {
     restore();

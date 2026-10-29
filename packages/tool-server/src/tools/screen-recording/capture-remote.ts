@@ -5,12 +5,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
-import {
-  screenRecordEnd,
-  screenRecordFetch,
-  screenRecordStart,
-  screenRecordStop,
-} from "../../utils/sim-remote";
+import { screenRecordFetch, screenRecordStart, screenRecordStop } from "../../utils/sim-remote";
 import { stripRemotePrefix } from "../../utils/device-info";
 import {
   clearActiveScreenRecording,
@@ -92,7 +87,7 @@ export async function startRemoteCapture(
   // start or stop is rejected instead of racing this one through the async
   // window below; the finally clears it on every exit.
   api.startPending = true;
-  let recordingId: string | null;
+  let recordingId: string;
   try {
     // A dispose that ran while an earlier await suspended this start would no
     // longer be able to release a recording started after it.
@@ -101,7 +96,7 @@ export async function startRemoteCapture(
     // A dispose while the runner was starting found nothing to release, so the
     // recording it left running is ended here.
     if (api.disposed) {
-      await screenRecordEnd(api.deviceId).catch(() => {});
+      await screenRecordStop(api.deviceId).catch(() => {});
       assertNotDisposed(api, "screen_recording_start");
     }
   } catch (err) {
@@ -137,7 +132,7 @@ export async function startRemoteCapture(
   // captured is salvageable rather than discarded — the teardown breadcrumb
   // points there.
   api.remoteRelease = async () => {
-    await screenRecordStop(api.deviceId, outputFile).catch(() => {});
+    await stopAndDownload(api.deviceId, recordingId, outputFile).catch(() => {});
   };
   api.startPending = false;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
@@ -178,48 +173,54 @@ export async function startRemoteCapture(
 
 /**
  * Start a recording on the runner. One the runner is already making belongs to
- * nobody here — this session would have refused the start itself — so it is a
- * leftover of a tool-server that lost track of it. It is stopped, which keeps
- * its video on the runner, and the start is tried once more — also when that
- * stop fails, since the runner ends a recording whatever its stop came to.
+ * nobody here — this session would have refused the start itself — so it is
+ * a leftover of a tool-server that lost track of it. It is stopped, which
+ * keeps its video on the runner, and the start is tried once more — also when
+ * that stop fails, since the runner ends a recording whatever its stop came to.
  */
-async function startOnRunner(deviceId: string, showTouches: boolean): Promise<string | null> {
+async function startOnRunner(deviceId: string, showTouches: boolean): Promise<string> {
   try {
     return await screenRecordStart(deviceId, { showTouches });
   } catch (err) {
     if (!/already recording/i.test(err instanceof Error ? err.message : String(err))) throw err;
-    await screenRecordEnd(deviceId).catch(() => {});
+    await screenRecordStop(deviceId).catch(() => {});
     return screenRecordStart(deviceId, { showTouches });
   }
 }
 
 /**
- * Stop the recording and download it. The runner keeps a stopped recording, so
- * when the stop fails — typically a transfer that broke off — the same
- * recording is fetched once more by its id before the failure is reported.
+ * Stop the recording and download it: two runner operations, since only the
+ * download can be retried. A stop that fails may or may not have reached the
+ * runner, and a fetch by the start's id tells which, as the runner only serves
+ * a recording it has stopped. A download that fails is tried once more before
+ * the failure is reported.
  */
 async function stopAndDownload(
   deviceId: string,
-  recordingId: string | null,
+  startedId: string | null,
   outputFile: string
 ): Promise<void> {
+  let recordingId: string;
   try {
-    await screenRecordStop(deviceId, outputFile);
+    recordingId = await screenRecordStop(deviceId);
   } catch (err) {
-    // The stop's own error is the one worth reporting if this fails as well:
-    // the fetch can only say the recording is not there.
     const fetched =
-      recordingId !== null &&
-      (await screenRecordFetch(deviceId, recordingId, outputFile).then(
+      startedId !== null &&
+      (await screenRecordFetch(deviceId, startedId, outputFile).then(
         () => true,
         () => false
       ));
     if (fetched) return;
-    // The stop may never have reached the runner, which is then still
-    // recording, touch markers and all. Ending it keeps the video there for a
-    // fetch; a runner the stop did reach answers "not recording".
-    await screenRecordEnd(deviceId).catch(() => {});
+    // Still recording, touch markers and all, or the runner is unreachable.
+    // Another stop keeps the video there for a fetch; the first stop's own
+    // error is the one worth reporting.
+    await screenRecordStop(deviceId).catch(() => {});
     throw err;
+  }
+  try {
+    await screenRecordFetch(deviceId, recordingId, outputFile);
+  } catch {
+    await screenRecordFetch(deviceId, recordingId, outputFile);
   }
 }
 
