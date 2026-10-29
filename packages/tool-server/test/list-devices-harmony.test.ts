@@ -16,7 +16,8 @@ vi.mock("../src/utils/adb", async (importOriginal) => {
   };
 });
 vi.mock("../src/utils/ios-devices", () => ({ listIosSimulators: vi.fn(async () => []) }));
-vi.mock("../src/utils/sim-remote", () => ({
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
   simctlListDevices: vi.fn(async () => ({ devices: {} })),
 }));
 vi.mock("../src/utils/chromium-discovery", async (importOriginal) => {
