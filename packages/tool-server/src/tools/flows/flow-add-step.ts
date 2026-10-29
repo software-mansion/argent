@@ -715,12 +715,17 @@ const MACOS_POINT_ROLES: ReadonlySet<string> = new Set(["AXSlider", "AXIncrement
 const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"]);
 
 /**
- * Whether a click is away from the centre of `frame` by more than the rounding
- * of a centre that describe prints with 3 decimals and an agent taps at with 2.
+ * Whether a click is away from the centre of `frame` by more than `tolerance`:
+ * the rounding of describe's 3-decimal frames (0.0015), or of a centre that an
+ * agent rounds to 2 decimals as well (0.006).
  */
-function awayFromCentre(point: { x: number; y: number }, frame: DescribeFrame): boolean {
+function awayFromCentre(
+  point: { x: number; y: number },
+  frame: DescribeFrame,
+  tolerance: number
+): boolean {
   const centre = getDescribeTapPoint(frame);
-  return Math.abs(point.x - centre.x) > 0.006 || Math.abs(point.y - centre.y) > 0.006;
+  return Math.abs(point.x - centre.x) > tolerance || Math.abs(point.y - centre.y) > tolerance;
 }
 
 /**
@@ -800,7 +805,10 @@ async function captureTapSelector(
       MACOS_POINT_ROLES.has(node.role) || (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
     if (
       device.platform === "macos" &&
-      ((pointMatters && awayFromCentre(point, resolved)) ||
+      // Coordinates on a slider replay the same point, so it keeps them for any click
+      // off its centre; elsewhere a tap at a rounded centre keeps the selector.
+      ((pointMatters &&
+        awayFromCentre(point, resolved, MACOS_POINT_ROLES.has(node.role) ? 0.0015 : 0.006)) ||
         (!node.clickable && nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node))
     ) {
       return {

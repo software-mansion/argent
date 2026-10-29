@@ -203,8 +203,8 @@ describe("a tap recorded at a point of a Mac app element", () => {
     [
       "keeps the coordinates of a click near the centre of a slider",
       "AXSlider",
-      0.38,
-      { x: 0.38, y: 0.25 },
+      0.396,
+      { x: 0.396, y: 0.25 },
     ],
     [
       "keeps the selector of a click at the centre, give or take its rounding to 2 decimals",
