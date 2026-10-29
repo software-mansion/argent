@@ -194,8 +194,18 @@ describe("a tap recorded at a point of a Mac app element", () => {
   const SEEK = { identifier: "seek", frame: { x: 0.1, y: 0.2, width: 0.6, height: 0.1 } };
 
   it.each([
-    ["keeps the coordinates on a canvas, chart or seek bar", "AXGroup", 0.2, { x: 0.2, y: 0.25 }],
-    ["keeps the coordinates on a slider", "AXSlider", 0.2, { x: 0.2, y: 0.25 }],
+    [
+      "keeps the coordinates of a click near the centre of a canvas, chart or seek bar",
+      "AXGroup",
+      0.38,
+      { x: 0.38, y: 0.25 },
+    ],
+    [
+      "keeps the coordinates of a click near the centre of a slider",
+      "AXSlider",
+      0.38,
+      { x: 0.38, y: 0.25 },
+    ],
     [
       "keeps the selector of a click at the centre, give or take a rounded frame",
       "AXGroup",

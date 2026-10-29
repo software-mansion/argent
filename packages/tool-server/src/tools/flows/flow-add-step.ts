@@ -716,14 +716,11 @@ const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeadin
 
 /**
  * Whether a click is away from the centre of `frame` by more than the rounding
- * of a describe frame: 5% of the element's size, and at least 0.005 of the window.
+ * of a centre taken from describe's frames, which have 3 decimals.
  */
 function awayFromCentre(point: { x: number; y: number }, frame: DescribeFrame): boolean {
   const centre = getDescribeTapPoint(frame);
-  return (
-    Math.abs(point.x - centre.x) > Math.max(0.005, 0.05 * frame.width) ||
-    Math.abs(point.y - centre.y) > Math.max(0.005, 0.05 * frame.height)
-  );
+  return Math.abs(point.x - centre.x) > 0.0015 || Math.abs(point.y - centre.y) > 0.0015;
 }
 
 /**
@@ -795,17 +792,16 @@ async function captureTapSelector(
         warning: `selector ${describeSelector(selector)} resolves to a different element on this screen; kept coordinates (brittle)`,
       };
     }
-    // Replay clicks the centre. On a Mac app, a click away from the centre of a
-    // slider, a stepper, a text view, a canvas, chart, map or seek bar, or a
-    // container's empty space does something else there, and so does a click
-    // on text with another element at its centre.
+    // Replay clicks the centre. On a Mac app, a click anywhere else on a slider,
+    // a stepper, a text view, a canvas, chart, map or seek bar, or a container's
+    // empty space does something else there. So does a click on any element that
+    // is not clickable, text included, when another element lies at its centre.
     const pointMatters =
       MACOS_POINT_ROLES.has(node.role) || (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
     if (
       device.platform === "macos" &&
-      (pointMatters
-        ? awayFromCentre(point, resolved)
-        : !node.clickable && nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node)
+      ((pointMatters && awayFromCentre(point, resolved)) ||
+        (!node.clickable && nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node))
     ) {
       return {
         warning: `the click is away from the centre of ${describeSelector(selector)}, where replay clicks; kept coordinates (brittle)`,
