@@ -35,6 +35,9 @@ export interface DescribeNode {
   // Distinct on D-pad UIs: input focus vs. the visually highlighted item.
   focused?: boolean;
   selected?: boolean;
+  // A Mac app's stacking: 2 in an open menu, 1 in a sheet, alert or popover,
+  // absent in a window. Of a selector's matches, the frontmost layer wins.
+  layer?: number;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -57,6 +60,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       scrollHidden: z.number().int().nonnegative().optional(),
       focused: z.boolean().optional(),
       selected: z.boolean().optional(),
+      layer: z.number().int().nonnegative().optional(),
     })
     .passthrough()
 );

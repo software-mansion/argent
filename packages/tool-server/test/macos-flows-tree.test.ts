@@ -11,7 +11,15 @@ import {
 import { adaptMacosTreeForFlows, queryMacosTree } from "../src/tools/flows/flow-macos-tree";
 import { fetchFlowTree } from "../src/tools/flows/flow-tree";
 import { resolveDevice } from "../src/utils/device-info";
-import { assertText, evaluateCondition, findAll, type Selector } from "../src/utils/ui-tree-match";
+import {
+  assertText,
+  evaluateCondition,
+  findAll,
+  firstInReadingOrder,
+  nodeAtPoint,
+  selectorToFrame,
+  type Selector,
+} from "../src/utils/ui-tree-match";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import {
   MACOS_DEVICE_ID,
@@ -357,6 +365,41 @@ describe("macOS describe and flow trees of one read", () => {
       walk(walk(describe).find(byId("settings.scroll"))!).find(byText("Purple"))
     ).toBeUndefined();
     expect(leaf(flow, byText("Purple"))).toMatchObject({ role: "AXMenuItem" });
+  });
+
+  it("picks the match in an open menu or sheet over the same-named control behind it", async () => {
+    const tree = probeTree();
+    // The window's controls are smaller and read first, so without the stacking they would win.
+    (windowRoot(tree).children as Json[]).push(
+      axNode("AXButton", rect(0.3, 0.2, 0.1, 0.02), {
+        identifier: "win.delete",
+        title: "Delete item",
+      }),
+      axNode("AXButton", rect(0.7, 0.2, 0.05, 0.02), { identifier: "win.done", title: "Done" }),
+      axNode("AXSheet", rect(0.3, 0.3, 0.4, 0.3), {}, [
+        axNode("AXButton", rect(0.43, 0.53, 0.13, 0.04), {
+          identifier: "sheet.done",
+          title: "Done",
+        }),
+      ])
+    );
+    (tree.windows as Json[]).push({
+      kind: "menu",
+      root: axNode("AXMenu", rect(0.15, 0.14, 0.26, 0.09), {}, [
+        axNode("AXMenuItem", rect(0.15, 0.19, 0.26, 0.04), {
+          identifier: "ctx.delete",
+          title: "Delete item",
+        }),
+      ]),
+    });
+    const { describe, flow } = await bothTrees({ trees: [tree] });
+    for (const t of [describe, flow]) {
+      const frame = (id: string) => findAll(t, { identifier: id })[0]!.frame;
+      expect(selectorToFrame(t, { text: "Delete item" })).toEqual(frame("ctx.delete"));
+      expect(selectorToFrame(t, { text: "Done" })).toEqual(frame("sheet.done"));
+      expect(firstInReadingOrder(findAll(t, { text: "Done" }))?.identifier).toBe("sheet.done");
+      expect(nodeAtPoint(t, { x: 0.35, y: 0.21 })?.identifier).toBe("ctx.delete");
+    }
   });
 
   it("adds the identified views on screen, and drops what lies outside the window", async () => {

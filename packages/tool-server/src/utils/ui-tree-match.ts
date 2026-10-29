@@ -525,9 +525,18 @@ export function isVisible(node: DescribeNode): boolean {
   return node.frame.width > 0 && node.frame.height > 0;
 }
 
-// The element a reader "sees first": smallest (y, then x), matching the order
-// format-tree renders flat iOS leaves in — in the UI's space when the caller
-// says how the UI lies on the frame space (see the module comment).
+// The nodes of the frontmost `layer` among `nodes`: a match in a Mac app's open
+// menu or sheet is the one in front of a same-named control of the window.
+function frontmost(nodes: DescribeNode[]): DescribeNode[] {
+  let top = 0;
+  for (const n of nodes) top = Math.max(top, n.layer ?? 0);
+  return top === 0 ? nodes : nodes.filter((n) => n.layer === top);
+}
+
+// The element a reader "sees first": in the frontmost layer, smallest (y, then
+// x), matching the order format-tree renders flat iOS leaves in — in the UI's
+// space when the caller says how the UI lies on the frame space (see the
+// module comment).
 export function firstInReadingOrder(
   matches: DescribeNode[],
   orientation?: UiOrientation
@@ -535,7 +544,7 @@ export function firstInReadingOrder(
   const reading = readingFrames(orientation);
   let best: DescribeNode | undefined;
   let bestFrame: DescribeFrame | undefined;
-  for (const n of matches) {
+  for (const n of frontmost(matches)) {
     const f = reading(n);
     if (
       bestFrame === undefined ||
@@ -654,9 +663,9 @@ function frameArea(frame: DescribeFrame): number {
 }
 
 /**
- * Reverse lookup for recording: the smallest visible node whose frame contains
- * the tapped point — the most specific element (a button over its container).
- * Skips the synthetic root.
+ * Reverse lookup for recording: the smallest visible node of the frontmost
+ * layer whose frame contains the tapped point — the most specific element (a
+ * button over its container). Skips the synthetic root.
  */
 export function nodeAtPoint(
   root: DescribeNode,
@@ -665,7 +674,14 @@ export function nodeAtPoint(
   let best: DescribeNode | undefined;
   const walk = (node: DescribeNode): void => {
     if (isVisible(node) && frameContains(node.frame, point.x, point.y)) {
-      if (best === undefined || frameArea(node.frame) < frameArea(best.frame)) best = node;
+      const layerDelta = (node.layer ?? 0) - (best?.layer ?? 0);
+      if (
+        best === undefined ||
+        layerDelta > 0 ||
+        (layerDelta === 0 && frameArea(node.frame) < frameArea(best.frame))
+      ) {
+        best = node;
+      }
     }
     for (const child of node.children) walk(child);
   };
@@ -716,7 +732,8 @@ function exactFieldCount(
  * as well as the leaf carrying the text, and the container's centre can sit
  * over a different child entirely. Matches are therefore ranked: exact field
  * matches beat substring hits, then the smallest frame (mirroring
- * {@link nodeAtPoint}), with reading order as the final tiebreak.
+ * {@link nodeAtPoint}), with reading order as the final tiebreak. Only the
+ * matches of the frontmost layer take part.
  *
  * The universal selector (flow YAML's `any: true`) is the case ranking cannot
  * serve: with no field to be exact about, "smallest" degenerates to whatever
@@ -739,7 +756,7 @@ export function selectorToFrame(
   selector: Selector,
   orientation?: UiOrientation
 ): DescribeFrame | undefined {
-  const visible = findAll(root, selector, orientation).filter(isVisible);
+  const visible = frontmost(findAll(root, selector, orientation).filter(isVisible));
   if (visible.length === 0) return undefined;
   const reading = readingFrames(orientation);
   if (!hasOwnConstraint(selector)) {

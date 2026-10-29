@@ -150,6 +150,7 @@ type MacosFields = Pick<
   | "focused"
   | "selected"
   | "password"
+  | "layer"
 >;
 
 /** One element of the app, in the shape both trees project from. */
@@ -435,9 +436,25 @@ interface TreeBuild {
   menus: MacosNode[];
 }
 
+// The `layer` of a root by its window kind, and of an element by its role: an
+// open menu lies over everything, a sheet, an alert or a popover over its window.
+const KIND_LAYERS = new Map([
+  ["menu", 2],
+  ["sheet", 1],
+  ["alert", 1],
+  ["popover", 1],
+  ["file-panel", 1],
+]);
+const ROLE_LAYERS = new Map([
+  ["AXMenu", 2],
+  ["AXSheet", 1],
+  ["AXPopover", 1],
+]);
+
 function axNode(
   r: Record<string, unknown>,
   build: TreeBuild,
+  layer: number,
   inScrollBar = false
 ): MacosNode | null {
   // An element that did not answer: its keys are partial and its children were not read.
@@ -446,6 +463,7 @@ function axNode(
   const secure = isSecure(r);
   const checkable = CHECKABLE_ROLES.has(role);
   const webView = finite(r.webView);
+  layer = Math.max(layer, ROLE_LAYERS.get(role) ?? 0);
   const node = newNode(
     {
       role,
@@ -462,6 +480,7 @@ function axNode(
       // SwiftUI reports every List row and cell focused; a field in one reports its own focus.
       focused: r.focused === true && !UNFOCUSED_ROLES.has(role),
       selected: r.selected === true,
+      layer,
     },
     asRect(r.normalizedFrame)
   );
@@ -476,7 +495,7 @@ function axNode(
   }
   for (const child of Array.isArray(r.children) ? r.children : []) {
     const converted = isRecord(child)
-      ? axNode(child, build, inScrollBar || role === "AXScrollBar")
+      ? axNode(child, build, layer, inScrollBar || role === "AXScrollBar")
       : null;
     // An open menu is a child of the button that opened it, and an open combo
     // box list a child of its combo box, but they float over the window: lifted
@@ -591,7 +610,7 @@ export async function readMacosTree(
   const nodes: MacosNode[] = [];
   for (const entry of raw.windows as unknown[]) {
     if (!isRecord(entry) || !isRecord(entry.root)) continue;
-    const root = axNode(entry.root, build);
+    const root = axNode(entry.root, build, KIND_LAYERS.get(str(entry.kind) ?? "") ?? 0);
     if (!root) continue;
     // An open context menu comes as a root of kind "menu": it floats like an
     // open popup menu.
@@ -625,6 +644,7 @@ export async function readMacosTree(
         .filter((i): i is WireWebItem => i !== null);
       for (const node of webViews) {
         node.children = items.map(webNode);
+        if (node.d.layer) for (const child of node.children) child.d.layer = node.d.layer;
         node.hiddenItems = finite(result?.hidden);
       }
     } catch (err) {
