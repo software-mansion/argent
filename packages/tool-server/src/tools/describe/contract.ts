@@ -35,8 +35,9 @@ export interface DescribeNode {
   // Distinct on D-pad UIs: input focus vs. the visually highlighted item.
   focused?: boolean;
   selected?: boolean;
-  // A Mac app's stacking: 2 in an open menu, 1 in a sheet, alert or popover,
-  // absent in a window. Of a selector's matches, the frontmost layer wins.
+  // A Mac app's stacking: 1 in a sheet, alert or popover, one more in each one
+  // attached over it, highest in an open menu, absent in a window. Of a
+  // selector's matches, the frontmost layer wins.
   layer?: number;
 }
 

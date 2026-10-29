@@ -436,20 +436,18 @@ interface TreeBuild {
   menus: MacosNode[];
 }
 
-// The `layer` of a root by its window kind, and of an element by its role: an
-// open menu lies over everything, a sheet, an alert or a popover over its window.
+// The `layer` of a root by its window kind, one more in each sheet or popover
+// attached over it (an alert over a sheet over the window), and MENU_LAYER in
+// an open menu, which lies over everything.
+const MENU_LAYER = 100;
 const KIND_LAYERS = new Map([
-  ["menu", 2],
+  ["menu", MENU_LAYER],
   ["sheet", 1],
   ["alert", 1],
   ["popover", 1],
   ["file-panel", 1],
 ]);
-const ROLE_LAYERS = new Map([
-  ["AXMenu", 2],
-  ["AXSheet", 1],
-  ["AXPopover", 1],
-]);
+const ATTACHED_ROLES = new Set(["AXSheet", "AXPopover"]);
 
 function axNode(
   r: Record<string, unknown>,
@@ -463,7 +461,7 @@ function axNode(
   const secure = isSecure(r);
   const checkable = CHECKABLE_ROLES.has(role);
   const webView = finite(r.webView);
-  layer = Math.max(layer, ROLE_LAYERS.get(role) ?? 0);
+  if (role === "AXMenu") layer = MENU_LAYER;
   const node = newNode(
     {
       role,
@@ -495,7 +493,12 @@ function axNode(
   }
   for (const child of Array.isArray(r.children) ? r.children : []) {
     const converted = isRecord(child)
-      ? axNode(child, build, layer, inScrollBar || role === "AXScrollBar")
+      ? axNode(
+          child,
+          build,
+          ATTACHED_ROLES.has(str(child.role) ?? "") ? layer + 1 : layer,
+          inScrollBar || role === "AXScrollBar"
+        )
       : null;
     // An open menu is a child of the button that opened it, and an open combo
     // box list a child of its combo box, but they float over the window: lifted

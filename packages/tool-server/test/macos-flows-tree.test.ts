@@ -367,9 +367,9 @@ describe("macOS describe and flow trees of one read", () => {
     expect(leaf(flow, byText("Purple"))).toMatchObject({ role: "AXMenuItem" });
   });
 
-  it("picks the match in an open menu or sheet over the same-named control behind it", async () => {
+  it("picks the match in an open menu, alert or sheet over the same-named control behind it", async () => {
     const tree = probeTree();
-    // The window's controls are smaller and read first, so without the stacking they would win.
+    // The controls behind are smaller and read first, so without the stacking they would win.
     (windowRoot(tree).children as Json[]).push(
       axNode("AXButton", rect(0.3, 0.2, 0.1, 0.02), {
         identifier: "win.delete",
@@ -381,6 +381,21 @@ describe("macOS describe and flow trees of one read", () => {
           identifier: "sheet.done",
           title: "Done",
         }),
+        axNode("AXButton", rect(0.31, 0.31, 0.05, 0.02), {
+          identifier: "sheet.cancel",
+          title: "Cancel",
+        }),
+        // An alert over the sheet.
+        axNode("AXSheet", rect(0.4, 0.35, 0.2, 0.15), {}, [
+          axNode("AXButton", rect(0.42, 0.45, 0.07, 0.03), {
+            identifier: "alert.cancel",
+            title: "Cancel",
+          }),
+          axNode("AXButton", rect(0.5, 0.45, 0.08, 0.03), {
+            identifier: "alert.delete",
+            title: "Delete item",
+          }),
+        ]),
       ])
     );
     (tree.windows as Json[]).push({
@@ -398,6 +413,8 @@ describe("macOS describe and flow trees of one read", () => {
       expect(selectorToFrame(t, { text: "Delete item" })).toEqual(frame("ctx.delete"));
       expect(selectorToFrame(t, { text: "Done" })).toEqual(frame("sheet.done"));
       expect(firstInReadingOrder(findAll(t, { text: "Done" }))?.identifier).toBe("sheet.done");
+      expect(selectorToFrame(t, { text: "Cancel" })).toEqual(frame("alert.cancel"));
+      expect(firstInReadingOrder(findAll(t, { text: "Cancel" }))?.identifier).toBe("alert.cancel");
       expect(nodeAtPoint(t, { x: 0.35, y: 0.21 })?.identifier).toBe("ctx.delete");
     }
   });
