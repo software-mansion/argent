@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
-import { getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -160,9 +160,12 @@ async function startStub({
   };
 }
 
-async function connect(paths: ToolsServerPaths, clientName = "probe"): Promise<Client> {
+async function connect(
+  paths: ToolsServerPaths,
+  { clientName = "probe", ...options }: { clientName?: string; captureTimeoutMs?: number } = {}
+): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await startMcpServer({ paths, transport: serverTransport });
+  await startMcpServer({ paths, transport: serverTransport, ...options });
   const client = new Client({ name: clientName, version: "1" });
   await client.connect(clientTransport);
   return client;
@@ -363,7 +366,7 @@ describe("startMcpServer tool listing per client", () => {
         simulatorServerDir: "",
         nativeDevtoolsDir: "",
       },
-      clientName
+      { clientName }
     );
     const { tools } = await client.listTools();
     return (tools[0]!.inputSchema.properties as Record<string, unknown>).top_n;
@@ -397,18 +400,26 @@ describe("startMcpServer tool listing per client", () => {
 describe("startMcpServer screen capture after an interaction", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
   const CAPTURE_LISTING = {
-    tools: ["gesture-tap", "await-screen-idle", "screenshot", "describe"].map((name) => ({
-      name,
-      description: name,
-      inputSchema: { type: "object", properties: {} },
-    })),
+    tools: ["gesture-tap", "await-ui-element", "await-screen-idle", "screenshot", "describe"].map(
+      (name) => ({
+        name,
+        description: name,
+        inputSchema: { type: "object", properties: {} },
+      })
+    ),
   };
+  // Short, so a capture call that never answers ends the test in about a second.
+  const CAPTURE_MS = 1_000;
   let stub: Stub;
   let client: Client;
   let events: string[];
   let settled: boolean;
   let idleStatus: number;
   let screenshotStatus: number;
+  let waitResult: Record<string, unknown>;
+  // A hanging route never answers, as a read of a frozen device's tree.
+  let idleHangs: boolean;
+  let describeHangs: boolean;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -428,21 +439,27 @@ describe("startMcpServer screen capture after an interaction", () => {
     settled = true;
     idleStatus = 200;
     screenshotStatus = 200;
+    waitResult = { success: true, elapsed: 120 };
+    idleHangs = false;
+    describeHangs = false;
+    const describeRoute = slow("describe", (res) =>
+      send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
+    );
     stub = await startStub({
       routes: {
         "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
-        "/tools/await-screen-idle": (res) =>
-          idleStatus === 200
-            ? send(res, 200, { data: { settled, waitedMs: 1, polls: 1 } })
-            : send(res, idleStatus, { error: "await-screen-idle is not supported" }),
+        "/tools/await-ui-element": (res) => send(res, 200, { data: waitResult }),
+        "/tools/await-screen-idle": (res) => {
+          if (idleHangs) return;
+          if (idleStatus === 200) send(res, 200, { data: { settled, waitedMs: 1, polls: 1 } });
+          else send(res, idleStatus, { error: "await-screen-idle is not supported" });
+        },
         "/tools/screenshot": slow("screenshot", (res) =>
           screenshotStatus === 200
             ? send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } })
             : send(res, screenshotStatus, { error: "screenshot failed" })
         ),
-        "/tools/describe": slow("describe", (res) =>
-          send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
-        ),
+        "/tools/describe": (res) => (describeHangs ? undefined : describeRoute(res)),
         "/shot.png": (res) => {
           res.writeHead(200, { "Content-Type": "image/png" });
           res.end(PNG);
@@ -452,11 +469,14 @@ describe("startMcpServer screen capture after an interaction", () => {
     });
     vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
     vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
-    client = await connect({
-      bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
-      simulatorServerDir: "",
-      nativeDevtoolsDir: "",
-    });
+    client = await connect(
+      {
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      },
+      { captureTimeoutMs: CAPTURE_MS }
+    );
   });
 
   afterEach(async () => {
@@ -467,6 +487,13 @@ describe("startMcpServer screen capture after an interaction", () => {
 
   const tap = () =>
     client.callTool({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } });
+  const wait = () =>
+    client.callTool({
+      name: "await-ui-element",
+      arguments: { udid: "u", condition: "visible", selector: { text: "Settings" } },
+    });
+  const toolCalls = () =>
+    stub.requests.filter((r) => r.url.startsWith("/tools/")).map((r) => r.url);
 
   it("appends the screenshot, then the element tree, after the tool result", async () => {
     const result = await tap();
@@ -526,6 +553,52 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(text).toContain('"tapped": true');
     expect(text).not.toContain("--- Screen after action ---");
     expect(text).toContain("--- Elements after action (describe) ---");
+  });
+
+  // `unreadable` as well: the wait also reports it when its reads were only
+  // slow, or on an Apple TV, where `describe` still reads the tree.
+  it.each(["unmet", "unreadable"])(
+    "settles and appends the screen and the tree after a wait that ends %s",
+    async (cause) => {
+      waitResult = { success: false, elapsed: 5002, cause };
+
+      const result = await wait();
+
+      const calls = toolCalls();
+      expect(calls.slice(0, 2)).toEqual(["/tools/await-ui-element", "/tools/await-screen-idle"]);
+      // Sent together, in either order, once the screen settled.
+      expect(calls.slice(2).sort()).toEqual(["/tools/describe", "/tools/screenshot"]);
+      const text = textOf(result);
+      expect(text).toContain("--- Screen after action ---");
+      expect(text).toContain(AUTO_DESCRIBE_HEADER);
+    }
+  );
+
+  it("drops a tree read that outlasts the capture budget, and sends it once", async () => {
+    describeHangs = true;
+
+    const started = Date.now();
+    const result = await tap();
+
+    expect(Date.now() - started).toBeLessThan(CAPTURE_MS + 2_000);
+    expect(result.isError).toBeFalsy();
+    expect(toolCalls().filter((url) => url === "/tools/describe")).toHaveLength(1);
+    const text = textOf(result);
+    expect(text).toContain('"tapped": true');
+    expect(text).toContain("--- Screen after action ---");
+    expect(text).not.toContain(AUTO_DESCRIBE_HEADER);
+  });
+
+  it("captures the screen after a settle wait that never answers", async () => {
+    // The settle call is capped at the tap's settle budget plus CAPTURE_MS.
+    idleHangs = true;
+
+    const result = await tap();
+
+    expect(toolCalls().filter((url) => url === "/tools/await-screen-idle")).toHaveLength(1);
+    const text = textOf(result);
+    expect(text).toContain("--- Screen after action ---");
+    expect(text).toContain(AUTO_DESCRIBE_HEADER);
   });
 });
 

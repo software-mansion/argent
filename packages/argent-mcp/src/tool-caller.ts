@@ -28,23 +28,61 @@ export async function fetchWithReconnect(
     const controller = new AbortController();
     const timer =
       fetchTimeoutMs !== null ? setTimeout(() => controller.abort(), fetchTimeoutMs) : undefined;
+    let callerSignal: AbortSignal | null | undefined;
     try {
       const attemptInit = typeof init === "function" ? init() : init;
-      return await fetch(getUrl(), { ...attemptInit, signal: controller.signal });
+      callerSignal = attemptInit?.signal;
+      const signal = callerSignal
+        ? AbortSignal.any([controller.signal, callerSignal])
+        : controller.signal;
+      return await fetch(getUrl(), { ...attemptInit, signal });
     } catch (err) {
       lastError = err;
-      if (attempt === maxRetries) break;
-      if (attempt === 0) {
-        // First failure: trigger reconnect (spawns new server if dead)
-        await reconnect();
+      // The caller stopped waiting, so a retry would only queue work behind
+      // the abandoned attempt, which the tool-server keeps running.
+      if (callerSignal?.aborted || attempt === maxRetries) break;
+      const pause = (async () => {
+        if (attempt === 0) {
+          // First failure: trigger reconnect (spawns new server if dead)
+          await reconnect();
+        }
+        // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
+        await new Promise((r) => setTimeout(r, expBackoffBase * Math.pow(2, attempt)));
+      })();
+      // The caller's signal also ends this pause. A reconnect left behind
+      // keeps running for the calls after this one.
+      await untilAborted(pause, callerSignal);
+      if (callerSignal?.aborted) {
+        lastError = callerSignal.reason;
+        break;
       }
-      // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
-      await new Promise((r) => setTimeout(r, expBackoffBase * Math.pow(2, attempt)));
     } finally {
       clearTimeout(timer);
     }
   }
   throw lastError;
+}
+
+/** Waits for `work`, or only until `signal` fires. Does not stop `work`. */
+async function untilAborted(
+  work: Promise<unknown>,
+  signal: AbortSignal | null | undefined
+): Promise<void> {
+  if (!signal) {
+    await work;
+    return;
+  }
+  let onAbort = () => {};
+  const aborted = new Promise<void>((resolve) => {
+    onAbort = resolve;
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([work, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 interface ToolCallerDeps {
@@ -65,9 +103,14 @@ interface ToolCallerDeps {
 
 interface ToolCaller {
   fetchTools(): Promise<ToolMeta[]>;
+  /**
+   * `opts.signal` bounds the whole call, the listing it reads first included,
+   * and is never retried once it fires.
+   */
   callTool(
     name: string,
-    args: unknown
+    args: unknown,
+    opts?: { signal?: AbortSignal }
   ): Promise<{ result: unknown; outputHint?: string; note?: string; profiling?: boolean }>;
 }
 
@@ -132,8 +175,8 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
 
   return {
     fetchTools: client.fetchTools,
-    async callTool(name, args) {
-      const { data, note, outputHint, profiling } = await client.callTool(name, args);
+    async callTool(name, args, opts) {
+      const { data, note, outputHint, profiling } = await client.callTool(name, args, opts);
       return { result: data, outputHint, note, ...(profiling ? { profiling } : {}) };
     },
   };
