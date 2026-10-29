@@ -46,6 +46,8 @@ export interface ToolMeta {
 export interface ToolInvocationResult {
   data: unknown;
   note?: string;
+  /** Set when a profiler was recording on the call's device as the call completed. */
+  profiling?: boolean;
   /** The `outputHint` of the tool's listing entry, when it has one. */
   outputHint?: string;
 }
@@ -141,7 +143,7 @@ async function consumeToolStream(
   onProgress: (event: unknown) => void,
   signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
-  let final: { data?: unknown; note?: string } | undefined;
+  let final: { data?: unknown; note?: string; profiling?: boolean } | undefined;
   let progress = 0;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
@@ -150,6 +152,7 @@ async function consumeToolStream(
       event?: string;
       data?: unknown;
       note?: string;
+      profiling?: boolean;
       error?: string;
       error_code?: string;
       error_kind?: string;
@@ -157,8 +160,13 @@ async function consumeToolStream(
     if (msg.event === "progress") {
       progress++;
       onProgress(msg.data);
-    } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
-    else if (msg.event === "error") {
+    } else if (msg.event === "result") {
+      final = {
+        data: msg.data,
+        note: msg.note,
+        ...(msg.profiling === true ? { profiling: true } : {}),
+      };
+    } else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
         errorCode: msg.error_code,
         errorKind: msg.error_kind,
@@ -214,7 +222,11 @@ async function consumeToolStream(
   if (!final) {
     throw brokenStream(name, "the stream ended without a result", progress);
   }
-  return { data: final.data, note: final.note };
+  return {
+    data: final.data,
+    note: final.note,
+    ...(final.profiling ? { profiling: true } : {}),
+  };
 }
 
 /**
@@ -488,6 +500,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         data: await settle(streamed.data),
         note: streamed.note,
         outputHint: meta?.outputHint,
+        ...(streamed.profiling ? { profiling: true } : {}),
       };
     }
     let json: {
@@ -495,6 +508,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       error?: string;
       message?: string;
       note?: string;
+      profiling?: boolean;
       error_code?: string;
       error_kind?: string;
       issues?: unknown;
@@ -525,7 +539,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       });
     }
     opts?.signal?.throwIfAborted();
-    return { data: await settle(json.data), note: json.note, outputHint: meta?.outputHint };
+    return {
+      data: await settle(json.data),
+      note: json.note,
+      outputHint: meta?.outputHint,
+      ...(json.profiling === true ? { profiling: true } : {}),
+    };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };

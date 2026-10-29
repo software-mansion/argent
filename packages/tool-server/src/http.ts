@@ -51,6 +51,7 @@ import {
   isExternalId,
 } from "./utils/external-devices";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device-alias";
+import { isProfiling } from "./utils/profiling-devices";
 import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
@@ -1065,11 +1066,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const toolNote = takeToolNote(data);
         if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
+        // For the MCP adapter: its post-action capture would load the app a
+        // profiler is recording on this device. Read at completion.
+        const profilingPayload =
+          deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
+            ? { profiling: true }
+            : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload });
+          writeLine({ event: "result", data, ...notePayload, ...profilingPayload });
           res.end();
         } else {
-          res.json({ data, ...notePayload });
+          res.json({ data, ...notePayload, ...profilingPayload });
         }
       } catch (err: unknown) {
         /**
