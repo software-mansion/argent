@@ -324,6 +324,12 @@ describe("file-panel", () => {
     expect(nonListCalls(calls)).toEqual([{ method: "Panel.cancel", params: { panel: 42 } }]);
   });
 
+  it("discard answers the panel with its Delete or Don't Save button", async () => {
+    const { invoke, calls } = harness([savePanel]);
+    await expect(invoke({ action: "discard" })).resolves.toEqual({ discarded: true, panel: 42 });
+    expect(nonListCalls(calls)).toEqual([{ method: "Panel.discard", params: { panel: 42 } }]);
+  });
+
   it("stub infers an open panel for existing paths and grants each path itself", async () => {
     tracked.sandboxed = true;
     const { invoke, calls } = harness();

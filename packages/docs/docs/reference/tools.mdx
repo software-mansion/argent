@@ -275,20 +275,21 @@ A system service draws the file list of a file panel. Thus `describe` cannot rea
 | Parameter   | Description                                                                                                                                                                         |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `udid`      | The Mac app id                                                                                                                                                                      |
-| `action`    | `list`, `choose`, `cancel` or `stub`                                                                                                                                                |
+| `action`    | `list`, `choose`, `cancel`, `discard` or `stub`                                                                                                                                     |
 | `path`      | For `choose` and `stub`: an absolute path, or a path that starts with `~/`. An existing file or folder for an open panel. The file to write for a save panel, in an existing folder |
 | `paths`     | For `choose` and `stub`: several paths, for an open panel that accepts more than one item. Give `path` or `paths`, not both                                                         |
-| `panel`     | For `choose` and `cancel`: the number of the panel from `list`. Argent needs it only when more than one panel is open                                                               |
+| `panel`     | For `choose`, `cancel` and `discard`: the number of the panel from `list`. Argent needs it only when more than one panel is open                                                    |
 | `stubMode`  | For `stub`: `answer` (the default) answers the next panel with the path, `cancel` cancels the next panel, `off` removes an answer that is still prepared                            |
 | `panelKind` | For `stub` with `stubMode` `answer`: `open` or `save`, the kind of the next panel. When it is absent, see the rules below                                                           |
-| `timeoutMs` | For `choose` and `cancel`: how long to wait for the panel after the click that opens it. Default `5000`, maximum `30000`                                                            |
+| `timeoutMs` | For `choose`, `cancel` and `discard`: how long to wait for the panel after the click that opens it. Default `5000`, maximum `30000`                                                 |
 
-| Action   | Result                                                                                                                                                              |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list`   | `{ panels }`. Each panel has its `number`, its `kind` (`open` or `save`), its title, its folder and its options                                                     |
-| `choose` | `{ chosen, panel, kind, paths }`. The panel closes, and the app receives the paths                                                                                  |
-| `cancel` | `{ cancelled, panel }`                                                                                                                                              |
-| `stub`   | `{ armed, mode, panelKind }`, without `panelKind` for `stubMode` `cancel` and `off`. The next panel that the app opens gets the prepared answer and does not appear |
+| Action    | Result                                                                                                                                                                                          |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`    | `{ panels }`. Each panel has its `number`, its `kind` (`open` or `save`), its title, its folder and its options. `discardButton` is the title of its Delete or Don't Save button, if it has one |
+| `choose`  | `{ chosen, panel, kind, paths }`. The panel closes, and the app receives the paths                                                                                                              |
+| `cancel`  | `{ cancelled, panel }`                                                                                                                                                                          |
+| `discard` | `{ discarded, panel }`. The app closes the new document without saving it                                                                                                                       |
+| `stub`    | `{ armed, mode, panelKind }`, without `panelKind` for `stubMode` `cancel` and `off`. The next panel that the app opens gets the prepared answer and does not appear                             |
 
 A prepared answer stays until the next panel opens, until a `stub` with `stubMode` `off`, or until the tool-server disconnects from the app.
 
@@ -312,6 +313,7 @@ On a save panel that offers more than one file format (`allowedContentTypes` in 
 - The folder for a save panel does not exist.
 - The path for a save panel is an existing folder. This includes a document package, such as `Notes.rtfd`.
 - The extension of the path matches none of the formats of a save panel.
+- With `discard`, the panel has no Delete or Don't Save button.
 - More than one path for a save panel, or, with `choose`, for an open panel that takes one item.
 - With `choose`, the panel cannot take the path: a folder for a panel that takes only files, or a file for a panel that takes only folders. A document package counts as a file.
 
