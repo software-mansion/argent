@@ -73,6 +73,7 @@ export {
   clearRememberedAgent,
   getAdditionalIosDeviceSets,
   getAndroidSdkRoot,
+  getAndroidAdbServerPort,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,
