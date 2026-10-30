@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { MAX_RUN_DEPTH, type FileInputMember } from "@argent/registry";
+import { MAX_RUN_DEPTH, baselineKeyFor, type FileInputMember } from "@argent/registry";
 import {
   prepareFileInputs,
   applyClientFileDirectives,
@@ -366,6 +366,32 @@ describe("prepareFileInputs — collect: flow", () => {
 
     // b names a, so the runner resolves a again to see the cycle: a is a member too.
     expect(names(await membersOf("a.yaml"))).toEqual(["b.yaml", "c.yaml", "a.yaml"]);
+  });
+
+  it("logs each member under the [e2e-files] tag, an e2e test member as `e2e test`", async () => {
+    vi.stubEnv("ARGENT_E2E_FILES_LOG", "1");
+    try {
+      await fs.writeFile(path.join(flows, "frag.yaml"), flowYaml("echo: frag"));
+      await fs.writeFile(path.join(flows, "main.yaml"), flowYaml("run: frag.yaml", "snapshot: home"));
+      const baselines = path.join(
+        flows,
+        "__baselines__",
+        baselineKeyFor(path.join(flows, "main.yaml"), "main")
+      );
+      await fs.mkdir(baselines, { recursive: true });
+      const png = path.join(baselines, "home__ios-390x844.png");
+      await fs.writeFile(png, "png");
+      const log: string[] = [];
+
+      await membersOf("main.yaml", { log: (line) => log.push(line) });
+
+      expect(log).toEqual([
+        `[e2e-files] e2e test ${path.join(flows, "frag.yaml")}: inline 22`,
+        `[e2e-files] baseline ${png}: inline 3`,
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("sums the inline bytes over the closure, and uploads the members past 256 KiB", async () => {

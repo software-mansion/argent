@@ -90,6 +90,9 @@ const RUN_REPORT = {
   durationMs: 1,
 };
 
+/** What the stub answers `e2e-execute` with: RUN_REPORT unless a test swaps it. */
+let runReport: Record<string, unknown> = RUN_REPORT;
+
 type Route = (res: http.ServerResponse) => void | Promise<void>;
 
 /**
@@ -128,7 +131,7 @@ async function startStub({
         req.method === "POST" &&
         (reqUrl === "/tools/e2e-execute" || reqUrl === "/tools/flow-execute")
       ) {
-        return json(200, { data: RUN_REPORT });
+        return json(200, { data: runReport });
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
@@ -234,6 +237,24 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(byAlias)).toContain('Running e2e test "demo"');
     expect(textOf(byAlias)).not.toContain('"steps"');
     expect(byAlias.content).toEqual(byId.content);
+  });
+
+  it("renders a run report that names its e2e test in e2eTest only, or in flow only", async () => {
+    const unnamed: Record<string, unknown> = { ...RUN_REPORT };
+    delete unnamed.flow;
+    try {
+      runReport = { ...unnamed, e2eTest: "fresh" };
+      const fresh = await client.callTool({ name: "e2e-execute", arguments: {} });
+      expect(textOf(fresh)).toContain('Running e2e test "fresh"');
+      expect(textOf(fresh)).not.toContain('"steps"');
+
+      runReport = { ...unnamed, flow: "older" };
+      const older = await client.callTool({ name: "e2e-execute", arguments: {} });
+      expect(textOf(older)).toContain('Running e2e test "older"');
+      expect(textOf(older)).not.toContain('"steps"');
+    } finally {
+      runReport = RUN_REPORT;
+    }
   });
 
   it("skips the post-action capture while a profiler records, with a note except on describe", async () => {

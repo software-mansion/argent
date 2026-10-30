@@ -3200,7 +3200,13 @@ describe("argent e2e run <dir>", () => {
     await expect(flow(["run", flowsDir, "--json", "-r"], opts)).rejects.toThrow("process.exit:1");
 
     // A single parseable object on stdout — no headers or verdict lines.
+    // `flows` is the deprecated spelling of `e2eTests`, with the same content.
     const parsed = JSON.parse(logs.join("\n")) as Record<string, unknown>;
+    const entries = [
+      { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
+      { path: "b-checkout.yaml", status: "fail", error: "boom" },
+      { path: path.join("sub", "c-search.yaml"), status: "skip" },
+    ];
     expect(parsed).toEqual({
       ok: false,
       total: 3,
@@ -3208,11 +3214,8 @@ describe("argent e2e run <dir>", () => {
       failed: 1,
       skipped: 1,
       durationMs: 5500,
-      flows: [
-        { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
-        { path: "b-checkout.yaml", status: "fail", error: "boom" },
-        { path: path.join("sub", "c-search.yaml"), status: "skip" },
-      ],
+      e2eTests: entries,
+      flows: entries,
     });
   });
 

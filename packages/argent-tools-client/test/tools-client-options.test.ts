@@ -322,6 +322,33 @@ describe("createToolsClient options", () => {
     expect(existsSync(outside)).toBe(false);
   });
 
+  it("logs each baseline it writes under the [e2e-files] tag", async () => {
+    vi.stubEnv("ARGENT_E2E_FILES_LOG", "1");
+    const flowPath = join(TEST_HOME, "logged.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const written = join(realpathSync(TEST_HOME), "__baselines__", "logged", "title__ios-30x60.png");
+    runFlowData = {
+      ok: true,
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: written,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+      onDiagnostic: (line) => diagnostics.push(line),
+    });
+
+    await callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME, updateBaselines: true });
+
+    expect(diagnostics).toContain(`[e2e-files] baseline ${written}: written`);
+  });
+
   it("rejects a 2xx answer whose body cannot be read", async () => {
     const { callTool } = createToolsClient({
       baseUrl: async () => ({ url, token: "t", remote: false }),
