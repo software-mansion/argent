@@ -43,7 +43,8 @@ const zodSchema = z.object({
     .describe(
       "Default true. Collapse stretches where the screen does not change: the first second of " +
         "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
-        "so a long recording with brief activity comes back short instead of full of dead air. " +
+        "so a long recording with brief activity comes back short instead of full of dead air " +
+        "(on a remote simulator the still stretches are removed whole). " +
         "The returned durationMs is the trimmed length; wallClockMs/trimmedMs report what was removed. " +
         "Set false to keep a faithful real-time recording."
     ),

@@ -191,7 +191,10 @@ export async function startRemoteCapture(
  * nobody here — this session would have refused the start itself — so it is
  * a leftover of a tool-server that lost track of it. It is stopped, which
  * keeps its video on the runner, and the start is tried once more — also when
- * that stop fails, since the runner ends a recording whatever its stop came to.
+ * that stop fails, since the runner ends a recording on every failure but a
+ * save that timed out. After that one it is still saving, and the retried
+ * start is refused again: then the caller is told to come back, not that the
+ * stream is unavailable.
  */
 async function startOnRunner(deviceId: string, showTouches: boolean): Promise<string> {
   try {
@@ -199,7 +202,23 @@ async function startOnRunner(deviceId: string, showTouches: boolean): Promise<st
   } catch (err) {
     if (!isAlreadyRecordingError(err)) throw err;
     await screenRecordStop(deviceId).catch(() => {});
-    return screenRecordStart(deviceId, { showTouches });
+    try {
+      return await screenRecordStart(deviceId, { showTouches });
+    } catch (again) {
+      if (!isAlreadyRecordingError(again)) throw again;
+      throw new FailureError(
+        `A previous recording of this remote simulator is still being saved on the remote ` +
+          `machine, so a new one cannot start yet. Retry screen-recording-start in a moment.`,
+        {
+          error_code: FAILURE_CODES.SCREEN_RECORDING_ALREADY_ACTIVE,
+          failure_stage: "screen_recording_remote_start",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_command: "sim_remote",
+        },
+        { cause: again instanceof Error ? again : new Error(String(again)) }
+      );
+    }
   }
 }
 
@@ -209,8 +228,10 @@ async function startOnRunner(deviceId: string, showTouches: boolean): Promise<st
  * runner, and the fetch tells, as the runner only serves a recording it has
  * stopped. After a stop that worked, a download that fails is tried once more;
  * after one that did not, the runner is still recording (touch markers and
- * all) or unreachable, so another stop keeps the video there for a fetch, and
- * the stop's own error is the one reported.
+ * all), still saving (a save that timed out keeps the buffer for another
+ * stop), or unreachable, so another stop is sent. When that one goes through
+ * the video is fetched after all; otherwise the first stop's own error is the
+ * one reported.
  */
 async function stopAndDownload(
   deviceId: string,
@@ -225,10 +246,17 @@ async function stopAndDownload(
     await screenRecordFetch(deviceId, recordingId, outputFile);
   } catch {
     if (stopError) {
-      await screenRecordStop(deviceId).catch(() => {});
-      throw stopError;
+      const stoppedNow = await screenRecordStop(deviceId).then(
+        () => true,
+        () => false
+      );
+      if (!stoppedNow) throw stopError;
+      await screenRecordFetch(deviceId, recordingId, outputFile).catch(() => {
+        throw stopError;
+      });
+    } else {
+      await screenRecordFetch(deviceId, recordingId, outputFile);
     }
-    await screenRecordFetch(deviceId, recordingId, outputFile);
   }
   return stopError
     ? {

@@ -263,8 +263,8 @@ describe("remote screen recording", () => {
       trimStatic: false,
       showTouches: false,
     });
-    mockStop.mockRejectedValueOnce(new Error("simulator is not recording"));
-    mockFetch.mockRejectedValueOnce(new Error("no such recording"));
+    mockStop.mockRejectedValue(new Error("simulator is not recording"));
+    mockFetch.mockRejectedValue(new Error("no such recording"));
 
     const err = (await stopRemoteCapture(api).catch((e: unknown) => e)) as Error;
     expect(err.message).toContain("simulator is not recording");
@@ -275,6 +275,30 @@ describe("remote screen recording", () => {
     );
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING);
     expect(api.recordingActive).toBe(false);
+  });
+
+  /**
+   * A save that timed out on the runner keeps the buffer there for another
+   * stop, so when the second stop goes through the recording is still to be
+   * had — the caller must not be sent away to fetch it by hand.
+   */
+  it("downloads the recording when the second stop succeeds", async () => {
+    const api = await makeSession();
+    const started = await startRemoteCapture(api, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: false,
+    });
+    mockStop.mockRejectedValueOnce(new Error("timed out waiting for simulator-server"));
+    mockFetch.mockRejectedValueOnce(new Error("no such recording"));
+
+    const stopped = await stopRemoteCapture(api);
+    expect(mockStop).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(stopped.outputFile).toBe(started.outputFile);
+    expect(stopped.sizeBytes).toBeGreaterThan(0);
+    expect(stopped.warning).toContain("timed out");
   });
 
   /**
@@ -289,8 +313,8 @@ describe("remote screen recording", () => {
       trimStatic: false,
       showTouches: true,
     });
-    mockStop.mockRejectedValueOnce(new Error("could not reach sim-router"));
-    mockFetch.mockRejectedValueOnce(new Error("could not reach sim-router"));
+    mockStop.mockRejectedValue(new Error("could not reach sim-router"));
+    mockFetch.mockRejectedValue(new Error("could not reach sim-router"));
 
     await expect(stopRemoteCapture(api)).rejects.toThrow("could not reach sim-router");
     expect(mockStop).toHaveBeenCalledTimes(2);
@@ -337,6 +361,31 @@ describe("remote screen recording", () => {
       })
     ).resolves.toMatchObject({ status: "recording" });
     expect(mockStart).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * A leftover whose save timed out is still being saved on the runner, and
+   * refuses the retried start too. That is a "come back later", not a missing
+   * stream.
+   */
+  it("says a previous recording is still being saved when the retried start is refused", async () => {
+    const api = await makeSession();
+    mockStart.mockRejectedValue(new Error("simulator X is already recording"));
+
+    const err = await startRemoteCapture(api, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: false,
+    }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err as Error)?.error_code).toBe(
+      FAILURE_CODES.SCREEN_RECORDING_ALREADY_ACTIVE
+    );
+    expect((err as Error).message).toContain("Retry screen-recording-start");
+    expect(mockStart).toHaveBeenCalledTimes(2);
+    expect(api.recordingActive).toBe(false);
+    expect(api.startPending).toBe(false);
   });
 
   it("fails the stop when the download brings back nothing", async () => {
