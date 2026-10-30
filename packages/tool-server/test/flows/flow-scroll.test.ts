@@ -461,6 +461,8 @@ describe("scroll-to directive", () => {
       // The screen's centre, else the named container's.
       expect(swipes[1].fromX).toBeCloseTo(within ? 0.75 : 0.5);
       expect(swipes[1].fromY).toBeCloseTo(within ? 0.6 : 0.5);
+      // Still no further than the row's visible start is from the window's (0.35).
+      expect(swipes[1].fromY - swipes[1].toY).toBeCloseTo(within ? 0.3 : 0.35);
     }
   });
 

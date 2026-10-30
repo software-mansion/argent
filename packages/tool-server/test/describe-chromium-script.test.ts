@@ -1079,6 +1079,24 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     const plain = run([pane([cutRow()], PANE)]).tree;
     expect(pxFrame(plain, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
     expect(findById(plain, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.1 } });
+    const above = el({ attrs: { id: "cut" }, rect: { x: 1, y: -50, w: 285, h: 100 } });
+    expect(findById(run([pane([above], PANE)]).tree, "cut")!.clipAnchors).toEqual({
+      y: { x: 0.0285, y: 0.9 },
+    });
+    // Of nested cutters, the innermost's window first: a wheel on the outer one
+    // carries the inner window along with the row.
+    const list = el({
+      rect: { x: 0, y: 500, w: 285, h: 400 },
+      client: { left: 0, top: 0, width: 285, height: 400 },
+      offset: { width: 285, height: 400 },
+      scrollSize: { width: 285, height: 800 },
+      style: { overflow: "auto" },
+      painted: { x: 0, y: 500, w: 285, h: 400 },
+      children: [el({ attrs: { id: "cut" }, rect: { x: 1, y: 850, w: 285, h: 200 } })],
+    });
+    expect(findById(run([pane([list], PANE)]).tree, "cut")!.clipAnchors).toEqual({
+      y: { x: 0.0285, y: 0.54 },
+    });
     // A fixed bar over the pane's upper part: the wheel there scrolls the page.
     const bar = el({
       rect: { x: 0, y: 0, w: 300, h: 300 },
@@ -1104,6 +1122,14 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     });
     const carried = run([pane([inner])]).tree;
     expect(findById(carried, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.1 } });
+    // Else the row's visible centre.
+    const cover = el({
+      rect: { x: 0, y: 0, w: 300, h: 950 },
+      painted: { x: 0, y: 0, w: 300, h: 950 },
+      style: { position: "fixed" },
+    });
+    const covered = run([pane([cutRow({ x: 1, y: 950, w: 285, h: 50 })], PANE), cover]).tree;
+    expect(findById(covered, "cut")!.clipAnchors).toEqual({ y: { x: 0.143, y: 0.975 } });
     // Where no wheel is seen to reach one, the cut window's centre across the row.
     const fallback = { y: { x: 0.143, y: 0.5 } };
     // The row scrolls itself, so a wheel on it moves the row's content instead.
