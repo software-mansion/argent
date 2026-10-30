@@ -776,7 +776,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   });
 
   it("reads a shared aria-labelledby target on a page whose own global Map is not the builtin", () => {
-    // A classic page script's top-level \`class Map\` or \`var Map = {...}\` shadows the builtin.
+    // A classic page script's top-level `class Map` or `var Map = {...}` shadows the builtin.
     const label = el({ tag: "span", text: "Shared", rect: BOX, attrs: { id: "lbl" } });
     const controls = ["b1", "b2"].map((id) =>
       el({ tag: "button", rect: BOX, attrs: { "id": id, "aria-labelledby": "lbl" } })

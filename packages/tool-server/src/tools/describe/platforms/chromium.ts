@@ -91,9 +91,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return t;
   }
 
-  // aria-labelledby id -> trimmed target text (null: no such element), as many controls
-  // can share one target. Not a Map: the script runs in the page's scope, where a page
-  // script's own global Map would shadow the builtin.
+  // aria-labelledby id -> trimmed target text, or null for a missing id. Not a Map: a
+  // page script's own global Map shadows the builtin here.
   const labelTexts = Object.create(null);
 
   function accessibleName(el) {
@@ -159,12 +158,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return s.replace(WHITESPACE, " ").trim();
   }
 
-  // An aria-labelledby target's textContent (text and CDATA), read like ownText: a
-  // rendered <br> is a space and whitespace collapses. A <br> under a display:none
-  // element inside a rendered target is not rendered (its own display does not inherit
-  // that). In a target that is itself display:none, or under such an ancestor, every
-  // <br> is a space, as in Chrome's accessible name. Iterative: the target's depth has
-  // no MAX_DEPTH bound, so recursion could overflow the stack.
+  // An aria-labelledby target's textContent (text and CDATA), read like ownText. In a
+  // shown target, a <br> under a display:none element is not rendered, though its own
+  // display stays inline. In a hidden one every <br> is a space, as in Chrome's
+  // accessible name. Iterative: the target's depth has no MAX_DEPTH bound.
   function labelText(root) {
     let shown = true;
     for (let n = root; n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
